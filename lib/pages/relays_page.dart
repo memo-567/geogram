@@ -6,6 +6,7 @@ import '../services/relay_service.dart';
 import '../services/log_service.dart';
 import '../services/relay_discovery_service.dart';
 import '../services/profile_service.dart';
+import '../services/i18n_service.dart';
 
 class RelaysPage extends StatefulWidget {
   const RelaysPage({super.key});
@@ -17,6 +18,7 @@ class RelaysPage extends StatefulWidget {
 class _RelaysPageState extends State<RelaysPage> {
   final RelayService _relayService = RelayService();
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
   List<Relay> _allRelays = [];
   bool _isLoading = true;
 
@@ -126,7 +128,7 @@ class _RelaysPageState extends State<RelaysPage> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Added relay: ${relay.name}')),
+            SnackBar(content: Text(_i18n.t('added_relay', params: [relay.name]))),
           );
         }
 
@@ -135,7 +137,7 @@ class _RelaysPageState extends State<RelaysPage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error adding relay: $e'),
+              content: Text(_i18n.t('error_adding_relay', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -148,13 +150,13 @@ class _RelaysPageState extends State<RelaysPage> {
     try {
       await _relayService.setPreferred(relay.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Set as preferred: ${relay.name}')),
+        SnackBar(content: Text(_i18n.t('set_preferred_success', params: [relay.name]))),
       );
       _loadRelays();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: $e'),
+          content: Text(_i18n.t('error', params: [e.toString()])),
           backgroundColor: Colors.red,
         ),
       );
@@ -165,13 +167,13 @@ class _RelaysPageState extends State<RelaysPage> {
     try {
       await _relayService.setBackup(relay.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added to backup: ${relay.name}')),
+        SnackBar(content: Text(_i18n.t('added_to_backup', params: [relay.name]))),
       );
       _loadRelays();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: $e'),
+          content: Text(_i18n.t('error', params: [e.toString()])),
           backgroundColor: Colors.red,
         ),
       );
@@ -182,13 +184,13 @@ class _RelaysPageState extends State<RelaysPage> {
     try {
       await _relayService.setAvailable(relay.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Removed from selection: ${relay.name}')),
+        SnackBar(content: Text(_i18n.t('removed_from_selection', params: [relay.name]))),
       );
       _loadRelays();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: $e'),
+          content: Text(_i18n.t('error', params: [e.toString()])),
           backgroundColor: Colors.red,
         ),
       );
@@ -199,17 +201,17 @@ class _RelaysPageState extends State<RelaysPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Relay'),
-        content: Text('Are you sure you want to delete "${relay.name}"?'),
+        title: Text(_i18n.t('delete_relay')),
+        content: Text(_i18n.t('delete_relay_confirm', params: [relay.name])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Delete'),
+            child: Text(_i18n.t('delete')),
           ),
         ],
       ),
@@ -220,7 +222,7 @@ class _RelaysPageState extends State<RelaysPage> {
         await _relayService.deleteRelay(relay.url);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Deleted relay: ${relay.name}')),
+            SnackBar(content: Text(_i18n.t('deleted_relay', params: [relay.name]))),
           );
         }
         _loadRelays();
@@ -228,7 +230,7 @@ class _RelaysPageState extends State<RelaysPage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error deleting relay: $e'),
+              content: Text(_i18n.t('error_deleting_relay', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -241,12 +243,12 @@ class _RelaysPageState extends State<RelaysPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear All Relays'),
-        content: const Text('Are you sure you want to delete ALL relays? This cannot be undone.'),
+        title: Text(_i18n.t('clear_all_relays_title')),
+        content: Text(_i18n.t('clear_all_relays_confirm')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
@@ -254,7 +256,7 @@ class _RelaysPageState extends State<RelaysPage> {
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Clear All'),
+            child: Text(_i18n.t('clear_all')),
           ),
         ],
       ),
@@ -268,7 +270,7 @@ class _RelaysPageState extends State<RelaysPage> {
         }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('All relays cleared')),
+            SnackBar(content: Text(_i18n.t('all_relays_cleared'))),
           );
         }
         _loadRelays();
@@ -276,7 +278,7 @@ class _RelaysPageState extends State<RelaysPage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error clearing relays: $e'),
+              content: Text(_i18n.t('error_clearing_relays', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -287,9 +289,9 @@ class _RelaysPageState extends State<RelaysPage> {
 
   Future<void> _scanNow() async {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Scanning local network for relays...'),
-        duration: Duration(seconds: 2),
+      SnackBar(
+        content: Text(_i18n.t('scanning_relays')),
+        duration: const Duration(seconds: 2),
       ),
     );
 
@@ -297,8 +299,8 @@ class _RelaysPageState extends State<RelaysPage> {
       await RelayDiscoveryService().discover();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Network scan complete. Check log window for details.'),
+          SnackBar(
+            content: Text(_i18n.t('scan_complete')),
             backgroundColor: Colors.green,
           ),
         );
@@ -308,7 +310,7 @@ class _RelaysPageState extends State<RelaysPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error during scan: $e'),
+            content: Text(_i18n.t('error_during_scan', params: [e.toString()])),
             backgroundColor: Colors.red,
           ),
         );
@@ -320,7 +322,7 @@ class _RelaysPageState extends State<RelaysPage> {
     // Show loading indicator
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Connecting to ${relay.name} with hello handshake...'),
+        content: Text(_i18n.t('connecting_to_relay', params: [relay.name])),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -334,15 +336,15 @@ class _RelaysPageState extends State<RelaysPage> {
         if (success) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('✓ Connected to ${relay.name}! Check log window for details.'),
+              content: Text(_i18n.t('connected_success', params: [relay.name])),
               backgroundColor: Colors.green,
               duration: const Duration(seconds: 3),
             ),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Connection failed. Check log window for details.'),
+            SnackBar(
+              content: Text(_i18n.t('connection_failed')),
               backgroundColor: Colors.red,
               duration: const Duration(seconds: 3),
             ),
@@ -353,7 +355,7 @@ class _RelaysPageState extends State<RelaysPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Connection error: $e'),
+            content: Text(_i18n.t('connection_error', params: [e.toString()])),
             backgroundColor: Colors.red,
           ),
         );
@@ -379,17 +381,17 @@ class _RelaysPageState extends State<RelaysPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Internet Relays'),
+        title: Text(_i18n.t('internet_relays')),
         actions: [
           IconButton(
             icon: const Icon(Icons.radar),
             onPressed: _scanNow,
-            tooltip: 'Scan for relays on local network',
+            tooltip: _i18n.t('scan_local_network'),
           ),
           IconButton(
             icon: const Icon(Icons.delete_sweep),
             onPressed: _clearAllRelays,
-            tooltip: 'Clear all relays',
+            tooltip: _i18n.t('clear_all_relays'),
           ),
         ],
       ),
@@ -417,7 +419,7 @@ class _RelaysPageState extends State<RelaysPage> {
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
-                                  'Internet Relay Configuration',
+                                  _i18n.t('internet_relay_config'),
                                   style: TextStyle(
                                     color: Theme.of(context).colorScheme.onPrimaryContainer,
                                     fontWeight: FontWeight.bold,
@@ -428,9 +430,7 @@ class _RelaysPageState extends State<RelaysPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '• Select ONE preferred relay (star icon)\n'
-                            '• Select multiple backup relays (checkmarks) for redundancy\n'
-                            '• Relays may disclose their name and location coordinates',
+                            _i18n.t('relay_instructions'),
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.onPrimaryContainer,
                               fontSize: 13,
@@ -453,7 +453,7 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        _selectedRelays.length == 1 ? 'Selected Relay' : 'Selected Relays',
+                        _selectedRelays.length == 1 ? _i18n.t('selected_relay') : _i18n.t('selected_relays'),
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -468,7 +468,7 @@ class _RelaysPageState extends State<RelaysPage> {
                         padding: const EdgeInsets.all(24),
                         child: Center(
                           child: Text(
-                            'No relays selected. Select at least one preferred relay.',
+                            _i18n.t('no_relays_selected'),
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                                 ),
@@ -503,7 +503,7 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        'Available Relays',
+                        _i18n.t('available_relays'),
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -518,7 +518,7 @@ class _RelaysPageState extends State<RelaysPage> {
                         padding: const EdgeInsets.all(24),
                         child: Center(
                           child: Text(
-                            'All relays are selected.',
+                            _i18n.t('all_relays_selected'),
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                                 ),
@@ -549,7 +549,7 @@ class _RelaysPageState extends State<RelaysPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addCustomRelay,
         icon: const Icon(Icons.add),
-        label: const Text('Add Relay'),
+        label: Text(_i18n.t('add_relay')),
       ),
     );
   }
@@ -578,6 +578,41 @@ class _RelayCard extends StatelessWidget {
     required this.onTest,
     this.isAvailableRelay = false,
   });
+
+  I18nService get _i18n => I18nService();
+
+  String _getStatusDisplayText() {
+    switch (relay.status) {
+      case 'preferred':
+        return _i18n.t('preferred');
+      case 'backup':
+        return _i18n.t('backup');
+      default:
+        return _i18n.t('available');
+    }
+  }
+
+  String _getConnectionStatusText() {
+    if (relay.isConnected) {
+      return relay.latency != null
+        ? _i18n.translate('connected_with_latency', params: [relay.latency.toString()])
+        : _i18n.t('connected');
+    }
+    return _i18n.t('disconnected');
+  }
+
+  String? _getDistanceText(double? userLat, double? userLon) {
+    final distance = relay.calculateDistance(userLat, userLon);
+    if (distance == null) return null;
+
+    if (distance < 1) {
+      final meters = (distance * 1000).round();
+      return _i18n.translate('meters_away', params: [meters.toString()]);
+    } else {
+      final km = distance.round();
+      return _i18n.translate('kilometers_away', params: [km.toString()]);
+    }
+  }
 
   Color _getStatusColor(BuildContext context) {
     switch (relay.status) {
@@ -670,7 +705,7 @@ class _RelayCard extends StatelessWidget {
                         ),
                       ],
                       // Display distance if available
-                      if (relay.getDistanceString(userLatitude, userLongitude) != null) ...[
+                      if (_getDistanceText(userLatitude, userLongitude) != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -681,7 +716,7 @@ class _RelayCard extends StatelessWidget {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              relay.getDistanceString(userLatitude, userLongitude)!,
+                              _getDistanceText(userLatitude, userLongitude)!,
                               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                     color: Theme.of(context).colorScheme.secondary,
                                     fontWeight: FontWeight.w500,
@@ -704,7 +739,7 @@ class _RelayCard extends StatelessWidget {
                     ),
                   ),
                   child: Text(
-                    relay.statusDisplay,
+                    _getStatusDisplayText(),
                     style: TextStyle(
                       color: _getStatusColor(context),
                       fontSize: 12,
@@ -733,12 +768,12 @@ class _RelayCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          relay.connectionStatus,
+                          _getConnectionStatusText(),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                         const Spacer(),
                         Text(
-                          'Last checked: ${_formatTime(relay.lastChecked!)}',
+                          _i18n.translate('last_checked', params: [_formatTime(relay.lastChecked!)]),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
@@ -757,7 +792,7 @@ class _RelayCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            '${relay.connectedDevices} ${relay.connectedDevices == 1 ? "device" : "devices"} connected',
+                            '${relay.connectedDevices} ${relay.connectedDevices == 1 ? _i18n.t("device") : _i18n.t("devices_connected")}',
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                   color: Theme.of(context).colorScheme.tertiary,
                                   fontWeight: FontWeight.w500,
@@ -780,7 +815,7 @@ class _RelayCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onSetPreferred,
                     icon: const Icon(Icons.star, size: 16),
-                    label: const Text('Set Preferred'),
+                    label: Text(_i18n.t('set_preferred')),
                     style: OutlinedButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                     ),
@@ -789,7 +824,7 @@ class _RelayCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onSetBackup,
                     icon: const Icon(Icons.check_circle_outline, size: 16),
-                    label: const Text('Set as Backup'),
+                    label: Text(_i18n.t('set_as_backup')),
                     style: OutlinedButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                     ),
@@ -798,7 +833,7 @@ class _RelayCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onSetAvailable,
                     icon: const Icon(Icons.remove_circle_outline, size: 16),
-                    label: const Text('Remove'),
+                    label: Text(_i18n.t('remove')),
                     style: OutlinedButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                     ),
@@ -806,7 +841,7 @@ class _RelayCard extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onTest,
                   icon: const Icon(Icons.network_check, size: 16),
-                  label: const Text('Test'),
+                  label: Text(_i18n.t('test')),
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                   ),
@@ -814,7 +849,7 @@ class _RelayCard extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
                   onPressed: onDelete,
-                  tooltip: 'Delete',
+                  tooltip: _i18n.t('delete'),
                   color: Theme.of(context).colorScheme.error,
                   visualDensity: VisualDensity.compact,
                 ),

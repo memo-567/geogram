@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/notification_settings.dart';
 import '../services/notification_service.dart';
 import '../services/log_service.dart';
+import '../services/i18n_service.dart';
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -12,6 +13,7 @@ class NotificationsPage extends StatefulWidget {
 
 class _NotificationsPageState extends State<NotificationsPage> {
   final NotificationService _notificationService = NotificationService();
+  final I18nService _i18n = I18nService();
   NotificationSettings? _settings;
   bool _isLoading = true;
 
@@ -49,7 +51,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     if (_isLoading || _settings == null) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Notifications'),
+          title: Text(_i18n.t('notifications')),
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -57,7 +59,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Notifications'),
+        title: Text(_i18n.t('notifications')),
       ),
       body: ListView(
         children: [
@@ -93,7 +95,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Enable Notifications',
+                        _i18n.t('enable_notifications'),
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -101,8 +103,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       const SizedBox(height: 4),
                       Text(
                         _settings!.enableNotifications
-                            ? 'All notifications are enabled'
-                            : 'All notifications are disabled',
+                            ? _i18n.t('all_notifications_enabled')
+                            : _i18n.t('all_notifications_disabled'),
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Theme.of(context).colorScheme.onSurfaceVariant,
                             ),
@@ -132,7 +134,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Notification Types',
+                  _i18n.t('notification_types'),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -144,8 +146,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.message,
-            title: 'New Messages',
-            subtitle: 'Notify when you receive new messages',
+            title: _i18n.t('new_messages'),
+            subtitle: _i18n.t('new_messages_desc'),
             value: _settings!.notifyNewMessages,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -156,8 +158,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.bluetooth_connected,
-            title: 'Nearby Devices',
-            subtitle: 'Notify when devices are detected nearby',
+            title: _i18n.t('nearby_devices'),
+            subtitle: _i18n.t('nearby_devices_desc'),
             value: _settings!.notifyNearbyDevices,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -168,8 +170,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.folder_special,
-            title: 'Collection Updates',
-            subtitle: 'Notify when collections are updated or synced',
+            title: _i18n.t('collection_updates'),
+            subtitle: _i18n.t('collection_updates_desc'),
             value: _settings!.notifyCollectionUpdates,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -180,8 +182,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.cloud_outlined,
-            title: 'Relay Status',
-            subtitle: 'Notify about relay connection changes',
+            title: _i18n.t('relay_status'),
+            subtitle: _i18n.t('relay_status_desc'),
             value: _settings!.notifyRelayStatus,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -192,8 +194,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.warning_outlined,
-            title: 'System Alerts',
-            subtitle: 'Important system notifications and errors',
+            title: _i18n.t('system_alerts'),
+            subtitle: _i18n.t('system_alerts_desc'),
             value: _settings!.notifySystemAlerts,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -218,7 +220,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Alert Settings',
+                  _i18n.t('alert_settings'),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -230,8 +232,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.volume_up,
-            title: 'Sound',
-            subtitle: 'Play sound for notifications',
+            title: _i18n.t('sound'),
+            subtitle: _i18n.t('sound_desc'),
             value: _settings!.soundEnabled,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -242,8 +244,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.vibration,
-            title: 'Vibration',
-            subtitle: 'Vibrate for notifications',
+            title: _i18n.t('vibration'),
+            subtitle: _i18n.t('vibration_desc'),
             value: _settings!.vibrationEnabled,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
@@ -275,15 +277,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'About Notifications',
+                        _i18n.t('about_notifications'),
                         style: Theme.of(context).textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Notifications help you stay informed about important events in Geogram. '
-                        'Settings are saved automatically and stored locally in your configuration file.',
+                        _i18n.t('about_notifications_desc'),
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.onSurfaceVariant,
                             ),

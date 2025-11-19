@@ -11,6 +11,7 @@ import 'services/profile_service.dart';
 import 'services/relay_service.dart';
 import 'services/relay_discovery_service.dart';
 import 'services/notification_service.dart';
+import 'services/i18n_service.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -30,6 +31,10 @@ void main() async {
     // Initialize services
     await ConfigService().init();
     LogService().log('ConfigService initialized');
+
+    // Initialize i18n service (internationalization)
+    await I18nService().init();
+    LogService().log('I18nService initialized');
 
     await CollectionService().init();
     LogService().log('CollectionService initialized');
@@ -91,24 +96,41 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
+  final I18nService _i18n = I18nService();
 
   static const List<Widget> _pages = [
     CollectionsPage(),
     GeoChatPage(),
     DevicesPage(),
-    LogPage(),
     SettingsPage(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Listen to language changes to rebuild the UI
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
+  }
+
+  @override
+  void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    super.dispose();
+  }
+
+  void _onLanguageChanged() {
+    setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.folder_special),
-            SizedBox(width: 8),
-            Text('Geogram'),
+            const Icon(Icons.folder_special),
+            const SizedBox(width: 8),
+            Text(_i18n.t('app_name')),
           ],
         ),
       ),
@@ -120,39 +142,34 @@ class _HomePageState extends State<HomePage> {
           });
           Navigator.pop(context);
         },
-        children: const [
+        children: [
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
             child: Text(
-              'Navigation',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              _i18n.t('navigation'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
           ),
           NavigationDrawerDestination(
-            icon: Icon(Icons.folder_special_outlined),
-            selectedIcon: Icon(Icons.folder_special),
-            label: Text('Collections'),
+            icon: const Icon(Icons.folder_special_outlined),
+            selectedIcon: const Icon(Icons.folder_special),
+            label: Text(_i18n.t('collections')),
           ),
           NavigationDrawerDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: Text('GeoChat'),
+            icon: const Icon(Icons.chat_bubble_outline),
+            selectedIcon: const Icon(Icons.chat_bubble),
+            label: Text(_i18n.t('geochat')),
           ),
           NavigationDrawerDestination(
-            icon: Icon(Icons.devices_outlined),
-            selectedIcon: Icon(Icons.devices),
-            label: Text('Devices'),
+            icon: const Icon(Icons.devices_outlined),
+            selectedIcon: const Icon(Icons.devices),
+            label: Text(_i18n.t('devices')),
           ),
+          const Divider(),
           NavigationDrawerDestination(
-            icon: Icon(Icons.list_alt_outlined),
-            selectedIcon: Icon(Icons.list_alt),
-            label: Text('Log'),
-          ),
-          Divider(),
-          NavigationDrawerDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: Text('Settings'),
+            icon: const Icon(Icons.settings_outlined),
+            selectedIcon: const Icon(Icons.settings),
+            label: Text(_i18n.t('settings')),
           ),
         ],
       ),
@@ -164,31 +181,26 @@ class _HomePageState extends State<HomePage> {
             _selectedIndex = index;
           });
         },
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.folder_special_outlined),
-            selectedIcon: Icon(Icons.folder_special),
-            label: 'Collections',
+            icon: const Icon(Icons.folder_special_outlined),
+            selectedIcon: const Icon(Icons.folder_special),
+            label: _i18n.t('collections'),
           ),
           NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: 'GeoChat',
+            icon: const Icon(Icons.chat_bubble_outline),
+            selectedIcon: const Icon(Icons.chat_bubble),
+            label: _i18n.t('geochat'),
           ),
           NavigationDestination(
-            icon: Icon(Icons.devices_outlined),
-            selectedIcon: Icon(Icons.devices),
-            label: 'Devices',
+            icon: const Icon(Icons.devices_outlined),
+            selectedIcon: const Icon(Icons.devices),
+            label: _i18n.t('devices'),
           ),
           NavigationDestination(
-            icon: Icon(Icons.list_alt_outlined),
-            selectedIcon: Icon(Icons.list_alt),
-            label: 'Log',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            selectedIcon: const Icon(Icons.settings),
+            label: _i18n.t('settings'),
           ),
         ],
       ),
@@ -206,6 +218,7 @@ class CollectionsPage extends StatefulWidget {
 
 class _CollectionsPageState extends State<CollectionsPage> {
   final CollectionService _collectionService = CollectionService();
+  final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Collection> _allCollections = [];
@@ -215,12 +228,18 @@ class _CollectionsPageState extends State<CollectionsPage> {
   @override
   void initState() {
     super.initState();
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
     LogService().log('Collections page opened');
     _loadCollections();
   }
 
+  void _onLanguageChanged() {
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -286,17 +305,17 @@ class _CollectionsPageState extends State<CollectionsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Collection'),
-        content: Text('Are you sure you want to delete "${collection.title}"?'),
+        title: Text(_i18n.t('delete_collection')),
+        content: Text(_i18n.t('delete_collection_confirm_msg', params: [collection.title])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
+            child: Text(_i18n.t('delete')),
           ),
         ],
       ),
@@ -329,7 +348,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Search collections...',
+                hintText: _i18n.t('search_collections'),
                 prefixIcon: const Icon(Icons.search),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -357,15 +376,15 @@ class _CollectionsPageState extends State<CollectionsPage> {
                             const SizedBox(height: 16),
                             Text(
                               _allCollections.isEmpty
-                                  ? 'No collections yet'
-                                  : 'No collections found',
+                                  ? _i18n.t('no_collections_yet')
+                                  : _i18n.t('no_collections_found'),
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 8),
                             Text(
                               _allCollections.isEmpty
-                                  ? 'Create your first collection'
-                                  : 'Try a different search',
+                                  ? _i18n.t('create_your_first_collection')
+                                  : _i18n.t('try_a_different_search'),
                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                                   ),
@@ -405,7 +424,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewCollection,
         icon: const Icon(Icons.add),
-        label: const Text('New Collection'),
+        label: Text(_i18n.t('create_new_collection')),
       ),
     );
   }
@@ -427,6 +446,7 @@ class _CollectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = I18nService();
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
@@ -499,7 +519,7 @@ class _CollectionCard extends StatelessWidget {
                 children: [
                   _InfoChip(
                     icon: Icons.insert_drive_file_outlined,
-                    label: '${collection.filesCount} files',
+                    label: '${collection.filesCount} ${collection.filesCount == 1 ? i18n.t('file') : i18n.t('files')}',
                   ),
                   const SizedBox(width: 8),
                   _InfoChip(
@@ -565,6 +585,7 @@ class _CreateCollectionDialog extends StatefulWidget {
 }
 
 class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
+  final I18nService _i18n = I18nService();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   bool _isCreating = false;
@@ -605,7 +626,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
 
     if (title.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title')),
+        SnackBar(content: Text(_i18n.t('title_required'))),
       );
       return;
     }
@@ -652,7 +673,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('New Collection'),
+      title: Text(_i18n.t('create_collection_title')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -660,10 +681,10 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
           children: [
             TextField(
               controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                hintText: 'Enter collection title',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: _i18n.t('collection_title'),
+                hintText: _i18n.t('collection_title_hint'),
+                border: const OutlineInputBorder(),
               ),
               autofocus: true,
               enabled: !_isCreating,
@@ -672,10 +693,10 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
             const SizedBox(height: 16),
             TextField(
               controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description (optional)',
-                hintText: 'Enter collection description',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: _i18n.t('collection_description'),
+                hintText: _i18n.t('collection_description_hint'),
+                border: const OutlineInputBorder(),
               ),
               maxLines: 3,
               enabled: !_isCreating,
@@ -756,7 +777,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
       actions: [
         TextButton(
           onPressed: _isCreating ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(_i18n.t('cancel')),
         ),
         FilledButton(
           onPressed: _isCreating ? null : _create,
@@ -766,7 +787,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Create'),
+              : Text(_i18n.t('create')),
         ),
       ],
     );
@@ -779,6 +800,7 @@ class GeoChatPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = I18nService();
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -790,12 +812,12 @@ class GeoChatPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'GeoChat',
+            i18n.t('geochat'),
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 8),
           Text(
-            'Your conversations will appear here',
+            i18n.t('your_conversations_will_appear_here'),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -812,6 +834,7 @@ class DevicesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = I18nService();
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -823,12 +846,12 @@ class DevicesPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Devices',
+            i18n.t('devices'),
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 8),
           Text(
-            'Connected devices will be listed here',
+            i18n.t('connected_devices_will_be_listed_here'),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -849,6 +872,7 @@ class LogPage extends StatefulWidget {
 
 class _LogPageState extends State<LogPage> {
   final LogService _logService = LogService();
+  final I18nService _i18n = I18nService();
   final TextEditingController _filterController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isPaused = false;
@@ -857,6 +881,7 @@ class _LogPageState extends State<LogPage> {
   @override
   void initState() {
     super.initState();
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
     _logService.addListener(_onLogUpdate);
 
     // Add some initial logs for demonstration
@@ -866,8 +891,13 @@ class _LogPageState extends State<LogPage> {
     });
   }
 
+  void _onLanguageChanged() {
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _logService.removeListener(_onLogUpdate);
     _filterController.dispose();
     _scrollController.dispose();
@@ -896,7 +926,7 @@ class _LogPageState extends State<LogPage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(_isPaused ? 'Log paused' : 'Log resumed'),
+        content: Text(_isPaused ? _i18n.t('log_paused') : _i18n.t('log_resumed')),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -906,9 +936,9 @@ class _LogPageState extends State<LogPage> {
     _logService.clear();
     setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Log cleared'),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(_i18n.t('log_cleared')),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -918,16 +948,16 @@ class _LogPageState extends State<LogPage> {
     if (logText.isNotEmpty) {
       Clipboard.setData(ClipboardData(text: logText));
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Log copied to clipboard'),
-          duration: Duration(seconds: 1),
+        SnackBar(
+          content: Text(_i18n.t('log_copied_to_clipboard')),
+          duration: const Duration(seconds: 1),
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Log is empty'),
-          duration: Duration(seconds: 1),
+        SnackBar(
+          content: Text(_i18n.t('log_is_empty')),
+          duration: const Duration(seconds: 1),
         ),
       );
     }
@@ -960,7 +990,7 @@ class _LogPageState extends State<LogPage> {
                 IconButton(
                   icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),
                   color: Colors.white,
-                  tooltip: _isPaused ? 'Resume' : 'Pause',
+                  tooltip: _isPaused ? _i18n.t('resume') : _i18n.t('pause'),
                   onPressed: _togglePause,
                 ),
                 const SizedBox(width: 8),
@@ -975,12 +1005,12 @@ class _LogPageState extends State<LogPage> {
                     child: TextField(
                       controller: _filterController,
                       style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        hintText: 'Filter',
-                        hintStyle: TextStyle(color: Colors.grey),
-                        prefixIcon: Icon(Icons.search, color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: _i18n.t('filter_logs'),
+                        hintStyle: const TextStyle(color: Colors.grey),
+                        prefixIcon: const Icon(Icons.search, color: Colors.white),
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
                       ),
                       onChanged: (value) {
                         setState(() {
@@ -995,14 +1025,14 @@ class _LogPageState extends State<LogPage> {
                 IconButton(
                   icon: const Icon(Icons.clear_all),
                   color: Colors.white,
-                  tooltip: 'Clear',
+                  tooltip: _i18n.t('clear_logs'),
                   onPressed: _clearLog,
                 ),
                 // Copy Button
                 IconButton(
                   icon: const Icon(Icons.copy),
                   color: Colors.white,
-                  tooltip: 'Copy to Clipboard',
+                  tooltip: _i18n.t('copy_to_clipboard_button'),
                   onPressed: _copyToClipboard,
                 ),
               ],
@@ -1039,24 +1069,90 @@ class _LogPageState extends State<LogPage> {
 }
 
 // Settings Page
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  final I18nService _i18n = I18nService();
+
+  @override
+  void initState() {
+    super.initState();
+    // Listen to language changes to rebuild the UI
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
+  }
+
+  @override
+  void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    super.dispose();
+  }
+
+  void _onLanguageChanged() {
+    setState(() {});
+  }
+
+  Future<void> _showLanguageDialog() async {
+    final selectedLanguage = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(_i18n.t('select_language')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _i18n.supportedLanguages.map((languageCode) {
+              return RadioListTile<String>(
+                title: Text(_i18n.getLanguageName(languageCode)),
+                value: languageCode,
+                groupValue: _i18n.currentLanguage,
+                onChanged: (String? value) {
+                  Navigator.pop(context, value);
+                },
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_i18n.t('cancel')),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selectedLanguage != null && selectedLanguage != _i18n.currentLanguage) {
+      await _i18n.setLanguage(selectedLanguage);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
+        Padding(
+          padding: const EdgeInsets.all(16),
           child: Text(
-            'Settings',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            _i18n.t('settings'),
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
         ),
         ListTile(
+          leading: const Icon(Icons.language),
+          title: Text(_i18n.t('language')),
+          subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _showLanguageDialog,
+        ),
+        const Divider(),
+        ListTile(
           leading: const Icon(Icons.person_outline),
-          title: const Text('Profile'),
-          subtitle: const Text('Manage your profile'),
+          title: Text(_i18n.t('profile')),
+          subtitle: Text(_i18n.t('manage_your_profile')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
@@ -1067,8 +1163,8 @@ class SettingsPage extends StatelessWidget {
         ),
         ListTile(
           leading: const Icon(Icons.location_on_outlined),
-          title: const Text('Location'),
-          subtitle: const Text('Set your location on the map'),
+          title: Text(_i18n.t('location')),
+          subtitle: Text(_i18n.t('set_location_on_map')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
@@ -1079,8 +1175,8 @@ class SettingsPage extends StatelessWidget {
         ),
         ListTile(
           leading: const Icon(Icons.settings_input_antenna),
-          title: const Text('Connections'),
-          subtitle: const Text('Manage internet relays and network settings'),
+          title: Text(_i18n.t('connections')),
+          subtitle: Text(_i18n.t('manage_relays_and_network')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
@@ -1091,8 +1187,8 @@ class SettingsPage extends StatelessWidget {
         ),
         ListTile(
           leading: const Icon(Icons.notifications_outlined),
-          title: const Text('Notifications'),
-          subtitle: const Text('Configure notifications'),
+          title: Text(_i18n.t('notifications')),
+          subtitle: Text(_i18n.t('configure_notifications')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
@@ -1104,8 +1200,8 @@ class SettingsPage extends StatelessWidget {
         const Divider(),
         ListTile(
           leading: const Icon(Icons.info_outlined),
-          title: const Text('About'),
-          subtitle: const Text('App version and information'),
+          title: Text(_i18n.t('about')),
+          subtitle: Text(_i18n.t('app_version_and_info')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
@@ -1134,6 +1230,7 @@ class CollectionBrowserPage extends StatefulWidget {
 
 class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   final CollectionService _collectionService = CollectionService();
+  final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   List<FileNode> _allFiles = [];
   List<FileNode> _filteredFiles = [];
@@ -1143,11 +1240,17 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   @override
   void initState() {
     super.initState();
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
     _loadFiles();
+  }
+
+  void _onLanguageChanged() {
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -1216,7 +1319,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
     try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
-        dialogTitle: 'Select files to add',
+        dialogTitle: _i18n.t('select_files_to_add'),
       );
 
       if (result != null && result.files.isNotEmpty) {
@@ -1228,7 +1331,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Added ${paths.length} file(s)')),
+            SnackBar(content: Text(_i18n.t('added_files', params: [paths.length.toString()]))),
           );
         }
 
@@ -1238,7 +1341,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       LogService().log('Error adding files: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding files: $e')),
+          SnackBar(content: Text(_i18n.t('error_adding_files', params: [e.toString()]))),
         );
       }
     }
@@ -1247,7 +1350,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   Future<void> _addFolder() async {
     try {
       final result = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select folder to add',
+        dialogTitle: _i18n.t('select_folder_to_add'),
       );
 
       if (result != null) {
@@ -1258,7 +1361,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Folder added successfully')),
+            SnackBar(content: Text(_i18n.t('folder_added_successfully'))),
           );
         }
 
@@ -1268,7 +1371,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       LogService().log('Error adding folder: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding folder: $e')),
+          SnackBar(content: Text(_i18n.t('error_adding_folder', params: [e.toString()]))),
         );
       }
     }
@@ -1280,13 +1383,13 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
     final folderName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Create Folder'),
+        title: Text(_i18n.t('create_folder')),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Folder Name',
-            hintText: 'Enter folder name',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+            hintText: _i18n.t('enter_folder_name'),
+            border: const OutlineInputBorder(),
           ),
           autofocus: true,
           textInputAction: TextInputAction.done,
@@ -1297,13 +1400,13 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () {
               Navigator.pop(context, controller.text.trim());
             },
-            child: const Text('Create'),
+            child: Text(_i18n.t('create')),
           ),
         ],
       ),
@@ -1320,7 +1423,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Created folder: $folderName')),
+            SnackBar(content: Text(_i18n.t('folder_created'))),
           );
         }
 
@@ -1329,7 +1432,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
         LogService().log('Error creating folder: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error creating folder: $e')),
+            SnackBar(content: Text(_i18n.t('error_creating_folder', params: [e.toString()]))),
           );
         }
       }
@@ -1358,7 +1461,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _editSettings,
-            tooltip: 'Collection Settings',
+            tooltip: _i18n.t('collection_settings'),
           ),
         ],
       ),
@@ -1383,7 +1486,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                     Icon(Icons.folder_outlined, size: 16, color: Theme.of(context).colorScheme.secondary),
                     const SizedBox(width: 4),
                     Text(
-                      '${widget.collection.filesCount} files',
+                      '${widget.collection.filesCount} ${widget.collection.filesCount == 1 ? _i18n.t('file') : _i18n.t('files')}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(width: 16),
@@ -1412,7 +1515,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Search files...',
+                hintText: _i18n.t('search_files'),
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchController.text.isNotEmpty
                     ? IconButton(
@@ -1442,7 +1545,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                   child: OutlinedButton.icon(
                     onPressed: _addFiles,
                     icon: const Icon(Icons.add),
-                    label: const Text('Add Files'),
+                    label: Text(_i18n.t('add_files')),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1450,7 +1553,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                   child: OutlinedButton.icon(
                     onPressed: _addFolder,
                     icon: const Icon(Icons.folder_open),
-                    label: const Text('Add Folder'),
+                    label: Text(_i18n.t('add_folder')),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1458,7 +1561,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                   child: OutlinedButton.icon(
                     onPressed: _createFolder,
                     icon: const Icon(Icons.create_new_folder),
-                    label: const Text('Create Folder'),
+                    label: Text(_i18n.t('create_folder')),
                   ),
                 ),
               ],
@@ -1481,14 +1584,14 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              _searchController.text.isEmpty ? 'No files yet' : 'No matching files',
+                              _searchController.text.isEmpty ? _i18n.t('no_files_yet') : _i18n.t('no_matching_files'),
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 8),
                             Text(
                               _searchController.text.isEmpty
-                                  ? 'Add files or folders to get started'
-                                  : 'Try a different search term',
+                                  ? _i18n.t('add_files_to_get_started')
+                                  : _i18n.t('try_a_different_search'),
                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                                   ),
@@ -1584,13 +1687,14 @@ class _FileNodeTileState extends State<_FileNodeTile> {
   }
 
   String _formatSubtitle() {
+    final i18n = I18nService();
     if (widget.fileNode.isDirectory) {
       final fileCount = widget.fileNode.fileCount;
       final size = _formatSize(widget.fileNode.size);
       if (fileCount == 1) {
-        return '1 file • $size';
+        return '1 ${i18n.t('file')} • $size';
       } else {
-        return '$fileCount files • $size';
+        return '$fileCount ${i18n.t('files')} • $size';
       }
     } else {
       return _formatSize(widget.fileNode.size);
@@ -1600,6 +1704,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
   Future<void> _openFile() async {
     if (widget.fileNode.isDirectory) return;
 
+    final i18n = I18nService();
     try {
       final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
       final file = File(filePath);
@@ -1607,7 +1712,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
       if (!await file.exists()) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('File not found')),
+            SnackBar(content: Text(i18n.t('file_not_found'))),
           );
         }
         return;
@@ -1621,7 +1726,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot open this file type')),
+            SnackBar(content: Text(i18n.t('cannot_open_file_type'))),
           );
         }
         LogService().log('Cannot launch file: $filePath');
@@ -1630,7 +1735,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
       LogService().log('Error opening file: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening file: $e')),
+          SnackBar(content: Text(i18n.t('error_opening_file', params: [e.toString()]))),
         );
       }
     }
@@ -1727,6 +1832,7 @@ class EditCollectionDialog extends StatefulWidget {
 
 class _EditCollectionDialogState extends State<EditCollectionDialog> {
   final CollectionService _collectionService = CollectionService();
+  final I18nService _i18n = I18nService();
   late TextEditingController _titleController;
   late TextEditingController _descriptionController;
   late String _visibility;
@@ -1754,7 +1860,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
 
     if (title.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title')),
+        SnackBar(content: Text(_i18n.t('please_enter_a_title'))),
       );
       return;
     }
@@ -1787,7 +1893,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
       LogService().log('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating collection: $e')),
+          SnackBar(content: Text(_i18n.t('error_updating_collection', params: [e.toString()]))),
         );
       }
     } finally {
@@ -1800,7 +1906,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Collection Settings'),
+      title: Text(_i18n.t('collection_settings')),
       content: SingleChildScrollView(
         child: SizedBox(
           width: 500,
@@ -1810,7 +1916,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
             children: [
               // Collection ID (read-only)
               Text(
-                'Collection ID',
+                _i18n.t('collection_id'),
                 style: Theme.of(context).textTheme.labelSmall,
               ),
               const SizedBox(height: 4),
@@ -1833,9 +1939,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               // Title
               TextField(
                 controller: _titleController,
-                decoration: const InputDecoration(
-                  labelText: 'Title',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _i18n.t('collection_title'),
+                  border: const OutlineInputBorder(),
                 ),
                 enabled: !_isSaving,
                 textInputAction: TextInputAction.next,
@@ -1845,9 +1951,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               // Description
               TextField(
                 controller: _descriptionController,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _i18n.t('description'),
+                  border: const OutlineInputBorder(),
                 ),
                 maxLines: 3,
                 enabled: !_isSaving,
@@ -1858,7 +1964,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               const SizedBox(height: 8),
 
               Text(
-                'Permissions',
+                _i18n.t('permissions'),
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 16),
@@ -1866,14 +1972,14 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               // Visibility
               DropdownButtonFormField<String>(
                 initialValue: _visibility,
-                decoration: const InputDecoration(
-                  labelText: 'Visibility',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _i18n.t('visibility'),
+                  border: const OutlineInputBorder(),
                 ),
-                items: const [
-                  DropdownMenuItem(value: 'public', child: Text('Public')),
-                  DropdownMenuItem(value: 'private', child: Text('Private')),
-                  DropdownMenuItem(value: 'restricted', child: Text('Restricted')),
+                items: [
+                  DropdownMenuItem(value: 'public', child: Text(_i18n.t('public'))),
+                  DropdownMenuItem(value: 'private', child: Text(_i18n.t('private'))),
+                  DropdownMenuItem(value: 'restricted', child: Text(_i18n.t('restricted'))),
                 ],
                 onChanged: _isSaving
                     ? null
@@ -1888,13 +1994,13 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               // Encryption
               DropdownButtonFormField<String>(
                 initialValue: _encryption,
-                decoration: const InputDecoration(
-                  labelText: 'Encryption',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _i18n.t('encryption'),
+                  border: const OutlineInputBorder(),
                 ),
-                items: const [
-                  DropdownMenuItem(value: 'none', child: Text('None')),
-                  DropdownMenuItem(value: 'aes256', child: Text('AES-256')),
+                items: [
+                  DropdownMenuItem(value: 'none', child: Text(_i18n.t('encryption_none'))),
+                  DropdownMenuItem(value: 'aes256', child: Text(_i18n.t('encryption_aes256'))),
                 ],
                 onChanged: _isSaving
                     ? null
@@ -1911,7 +2017,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
       actions: [
         TextButton(
           onPressed: _isSaving ? null : () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
+          child: Text(_i18n.t('cancel')),
         ),
         FilledButton(
           onPressed: _isSaving ? null : _save,
@@ -1921,7 +2027,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Save'),
+              : Text(_i18n.t('save')),
         ),
       ],
     );

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import '../services/i18n_service.dart';
 
 class LocationPage extends StatefulWidget {
   const LocationPage({super.key});
@@ -15,6 +16,7 @@ class LocationPage extends StatefulWidget {
 
 class _LocationPageState extends State<LocationPage> {
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
   final MapController _mapController = MapController();
   final TextEditingController _latController = TextEditingController();
   final TextEditingController _lonController = TextEditingController();
@@ -150,14 +152,14 @@ class _LocationPageState extends State<LocationPage> {
 
     if (lat == null || lon == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid coordinates')),
+        SnackBar(content: Text(_i18n.t('invalid_coordinates_error'))),
       );
       return;
     }
 
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Coordinates out of range')),
+        SnackBar(content: Text(_i18n.t('coordinates_out_of_range'))),
       );
       return;
     }
@@ -190,8 +192,8 @@ class _LocationPageState extends State<LocationPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Location saved successfully'),
+          SnackBar(
+            content: Text(_i18n.t('location_saved')),
             backgroundColor: Colors.green,
           ),
         );
@@ -201,7 +203,7 @@ class _LocationPageState extends State<LocationPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving location: $e'),
+            content: Text(_i18n.t('error_saving_location', params: [e.toString()])),
             backgroundColor: Colors.red,
           ),
         );
@@ -225,7 +227,7 @@ class _LocationPageState extends State<LocationPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Location Settings'),
+        title: Text(_i18n.t('location_settings')),
       ),
       body: Row(
         children: [
@@ -303,7 +305,7 @@ class _LocationPageState extends State<LocationPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Click anywhere on the map to set your location. Use mouse wheel or +/- buttons to zoom.',
+                          _i18n.t('map_instructions'),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
@@ -342,7 +344,7 @@ class _LocationPageState extends State<LocationPage> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Location Details',
+                          _i18n.t('location_details'),
                           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -362,7 +364,7 @@ class _LocationPageState extends State<LocationPage> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Coordinates',
+                          _i18n.t('coordinates'),
                           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -376,14 +378,14 @@ class _LocationPageState extends State<LocationPage> {
                               borderRadius: BorderRadius.circular(4),
                               border: Border.all(color: Colors.blue.withOpacity(0.3)),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.wifi, size: 12, color: Colors.blue),
-                                SizedBox(width: 4),
+                                const Icon(Icons.wifi, size: 12, color: Colors.blue),
+                                const SizedBox(width: 4),
                                 Text(
-                                  'Auto-detected',
-                                  style: TextStyle(fontSize: 11, color: Colors.blue),
+                                  _i18n.t('auto_detected'),
+                                  style: const TextStyle(fontSize: 11, color: Colors.blue),
                                 ),
                               ],
                             ),
@@ -394,8 +396,8 @@ class _LocationPageState extends State<LocationPage> {
                     const SizedBox(height: 8),
                     Text(
                       _locationFromIP
-                          ? 'Location detected from IP address. Click map or enter coordinates to change.'
-                          : 'Click on map or enter coordinates manually',
+                          ? _i18n.t('location_auto_detected_desc')
+                          : _i18n.t('location_manual_desc'),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
@@ -405,14 +407,14 @@ class _LocationPageState extends State<LocationPage> {
 
                     // Latitude Input
                     Text(
-                      'Latitude',
+                      _i18n.t('latitude'),
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _latController,
                       decoration: InputDecoration(
-                        hintText: '-90 to 90',
+                        hintText: _i18n.t('latitude_range'),
                         border: const OutlineInputBorder(),
                         filled: true,
                         suffixText: '°',
@@ -431,14 +433,14 @@ class _LocationPageState extends State<LocationPage> {
 
                     // Longitude Input
                     Text(
-                      'Longitude',
+                      _i18n.t('longitude'),
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _lonController,
                       decoration: InputDecoration(
-                        hintText: '-180 to 180',
+                        hintText: _i18n.t('longitude_range'),
                         border: const OutlineInputBorder(),
                         filled: true,
                         suffixText: '°',
@@ -461,7 +463,7 @@ class _LocationPageState extends State<LocationPage> {
                       child: FilledButton.icon(
                         onPressed: _updateFromManualInput,
                         icon: const Icon(Icons.update),
-                        label: const Text('Update Map Position'),
+                        label: Text(_i18n.t('update_map_position')),
                       ),
                     ),
 
@@ -471,14 +473,14 @@ class _LocationPageState extends State<LocationPage> {
 
                     // Location Name
                     Text(
-                      'Location Name (Optional)',
+                      _i18n.t('location_name_optional'),
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _locationNameController,
-                      decoration: const InputDecoration(
-                        hintText: 'e.g., Home, Office, Camp Site',
+                      decoration: InputDecoration(
+                        hintText: _i18n.t('location_name_hint'),
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.label),
                         filled: true,
@@ -509,7 +511,7 @@ class _LocationPageState extends State<LocationPage> {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                'Location Privacy',
+                                _i18n.t('location_privacy'),
                                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -518,7 +520,7 @@ class _LocationPageState extends State<LocationPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Your location is stored locally and only shared when you explicitly choose to do so.',
+                            _i18n.t('location_privacy_desc'),
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                                 ),
@@ -531,18 +533,13 @@ class _LocationPageState extends State<LocationPage> {
 
                     // Coordinate Format Help
                     ExpansionTile(
-                      title: const Text('Coordinate Format Help'),
+                      title: Text(_i18n.t('coordinate_format_help')),
                       leading: const Icon(Icons.help_outline, size: 20),
                       tilePadding: EdgeInsets.zero,
                       childrenPadding: const EdgeInsets.all(12),
                       children: [
                         Text(
-                          'Latitude ranges from -90° (South Pole) to +90° (North Pole).\n\n'
-                          'Longitude ranges from -180° (West) to +180° (East).\n\n'
-                          'Use decimal format:\n'
-                          '• New York: 40.7128, -74.0060\n'
-                          '• London: 51.5074, -0.1278\n'
-                          '• Tokyo: 35.6762, 139.6503',
+                          _i18n.t('coordinate_help_text'),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],

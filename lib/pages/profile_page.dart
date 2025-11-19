@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+import '../services/i18n_service.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -15,6 +16,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
   final TextEditingController _nicknameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
 
@@ -22,26 +24,32 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _isLoading = true;
   String? _profileImagePath;
 
-  // Color options
+  // Color options - keys for translation
   final List<String> _colorOptions = [
-    'Red',
-    'Blue',
-    'Green',
-    'Yellow',
-    'Purple',
-    'Orange',
-    'Pink',
-    'Cyan',
+    'red',
+    'blue',
+    'green',
+    'yellow',
+    'purple',
+    'orange',
+    'pink',
+    'cyan',
   ];
 
   @override
   void initState() {
     super.initState();
+    _i18n.languageNotifier.addListener(_onLanguageChanged);
     _loadProfile();
+  }
+
+  void _onLanguageChanged() {
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _saveProfile(showSnackbar: false);
     _nicknameController.dispose();
     _descriptionController.dispose();
@@ -80,8 +88,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (mounted && showSnackbar) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile saved successfully'),
+          SnackBar(
+            content: Text(_i18n.t('profile_saved')),
             backgroundColor: Colors.green,
           ),
         );
@@ -91,7 +99,7 @@ class _ProfilePageState extends State<ProfilePage> {
       if (mounted && showSnackbar) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving profile: $e'),
+            content: Text(_i18n.t('error_saving_profile', params: [e.toString()])),
             backgroundColor: Colors.red,
           ),
         );
@@ -103,7 +111,7 @@ class _ProfilePageState extends State<ProfilePage> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
-        dialogTitle: 'Select profile picture',
+        dialogTitle: _i18n.t('select_profile_picture'),
       );
 
       if (result != null && result.files.isNotEmpty) {
@@ -123,7 +131,7 @@ class _ProfilePageState extends State<ProfilePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error selecting image: $e'),
+            content: Text(_i18n.t('error_selecting_image', params: [e.toString()])),
             backgroundColor: Colors.red,
           ),
         );
@@ -141,7 +149,7 @@ class _ProfilePageState extends State<ProfilePage> {
   void _copyToClipboard(String text, String label) {
     if (text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Field is empty')),
+        SnackBar(content: Text(_i18n.t('field_is_empty'))),
       );
       return;
     }
@@ -149,7 +157,7 @@ class _ProfilePageState extends State<ProfilePage> {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('$label copied to clipboard'),
+        content: Text(_i18n.t('copied_to_clipboard', params: [label])),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -159,21 +167,19 @@ class _ProfilePageState extends State<ProfilePage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reset Identity'),
-        content: const Text(
-          'This will generate new Nostr keys and callsign. Your old identity will be lost. Continue?',
-        ),
+        title: Text(_i18n.t('reset_identity')),
+        content: Text(_i18n.t('reset_identity_confirm')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(_i18n.t('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(
               backgroundColor: Colors.red,
             ),
-            child: const Text('Yes, Reset'),
+            child: Text(_i18n.t('yes_reset')),
           ),
         ],
       ),
@@ -184,8 +190,8 @@ class _ProfilePageState extends State<ProfilePage> {
       await _loadProfile();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('New identity generated'),
+          SnackBar(
+            content: Text(_i18n.t('new_identity_generated')),
             backgroundColor: Colors.green,
           ),
         );
@@ -197,7 +203,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Profile Settings'),
+        title: Text(_i18n.t('profile_settings')),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -208,7 +214,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 children: [
                   // Profile Information Section
                   Text(
-                    'Profile Information',
+                    _i18n.t('profile_information'),
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 16),
@@ -255,7 +261,7 @@ class _ProfilePageState extends State<ProfilePage> {
                               onPressed: _pickProfileImage,
                               icon: const Icon(Icons.upload, size: 16),
                               label: Text(
-                                _profileImagePath == null ? 'Upload' : 'Change',
+                                _profileImagePath == null ? _i18n.t('upload') : _i18n.t('change'),
                                 style: const TextStyle(fontSize: 12),
                               ),
                               style: OutlinedButton.styleFrom(
@@ -269,7 +275,7 @@ class _ProfilePageState extends State<ProfilePage> {
                                 child: IconButton(
                                   icon: const Icon(Icons.delete, size: 20),
                                   onPressed: _removeProfileImage,
-                                  tooltip: 'Remove picture',
+                                  tooltip: _i18n.t('remove_picture'),
                                   color: Theme.of(context).colorScheme.error,
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(),
@@ -281,14 +287,14 @@ class _ProfilePageState extends State<ProfilePage> {
 
                             // Preferred Color
                             Text(
-                              'Preferred Color',
+                              _i18n.t('preferred_color'),
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                             const SizedBox(height: 8),
                             DropdownButtonFormField<String>(
-                              value: _profile != null && _colorOptions.contains(_profile!.preferredColor.capitalize())
-                                  ? _profile!.preferredColor.capitalize()
-                                  : 'Blue',
+                              value: _profile != null && _colorOptions.contains(_profile!.preferredColor.toLowerCase())
+                                  ? _profile!.preferredColor.toLowerCase()
+                                  : 'blue',
                               decoration: const InputDecoration(
                                 border: OutlineInputBorder(),
                                 filled: true,
@@ -310,7 +316,7 @@ class _ProfilePageState extends State<ProfilePage> {
                                       ),
                                       const SizedBox(width: 8),
                                       Text(
-                                        color,
+                                        _i18n.t(color),
                                         style: const TextStyle(fontSize: 13),
                                       ),
                                     ],
@@ -342,15 +348,15 @@ class _ProfilePageState extends State<ProfilePage> {
                           children: [
                             // Nickname Field
                             Text(
-                              'Nickname',
+                              _i18n.t('nickname'),
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
                             TextField(
                               controller: _nicknameController,
-                              decoration: const InputDecoration(
-                                hintText: 'Enter your nickname',
-                                border: OutlineInputBorder(),
+                              decoration: InputDecoration(
+                                hintText: _i18n.t('enter_your_nickname'),
+                                border: const OutlineInputBorder(),
                                 filled: true,
                               ),
                               maxLength: 50,
@@ -360,15 +366,15 @@ class _ProfilePageState extends State<ProfilePage> {
 
                             // Description Field
                             Text(
-                              'Description',
+                              _i18n.t('description'),
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
                             TextField(
                               controller: _descriptionController,
-                              decoration: const InputDecoration(
-                                hintText: 'Tell others about yourself',
-                                border: OutlineInputBorder(),
+                              decoration: InputDecoration(
+                                hintText: _i18n.t('tell_about_yourself'),
+                                border: const OutlineInputBorder(),
                                 filled: true,
                               ),
                               maxLines: 4,
@@ -386,14 +392,14 @@ class _ProfilePageState extends State<ProfilePage> {
 
                   // Identity Section
                   Text(
-                    'NOSTR Identity',
+                    _i18n.t('nostr_identity'),
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 16),
 
                   // Callsign (read-only)
                   Text(
-                    'Callsign',
+                    _i18n.t('callsign'),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 8),
@@ -418,8 +424,8 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.copy),
-                          onPressed: () => _copyToClipboard(_profile?.callsign ?? '', 'Callsign'),
-                          tooltip: 'Copy callsign',
+                          onPressed: () => _copyToClipboard(_profile?.callsign ?? '', _i18n.t('callsign')),
+                          tooltip: _i18n.t('copy_callsign'),
                         ),
                       ],
                     ),
@@ -429,7 +435,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
                   // NPUB (read-only)
                   Text(
-                    'NOSTR Public Key (npub)',
+                    _i18n.t('nostr_public_key'),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 8),
@@ -453,8 +459,8 @@ class _ProfilePageState extends State<ProfilePage> {
                         const SizedBox(width: 8),
                         IconButton(
                           icon: const Icon(Icons.copy),
-                          onPressed: () => _copyToClipboard(_profile?.npub ?? '', 'NPUB'),
-                          tooltip: 'Copy to clipboard',
+                          onPressed: () => _copyToClipboard(_profile?.npub ?? '', _i18n.t('nostr_public_key')),
+                          tooltip: _i18n.t('copy_to_clipboard'),
                         ),
                       ],
                     ),
@@ -464,14 +470,14 @@ class _ProfilePageState extends State<ProfilePage> {
 
                   // NSEC (read-only, sensitive)
                   Text(
-                    'NOSTR Private Key (nsec)',
+                    _i18n.t('nostr_private_key'),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           color: Theme.of(context).colorScheme.error,
                         ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '⚠️ Keep this secret! Never share with anyone.',
+                    _i18n.t('keep_secret_warning'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.error,
                           fontWeight: FontWeight.bold,
@@ -498,8 +504,8 @@ class _ProfilePageState extends State<ProfilePage> {
                         const SizedBox(width: 8),
                         IconButton(
                           icon: const Icon(Icons.copy),
-                          onPressed: () => _copyToClipboard(_profile?.nsec ?? '', 'NSEC'),
-                          tooltip: 'Copy to clipboard',
+                          onPressed: () => _copyToClipboard(_profile?.nsec ?? '', _i18n.t('nostr_private_key')),
+                          tooltip: _i18n.t('copy_to_clipboard'),
                           color: Theme.of(context).colorScheme.error,
                         ),
                       ],
@@ -514,7 +520,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     child: OutlinedButton.icon(
                       onPressed: _resetIdentity,
                       icon: const Icon(Icons.refresh),
-                      label: const Text('Reset Identity'),
+                      label: Text(_i18n.t('reset_identity')),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Theme.of(context).colorScheme.error,
                         side: BorderSide(color: Theme.of(context).colorScheme.error),
