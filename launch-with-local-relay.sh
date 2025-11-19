@@ -33,19 +33,34 @@ if [ ! -d "$RELAY_DIR" ]; then
     exit 1
 fi
 
-# Build relay if needed
-echo "[1/3] Checking relay build..."
-if [ ! -f "$RELAY_DIR/target/geogram-relay-1.0.0.jar" ]; then
-    echo "Building relay..."
-    cd "$RELAY_DIR"
+# Build relay (always rebuild to ensure latest code)
+echo "[1/3] Building relay..."
+cd "$RELAY_DIR"
+
+# Check if source is newer than JAR
+NEEDS_BUILD=false
+if [ ! -f "target/geogram-relay-1.0.0.jar" ]; then
+    NEEDS_BUILD=true
+    echo "  JAR not found, need to build"
+else
+    # Check if any Java source files are newer than the JAR
+    NEWEST_SOURCE=$(find src -name "*.java" -type f -newer target/geogram-relay-1.0.0.jar 2>/dev/null | head -1)
+    if [ ! -z "$NEWEST_SOURCE" ]; then
+        NEEDS_BUILD=true
+        echo "  Source files changed, need to rebuild"
+    fi
+fi
+
+if [ "$NEEDS_BUILD" = true ]; then
+    echo "  Running: mvn clean package"
     mvn clean package -q
     if [ $? -ne 0 ]; then
-        echo "Relay build failed!"
+        echo "  ✗ Relay build failed!"
         exit 1
     fi
     echo "✓ Relay built successfully"
 else
-    echo "✓ Relay already built"
+    echo "✓ Relay already up to date"
 fi
 
 # Check if relay is already running on port 8080
@@ -53,19 +68,44 @@ echo ""
 echo "[2/3] Starting local relay..."
 echo "URL: ws://localhost:8080"
 
-# Check for existing process on port 8080
-EXISTING_PID=$(lsof -ti:8080 2>/dev/null || true)
-if [ ! -z "$EXISTING_PID" ]; then
-    echo "  Found existing process on port 8080 (PID: $EXISTING_PID)"
-    echo "  Stopping existing relay..."
-    kill $EXISTING_PID 2>/dev/null || true
-    sleep 1
-    # Force kill if still running
-    if kill -0 $EXISTING_PID 2>/dev/null; then
-        kill -9 $EXISTING_PID 2>/dev/null || true
-    fi
-    echo "  ✓ Stopped"
+# Kill all existing relay processes with multiple methods
+echo "  Checking for existing relay processes..."
+
+# Method 1: Kill by port 8080
+EXISTING_PIDS=$(lsof -ti:8080 2>/dev/null || true)
+if [ ! -z "$EXISTING_PIDS" ]; then
+    echo "  Found process(es) on port 8080: $EXISTING_PIDS"
+    for PID in $EXISTING_PIDS; do
+        echo "    Killing PID $PID..."
+        kill -9 $PID 2>/dev/null || true
+    done
 fi
+
+# Method 2: Kill by process name pattern
+RELAY_PIDS=$(pgrep -f "geogram-relay.*\.jar" || true)
+if [ ! -z "$RELAY_PIDS" ]; then
+    echo "  Found relay process(es): $RELAY_PIDS"
+    for PID in $RELAY_PIDS; do
+        echo "    Killing PID $PID..."
+        kill -9 $PID 2>/dev/null || true
+    done
+fi
+
+# Method 3: Fallback - pkill
+pkill -9 -f "geogram-relay" 2>/dev/null || true
+
+# Wait a moment for processes to die
+sleep 2
+
+# Verify port 8080 is free
+if lsof -ti:8080 >/dev/null 2>&1; then
+    echo "  ✗ ERROR: Port 8080 is still in use!"
+    echo "  Please manually stop the process:"
+    lsof -ti:8080 | xargs ps -fp
+    exit 1
+fi
+
+echo "  ✓ All relay processes stopped, port 8080 is free"
 
 cd "$RELAY_DIR"
 java -jar target/geogram-relay-1.0.0.jar > /tmp/geogram-relay.log 2>&1 &
