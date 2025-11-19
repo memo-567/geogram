@@ -9,6 +9,7 @@ import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
 import 'services/relay_service.dart';
+import 'services/relay_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
@@ -41,6 +42,10 @@ void main() async {
 
     await NotificationService().initialize();
     LogService().log('NotificationService initialized');
+
+    // Start relay auto-discovery
+    RelayDiscoveryService().start();
+    LogService().log('RelayDiscoveryService started');
   } catch (e, stackTrace) {
     LogService().log('ERROR during initialization: $e');
     LogService().log('Stack trace: $stackTrace');

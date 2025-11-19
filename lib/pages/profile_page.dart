@@ -42,6 +42,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   void dispose() {
+    _saveProfile(showSnackbar: false);
     _nicknameController.dispose();
     _descriptionController.dispose();
     super.dispose();
@@ -65,7 +66,7 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<void> _saveProfile() async {
+  Future<void> _saveProfile({bool showSnackbar = false}) async {
     if (_profile == null) return;
 
     try {
@@ -77,7 +78,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       await _profileService.saveProfile(updatedProfile);
 
-      if (mounted) {
+      if (mounted && showSnackbar) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Profile saved successfully'),
@@ -87,7 +88,7 @@ class _ProfilePageState extends State<ProfilePage> {
       }
     } catch (e) {
       LogService().log('Error saving profile: $e');
-      if (mounted) {
+      if (mounted && showSnackbar) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error saving profile: $e'),
@@ -205,64 +206,6 @@ class _ProfilePageState extends State<ProfilePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Profile Picture Section
-                  Center(
-                    child: Column(
-                      children: [
-                        GestureDetector(
-                          onTap: _pickProfileImage,
-                          child: Container(
-                            width: 120,
-                            height: 120,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                              image: _profileImagePath != null
-                                  ? DecorationImage(
-                                      image: FileImage(File(_profileImagePath!)),
-                                      fit: BoxFit.cover,
-                                    )
-                                  : null,
-                            ),
-                            child: _profileImagePath == null
-                                ? Icon(
-                                    Icons.person,
-                                    size: 60,
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  )
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            OutlinedButton.icon(
-                              onPressed: _pickProfileImage,
-                              icon: const Icon(Icons.upload),
-                              label: Text(_profileImagePath == null
-                                  ? 'Upload Picture'
-                                  : 'Change Picture'),
-                            ),
-                            if (_profileImagePath != null) ...[
-                              const SizedBox(width: 8),
-                              IconButton(
-                                icon: const Icon(Icons.delete),
-                                onPressed: _removeProfileImage,
-                                tooltip: 'Remove picture',
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-                  const Divider(),
-                  const SizedBox(height: 16),
-
                   // Profile Information Section
                   Text(
                     'Profile Information',
@@ -270,90 +213,171 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Nickname Field
-                  Text(
-                    'Nickname',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _nicknameController,
-                    decoration: const InputDecoration(
-                      hintText: 'Enter your nickname',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                    ),
-                    maxLength: 50,
-                    onChanged: (_) => _saveProfile(),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Description Field
-                  Text(
-                    'Description',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _descriptionController,
-                    decoration: const InputDecoration(
-                      hintText: 'Tell others about yourself',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                    ),
-                    maxLines: 4,
-                    maxLength: 200,
-                    onChanged: (_) => _saveProfile(),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Preferred Color
-                  Text(
-                    'Preferred Color',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: _profile != null && _colorOptions.contains(_profile!.preferredColor.capitalize())
-                        ? _profile!.preferredColor.capitalize()
-                        : 'Blue',
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      filled: true,
-                    ),
-                    items: _colorOptions.map((color) {
-                      return DropdownMenuItem(
-                        value: color,
-                        child: Row(
+                  // Profile picture and fields in a row
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Profile Picture and Preferred Color on the left
+                      SizedBox(
+                        width: 160,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: _getColorFromName(color),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.grey),
+                            // Profile Picture
+                            Center(
+                              child: GestureDetector(
+                                onTap: _pickProfileImage,
+                                child: Container(
+                                  width: 100,
+                                  height: 100,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                    image: _profileImagePath != null
+                                        ? DecorationImage(
+                                            image: FileImage(File(_profileImagePath!)),
+                                            fit: BoxFit.cover,
+                                          )
+                                        : null,
+                                  ),
+                                  child: _profileImagePath == null
+                                      ? Icon(
+                                          Icons.person,
+                                          size: 50,
+                                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                        )
+                                      : null,
+                                ),
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Text(color),
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: _pickProfileImage,
+                              icon: const Icon(Icons.upload, size: 16),
+                              label: Text(
+                                _profileImagePath == null ? 'Upload' : 'Change',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                minimumSize: const Size(0, 0),
+                              ),
+                            ),
+                            if (_profileImagePath != null) ...[
+                              const SizedBox(height: 4),
+                              Center(
+                                child: IconButton(
+                                  icon: const Icon(Icons.delete, size: 20),
+                                  onPressed: _removeProfileImage,
+                                  tooltip: 'Remove picture',
+                                  color: Theme.of(context).colorScheme.error,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                ),
+                              ),
+                            ],
+
+                            const SizedBox(height: 24),
+
+                            // Preferred Color
+                            Text(
+                              'Preferred Color',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            DropdownButtonFormField<String>(
+                              value: _profile != null && _colorOptions.contains(_profile!.preferredColor.capitalize())
+                                  ? _profile!.preferredColor.capitalize()
+                                  : 'Blue',
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                filled: true,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                              items: _colorOptions.map((color) {
+                                return DropdownMenuItem(
+                                  value: color,
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: _getColorFromName(color),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(color: Colors.grey),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        color,
+                                        style: const TextStyle(fontSize: 13),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (value) async {
+                                if (value != null && _profile != null) {
+                                  final updatedProfile = _profile!.copyWith(
+                                    preferredColor: value.toLowerCase(),
+                                  );
+                                  await _profileService.saveProfile(updatedProfile);
+                                  setState(() {
+                                    _profile = updatedProfile;
+                                  });
+                                }
+                              },
+                            ),
                           ],
                         ),
-                      );
-                    }).toList(),
-                    onChanged: (value) async {
-                      if (value != null && _profile != null) {
-                        final updatedProfile = _profile!.copyWith(
-                          preferredColor: value.toLowerCase(),
-                        );
-                        await _profileService.saveProfile(updatedProfile);
-                        setState(() {
-                          _profile = updatedProfile;
-                        });
-                      }
-                    },
+                      ),
+
+                      const SizedBox(width: 24),
+
+                      // Form fields on the right
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Nickname Field
+                            Text(
+                              'Nickname',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _nicknameController,
+                              decoration: const InputDecoration(
+                                hintText: 'Enter your nickname',
+                                border: OutlineInputBorder(),
+                                filled: true,
+                              ),
+                              maxLength: 50,
+                            ),
+
+                            const SizedBox(height: 16),
+
+                            // Description Field
+                            Text(
+                              'Description',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _descriptionController,
+                              decoration: const InputDecoration(
+                                hintText: 'Tell others about yourself',
+                                border: OutlineInputBorder(),
+                                filled: true,
+                              ),
+                              maxLines: 4,
+                              maxLength: 200,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
 
                   const SizedBox(height: 32),

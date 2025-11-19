@@ -44,9 +44,23 @@ class _LocationPageState extends State<LocationPage> {
     try {
       final profile = _profileService.getProfile();
 
-      // For now, check if profile has location data
-      // In future, this would load from profile.latitude/longitude
-      // Since we haven't added these fields to Profile yet, try IP geolocation
+      // Check if profile already has location data
+      if (profile.latitude != null && profile.longitude != null) {
+        setState(() {
+          _currentPosition = LatLng(profile.latitude!, profile.longitude!);
+          _latController.text = _currentPosition.latitude.toStringAsFixed(6);
+          _lonController.text = _currentPosition.longitude.toStringAsFixed(6);
+          if (profile.locationName != null) {
+            _locationNameController.text = profile.locationName!;
+            _locationName = profile.locationName!;
+          }
+          _hasLocation = true;
+        });
+        // Move map to saved location
+        _mapController.move(_currentPosition, 5.0);
+        LogService().log('Location loaded from profile: ${profile.latitude}, ${profile.longitude}');
+        return;
+      }
 
       // Try to get location from IP address
       final ipLocation = await _getLocationFromIP();
@@ -59,7 +73,12 @@ class _LocationPageState extends State<LocationPage> {
           _hasLocation = true;
           _locationFromIP = true;
         });
+        // Move map to detected location
+        _mapController.move(_currentPosition, 5.0);
         LogService().log('Location detected from IP: ${ipLocation.latitude}, ${ipLocation.longitude}');
+
+        // Auto-save IP-detected location to profile
+        _saveLocation();
       } else {
         setState(() {
           // Fallback to center of world map
@@ -160,14 +179,23 @@ class _LocationPageState extends State<LocationPage> {
     try {
       _locationName = _locationNameController.text.trim();
 
-      // TODO: Save to profile service when profile has location fields
-      // await _profileService.updateProfile(
-      //   latitude: _currentPosition.latitude,
-      //   longitude: _currentPosition.longitude,
-      //   locationName: _locationName,
-      // );
+      // Save to profile
+      await _profileService.updateProfile(
+        latitude: _currentPosition.latitude,
+        longitude: _currentPosition.longitude,
+        locationName: _locationName.isNotEmpty ? _locationName : null,
+      );
 
       LogService().log('Saved location: $_locationName (${_currentPosition.latitude}, ${_currentPosition.longitude})');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location saved successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
       LogService().log('Error saving location: $e');
       if (mounted) {
@@ -206,67 +234,23 @@ class _LocationPageState extends State<LocationPage> {
             flex: 2,
             child: Column(
               children: [
-                // Map Controls Bar
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.map,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Interactive World Map',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      const Spacer(),
-                      if (!_isOnline)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Row(
-                            children: [
-                              Icon(Icons.cloud_off, size: 16, color: Colors.orange),
-                              SizedBox(width: 4),
-                              Text('Offline', style: TextStyle(fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _resetToCurrentView,
-                        icon: const Icon(Icons.my_location, size: 18),
-                        label: const Text('Use Map Center'),
-                        style: OutlinedButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
                 // Map Widget
                 Expanded(
                   child: FlutterMap(
                     mapController: _mapController,
                     options: MapOptions(
                       initialCenter: _currentPosition,
-                      initialZoom: 2.0,
+                      initialZoom: 5.0,
                       minZoom: 1.0,
                       maxZoom: 18.0,
                       onTap: _onMapTap,
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
                         userAgentPackageName: 'dev.geogram.geogram_desktop',
+                        subdomains: const ['a', 'b', 'c', 'd'],
+                        retinaMode: RetinaMode.isHighDensity(context),
                         errorTileCallback: (tile, error, stackTrace) {
                           // Map tiles failed to load - probably offline
                           if (!_isOnline) return;

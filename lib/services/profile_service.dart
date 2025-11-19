@@ -98,6 +98,9 @@ class ProfileService {
     String? description,
     String? profileImagePath,
     String? preferredColor,
+    double? latitude,
+    double? longitude,
+    String? locationName,
   }) async {
     final currentProfile = getProfile();
     final updatedProfile = currentProfile.copyWith(
@@ -105,6 +108,9 @@ class ProfileService {
       description: description,
       profileImagePath: profileImagePath,
       preferredColor: preferredColor,
+      latitude: latitude,
+      longitude: longitude,
+      locationName: locationName,
     );
     await saveProfile(updatedProfile);
   }
