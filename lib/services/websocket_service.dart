@@ -245,15 +245,26 @@ class WebSocketService {
         final sha1Hash = sha1.convert(bytes).toString();
         final mimeType = lookupMimeType(entity.path) ?? 'application/octet-stream';
 
+        // TODO: Implement TLSH (Trend Micro Locality Sensitive Hash)
+        // TLSH is used for fuzzy matching and finding similar files
+        // For now, we'll include it as null until a Dart TLSH package is available
+        // or we implement FFI bindings to the C library
+        final tlshHash = null; // await _calculateTlsh(bytes);
+
+        final hashes = <String, dynamic>{
+          'sha1': sha1Hash,
+        };
+        if (tlshHash != null) {
+          hashes['tlsh'] = tlshHash;
+        }
+
         entries.add({
           'path': relativePath,
           'name': entity.path.split('/').last,
           'type': 'file',
           'size': stat.size,
           'mimeType': mimeType,
-          'hashes': {
-            'sha1': sha1Hash,
-          },
+          'hashes': hashes,
           'metadata': {
             'mime_type': mimeType,
           },
