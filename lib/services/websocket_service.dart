@@ -255,6 +255,9 @@ class WebSocketService {
         // Calculate TLSH (Trend Micro Locality Sensitive Hash)
         // TLSH is used for fuzzy matching and finding similar files
         final tlshHash = TLSH.hash(bytes);
+        if (tlshHash != null && bytes.length < 500) {
+          LogService().log('  TLSH for $relativePath (${bytes.length} bytes): $tlshHash');
+        }
 
         final hashes = <String, dynamic>{
           'sha1': sha1Hash,
