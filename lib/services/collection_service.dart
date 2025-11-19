@@ -982,11 +982,13 @@ window.COLLECTION_DATA_FULL = $jsonData;
         }
 
         .header h1 {
-            color: #0ff;
-            text-shadow: 0 0 10px #0ff, 0 0 20px #0ff;
-            font-size: 24px;
+            color: #0f0;
+            text-shadow: 0 0 5px #0f0;
+            font-size: 32px;
             margin-bottom: 10px;
             text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: bold;
         }
 
         .header .subtitle {
@@ -1073,6 +1075,14 @@ window.COLLECTION_DATA_FULL = $jsonData;
         }
 
         .file-tree {
+            list-style: none;
+        }
+
+        .file-tree ul {
+            list-style: none;
+        }
+
+        .file-tree li {
             list-style: none;
         }
 
@@ -1193,7 +1203,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
         <div class="header">
             <h1><span id="collection-title">LOADING SYSTEM...</span></h1>
             <div class="subtitle" id="collection-description"></div>
-            <div class="meta">SYSTEM TIME: <span id="collection-meta"></span></div>
+            <div class="meta">LATEST UPDATE: <span id="collection-meta"></span></div>
         </div>
 
         <div class="stats-box">
@@ -1224,8 +1234,8 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
         <div class="footer">
             ┌────────────────────────────────────────────────────────────────┐<br>
-            │ GEOGRAM RESILIENT NETWORK v1.0 (c) 2025 - UNDERGROUND EDITION │<br>
-            │ NO CARRIER DETECTED - OFFLINE MODE ACTIVE - STAY UNDETECTED    │<br>
+            │ GEOGRAM COLLECTION BROWSER v1.0 - OFFLINE-FIRST COMMUNICATION │<br>
+            │ LEFT CLICK: OPEN FILE | RIGHT CLICK: OPEN IN NEW TAB          │<br>
             └────────────────────────────────────────────────────────────────┘
         </div>
     </div>
@@ -1250,7 +1260,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
         function loadCollectionInfo() {
             document.getElementById('collection-title').textContent = collectionData.title || 'Collection';
             document.getElementById('collection-description').textContent = collectionData.description || '';
-            document.getElementById('collection-meta').textContent = \`Updated: \${new Date(collectionData.updated).toLocaleString()}\`;
+            document.getElementById('collection-meta').textContent = new Date(collectionData.updated).toLocaleString();
         }
 
         function setupKeyboardShortcuts() {
@@ -1264,12 +1274,13 @@ window.COLLECTION_DATA_FULL = $jsonData;
                     searchInput.select();
                 }
 
-                // ESC - Clear search
-                if (e.key === 'Escape') {
+                // ESC - Clear search and keep focus
+                if (e.key === 'Escape' && document.activeElement === searchInput) {
+                    e.preventDefault();
                     searchInput.value = '';
-                    searchInput.blur();
                     currentSearchQuery = '';
                     renderFileList();
+                    // Keep focus on search input
                 }
             });
         }
@@ -1370,9 +1381,17 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
                     div.addEventListener('click', () => {
                         if (item.type !== 'directory') {
-                            openFile(item.path);
+                            openFile(item.path, false);
                         }
                     });
+
+                    // Right-click to open in new tab
+                    if (item.type !== 'directory') {
+                        div.addEventListener('contextmenu', (e) => {
+                            e.preventDefault();
+                            openFile(item.path, true);
+                        });
+                    }
 
                     container.appendChild(div);
                 });
@@ -1460,9 +1479,17 @@ window.COLLECTION_DATA_FULL = $jsonData;
                             expandIcon.textContent = isOpen ? '-' : '+';
                         }
                     } else {
-                        openFile(item.path);
+                        openFile(item.path, false);
                     }
                 });
+
+                // Right-click to open in new tab
+                if (item.type !== 'directory') {
+                    div.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        openFile(item.path, true);
+                    });
+                }
 
                 li.appendChild(div);
 
@@ -1488,8 +1515,12 @@ window.COLLECTION_DATA_FULL = $jsonData;
             });
         }
 
-        function openFile(path) {
-            window.open(path, '_blank');
+        function openFile(path, newTab = false) {
+            if (newTab) {
+                window.open(path, '_blank');
+            } else {
+                window.location.href = path;
+            }
         }
     </script>
 </body>
