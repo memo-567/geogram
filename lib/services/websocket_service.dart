@@ -158,7 +158,13 @@ class WebSocketService {
 
     try {
       final collections = await CollectionService().loadCollections();
-      final collectionNames = collections.map((c) => c.title).toList();
+
+      // Filter out private collections - only share public and restricted ones
+      final publicCollections = collections
+          .where((c) => c.visibility != 'private')
+          .toList();
+
+      final collectionNames = publicCollections.map((c) => c.title).toList();
 
       final response = {
         'type': 'COLLECTIONS_RESPONSE',
@@ -167,7 +173,7 @@ class WebSocketService {
       };
 
       send(response);
-      LogService().log('Sent ${collectionNames.length} collection names to relay');
+      LogService().log('Sent ${collectionNames.length} collection names to relay (filtered ${collections.length - publicCollections.length} private collections)');
     } catch (e) {
       LogService().log('Error handling collections request: $e');
     }
@@ -187,6 +193,12 @@ class WebSocketService {
         (c) => c.title == collectionName,
         orElse: () => throw Exception('Collection not found: $collectionName'),
       );
+
+      // Security check: reject access to private collections
+      if (collection.visibility == 'private') {
+        LogService().log('⚠ Rejected file request for private collection: $collectionName');
+        throw Exception('Access denied: Collection is private');
+      }
 
       String fileContent;
       String actualFileName;
