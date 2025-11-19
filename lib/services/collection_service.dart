@@ -907,10 +907,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
             box-sizing: border-box;
         }
 
-        @keyframes blink {
-            0%, 49% { opacity: 1; }
-            50%, 100% { opacity: 0; }
-        }
 
         @keyframes scanline {
             0% { transform: translateY(-100%); }
@@ -977,15 +973,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
             z-index: 1;
         }
 
-        .ascii-art {
-            color: #0f0;
-            text-shadow: 0 0 10px #0f0;
-            font-size: 10px;
-            line-height: 8px;
-            white-space: pre;
-            margin-bottom: 20px;
-            animation: textGlow 2s ease-in-out infinite;
-        }
 
         .header {
             border: 2px solid #0f0;
@@ -1076,34 +1063,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
             box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
         }
 
-        .tabs {
-            display: flex;
-            gap: 2px;
-            margin-bottom: 15px;
-        }
-
-        .tab {
-            background: #000;
-            border: 1px solid #0f0;
-            color: #0f0;
-            padding: 8px 20px;
-            cursor: pointer;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            text-transform: uppercase;
-            transition: all 0.2s;
-        }
-
-        .tab:hover {
-            background: rgba(0, 255, 0, 0.1);
-            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-        }
-
-        .tab.active {
-            background: rgba(0, 255, 0, 0.2);
-            color: #0ff;
-            box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
-        }
 
         .content {
             border: 2px solid #0f0;
@@ -1154,8 +1113,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
         .nested {
             padding-left: 20px;
             display: none;
-            border-left: 1px dotted #0f0;
-            margin-left: 10px;
         }
 
         .nested.open {
@@ -1204,13 +1161,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
             border: 1px dashed #f00;
         }
 
-        .search-results {
-            display: none;
-        }
-
-        .search-results.active {
-            display: block;
-        }
 
         .footer {
             margin-top: 20px;
@@ -1231,39 +1181,17 @@ window.COLLECTION_DATA_FULL = $jsonData;
             text-shadow: 0 0 10px #0ff;
         }
 
-        .blink {
-            animation: blink 1s step-start infinite;
-        }
-
         @media (max-width: 768px) {
-            .ascii-art {
-                font-size: 6px;
-                line-height: 5px;
-            }
-
             .stat {
                 min-width: 100%;
-            }
-
-            .tabs {
-                flex-direction: column;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <pre class="ascii-art">
- ██████╗ ███████╗ ██████╗  ██████╗ ██████╗  █████╗ ███╗   ███╗    ██████╗ ██████╗ ███████╗
-██╔════╝ ██╔════╝██╔═══██╗██╔════╝ ██╔══██╗██╔══██╗████╗ ████║    ██╔══██╗██╔══██╗██╔════╝
-██║  ███╗█████╗  ██║   ██║██║  ███╗██████╔╝███████║██╔████╔██║    ██████╔╝██████╔╝███████╗
-██║   ██║██╔══╝  ██║   ██║██║   ██║██╔══██╗██╔══██║██║╚██╔╝██║    ██╔══██╗██╔══██╗╚════██║
-╚██████╔╝███████╗╚██████╔╝╚██████╔╝██║  ██║██║  ██║██║ ╚═╝ ██║    ██████╔╝██████╔╝███████║
- ╚═════╝ ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝    ╚═════╝ ╚═════╝ ╚══════╝
-        </pre>
-
         <div class="header">
-            <h1>[<span class="blink">█</span>] <span id="collection-title">LOADING SYSTEM...</span></h1>
+            <h1><span id="collection-title">LOADING SYSTEM...</span></h1>
             <div class="subtitle" id="collection-description"></div>
             <div class="meta">SYSTEM TIME: <span id="collection-meta"></span></div>
         </div>
@@ -1286,22 +1214,12 @@ window.COLLECTION_DATA_FULL = $jsonData;
         </div>
 
         <div class="search-box">
-            <div class="search-prompt">SEARCH COMMAND [?]:</div>
-            <input type="text" class="search-input" id="search-input" placeholder="Enter search query...">
-        </div>
-
-        <div class="tabs">
-            <button class="tab active" data-tab="browser">[F1] FILE BROWSER</button>
-            <button class="tab" data-tab="search">[F2] SEARCH RESULTS</button>
+            <div class="search-prompt">SEARCH [?]:</div>
+            <input type="text" class="search-input" id="search-input" placeholder="Type to search files...">
         </div>
 
         <div class="content">
-            <div id="browser-view">
-                <ul class="file-tree" id="file-tree"></ul>
-            </div>
-            <div id="search-view" class="search-results">
-                <div id="search-results-list"></div>
-            </div>
+            <div id="file-list"></div>
         </div>
 
         <div class="footer">
@@ -1317,22 +1235,43 @@ window.COLLECTION_DATA_FULL = $jsonData;
     <script>
         const collectionData = window.COLLECTION_DATA?.collection || {};
         const fileData = window.COLLECTION_DATA_FULL || [];
-        let currentView = 'browser';
         let searchTimeout = null;
+        let currentSearchQuery = '';
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             loadCollectionInfo();
-            buildFileTree();
             setupSearch();
-            setupTabs();
+            setupKeyboardShortcuts();
             calculateStats();
+            renderFileList();
         });
 
         function loadCollectionInfo() {
             document.getElementById('collection-title').textContent = collectionData.title || 'Collection';
             document.getElementById('collection-description').textContent = collectionData.description || '';
             document.getElementById('collection-meta').textContent = \`Updated: \${new Date(collectionData.updated).toLocaleString()}\`;
+        }
+
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', (e) => {
+                const searchInput = document.getElementById('search-input');
+
+                // ? - Focus search
+                if (e.key === '?' && document.activeElement !== searchInput) {
+                    e.preventDefault();
+                    searchInput.focus();
+                    searchInput.select();
+                }
+
+                // ESC - Clear search
+                if (e.key === 'Escape') {
+                    searchInput.value = '';
+                    searchInput.blur();
+                    currentSearchQuery = '';
+                    renderFileList();
+                }
+            });
         }
 
         function getFileIcon(item) {
@@ -1391,9 +1330,57 @@ window.COLLECTION_DATA_FULL = $jsonData;
             return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
         }
 
-        function buildFileTree() {
-            const tree = {};
+        function renderFileList() {
+            const container = document.getElementById('file-list');
+            const query = currentSearchQuery.toLowerCase();
 
+            // If searching, show filtered results
+            if (query) {
+                const results = fileData.filter(item => {
+                    const nameMatch = item.name.toLowerCase().includes(query);
+                    const pathMatch = item.path.toLowerCase().includes(query);
+                    const mimeMatch = item.mimeType && item.mimeType.toLowerCase().includes(query);
+                    return nameMatch || pathMatch || mimeMatch;
+                });
+
+                if (results.length === 0) {
+                    container.innerHTML = \`
+                        <div class="no-results">
+                            *** SEARCH FAILED ***<br><br>
+                            NO MATCHES FOUND FOR: "\${currentSearchQuery}"<br><br>
+                            PRESS [ESC] TO CLEAR SEARCH
+                        </div>
+                    \`;
+                    return;
+                }
+
+                container.innerHTML = '';
+                results.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item';
+
+                    const sizeStr = item.type !== 'directory' ? formatSize(item.size) : '<DIR>';
+                    const mimeStr = item.mimeType ? \` TYPE: \${item.mimeType}\` : '';
+
+                    div.innerHTML = \`
+                        <div class="result-name">\${getFileIcon(item)} \${item.name}</div>
+                        <div class="result-path">PATH: \${item.path}</div>
+                        <div class="result-meta">SIZE: \${sizeStr}\${mimeStr}</div>
+                    \`;
+
+                    div.addEventListener('click', () => {
+                        if (item.type !== 'directory') {
+                            openFile(item.path);
+                        }
+                    });
+
+                    container.appendChild(div);
+                });
+                return;
+            }
+
+            // Otherwise show file tree
+            const tree = {};
             fileData.forEach(item => {
                 const parts = item.path.split('/');
                 let current = tree;
@@ -1413,16 +1400,19 @@ window.COLLECTION_DATA_FULL = $jsonData;
                 });
             });
 
-            const treeContainer = document.getElementById('file-tree');
-            treeContainer.innerHTML = '';
-            renderTree(tree, treeContainer);
+            container.innerHTML = '';
+            const ul = document.createElement('ul');
+            ul.className = 'file-tree';
+            renderTreeNode(tree, ul);
+            container.appendChild(ul);
         }
 
-        function renderTree(node, container, level = 0) {
+        function renderTreeNode(node, container) {
             const entries = Object.values(node).sort((a, b) => {
+                // Folders first, then alphabetically
                 if (a.type === 'directory' && b.type !== 'directory') return -1;
                 if (a.type !== 'directory' && b.type === 'directory') return 1;
-                return a.name.localeCompare(b.name);
+                return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
             });
 
             entries.forEach(item => {
@@ -1478,8 +1468,8 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
                 if (item.type === 'directory' && Object.keys(item.children).length > 0) {
                     const nested = document.createElement('ul');
-                    nested.className = 'nested';
-                    renderTree(item.children, nested, level + 1);
+                    nested.className = 'nested';  // Collapsed by default
+                    renderTreeNode(item.children, nested);
                     li.appendChild(nested);
                 }
 
@@ -1492,83 +1482,10 @@ window.COLLECTION_DATA_FULL = $jsonData;
             searchInput.addEventListener('input', (e) => {
                 clearTimeout(searchTimeout);
                 searchTimeout = setTimeout(() => {
-                    performSearch(e.target.value);
+                    currentSearchQuery = e.target.value.trim();
+                    renderFileList();
                 }, 300);
             });
-        }
-
-        function performSearch(query) {
-            if (!query.trim()) {
-                switchTab('browser');
-                return;
-            }
-
-            const lowerQuery = query.toLowerCase();
-            const results = fileData.filter(item => {
-                const nameMatch = item.name.toLowerCase().includes(lowerQuery);
-                const pathMatch = item.path.toLowerCase().includes(lowerQuery);
-                const mimeMatch = item.mimeType && item.mimeType.toLowerCase().includes(lowerQuery);
-                return nameMatch || pathMatch || mimeMatch;
-            });
-
-            displaySearchResults(results, query);
-            switchTab('search');
-        }
-
-        function displaySearchResults(results, query) {
-            const container = document.getElementById('search-results-list');
-
-            if (results.length === 0) {
-                container.innerHTML = \`
-                    <div class="no-results">
-                        *** SEARCH FAILED ***<br><br>
-                        NO MATCHES FOUND FOR: "\${query}"<br><br>
-                        TRY AGAIN OR PRESS [ESC] TO ABORT
-                    </div>
-                \`;
-                return;
-            }
-
-            container.innerHTML = '';
-            results.forEach(item => {
-                const div = document.createElement('div');
-                div.className = 'result-item';
-
-                const sizeStr = item.type !== 'directory' ? formatSize(item.size) : '<DIR>';
-                const mimeStr = item.mimeType ? \` TYPE: \${item.mimeType}\` : '';
-
-                div.innerHTML = \`
-                    <div class="result-name">\${getFileIcon(item)} \${item.name}</div>
-                    <div class="result-path">PATH: \${item.path}</div>
-                    <div class="result-meta">SIZE: \${sizeStr}\${mimeStr}</div>
-                \`;
-
-                div.addEventListener('click', () => {
-                    if (item.type !== 'directory') {
-                        openFile(item.path);
-                    }
-                });
-
-                container.appendChild(div);
-            });
-        }
-
-        function setupTabs() {
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.addEventListener('click', () => {
-                    switchTab(tab.dataset.tab);
-                });
-            });
-        }
-
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.toggle('active', tab.dataset.tab === tabName);
-            });
-
-            document.getElementById('browser-view').style.display = tabName === 'browser' ? 'block' : 'none';
-            document.getElementById('search-view').style.display = tabName === 'search' ? 'block' : 'none';
-            currentView = tabName;
         }
 
         function openFile(path) {
