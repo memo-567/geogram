@@ -591,7 +591,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
   bool _isCreating = false;
   bool _useAutoFolder = true;
   String? _selectedFolderPath;
-  String _collectionType = 'Files';
+  String _collectionType = 'files';
 
   @override
   void dispose() {
@@ -717,9 +717,9 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 border: OutlineInputBorder(),
               ),
               items: const [
-                DropdownMenuItem(value: 'Files', child: Text('Files')),
-                DropdownMenuItem(value: 'Forum', child: Text('Forum')),
-                DropdownMenuItem(value: 'Chat', child: Text('Chat')),
+                DropdownMenuItem(value: 'files', child: Text('Files')),
+                DropdownMenuItem(value: 'forum', child: Text('Forum')),
+                DropdownMenuItem(value: 'chat', child: Text('Chat')),
               ],
               onChanged: _isCreating ? null : (value) {
                 if (value != null) {

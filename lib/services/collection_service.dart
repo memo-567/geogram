@@ -114,7 +114,7 @@ class CollectionService {
         id: collectionData['id'] as String? ?? '',
         title: collectionData['title'] as String? ?? 'Untitled',
         description: collectionData['description'] as String? ?? '',
-        type: collectionData['type'] as String? ?? 'Files',
+        type: collectionData['type'] as String? ?? 'files',
         updated: collectionData['updated'] as String? ??
                  DateTime.now().toIso8601String(),
         storagePath: folder.path,
@@ -201,7 +201,7 @@ class CollectionService {
   Future<Collection> createCollection({
     required String title,
     String description = '',
-    String type = 'Files',
+    String type = 'files',
     String? customRootPath,
   }) async {
     if (_collectionsDir == null) {
