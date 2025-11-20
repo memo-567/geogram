@@ -1209,8 +1209,26 @@ window.COLLECTION_DATA_FULL = $jsonData;
             color: #ff0;
         }
 
+        .file-item.selected {
+            background: rgba(255, 255, 0, 0.2);
+            padding-left: 10px;
+        }
+
+        .file-item.selected::before {
+            content: '►';
+            position: absolute;
+            left: 0;
+            color: #ff0;
+            font-weight: bold;
+        }
+
         .file-item.directory {
             color: #0ff;
+        }
+
+        .result-item.selected {
+            background: rgba(255, 255, 0, 0.2);
+            padding-left: 15px;
         }
 
         .file-name {
@@ -1349,6 +1367,9 @@ window.COLLECTION_DATA_FULL = $jsonData;
         const fileData = window.COLLECTION_DATA_FULL || [];
         let searchTimeout = null;
         let currentSearchQuery = '';
+        let selectedIndex = 0;
+        let navigableItems = [];
+        let currentPath = [];
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -1383,11 +1404,17 @@ window.COLLECTION_DATA_FULL = $jsonData;
             document.addEventListener('keydown', (e) => {
                 const searchInput = document.getElementById('search-input');
 
+                // If typing in search, don't handle navigation keys
+                if (document.activeElement === searchInput && !['Escape', 'ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)) {
+                    return;
+                }
+
                 // ? - Focus search
                 if (e.key === '?' && document.activeElement !== searchInput) {
                     e.preventDefault();
                     searchInput.focus();
                     searchInput.select();
+                    return;
                 }
 
                 // ESC - Clear search and keep focus
@@ -1396,9 +1423,83 @@ window.COLLECTION_DATA_FULL = $jsonData;
                     searchInput.value = '';
                     currentSearchQuery = '';
                     renderFileList();
-                    // Keep focus on search input
+                    return;
+                }
+
+                // Arrow Down - Move selection down
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (navigableItems.length > 0) {
+                        selectedIndex = (selectedIndex + 1) % navigableItems.length;
+                        updateSelection();
+                    }
+                    return;
+                }
+
+                // Arrow Up - Move selection up
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (navigableItems.length > 0) {
+                        selectedIndex = (selectedIndex - 1 + navigableItems.length) % navigableItems.length;
+                        updateSelection();
+                    }
+                    return;
+                }
+
+                // Enter - Open/expand selected item
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (navigableItems.length > 0 && navigableItems[selectedIndex]) {
+                        navigableItems[selectedIndex].click();
+                    }
+                    return;
+                }
+
+                // Backspace - Go back one folder
+                if (e.key === 'Backspace' && document.activeElement !== searchInput) {
+                    e.preventDefault();
+                    if (currentPath.length > 0) {
+                        goBackOneFolder();
+                    }
+                    return;
                 }
             });
+        }
+
+        function updateSelection() {
+            // Remove previous selection
+            navigableItems.forEach(item => item.classList.remove('selected'));
+
+            // Add selection to current item
+            if (navigableItems[selectedIndex]) {
+                navigableItems[selectedIndex].classList.add('selected');
+                // Scroll into view
+                navigableItems[selectedIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        function goBackOneFolder() {
+            if (currentPath.length === 0) return;
+
+            // Remove last folder from path
+            currentPath.pop();
+
+            // Find all expanded folders and close the deepest one
+            const allExpanded = document.querySelectorAll('.nested.open');
+            if (allExpanded.length > 0) {
+                const deepest = allExpanded[allExpanded.length - 1];
+                deepest.classList.remove('open');
+                const parentDiv = deepest.previousElementSibling;
+                if (parentDiv) {
+                    const expandIcon = parentDiv.querySelector('.expand-icon');
+                    if (expandIcon) {
+                        expandIcon.textContent = '+';
+                    }
+                }
+            }
+
+            // Refresh navigable items
+            refreshNavigableItems();
         }
 
         function getFileIcon(item) {
@@ -1457,6 +1558,26 @@ window.COLLECTION_DATA_FULL = $jsonData;
             return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
         }
 
+        function refreshNavigableItems() {
+            // Get all file-item and result-item elements
+            const allItems = Array.from(document.querySelectorAll('.file-item, .result-item'));
+
+            // Filter to only include visible items (not inside collapsed folders)
+            navigableItems = allItems.filter(item => {
+                let element = item;
+                while (element && element !== document.body) {
+                    if (element.classList && element.classList.contains('nested') && !element.classList.contains('open')) {
+                        return false; // Item is inside a collapsed folder
+                    }
+                    element = element.parentElement;
+                }
+                return true; // Item is visible
+            });
+
+            selectedIndex = Math.min(selectedIndex, Math.max(0, navigableItems.length - 1));
+            updateSelection();
+        }
+
         function renderFileList() {
             const container = document.getElementById('file-list');
             const query = currentSearchQuery.toLowerCase();
@@ -1478,6 +1599,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
                             PRESS [ESC] TO CLEAR SEARCH
                         </div>
                     \`;
+                    navigableItems = [];
                     return;
                 }
 
@@ -1511,6 +1633,8 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
                     container.appendChild(div);
                 });
+
+                refreshNavigableItems();
                 return;
             }
 
@@ -1540,6 +1664,8 @@ window.COLLECTION_DATA_FULL = $jsonData;
             ul.className = 'file-tree';
             renderTreeNode(tree, ul);
             container.appendChild(ul);
+
+            refreshNavigableItems();
         }
 
         function renderTreeNode(node, container) {
@@ -1593,6 +1719,19 @@ window.COLLECTION_DATA_FULL = $jsonData;
                         if (nested) {
                             const isOpen = nested.classList.toggle('open');
                             expandIcon.textContent = isOpen ? '-' : '+';
+
+                            // Update current path
+                            if (isOpen) {
+                                currentPath.push(item.name);
+                            } else {
+                                const index = currentPath.indexOf(item.name);
+                                if (index > -1) {
+                                    currentPath.splice(index, 1);
+                                }
+                            }
+
+                            // Refresh navigable items after expanding/collapsing
+                            refreshNavigableItems();
                         }
                     } else {
                         openFile(item.path, false);
