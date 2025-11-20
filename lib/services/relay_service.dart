@@ -271,7 +271,8 @@ class RelayService {
         int? connectedDevices;
         try {
           final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-          final response = await http.get(Uri.parse(httpUrl));
+          final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
+          final response = await http.get(Uri.parse(statusUrl));
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             connectedDevices = data['connected_devices'] as int?;
