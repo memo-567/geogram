@@ -1472,18 +1472,33 @@ window.COLLECTION_DATA_FULL = $jsonData;
                     return;
                 }
 
-                // Arrow Left - Collapse selected folder
+                // Arrow Left - Collapse selected folder or parent folder if on a file
                 if (e.key === 'ArrowLeft' && document.activeElement !== searchInput) {
                     e.preventDefault();
                     if (navigableItems.length > 0 && navigableItems[selectedIndex]) {
                         const item = navigableItems[selectedIndex];
                         if (item.classList.contains('directory')) {
+                            // If on a folder, collapse it if it's open
                             const li = item.parentElement;
                             const nested = li?.querySelector('.nested');
                             if (nested && nested.classList.contains('open')) {
                                 const expandIcon = item.querySelector('.expand-icon');
                                 nested.classList.remove('open');
                                 if (expandIcon) expandIcon.textContent = '+';
+                                refreshNavigableItems();
+                                saveState();
+                            }
+                        } else {
+                            // If on a file, collapse its parent folder
+                            const li = item.parentElement;
+                            const parentUl = li?.parentElement;
+                            if (parentUl && parentUl.classList.contains('nested') && parentUl.classList.contains('open')) {
+                                parentUl.classList.remove('open');
+                                const parentDiv = parentUl.previousElementSibling;
+                                if (parentDiv) {
+                                    const expandIcon = parentDiv.querySelector('.expand-icon');
+                                    if (expandIcon) expandIcon.textContent = '+';
+                                }
                                 refreshNavigableItems();
                                 saveState();
                             }
