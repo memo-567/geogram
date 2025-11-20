@@ -602,7 +602,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
 
   Future<void> _checkExistingTypes() async {
     try {
-      final collections = await CollectionService().getCollections();
+      final collections = await CollectionService().loadCollections();
       setState(() {
         _existingTypes = collections
             .where((c) => c.type != 'files')
