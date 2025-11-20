@@ -1234,7 +1234,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
         <div class="footer">
             ┌────────────────────────────────────────────────────────────────┐<br>
             │ GEOGRAM COLLECTION BROWSER v1.0 - OFFLINE-FIRST COMMUNICATION │<br>
-            │ LEFT CLICK: OPEN FILE | RIGHT CLICK: OPEN IN NEW TAB          │<br>
             └────────────────────────────────────────────────────────────────┘
         </div>
     </div>
