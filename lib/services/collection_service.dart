@@ -1378,6 +1378,14 @@ window.COLLECTION_DATA_FULL = $jsonData;
             setupKeyboardShortcuts();
             calculateStats();
             renderFileList();
+            restoreState();
+        });
+
+        // Handle browser back/forward navigation
+        window.addEventListener('popstate', (e) => {
+            if (e.state && e.state.expandedPaths) {
+                restoreStateFromData(e.state);
+            }
         });
 
         function loadCollectionInfo() {
@@ -1477,6 +1485,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
                                 nested.classList.remove('open');
                                 if (expandIcon) expandIcon.textContent = '+';
                                 refreshNavigableItems();
+                                saveState();
                             }
                         }
                     }
@@ -1501,6 +1510,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
                                     currentPath.push(nameSpan.textContent);
                                 }
                                 refreshNavigableItems();
+                                saveState();
                             }
                         }
                     }
@@ -1543,6 +1553,9 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
             // Refresh navigable items
             refreshNavigableItems();
+
+            // Save state after going back
+            saveState();
         }
 
         function getFileIcon(item) {
@@ -1775,6 +1788,9 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
                             // Refresh navigable items after expanding/collapsing
                             refreshNavigableItems();
+
+                            // Save state after folder change
+                            saveState();
                         }
                     } else {
                         openFile(item.path, false);
@@ -1817,8 +1833,83 @@ window.COLLECTION_DATA_FULL = $jsonData;
             if (newTab) {
                 window.open(path, '_blank');
             } else {
+                // Save current state before navigating
+                saveState();
                 window.location.href = path;
             }
+        }
+
+        // Save current browser state
+        function saveState() {
+            const expandedPaths = [];
+            document.querySelectorAll('.nested.open').forEach(nested => {
+                const parentDiv = nested.previousElementSibling;
+                if (parentDiv) {
+                    const nameSpan = parentDiv.querySelector('.file-name');
+                    if (nameSpan) {
+                        expandedPaths.push(nameSpan.textContent);
+                    }
+                }
+            });
+
+            const state = {
+                expandedPaths: expandedPaths,
+                selectedIndex: selectedIndex,
+                searchQuery: currentSearchQuery
+            };
+
+            // Push state to history
+            history.replaceState(state, '', window.location.href);
+        }
+
+        // Restore state from URL hash or history
+        function restoreState() {
+            const state = history.state;
+            if (state && state.expandedPaths) {
+                restoreStateFromData(state);
+            }
+        }
+
+        // Restore state from data object
+        function restoreStateFromData(state) {
+            if (!state) return;
+
+            // Restore search query
+            if (state.searchQuery) {
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = state.searchQuery;
+                currentSearchQuery = state.searchQuery;
+            }
+
+            // Wait for file list to render
+            setTimeout(() => {
+                // Restore expanded folders
+                if (state.expandedPaths && state.expandedPaths.length > 0) {
+                    state.expandedPaths.forEach(folderName => {
+                        const allDivs = document.querySelectorAll('.file-item.directory');
+                        allDivs.forEach(div => {
+                            const nameSpan = div.querySelector('.file-name');
+                            if (nameSpan && nameSpan.textContent === folderName) {
+                                const li = div.parentElement;
+                                const nested = li?.querySelector('.nested');
+                                if (nested && !nested.classList.contains('open')) {
+                                    const expandIcon = div.querySelector('.expand-icon');
+                                    nested.classList.add('open');
+                                    if (expandIcon) expandIcon.textContent = '-';
+                                }
+                            }
+                        });
+                    });
+
+                    // Refresh navigable items and restore selection
+                    refreshNavigableItems();
+
+                    if (state.selectedIndex !== undefined && state.selectedIndex < navigableItems.length) {
+                        selectedIndex = state.selectedIndex;
+                        updateSelection();
+                    }
+                }
+            }, 50);
         }
     </script>
 </body>
