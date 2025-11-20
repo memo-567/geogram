@@ -1260,7 +1260,18 @@ window.COLLECTION_DATA_FULL = $jsonData;
             const title = collectionData.title || 'Collection';
             document.getElementById('collection-title').textContent = title;
             document.getElementById('collection-description').textContent = collectionData.description || '';
-            document.getElementById('collection-meta').textContent = new Date(collectionData.updated).toLocaleString();
+
+            // Format date as YYYY-MM-DD HH:MM:SS
+            const date = new Date(collectionData.updated);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            const isoDateTime = \`\${year}-\${month}-\${day} \${hours}:\${minutes}:\${seconds}\`;
+
+            document.getElementById('collection-meta').textContent = isoDateTime;
             // Update browser tab title
             document.title = title;
         }
