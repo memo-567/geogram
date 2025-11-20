@@ -121,6 +121,7 @@ class _HomePageState extends State<HomePage> {
     CollectionsPage(),
     GeoChatPage(),
     DevicesPage(),
+    LogPage(),
     SettingsPage(),
   ];
 
@@ -215,6 +216,11 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.devices_outlined),
             selectedIcon: const Icon(Icons.devices),
             label: _i18n.t('devices'),
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.article_outlined),
+            selectedIcon: const Icon(Icons.article),
+            label: _i18n.t('log'),
           ),
           NavigationDestination(
             icon: const Icon(Icons.settings_outlined),
