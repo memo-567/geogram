@@ -892,7 +892,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GEOGRAM BBS v1.0</title>
+    <title>Collection Browser</title>
     <style>
         @font-face {
             font-family: 'VT323';
@@ -983,7 +983,6 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
         .header h1 {
             color: #0f0;
-            text-shadow: 0 0 5px #0f0;
             font-size: 32px;
             margin-bottom: 10px;
             text-transform: uppercase;
@@ -1258,9 +1257,12 @@ window.COLLECTION_DATA_FULL = $jsonData;
         });
 
         function loadCollectionInfo() {
-            document.getElementById('collection-title').textContent = collectionData.title || 'Collection';
+            const title = collectionData.title || 'Collection';
+            document.getElementById('collection-title').textContent = title;
             document.getElementById('collection-description').textContent = collectionData.description || '';
             document.getElementById('collection-meta').textContent = new Date(collectionData.updated).toLocaleString();
+            // Update browser tab title
+            document.title = title;
         }
 
         function setupKeyboardShortcuts() {
