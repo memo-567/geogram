@@ -16,12 +16,20 @@ class WebSocketService {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  Timer? _reconnectTimer;
+  String? _relayUrl;
+  bool _shouldReconnect = false;
+  bool _isReconnecting = false;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
 
   /// Connect to relay and send hello
   Future<bool> connectAndHello(String url) async {
     try {
+      // Store URL for reconnection
+      _relayUrl = url;
+      _shouldReconnect = true;
+
       LogService().log('══════════════════════════════════════');
       LogService().log('CONNECTING TO RELAY');
       LogService().log('══════════════════════════════════════');
@@ -32,6 +40,9 @@ class WebSocketService {
       _channel = WebSocketChannel.connect(uri);
 
       LogService().log('✓ WebSocket connected');
+
+      // Start reconnection monitoring
+      _startReconnectTimer();
 
       // Get user profile
       final profile = ProfileService().getProfile();
@@ -87,6 +98,7 @@ class WebSocketService {
                 LogService().log('Relay ID: ${data['relay_id']}');
                 LogService().log('Message: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
+                _isReconnecting = false; // Reset reconnecting flag on successful connection
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
@@ -120,9 +132,11 @@ class WebSocketService {
         },
         onError: (error) {
           LogService().log('WebSocket error: $error');
+          _handleConnectionLoss();
         },
         onDone: () {
           LogService().log('WebSocket connection closed');
+          _handleConnectionLoss();
         },
       );
 
@@ -143,6 +157,9 @@ class WebSocketService {
   /// Disconnect from relay
   void disconnect() {
     LogService().log('Disconnecting from relay...');
+    _shouldReconnect = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _subscription?.cancel();
     _channel?.sink.close();
     _channel = null;
@@ -384,9 +401,62 @@ class WebSocketService {
     }
   }
 
+  /// Start reconnection monitoring timer
+  void _startReconnectTimer() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _checkConnection();
+    });
+  }
+
+  /// Check connection and attempt reconnection if needed
+  void _checkConnection() {
+    if (!_shouldReconnect || _isReconnecting) {
+      return;
+    }
+
+    // Check if channel is still active
+    if (_channel == null) {
+      LogService().log('Connection lost - attempting reconnection...');
+      _attemptReconnect();
+    }
+  }
+
+  /// Handle connection loss
+  void _handleConnectionLoss() {
+    if (!_shouldReconnect || _isReconnecting) {
+      return;
+    }
+
+    _channel = null;
+    _subscription?.cancel();
+    _subscription = null;
+
+    LogService().log('Connection lost - will attempt reconnection in 10 seconds');
+  }
+
+  /// Attempt to reconnect to relay
+  Future<void> _attemptReconnect() async {
+    if (!_shouldReconnect || _isReconnecting || _relayUrl == null) {
+      return;
+    }
+
+    _isReconnecting = true;
+    LogService().log('Attempting to reconnect to relay...');
+
+    try {
+      await connectAndHello(_relayUrl!);
+      LogService().log('✓ Reconnection successful!');
+    } catch (e) {
+      LogService().log('✗ Reconnection failed: $e');
+      _isReconnecting = false;
+    }
+  }
+
   /// Cleanup
   void dispose() {
     disconnect();
+    _reconnectTimer?.cancel();
     _messageController.close();
   }
 }
