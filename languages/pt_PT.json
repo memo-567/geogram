@@ -317,5 +317,6 @@
   "disconnected": "Desligado",
   "connected_with_latency": "Ligado ({0}ms)",
   "meters_away": "{0} metros de distância",
-  "kilometers_away": "{0} quilómetros de distância"
+  "kilometers_away": "{0} quilómetros de distância",
+  "title_defined_by_default": "Título é definido por padrão"
 }

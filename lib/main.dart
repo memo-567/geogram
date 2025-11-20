@@ -749,7 +749,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 hintText: _i18n.t('collection_title_hint'),
                 border: const OutlineInputBorder(),
                 helperText: _collectionType != 'files'
-                    ? 'Title is auto-set based on collection type'
+                    ? _i18n.t('title_defined_by_default')
                     : null,
               ),
               autofocus: _collectionType == 'files',
