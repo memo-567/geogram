@@ -322,31 +322,12 @@ class CollectionService {
         // Create default index.html for website type
         final indexFile = File('${collectionFolder.path}/index.html');
         final indexContent = '''<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
-            padding: 20px;
-            line-height: 1.6;
-        }
-        h1 {
-            color: #333;
-        }
-        p {
-            color: #666;
-        }
-    </style>
+    <title>Hello World</title>
 </head>
 <body>
-    <h1>Welcome to Your Website</h1>
-    <p>This is the default homepage. Edit this file to create your website.</p>
-    <p>You can add more HTML files, CSS stylesheets, JavaScript files, and images to build your site.</p>
+    <h1>Hello World</h1>
 </body>
 </html>
 ''';
