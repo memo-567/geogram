@@ -647,6 +647,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
       final collection = await CollectionService().createCollection(
         title: title,
         description: _descriptionController.text.trim(),
+        type: _collectionType,
         customRootPath: _useAutoFolder ? null : _selectedFolderPath,
       );
 

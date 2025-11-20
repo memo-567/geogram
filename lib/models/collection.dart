@@ -60,6 +60,7 @@ class Collection {
   String? storagePath;
   bool isOwned;
   bool isFavorite;
+  String type; // 'Files', 'Forum', 'Chat'
 
   // Security settings
   String visibility; // 'public', 'private', 'restricted'
@@ -77,6 +78,7 @@ class Collection {
     this.storagePath,
     this.isOwned = false,
     this.isFavorite = false,
+    this.type = 'Files',
     this.visibility = 'public',
     this.allowedReaders = const [],
     this.encryption = 'none',
@@ -95,6 +97,7 @@ class Collection {
       storagePath: json['storagePath'] as String?,
       isOwned: json['isOwned'] as bool? ?? false,
       isFavorite: json['isFavorite'] as bool? ?? false,
+      type: json['type'] as String? ?? 'Files',
       visibility: json['visibility'] as String? ?? 'public',
       allowedReaders: (json['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [],
       encryption: json['encryption'] as String? ?? 'none',
@@ -114,6 +117,7 @@ class Collection {
       if (storagePath != null) 'storagePath': storagePath,
       'isOwned': isOwned,
       'isFavorite': isFavorite,
+      'type': type,
       'visibility': visibility,
       'allowedReaders': allowedReaders,
       'encryption': encryption,
@@ -127,6 +131,7 @@ class Collection {
         'id': id,
         'title': title,
         'description': description,
+        'type': type,
         'updated': updated,
       },
     };

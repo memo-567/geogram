@@ -114,6 +114,7 @@ class CollectionService {
         id: collectionData['id'] as String? ?? '',
         title: collectionData['title'] as String? ?? 'Untitled',
         description: collectionData['description'] as String? ?? '',
+        type: collectionData['type'] as String? ?? 'Files',
         updated: collectionData['updated'] as String? ??
                  DateTime.now().toIso8601String(),
         storagePath: folder.path,
@@ -200,6 +201,7 @@ class CollectionService {
   Future<Collection> createCollection({
     required String title,
     String description = '',
+    String type = 'Files',
     String? customRootPath,
   }) async {
     if (_collectionsDir == null) {
@@ -263,6 +265,7 @@ class CollectionService {
         id: id,
         title: title,
         description: description,
+        type: type,
         updated: DateTime.now().toIso8601String(),
         storagePath: collectionFolder.path,
         isOwned: true,
