@@ -179,6 +179,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         ],
       ),
       body: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Left panel: Place list
           Expanded(
@@ -281,7 +282,10 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                 ? Center(
                     child: Text(_i18n.t('select_place_to_view')),
                   )
-                : _buildPlaceDetail(_selectedPlace!),
+                : Align(
+                alignment: Alignment.topCenter,
+                child: _buildPlaceDetail(_selectedPlace!),
+              ),
           ),
         ],
       ),
