@@ -216,12 +216,18 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           const SizedBox(width: 16),
         ],
       ),
-      body: Row(
-        children: [
-          // Map View (Left Side)
-          Expanded(
-            flex: 2,
-            child: Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Use portrait layout if width < height (portrait mode)
+          final isPortrait = constraints.maxWidth < constraints.maxHeight;
+
+          return Flex(
+            direction: isPortrait ? Axis.vertical : Axis.horizontal,
+            children: [
+              // Map View
+              Expanded(
+                flex: isPortrait ? 3 : 2,
+                child: Column(
               children: [
                 // Map Widget
                 Expanded(
@@ -298,18 +304,18 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
             ),
           ),
 
-          // Manual Input Panel (Right Side)
-          SizedBox(
-            width: 350,
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                border: Border(
-                  left: BorderSide(
-                    color: theme.colorScheme.outline.withOpacity(0.2),
+          // Manual Input Panel
+          isPortrait
+              ? Container(
+                  height: 200,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surface,
+                    border: Border(
+                      top: BorderSide(
+                        color: theme.colorScheme.outline.withOpacity(0.2),
+                      ),
+                    ),
                   ),
-                ),
-              ),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
                 child: Column(
@@ -398,9 +404,111 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                   ],
                 ),
               ),
-            ),
-          ),
-        ],
+            )
+              : SizedBox(
+                  width: 350,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface,
+                      border: Border(
+                        left: BorderSide(
+                          color: theme.colorScheme.outline.withOpacity(0.2),
+                        ),
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Coordinates Section
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.my_location,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _i18n.t('coordinates'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Latitude Input
+                          Text(
+                            _i18n.t('latitude'),
+                            style: theme.textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _latController,
+                            decoration: InputDecoration(
+                              hintText: _i18n.t('latitude_range'),
+                              border: const OutlineInputBorder(),
+                              filled: true,
+                              suffixText: '°',
+                              prefixIcon: Icon(
+                                Icons.arrow_upward,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                              signed: true,
+                            ),
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          // Longitude Input
+                          Text(
+                            _i18n.t('longitude'),
+                            style: theme.textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _lonController,
+                            decoration: InputDecoration(
+                              hintText: _i18n.t('longitude_range'),
+                              border: const OutlineInputBorder(),
+                              filled: true,
+                              suffixText: '°',
+                              prefixIcon: Icon(
+                                Icons.arrow_forward,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                              signed: true,
+                            ),
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          // Update Button
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: _updateFromManualInput,
+                              icon: const Icon(Icons.update),
+                              label: Text(_i18n.t('update_map_position')),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
