@@ -1334,6 +1334,16 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                         : null,
                   ),
                 ),
+                DropdownMenuItem(
+                  value: 'report',
+                  enabled: !_existingTypes.contains('report'),
+                  child: Text(
+                    '${_i18n.t('collection_type_report')}${_existingTypes.contains('report') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('report')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
               ].where((item) {
                 // Hide disabled items (existing fixed types) instead of greying them out
                 if (item.value == 'files') return true; // Always show files
