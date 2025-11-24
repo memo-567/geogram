@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:window_manager/window_manager.dart' if (dart.library.html) 'platform/window_manager_stub.dart';
 import 'services/log_service.dart';
 import 'services/log_api_service.dart';
 import 'services/config_service.dart';
@@ -29,26 +30,34 @@ import 'pages/news_browser_page.dart';
 import 'pages/postcards_browser_page.dart';
 import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
+import 'pages/market_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize window manager for desktop platforms
-  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-    await windowManager.ensureInitialized();
+  // Initialize window manager for desktop platforms (not web or mobile)
+  if (!kIsWeb) {
+    try {
+      // Only import and use window_manager on desktop platforms
+      // This code will be tree-shaken out on web builds
+      await windowManager.ensureInitialized();
 
-    const windowOptions = WindowOptions(
-      size: Size(1200, 800),
-      center: true,
-      backgroundColor: Colors.transparent,
-      skipTaskbar: false,
-      titleBarStyle: TitleBarStyle.normal,
-    );
+      const windowOptions = WindowOptions(
+        size: Size(1200, 800),
+        center: true,
+        backgroundColor: Colors.transparent,
+        skipTaskbar: false,
+        titleBarStyle: TitleBarStyle.normal,
+      );
 
-    await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
+      await windowManager.waitUntilReadyToShow(windowOptions, () async {
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    } catch (e) {
+      // Silently fail if window_manager is not available
+      // This handles Android and iOS platforms
+    }
   }
 
   // Initialize log service first to capture any initialization errors
@@ -305,7 +314,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places'
+      'www', 'postcards', 'contacts', 'places', 'market'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -561,7 +570,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                         collectionPath: collection.storagePath ?? '',
                                                                         collectionTitle: collection.title,
                                                                       )
-                                                                    : CollectionBrowserPage(collection: collection);
+                                                                    : collection.type == 'market'
+                                                                        ? MarketBrowserPage(
+                                                                            collectionPath: collection.storagePath ?? '',
+                                                                            collectionTitle: collection.title,
+                                                                          )
+                                                                        : CollectionBrowserPage(collection: collection);
 
                                               Navigator.push(
                                                 context,
@@ -642,7 +656,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                   collectionPath: collection.storagePath ?? '',
                                                                                   collectionTitle: collection.title,
                                                                                 )
-                                                                              : CollectionBrowserPage(collection: collection);
+                                                                              : collection.type == 'market'
+                                                                                  ? MarketBrowserPage(
+                                                                                      collectionPath: collection.storagePath ?? '',
+                                                                                      collectionTitle: collection.title,
+                                                                                    )
+                                                                                  : CollectionBrowserPage(collection: collection);
 
                                               Navigator.push(
                                                 context,
@@ -697,7 +716,7 @@ class _CollectionGridCard extends StatelessWidget {
   bool _isFixedCollectionType() {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places'
+      'www', 'postcards', 'contacts', 'places', 'market'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -735,6 +754,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.contacts;
       case 'places':
         return Icons.place;
+      case 'market':
+        return Icons.store;
       default:
         return Icons.folder_special;
     }
@@ -907,6 +928,8 @@ class _CollectionCard extends StatelessWidget {
         return Icons.contacts;
       case 'places':
         return Icons.place;
+      case 'market':
+        return Icons.store;
       default:
         return Icons.folder_special;
     }
@@ -1290,7 +1313,21 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                         : null,
                   ),
                 ),
-              ],
+                DropdownMenuItem(
+                  value: 'market',
+                  enabled: !_existingTypes.contains('market'),
+                  child: Text(
+                    '${_i18n.t('collection_type_market')}${_existingTypes.contains('market') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('market')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+              ].where((item) {
+                // Hide disabled items (existing fixed types) instead of greying them out
+                if (item.value == 'files') return true; // Always show files
+                return item.enabled ?? true;
+              }).toList(),
               onChanged: _isCreating ? null : (value) {
                 if (value != null) {
                   setState(() {
@@ -1305,9 +1342,11 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                           _titleController.text == 'chat' ||
                           _titleController.text == 'blog' ||
                           _titleController.text == 'events' ||
+                          _titleController.text == 'news' ||
                           _titleController.text == 'postcards' ||
                           _titleController.text == 'contacts' ||
-                          _titleController.text == 'places') {
+                          _titleController.text == 'places' ||
+                          _titleController.text == 'market') {
                         _titleController.text = '';
                       }
                     }
@@ -1315,40 +1354,39 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 }
               },
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _titleController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('collection_title'),
-                hintText: _i18n.t('collection_title_hint'),
-                border: const OutlineInputBorder(),
-                helperText: _collectionType != 'files'
-                    ? _i18n.t('title_defined_by_default')
-                    : null,
+            // Only show title and description for 'files' type
+            if (_collectionType == 'files') ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _titleController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('collection_title'),
+                  hintText: _i18n.t('collection_title_hint'),
+                  border: const OutlineInputBorder(),
+                ),
+                autofocus: true,
+                enabled: !_isCreating,
+                textInputAction: TextInputAction.next,
               ),
-              autofocus: _collectionType == 'files',
-              enabled: !_isCreating && _collectionType == 'files',
-              readOnly: _collectionType != 'files',
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _descriptionController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('collection_description'),
-                hintText: _i18n.t('collection_description_hint'),
-                border: const OutlineInputBorder(),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _descriptionController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('collection_description'),
+                  hintText: _i18n.t('collection_description_hint'),
+                  border: const OutlineInputBorder(),
+                ),
+                maxLines: 3,
+                enabled: !_isCreating,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) {
+                  if (!_isCreating) {
+                    _create();
+                  }
+                },
               ),
-              maxLines: 3,
-              enabled: !_isCreating,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) {
-                if (!_isCreating) {
-                  _create();
-                }
-              },
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ],
             // Only show folder selection for 'files' type
             if (_collectionType == 'files') ...[
               const Divider(),
@@ -2323,17 +2361,20 @@ class _FileNodeTile extends StatefulWidget {
 }
 
 class _FileNodeTileState extends State<_FileNodeTile> {
-  File? _thumbnailFile;
+  dynamic _thumbnailFile;  // File on native, null on web
 
   @override
   void initState() {
     super.initState();
-    if (!widget.fileNode.isDirectory && FileIconHelper.isImage(widget.fileNode.name)) {
+    // Only load thumbnails on native platforms (not web)
+    if (!kIsWeb && !widget.fileNode.isDirectory && FileIconHelper.isImage(widget.fileNode.name)) {
       _loadThumbnail();
     }
   }
 
   Future<void> _loadThumbnail() async {
+    if (kIsWeb) return;  // No local file access on web
+
     try {
       final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
       final file = File(filePath);
@@ -2377,6 +2418,17 @@ class _FileNodeTileState extends State<_FileNodeTile> {
     if (widget.fileNode.isDirectory) return;
 
     final i18n = I18nService();
+
+    // On web, file operations are not supported
+    if (kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File operations not supported on web')),
+        );
+      }
+      return;
+    }
+
     try {
       final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
       final file = File(filePath);
@@ -2421,8 +2473,8 @@ class _FileNodeTileState extends State<_FileNodeTile> {
         size: 40,
         color: Theme.of(context).colorScheme.primary,
       );
-    } else if (_thumbnailFile != null) {
-      // Image thumbnail
+    } else if (!kIsWeb && _thumbnailFile != null) {
+      // Image thumbnail (only on native platforms)
       return ClipRRect(
         borderRadius: BorderRadius.circular(4),
         child: Image.file(
