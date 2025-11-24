@@ -6,6 +6,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io';
+import 'package:path/path.dart' as path;
 import '../models/report.dart';
 import '../models/report_update.dart';
 import '../services/report_service.dart';
@@ -38,6 +41,8 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   List<ReportUpdate> _updates = [];
   bool _isLoading = false;
   String? _currentUserNpub;
+  List<File> _imageFiles = [];
+  List<String> _existingImages = [];
 
   // Form controllers
   final _titleController = TextEditingController();
@@ -103,6 +108,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _selectedStatus = _report!.status;
 
       _loadUpdates();
+      _loadExistingImages();
     }
   }
 
@@ -160,6 +166,95 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     }
   }
 
+  Future<void> _pickImages() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: true,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        setState(() {
+          _imageFiles.addAll(
+            result.files.map((file) => File(file.path!)).toList(),
+          );
+        });
+      }
+    } catch (e) {
+      _showError('Error picking images: $e');
+    }
+  }
+
+  Future<void> _loadExistingImages() async {
+    if (_report == null) return;
+
+    try {
+      final reportDir = Directory(path.join(
+        widget.collectionPath,
+        _report!.folderName,
+      ));
+      final imagesDir = Directory(path.join(reportDir.path, 'images'));
+
+      if (await imagesDir.exists()) {
+        final entities = await imagesDir.list().toList();
+        setState(() {
+          _existingImages = entities
+              .where((e) => e is File && _isImageFile(e.path))
+              .map((e) => e.path)
+              .toList();
+        });
+      }
+    } catch (e) {
+      LogService().log('Error loading images: $e');
+    }
+  }
+
+  bool _isImageFile(String filePath) {
+    final ext = path.extension(filePath).toLowerCase();
+    return ['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext);
+  }
+
+  void _removeImage(int index, {bool isExisting = false}) {
+    setState(() {
+      if (isExisting) {
+        _existingImages.removeAt(index);
+      } else {
+        _imageFiles.removeAt(index);
+      }
+    });
+  }
+
+  Future<void> _saveImages() async {
+    if (_report == null || _imageFiles.isEmpty) return;
+
+    try {
+      final reportDir = Directory(path.join(
+        widget.collectionPath,
+        _report!.folderName,
+      ));
+      final imagesDir = Directory(path.join(reportDir.path, 'images'));
+
+      // Create images directory if it doesn't exist
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
+      // Copy new images to the images folder
+      for (final imageFile in _imageFiles) {
+        final fileName = path.basename(imageFile.path);
+        final destPath = path.join(imagesDir.path, fileName);
+        await imageFile.copy(destPath);
+      }
+
+      // Clear the list and reload existing images
+      _imageFiles.clear();
+      await _loadExistingImages();
+    } catch (e) {
+      LogService().log('Error saving images: $e');
+      rethrow;
+    }
+  }
+
   Future<void> _save() async {
     // Validate
     if (_titleController.text.trim().isEmpty) {
@@ -209,6 +304,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           contact: _contactController.text.trim().isNotEmpty ? _contactController.text.trim() : null,
         );
 
+        // Save images
+        await _saveImages();
+
         _showSuccess('Report created');
         setState(() {
           _isNew = false;
@@ -230,6 +328,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
         await _reportService.saveReport(updated);
         _report = updated;
+
+        // Save images
+        await _saveImages();
 
         _showSuccess('Report updated');
         setState(() {
@@ -523,6 +624,98 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     ),
                     enabled: _isEditing,
                   ),
+                  const SizedBox(height: 24),
+
+                  // Images Section
+                  Text(
+                    'Photos',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Add Images Button
+                  if (_isEditing)
+                    OutlinedButton.icon(
+                      onPressed: _pickImages,
+                      icon: const Icon(Icons.add_photo_alternate),
+                      label: const Text('Add Photos'),
+                    ),
+                  if (_isEditing) const SizedBox(height: 16),
+
+                  // Display Images
+                  if (_existingImages.isNotEmpty || _imageFiles.isNotEmpty)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        // Existing images
+                        ..._existingImages.asMap().entries.map((entry) {
+                          return Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  File(entry.value),
+                                  width: 120,
+                                  height: 120,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                              if (_isEditing)
+                                Positioned(
+                                  top: 4,
+                                  right: 4,
+                                  child: IconButton(
+                                    onPressed: () => _removeImage(entry.key, isExisting: true),
+                                    icon: const Icon(Icons.close),
+                                    iconSize: 20,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: Colors.black54,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.all(4),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        }),
+                        // New images
+                        ..._imageFiles.asMap().entries.map((entry) {
+                          return Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  entry.value,
+                                  width: 120,
+                                  height: 120,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                              if (_isEditing)
+                                Positioned(
+                                  top: 4,
+                                  right: 4,
+                                  child: IconButton(
+                                    onPressed: () => _removeImage(entry.key),
+                                    icon: const Icon(Icons.close),
+                                    iconSize: 20,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: Colors.black54,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.all(4),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        }),
+                      ],
+                    ),
+                  if (_existingImages.isEmpty && _imageFiles.isEmpty && !_isEditing)
+                    const Text('No photos attached'),
                   const SizedBox(height: 24),
 
                   // Actions (for existing reports)
