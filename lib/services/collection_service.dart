@@ -964,7 +964,8 @@ class CollectionService {
       await dest.create(recursive: true);
     }
 
-    await for (final entity in source.list(recursive: false)) {
+    final entities = await source.list(recursive: false).toList();
+    for (final entity in entities) {
       if (entity is File) {
         final newPath = '${dest.path}/${entity.path.split('/').last}';
         await entity.copy(newPath);
@@ -981,7 +982,8 @@ class CollectionService {
     final fileNodes = <FileNode>[];
 
     try {
-      await for (final entity in collectionDir.list(recursive: false)) {
+      final entities = await collectionDir.list(recursive: false).toList();
+      for (final entity in entities) {
         final name = entity.path.split('/').last;
 
         // Skip metadata folders and files
@@ -1038,7 +1040,8 @@ class CollectionService {
     final fileNodes = <FileNode>[];
 
     try {
-      await for (final entity in dir.list(recursive: false)) {
+      final entities = await dir.list(recursive: false).toList();
+      for (final entity in entities) {
         final name = entity.path.split('/').last;
         final relativePath = '$basePath/$name';
 
