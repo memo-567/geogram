@@ -136,7 +136,9 @@ class NewsService {
     if (!await newsDir.exists()) return [];
 
     final years = <int>[];
-    await for (var entity in newsDir.list()) {
+    final entities = await newsDir.list().toList();
+
+    for (var entity in entities) {
       if (entity is Directory) {
         final name = entity.path.split('/').last;
         final year = int.tryParse(name);
@@ -165,7 +167,10 @@ class NewsService {
       final yearDir = Directory('$_collectionPath/news/$y');
       if (!await yearDir.exists()) continue;
 
-      await for (var entity in yearDir.list()) {
+      final entities = await yearDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is File && entity.path.endsWith('.md')) {
           try {
             final fileName = entity.path.split('/').last;

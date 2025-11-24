@@ -51,7 +51,8 @@ class PlaceService {
 
   /// Recursively scan a directory for place.txt files
   Future<void> _scanDirectoryForPlaces(Directory dir, List<Place> places) async {
-    await for (final entity in dir.list()) {
+    final entities = await dir.list().toList();
+    for (final entity in entities) {
       if (entity is Directory) {
         // Check if this directory contains a place.txt file
         final placeFile = File('${entity.path}/place.txt');

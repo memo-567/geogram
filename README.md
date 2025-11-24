@@ -13,13 +13,49 @@ A cross-platform desktop and mobile application for Geogram, built with Flutter.
 
 ## Prerequisites
 
-- Flutter SDK (installed in ~/flutter)
-- For Linux: GTK development libraries
+- Flutter SDK 3.38.3+ with Dart 3.10+ (installed in ~/flutter)
+- For Linux: GTK development libraries (ninja-build, clang, libgtk-3-dev, liblzma-dev)
 - For Windows: Visual Studio 2022 with C++ tools
 - For macOS: Xcode
 - For Android: Android Studio and SDK
 - For iOS: Xcode (macOS only)
 - For Web: Chrome or another web browser
+
+## Quick Setup (New Machine)
+
+### Linux
+
+Run the automated setup script to install all dependencies and Flutter:
+
+```bash
+cd geogram-desktop
+./setup.sh
+```
+
+This will:
+1. Install Linux system dependencies (requires sudo)
+2. Download and install Flutter 3.38.3+ with Dart 3.10+
+3. Run flutter doctor to verify the installation
+
+Or install components individually:
+
+```bash
+# Install Linux dependencies only
+./install-linux-deps.sh
+
+# Install Flutter only (with resume support for slow connections)
+./install-flutter.sh
+```
+
+### Manual Setup
+
+If you prefer manual installation or need a different Flutter version:
+
+1. Install Flutter SDK 3.38.3+ from https://docs.flutter.dev/get-started/install
+2. Ensure Dart SDK version is 3.10.0 or higher (check with `flutter --version`)
+3. Install platform-specific dependencies (see Prerequisites)
+
+**Important:** This project requires Dart SDK ^3.10.0 (specified in pubspec.yaml). Flutter 3.27.x and earlier versions will NOT work as they include older Dart versions.
 
 ## Building
 
@@ -29,6 +65,8 @@ A cross-platform desktop and mobile application for Geogram, built with Flutter.
 - Windows: `build-windows.bat` or `build-windows.sh`
 - Web: `./launch-web.sh`
 - Android: `./launch-android.sh`
+
+**Note:** The `launch-desktop.sh` script automatically checks for the correct Flutter and Dart versions before launching.
 
 ### Detailed Build Instructions
 

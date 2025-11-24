@@ -35,7 +35,9 @@ class PostcardService {
     if (!await postcardsDir.exists()) return [];
 
     final years = <int>[];
-    await for (var entity in postcardsDir.list()) {
+    final entities = await postcardsDir.list().toList();
+
+    for (var entity in entities) {
       if (entity is Directory) {
         final name = entity.path.split('/').last;
         final year = int.tryParse(name);
@@ -63,7 +65,10 @@ class PostcardService {
       final yearDir = Directory('$_collectionPath/postcards/$y');
       if (!await yearDir.exists()) continue;
 
-      await for (var entity in yearDir.list()) {
+      final entities = await yearDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is Directory) {
           try {
             final folderName = entity.path.split('/').last;
@@ -499,7 +504,9 @@ class PostcardService {
       if (!await contributorsDir.exists()) return [];
 
       final files = <String>[];
-      await for (var entity in contributorsDir.list()) {
+      final entities = await contributorsDir.list().toList();
+
+      for (var entity in entities) {
         if (entity is File) {
           final filename = entity.path.split('/').last;
           // Skip hidden files

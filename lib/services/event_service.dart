@@ -42,7 +42,9 @@ class EventService {
     if (!await eventsDir.exists()) return [];
 
     final years = <int>[];
-    await for (var entity in eventsDir.list()) {
+    final entities = await eventsDir.list().toList();
+
+    for (var entity in entities) {
       if (entity is Directory) {
         final name = entity.path.split('/').last;
         final year = int.tryParse(name);
@@ -71,7 +73,10 @@ class EventService {
       final yearDir = Directory('$_collectionPath/events/$y');
       if (!await yearDir.exists()) continue;
 
-      await for (var entity in yearDir.list()) {
+      final entities = await yearDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is Directory) {
           try {
             final folderName = entity.path.split('/').last;
@@ -468,7 +473,10 @@ class EventService {
 
       final items = <EventItem>[];
 
-      await for (var entity in eventDir.list()) {
+      final entities = await eventDir.list().toList();
+
+
+      for (var entity in entities) {
         final name = entity.path.split('/').last;
 
         // Skip special files and directories
@@ -529,7 +537,10 @@ class EventService {
       final flyers = <String>[];
       final flyerPattern = RegExp(r'^flyer.*\.(jpg|jpeg|png|gif|webp)$', caseSensitive: false);
 
-      await for (var entity in eventDir.list()) {
+      final entities = await eventDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is File) {
           final name = entity.path.split('/').last;
           if (flyerPattern.hasMatch(name)) {
@@ -556,7 +567,10 @@ class EventService {
       // Look for any file named trailer.* (mp4, mov, avi, etc.)
       final trailerPattern = RegExp(r'^trailer\.(mp4|mov|avi|mkv|webm|flv|wmv)$', caseSensitive: false);
 
-      await for (var entity in eventDir.list()) {
+      final entities = await eventDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is File) {
           final name = entity.path.split('/').last;
           if (trailerPattern.hasMatch(name)) {
@@ -580,7 +594,10 @@ class EventService {
 
       final updates = <EventUpdate>[];
 
-      await for (var entity in updatesDir.list()) {
+      final entities = await updatesDir.list().toList();
+
+
+      for (var entity in entities) {
         if (entity is File && entity.path.endsWith('.md')) {
           try {
             final content = await entity.readAsString();

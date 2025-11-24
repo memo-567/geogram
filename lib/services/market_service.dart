@@ -92,7 +92,10 @@ class MarketService {
     if (!await itemsDir.exists()) return [];
 
     final categories = <String>[];
-    await for (var entity in itemsDir.list(recursive: true)) {
+    // Use toList() to collect all entities first, then close the stream
+    final entities = await itemsDir.list(recursive: true).toList();
+
+    for (var entity in entities) {
       if (entity is Directory) {
         // Get relative path from items directory
         final relativePath = entity.path.replaceFirst('${itemsDir.path}/', '');
@@ -123,7 +126,10 @@ class MarketService {
 
     if (!await searchDir.exists()) return [];
 
-    await for (var entity in searchDir.list(recursive: true)) {
+    // Use toList() to collect all entities first, then close the stream
+    final entities = await searchDir.list(recursive: true).toList();
+
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('/item.txt')) {
         try {
           final content = await entity.readAsString();
@@ -237,7 +243,10 @@ class MarketService {
 
     final reviews = <MarketReview>[];
 
-    await for (var entity in reviewsDir.list()) {
+    // Use toList() to collect all entities first, then close the stream
+    final entities = await reviewsDir.list().toList();
+
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         try {
           final content = await entity.readAsString();
@@ -291,7 +300,8 @@ class MarketService {
     if (!await cartsDir.exists()) return null;
 
     // Find cart file for buyer
-    await for (var entity in cartsDir.list()) {
+    final entities = await cartsDir.list().toList();
+    for (var entity in entities) {
       if (entity is File && entity.path.contains('cart-$buyerCallsign')) {
         try {
           final content = await entity.readAsString();
@@ -342,7 +352,8 @@ class MarketService {
       }
     } else {
       // Load orders from all years
-      await for (var entity in ordersDir.list()) {
+      final entities = await ordersDir.list().toList();
+      for (var entity in entities) {
         if (entity is Directory) {
           await _loadOrdersFromDir(Directory(entity.path), orders);
         }
@@ -356,7 +367,8 @@ class MarketService {
   }
 
   Future<void> _loadOrdersFromDir(Directory dir, List<MarketOrder> orders) async {
-    await for (var entity in dir.list()) {
+    final entities = await dir.list().toList();
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         try {
           final content = await entity.readAsString();
@@ -409,7 +421,8 @@ class MarketService {
 
     final promotions = <MarketPromotion>[];
 
-    await for (var entity in promosDir.list()) {
+    final entities = await promosDir.list().toList();
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         try {
           final content = await entity.readAsString();
@@ -461,7 +474,8 @@ class MarketService {
 
     final coupons = <MarketCoupon>[];
 
-    await for (var entity in couponsDir.list()) {
+    final entities = await couponsDir.list().toList();
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         try {
           final content = await entity.readAsString();

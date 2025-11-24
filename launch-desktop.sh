@@ -12,7 +12,19 @@ FLUTTER_BIN="$FLUTTER_HOME/bin/flutter"
 # Check if Flutter is installed
 if [ ! -f "$FLUTTER_BIN" ]; then
     echo "❌ Flutter not found at $FLUTTER_HOME"
-    echo "Please install Flutter or update FLUTTER_HOME in this script"
+    echo "Please run ./install-flutter.sh to install Flutter"
+    exit 1
+fi
+
+# Check Dart SDK version (must be >= 3.10.0 as required by pubspec.yaml)
+DART_VERSION=$("$FLUTTER_BIN" --version 2>&1 | grep -oP 'Dart \K[0-9]+\.[0-9]+' | head -1)
+DART_MAJOR=$(echo "$DART_VERSION" | cut -d. -f1)
+DART_MINOR=$(echo "$DART_VERSION" | cut -d. -f2)
+
+if [ "$DART_MAJOR" -lt 3 ] || ([ "$DART_MAJOR" -eq 3 ] && [ "$DART_MINOR" -lt 10 ]); then
+    echo "❌ Dart version $DART_VERSION is too old"
+    echo "This project requires Dart SDK ^3.10.0"
+    echo "Please run ./install-flutter.sh to install the correct Flutter version (3.38.3+)"
     exit 1
 fi
 

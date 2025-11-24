@@ -214,7 +214,9 @@ class CollectionService {
   /// Scan directory recursively to count files (fallback when tree.json doesn't exist)
   Future<void> _scanDirectoryForCount(Directory dir, void Function(int count, int size) onCount) async {
     try {
-      await for (var entity in dir.list()) {
+      final entities = await dir.list().toList();
+
+      for (var entity in entities) {
         if (entity is File) {
           // Skip system files
           final fileName = entity.path.split('/').last;
@@ -1108,7 +1110,9 @@ class CollectionService {
       }
 
       // Recursively scan all files and directories
-      await for (var entity in folder.list(recursive: true, followLinks: false)) {
+      final entities = await folder.list(recursive: true, followLinks: false).toList();
+
+      for (var entity in entities) {
         final relativePath = entity.path.substring(folder.path.length + 1);
 
         // Skip hidden files, metadata files, and the extra directory
@@ -1173,7 +1177,9 @@ class CollectionService {
       }
 
       // First pass: collect all entities without reading files
-      await for (var entity in folder.list(recursive: true, followLinks: false)) {
+      final entities = await folder.list(recursive: true, followLinks: false).toList();
+
+      for (var entity in entities) {
         final relativePath = entity.path.substring(folder.path.length + 1);
 
         // Skip hidden files, metadata files, and the extra directory

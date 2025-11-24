@@ -46,7 +46,10 @@ class ContactService {
     final searchDir = Directory(searchPath);
     if (!await searchDir.exists()) return [];
 
-    await for (var entity in searchDir.list()) {
+    final entities = await searchDir.list().toList();
+
+
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         // Skip group.txt and hidden files
         final filename = entity.path.split('/').last;
@@ -91,7 +94,9 @@ class ContactService {
     String relativePath,
     List<Contact> contacts,
   ) async {
-    await for (var entity in dir.list()) {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         // Skip group.txt, hidden files, and profile-pictures
         final filename = entity.path.split('/').last;
@@ -579,7 +584,9 @@ class ContactService {
     String relativePath,
     List<ContactGroup> groups,
   ) async {
-    await for (var entity in dir.list()) {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
       if (entity is Directory) {
         final dirname = entity.path.split('/').last;
 
@@ -590,7 +597,9 @@ class ContactService {
 
         // Count contacts in this group (non-recursive)
         int contactCount = 0;
-        await for (var file in entity.list()) {
+        final entities = await entity.list().toList();
+
+        for (var file in entities) {
           if (file is File && file.path.endsWith('.txt')) {
             final filename = file.path.split('/').last;
             if (filename != 'group.txt' && !filename.startsWith('.')) {
@@ -730,7 +739,9 @@ class ContactService {
 
     // Check if group has any contacts
     int contactCount = 0;
-    await for (var entity in dir.list()) {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         final filename = entity.path.split('/').last;
         if (filename != 'group.txt' && !filename.startsWith('.')) {

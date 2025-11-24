@@ -9,6 +9,7 @@ import '../models/market_item.dart';
 import '../services/market_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import 'shop_settings_page.dart';
 
 /// Marketplace browser page with responsive layout
 class MarketBrowserPage extends StatefulWidget {
@@ -321,11 +322,17 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
           if (_shop!.ownerNpub == _currentUserNpub)
             IconButton(
               icon: const Icon(Icons.settings),
-              onPressed: () {
-                // TODO: Edit shop settings
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Shop settings coming soon')),
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ShopSettingsPage(
+                      collectionPath: widget.collectionPath,
+                    ),
+                  ),
                 );
+                // Reload shop after returning from settings
+                _loadMarketplace();
               },
             ),
         ],
@@ -633,16 +640,17 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
   }
 
   Future<void> _showCreateShopDialog() async {
-    final profile = _profileService.getProfile();
-
-    await showDialog(
-      context: context,
-      builder: (context) => _CreateShopDialog(
-        onCreateShop: _createShop,
-        ownerName: profile.nickname ?? profile.callsign,
-        ownerNpub: profile.npub,
+    // Navigate to shop settings page for comprehensive shop creation
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ShopSettingsPage(
+          collectionPath: widget.collectionPath,
+        ),
       ),
     );
+    // Reload marketplace after returning from settings
+    _loadMarketplace();
   }
 
   Future<void> _createShop({
