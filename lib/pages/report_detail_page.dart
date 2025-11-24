@@ -46,10 +46,40 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   final _longitudeController = TextEditingController();
   final _addressController = TextEditingController();
   final _contactController = TextEditingController();
-  final _typeController = TextEditingController();
 
   ReportSeverity _selectedSeverity = ReportSeverity.attention;
   ReportStatus _selectedStatus = ReportStatus.open;
+  String _selectedType = 'other';
+
+  // Common report types
+  static const List<Map<String, String>> _reportTypes = [
+    {'value': 'infrastructure-broken', 'label': 'Broken Infrastructure'},
+    {'value': 'infrastructure-damaged', 'label': 'Damaged Infrastructure'},
+    {'value': 'road-pothole', 'label': 'Road Pothole'},
+    {'value': 'road-damage', 'label': 'Road Damage'},
+    {'value': 'traffic-accident', 'label': 'Traffic Accident'},
+    {'value': 'traffic-congestion', 'label': 'Traffic Congestion'},
+    {'value': 'vandalism', 'label': 'Vandalism'},
+    {'value': 'graffiti', 'label': 'Graffiti'},
+    {'value': 'hazard-general', 'label': 'General Hazard'},
+    {'value': 'hazard-environmental', 'label': 'Environmental Hazard'},
+    {'value': 'hazard-chemical', 'label': 'Chemical Hazard'},
+    {'value': 'fire', 'label': 'Fire'},
+    {'value': 'flood', 'label': 'Flood'},
+    {'value': 'weather-severe', 'label': 'Severe Weather'},
+    {'value': 'utility-outage', 'label': 'Utility Outage'},
+    {'value': 'water-leak', 'label': 'Water Leak'},
+    {'value': 'gas-leak', 'label': 'Gas Leak'},
+    {'value': 'power-outage', 'label': 'Power Outage'},
+    {'value': 'street-light-out', 'label': 'Street Light Out'},
+    {'value': 'public-health', 'label': 'Public Health Issue'},
+    {'value': 'waste-illegal', 'label': 'Illegal Waste Disposal'},
+    {'value': 'noise-complaint', 'label': 'Noise Complaint'},
+    {'value': 'animal-issue', 'label': 'Animal Issue'},
+    {'value': 'security-concern', 'label': 'Security Concern'},
+    {'value': 'maintenance-needed', 'label': 'Maintenance Needed'},
+    {'value': 'other', 'label': 'Other'},
+  ];
 
   @override
   void initState() {
@@ -68,13 +98,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _longitudeController.text = _report!.longitude.toString();
       _addressController.text = _report!.address ?? '';
       _contactController.text = _report!.contact ?? '';
-      _typeController.text = _report!.type;
+      _selectedType = _report!.type;
       _selectedSeverity = _report!.severity;
       _selectedStatus = _report!.status;
 
       _loadUpdates();
-    } else {
-      _typeController.text = 'other';
     }
   }
 
@@ -86,7 +114,6 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     _longitudeController.dispose();
     _addressController.dispose();
     _contactController.dispose();
-    _typeController.dispose();
     super.dispose();
   }
 
@@ -177,7 +204,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           latitude: lat,
           longitude: lon,
           severity: _selectedSeverity,
-          type: _typeController.text.trim(),
+          type: _selectedType,
           address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
           contact: _contactController.text.trim().isNotEmpty ? _contactController.text.trim() : null,
         );
@@ -196,7 +223,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           longitude: lon,
           severity: _selectedSeverity,
           status: _selectedStatus,
-          type: _typeController.text.trim(),
+          type: _selectedType,
           address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
           contact: _contactController.text.trim().isNotEmpty ? _contactController.text.trim() : null,
         );
@@ -410,14 +437,27 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   const SizedBox(height: 16),
 
                   // Type
-                  TextField(
-                    controller: _typeController,
+                  DropdownButtonFormField<String>(
+                    value: _selectedType,
                     decoration: const InputDecoration(
                       labelText: 'Type *',
-                      hintText: 'e.g., infrastructure-broken, vandalism, hazard',
                       border: OutlineInputBorder(),
                     ),
-                    enabled: _isEditing,
+                    items: _reportTypes.map((type) {
+                      return DropdownMenuItem(
+                        value: type['value'],
+                        child: Text(type['label']!),
+                      );
+                    }).toList(),
+                    onChanged: _isEditing
+                        ? (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedType = value;
+                              });
+                            }
+                          }
+                        : null,
                   ),
                   const SizedBox(height: 16),
 
