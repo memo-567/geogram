@@ -55,6 +55,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   ReportSeverity _selectedSeverity = ReportSeverity.attention;
   ReportStatus _selectedStatus = ReportStatus.open;
   String _selectedType = 'other';
+  String _locationInputMode = 'map'; // 'map' or 'manual'
 
   // Common report types
   static const List<Map<String, String>> _reportTypes = [
@@ -478,8 +479,48 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  // Map Picker Button (Primary method)
+                  // Location Input Mode Selector
                   if (_isEditing)
+                    DropdownButtonFormField<String>(
+                      value: _locationInputMode,
+                      decoration: const InputDecoration(
+                        labelText: 'Input Method',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'map',
+                          child: Row(
+                            children: [
+                              Icon(Icons.map, size: 20),
+                              SizedBox(width: 8),
+                              Text('Pick on Map'),
+                            ],
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: 'manual',
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_location, size: 20),
+                              SizedBox(width: 8),
+                              Text('Enter Manually'),
+                            ],
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _locationInputMode = value;
+                          });
+                        }
+                      },
+                    ),
+                  if (_isEditing) const SizedBox(height: 16),
+
+                  // Map Picker Button
+                  if (_isEditing && _locationInputMode == 'map')
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
@@ -491,39 +532,61 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         ),
                       ),
                     ),
-                  if (_isEditing) const SizedBox(height: 16),
+                  if (_isEditing && _locationInputMode == 'map') const SizedBox(height: 16),
 
-                  // Coordinates (Manual Input)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _latitudeController,
-                          decoration: InputDecoration(
-                            labelText: 'Latitude *',
-                            border: const OutlineInputBorder(),
-                            hintText: _isEditing ? 'Or enter manually' : null,
+                  // Coordinates Display/Input
+                  if (_locationInputMode == 'manual' || !_isEditing)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _latitudeController,
+                            decoration: const InputDecoration(
+                              labelText: 'Latitude *',
+                              border: OutlineInputBorder(),
+                            ),
+                            enabled: _isEditing && _locationInputMode == 'manual',
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                           ),
-                          enabled: _isEditing,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                         ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: TextField(
-                          controller: _longitudeController,
-                          decoration: InputDecoration(
-                            labelText: 'Longitude *',
-                            border: const OutlineInputBorder(),
-                            hintText: _isEditing ? 'Or enter manually' : null,
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextField(
+                            controller: _longitudeController,
+                            decoration: const InputDecoration(
+                              labelText: 'Longitude *',
+                              border: OutlineInputBorder(),
+                            ),
+                            enabled: _isEditing && _locationInputMode == 'manual',
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                           ),
-                          enabled: _isEditing,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                         ),
+                      ],
+                    ),
+                  if (_locationInputMode == 'manual' || !_isEditing) const SizedBox(height: 16),
+
+                  // Show current coordinates when using map mode
+                  if (_isEditing && _locationInputMode == 'map')
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                      child: Row(
+                        children: [
+                          Icon(Icons.location_on, size: 16, color: theme.colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Coordinates: ${_latitudeController.text}, ${_longitudeController.text}',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (_isEditing && _locationInputMode == 'map') const SizedBox(height: 16),
 
                   // Address
                   TextField(
