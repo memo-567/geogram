@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import '../models/report.dart';
 import '../models/report_update.dart';
+import '../models/report_comment.dart';
 import '../models/report_settings.dart';
 import 'log_service.dart';
 
@@ -391,6 +392,118 @@ class ReportService {
       );
       await saveReport(updated, isExpired: await _isReportExpired(folderName));
     }
+  }
+
+  /// Like a report
+  Future<void> likeReport(String folderName, String npub) async {
+    if (npub.isEmpty) return;
+
+    final report = await loadReport(folderName);
+    if (report == null) return;
+
+    if (!report.likedBy.contains(npub)) {
+      final updatedLikedBy = List<String>.from(report.likedBy)..add(npub);
+      final updated = report.copyWith(
+        likedBy: updatedLikedBy,
+        likeCount: updatedLikedBy.length,
+      );
+      await saveReport(updated, isExpired: await _isReportExpired(folderName));
+    }
+  }
+
+  /// Unlike a report
+  Future<void> unlikeReport(String folderName, String npub) async {
+    if (npub.isEmpty) return;
+
+    final report = await loadReport(folderName);
+    if (report == null) return;
+
+    if (report.likedBy.contains(npub)) {
+      final updatedLikedBy = List<String>.from(report.likedBy)..remove(npub);
+      final updated = report.copyWith(
+        likedBy: updatedLikedBy,
+        likeCount: updatedLikedBy.length,
+      );
+      await saveReport(updated, isExpired: await _isReportExpired(folderName));
+    }
+  }
+
+  /// Load comments for a report
+  Future<List<ReportComment>> loadComments(String folderName) async {
+    if (_collectionPath == null) return [];
+
+    final report = await loadReport(folderName);
+    if (report == null) return [];
+
+    final regionFolder = report.regionFolder;
+    final isExpired = await _isReportExpired(folderName);
+    final baseDir = isExpired ? 'expired' : 'active';
+    final commentsPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/comments';
+
+    final commentsDir = Directory(commentsPath);
+    if (!await commentsDir.exists()) return [];
+
+    final comments = <ReportComment>[];
+    final entities = await commentsDir.list().toList();
+
+    for (var entity in entities) {
+      if (entity is File && entity.path.endsWith('.txt')) {
+        try {
+          final content = await entity.readAsString();
+          final fileName = entity.path.split('/').last;
+          final comment = ReportComment.fromText(content, fileName);
+          comments.add(comment);
+        } catch (e) {
+          LogService().log('ReportService: Error loading comment from ${entity.path}: $e');
+        }
+      }
+    }
+
+    // Sort by timestamp (oldest first for comments)
+    comments.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+
+    return comments;
+  }
+
+  /// Add a comment to a report
+  Future<ReportComment> addComment(String folderName, String author, String content, {String? npub}) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    final report = await loadReport(folderName);
+    if (report == null) {
+      throw Exception('Report not found');
+    }
+
+    final now = DateTime.now();
+    final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+    final id = '${now.millisecondsSinceEpoch}';
+
+    final comment = ReportComment(
+      id: id,
+      author: author,
+      content: content,
+      created: created,
+      npub: npub,
+    );
+
+    final regionFolder = report.regionFolder;
+    final isExpired = await _isReportExpired(folderName);
+    final baseDir = isExpired ? 'expired' : 'active';
+    final commentsPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/comments';
+
+    final commentsDir = Directory(commentsPath);
+    if (!await commentsDir.exists()) {
+      await commentsDir.create(recursive: true);
+    }
+
+    final commentFile = File('$commentsPath/$id.txt');
+    await commentFile.writeAsString(comment.exportAsText(), flush: true);
+
+    LogService().log('ReportService: Added comment to $folderName');
+
+    return comment;
   }
 
   /// Move report to expired

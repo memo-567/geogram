@@ -10,9 +10,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
-import '../services/relay_service.dart';
 import '../services/profile_service.dart';
 import '../services/config_service.dart';
+import '../services/map_tile_service.dart';
 
 /// Full-page reusable location picker
 /// Can be used throughout the app for selecting coordinates
@@ -32,6 +32,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final ConfigService _configService = ConfigService();
+  final MapTileService _mapTileService = MapTileService();
   final MapController _mapController = MapController();
   late TextEditingController _latController;
   late TextEditingController _lonController;
@@ -44,6 +45,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   @override
   void initState() {
     super.initState();
+    _initializeMap();
 
     // Priority: 1) provided initialPosition, 2) last saved position, 3) GeoIP, 4) Europe default
     if (widget.initialPosition != null) {
@@ -64,6 +66,11 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         _fetchGeoIPLocation();
       }
     }
+  }
+
+  Future<void> _initializeMap() async {
+    // Initialize tile caching
+    await _mapTileService.initialize();
   }
 
   void _initializeControllers() {
@@ -162,38 +169,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     }
   }
 
-  /// Get tile URL - use relay if available, otherwise fallback to OSM
-  String _getTileUrl() {
-    try {
-      final relay = RelayService().getPreferredRelay();
-      final profile = _profileService.getProfile();
-
-      // Check if we have both a relay and a callsign
-      if (relay != null && relay.url.isNotEmpty && profile.callsign.isNotEmpty) {
-        // Use relay tile server - convert WebSocket URL to HTTP URL
-        var relayUrl = relay.url;
-
-        // Convert ws:// to http:// and wss:// to https://
-        if (relayUrl.startsWith('ws://')) {
-          relayUrl = relayUrl.replaceFirst('ws://', 'http://');
-        } else if (relayUrl.startsWith('wss://')) {
-          relayUrl = relayUrl.replaceFirst('wss://', 'https://');
-        }
-
-        // Remove trailing slash if present
-        if (relayUrl.endsWith('/')) {
-          relayUrl = relayUrl.substring(0, relayUrl.length - 1);
-        }
-
-        return '$relayUrl/tiles/${profile.callsign}/{z}/{x}/{y}.png';
-      }
-    } catch (e) {
-      LogService().log('Error getting relay tile URL: $e');
-    }
-
-    // Fallback to OpenStreetMap
-    return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -242,9 +217,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: _getTileUrl(),
+                        urlTemplate: _mapTileService.getTileUrl(),
                         userAgentPackageName: 'dev.geogram.geogram_desktop',
                         subdomains: const [], // No subdomains for relay/OSM
+                        tileProvider: _mapTileService.getTileProvider(),
                         errorTileCallback: (tile, error, stackTrace) {
                           if (!_isOnline) return;
                           setState(() {

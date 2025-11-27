@@ -116,6 +116,12 @@ class ConfigService {
     await _save();
   }
 
+  /// Remove a configuration value
+  Future<void> remove(String key) async {
+    _config.remove(key);
+    await _save();
+  }
+
   /// Get nested configuration value using dot notation
   dynamic getNestedValue(String path, [dynamic defaultValue]) {
     final keys = path.split('.');

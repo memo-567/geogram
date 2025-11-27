@@ -68,6 +68,8 @@ class Report {
   final List<String> updateAuthorized;
   final List<String> subscribers;
   final int subscriberCount;
+  final List<String> likedBy;
+  final int likeCount;
   final Map<String, String> titles;
   final Map<String, String> descriptions;
   final Map<String, String> metadata;
@@ -96,10 +98,18 @@ class Report {
     this.updateAuthorized = const [],
     this.subscribers = const [],
     this.subscriberCount = 0,
+    this.likedBy = const [],
+    this.likeCount = 0,
     this.titles = const {},
     this.descriptions = const {},
     this.metadata = const {},
   });
+
+  /// Check if user has liked this report
+  bool isLikedBy(String npub) {
+    if (npub.isEmpty) return false;
+    return likedBy.contains(npub);
+  }
 
   /// Parse timestamp to DateTime
   DateTime get dateTime {
@@ -236,6 +246,8 @@ class Report {
     List<String> updateAuthorized = [];
     List<String> subscribers = [];
     int subscriberCount = 0;
+    List<String> likedBy = [];
+    int likeCount = 0;
     Map<String, String> metadata = {};
 
     int contentStart = headerEnd;
@@ -288,6 +300,10 @@ class Report {
         subscribers = line.substring(13).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       } else if (line.startsWith('SUBSCRIBER_COUNT: ')) {
         subscriberCount = int.tryParse(line.substring(18).trim()) ?? 0;
+      } else if (line.startsWith('LIKED_BY: ')) {
+        likedBy = line.substring(10).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      } else if (line.startsWith('LIKE_COUNT: ')) {
+        likeCount = int.tryParse(line.substring(12).trim()) ?? 0;
       } else if (line.startsWith('-->')) {
         final metaLine = line.substring(3).trim();
         final colonIndex = metaLine.indexOf(':');
@@ -364,6 +380,8 @@ class Report {
       updateAuthorized: updateAuthorized,
       subscribers: subscribers,
       subscriberCount: subscriberCount,
+      likedBy: likedBy,
+      likeCount: likeCount,
       titles: titles,
       descriptions: descriptions,
       metadata: metadata,
@@ -439,6 +457,12 @@ class Report {
     if (subscriberCount > 0) {
       buffer.writeln('SUBSCRIBER_COUNT: $subscriberCount');
     }
+    if (likedBy.isNotEmpty) {
+      buffer.writeln('LIKED_BY: ${likedBy.join(', ')}');
+    }
+    if (likeCount > 0) {
+      buffer.writeln('LIKE_COUNT: $likeCount');
+    }
 
     buffer.writeln();
 
@@ -493,6 +517,8 @@ class Report {
     List<String>? updateAuthorized,
     List<String>? subscribers,
     int? subscriberCount,
+    List<String>? likedBy,
+    int? likeCount,
     Map<String, String>? titles,
     Map<String, String>? descriptions,
     Map<String, String>? metadata,
@@ -521,6 +547,8 @@ class Report {
       updateAuthorized: updateAuthorized ?? this.updateAuthorized,
       subscribers: subscribers ?? this.subscribers,
       subscriberCount: subscriberCount ?? this.subscriberCount,
+      likedBy: likedBy ?? this.likedBy,
+      likeCount: likeCount ?? this.likeCount,
       titles: titles ?? this.titles,
       descriptions: descriptions ?? this.descriptions,
       metadata: metadata ?? this.metadata,

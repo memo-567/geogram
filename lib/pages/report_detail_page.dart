@@ -13,6 +13,7 @@ import 'dart:io';
 import 'package:path/path.dart' as path;
 import '../models/report.dart';
 import '../models/report_update.dart';
+import '../models/report_comment.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
@@ -43,6 +44,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   late bool _isEditing;
   Report? _report;
   List<ReportUpdate> _updates = [];
+  List<ReportComment> _comments = [];
   bool _isLoading = false;
   String? _currentUserNpub;
   List<File> _imageFiles = [];
@@ -55,6 +57,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   final _longitudeController = TextEditingController();
   final _addressController = TextEditingController();
   final _contactController = TextEditingController();
+  final _commentController = TextEditingController();
 
   ReportSeverity _selectedSeverity = ReportSeverity.attention;
   ReportStatus _selectedStatus = ReportStatus.open;
@@ -113,6 +116,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _selectedStatus = _report!.status;
 
       _loadUpdates();
+      _loadComments();
       _loadExistingImages();
     }
   }
@@ -125,6 +129,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     _longitudeController.dispose();
     _addressController.dispose();
     _contactController.dispose();
+    _commentController.dispose();
     super.dispose();
   }
 
@@ -137,6 +142,67 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       _updates = await _reportService.loadUpdates(_report!.folderName);
     } catch (e) {
       LogService().log('ReportDetailPage: Error loading updates: $e');
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _loadComments() async {
+    if (_report == null) return;
+
+    try {
+      _comments = await _reportService.loadComments(_report!.folderName);
+      setState(() {});
+    } catch (e) {
+      LogService().log('ReportDetailPage: Error loading comments: $e');
+    }
+  }
+
+  Future<void> _addComment() async {
+    if (_report == null || _commentController.text.trim().isEmpty) return;
+
+    final profile = _profileService.getProfile();
+    if (profile.callsign.isEmpty) {
+      _showError('Please set up your profile first');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      await _reportService.addComment(
+        _report!.folderName,
+        profile.callsign,
+        _commentController.text.trim(),
+        npub: _currentUserNpub,
+      );
+      _commentController.clear();
+      await _loadComments();
+      _showSuccess(_i18n.t('comment_added'));
+    } catch (e) {
+      _showError('Failed to add comment: $e');
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _toggleLike() async {
+    if (_report == null || _currentUserNpub == null || _currentUserNpub!.isEmpty) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      if (_report!.isLikedBy(_currentUserNpub!)) {
+        await _reportService.unlikeReport(_report!.folderName, _currentUserNpub!);
+      } else {
+        await _reportService.likeReport(_report!.folderName, _currentUserNpub!);
+      }
+
+      // Reload report
+      _report = await _reportService.loadReport(_report!.folderName);
+      setState(() {});
+    } catch (e) {
+      _showError('Failed to toggle like: $e');
     }
 
     setState(() => _isLoading = false);
@@ -600,7 +666,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Coordinates: ${_latitudeController.text}, ${_longitudeController.text}',
+                              '${_i18n.t('coordinates')}: ${_latitudeController.text}, ${_longitudeController.text}',
                               style: theme.textTheme.bodySmall,
                             ),
                           ),
@@ -819,6 +885,35 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                     Text(_i18n.t('no_photos_attached')),
                   SizedBox(height: 24),
 
+                  // Likes section (for existing reports)
+                  if (!_isNew && _report != null) ...[
+                    const Divider(),
+                    SizedBox(height: 16),
+                    Row(
+                      children: [
+                        if (_currentUserNpub != null && _currentUserNpub!.isNotEmpty)
+                          ElevatedButton.icon(
+                            onPressed: _isLoading ? null : _toggleLike,
+                            icon: Icon(
+                              _report!.isLikedBy(_currentUserNpub!) ? Icons.favorite : Icons.favorite_border,
+                              color: _report!.isLikedBy(_currentUserNpub!) ? Colors.red : null,
+                            ),
+                            label: Text(_report!.isLikedBy(_currentUserNpub!)
+                                ? _i18n.t('liked')
+                                : _i18n.t('like')),
+                          ),
+                        if (_report!.likeCount > 0) ...[
+                          SizedBox(width: 16),
+                          Text(
+                            '${_report!.likeCount} ${_i18n.t('likes').toLowerCase()}',
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        ],
+                      ],
+                    ),
+                    SizedBox(height: 24),
+                  ],
+
                   // Actions (for existing reports)
                   if (!_isNew && _report != null && _currentUserNpub != null && _currentUserNpub!.isNotEmpty) ...[
                     const Divider(),
@@ -847,10 +942,67 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           ElevatedButton.icon(
                             onPressed: _isLoading ? null : _verify,
                             icon: Icon(Icons.verified),
-                            label: Text(_i18n.t('verify')),
+                            label: Text(_i18n.t('confirm_report_accurate')),
                           ),
                       ],
                     ),
+                    SizedBox(height: 24),
+                  ],
+
+                  // Comments section (for existing reports)
+                  if (!_isNew && _report != null) ...[
+                    const Divider(),
+                    SizedBox(height: 16),
+                    Text(
+                      _comments.isEmpty
+                          ? _i18n.t('comments')
+                          : '${_i18n.t('comments')} (${_comments.length})',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Add comment input
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _commentController,
+                            decoration: InputDecoration(
+                              hintText: _i18n.t('comment_hint'),
+                              border: OutlineInputBorder(),
+                            ),
+                            maxLines: 3,
+                            minLines: 1,
+                          ),
+                        ),
+                        SizedBox(width: 8),
+                        IconButton(
+                          onPressed: _isLoading ? null : _addComment,
+                          icon: Icon(Icons.send),
+                          tooltip: _i18n.t('add_comment'),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 16),
+
+                    // Display comments
+                    if (_comments.isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text(
+                            _i18n.t('no_comments_yet'),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      ..._comments.map((comment) => _buildCommentCard(comment, theme)),
                     SizedBox(height: 24),
                   ],
 
@@ -1015,53 +1167,63 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   Widget _buildSeverityChip(ReportSeverity severity) {
     Color color;
     IconData icon;
+    String label;
 
     switch (severity) {
       case ReportSeverity.emergency:
         color = Colors.red;
         icon = Icons.emergency;
+        label = _i18n.t('severity_emergency');
         break;
       case ReportSeverity.urgent:
         color = Colors.orange;
         icon = Icons.warning;
+        label = _i18n.t('severity_urgent');
         break;
       case ReportSeverity.attention:
         color = Colors.yellow.shade700;
         icon = Icons.report_problem;
+        label = _i18n.t('severity_attention');
         break;
       case ReportSeverity.info:
         color = Colors.blue;
         icon = Icons.info;
+        label = _i18n.t('severity_info');
         break;
     }
 
     return Chip(
       avatar: Icon(icon, color: color, size: 16),
-      label: Text(severity.name.toUpperCase()),
+      label: Text(label.toUpperCase()),
       backgroundColor: color.withOpacity(0.2),
     );
   }
 
   Widget _buildStatusChip(ReportStatus status) {
     Color color;
+    String label;
 
     switch (status) {
       case ReportStatus.open:
         color = Colors.grey;
+        label = _i18n.t('status_open');
         break;
       case ReportStatus.inProgress:
         color = Colors.blue;
+        label = _i18n.t('status_in_progress');
         break;
       case ReportStatus.resolved:
         color = Colors.green;
+        label = _i18n.t('status_resolved');
         break;
       case ReportStatus.closed:
         color = Colors.grey.shade700;
+        label = _i18n.t('status_closed');
         break;
     }
 
     return Chip(
-      label: Text(status.name.replaceAll(RegExp(r'([A-Z])'), ' \$1').trim().toUpperCase()),
+      label: Text(label.toUpperCase()),
       backgroundColor: color.withOpacity(0.2),
     );
   }
@@ -1096,6 +1258,45 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
             SizedBox(height: 8),
             Text(
               update.content,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommentCard(ReportComment comment, ThemeData theme) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.person, size: 16, color: theme.colorScheme.primary),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    comment.author,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Text(
+                  comment.displayDate,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            Text(
+              comment.content,
               style: theme.textTheme.bodyMedium,
             ),
           ],

@@ -32,7 +32,9 @@ import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/report_browser_page.dart';
+import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
+import 'pages/relay_dashboard_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -316,7 +318,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'report'
+      'www', 'postcards', 'contacts', 'places', 'market', 'report', 'groups', 'relay'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -582,8 +584,16 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                 collectionPath: collection.storagePath ?? '',
                                                                                 collectionTitle: collection.title,
                                                                               )
-                                                                            : CollectionBrowserPage(collection: collection);
+                                                                            : collection.type == 'groups'
+                                                                                ? GroupsBrowserPage(
+                                                                                    collectionPath: collection.storagePath ?? '',
+                                                                                    collectionTitle: collection.title,
+                                                                                  )
+                                                                                : collection.type == 'relay'
+                                                                                    ? const RelayDashboardPage()
+                                                                                    : CollectionBrowserPage(collection: collection);
 
+                                              LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
                                                 context,
                                                 MaterialPageRoute(
@@ -673,8 +683,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                           collectionPath: collection.storagePath ?? '',
                                                                                           collectionTitle: collection.title,
                                                                                         )
-                                                                                      : CollectionBrowserPage(collection: collection);
+                                                                                      : collection.type == 'groups'
+                                                                                          ? GroupsBrowserPage(
+                                                                                              collectionPath: collection.storagePath ?? '',
+                                                                                              collectionTitle: collection.title,
+                                                                                            )
+                                                                                          : CollectionBrowserPage(collection: collection);
 
+                                              LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
                                                 context,
                                                 MaterialPageRoute(
@@ -728,7 +744,7 @@ class _CollectionGridCard extends StatelessWidget {
   bool _isFixedCollectionType() {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market'
+      'www', 'postcards', 'contacts', 'places', 'market', 'groups'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -768,6 +784,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.place;
       case 'market':
         return Icons.store;
+      case 'groups':
+        return Icons.groups;
       default:
         return Icons.folder_special;
     }
@@ -1125,7 +1143,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
         // Known fixed collection types (non-files types use type name as folder name)
         final fixedTypes = {
           'forum', 'chat', 'blog', 'events', 'news', 'www',
-          'postcards', 'contacts', 'places', 'market', 'report'
+          'postcards', 'contacts', 'places', 'market', 'report', 'groups', 'relay'
         };
 
         setState(() {
@@ -1360,6 +1378,26 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                         : null,
                   ),
                 ),
+                DropdownMenuItem(
+                  value: 'groups',
+                  enabled: !_existingTypes.contains('groups'),
+                  child: Text(
+                    '${_i18n.t('collection_type_groups')}${_existingTypes.contains('groups') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('groups')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'relay',
+                  enabled: !_existingTypes.contains('relay'),
+                  child: Text(
+                    '${_i18n.t('collection_type_relay')}${_existingTypes.contains('relay') ? ' ${_i18n.t('already_exists')}' : ''}',
+                    style: _existingTypes.contains('relay')
+                        ? TextStyle(color: Colors.grey)
+                        : null,
+                  ),
+                ),
               ].where((item) {
                 // Hide disabled items (existing fixed types) instead of greying them out
                 if (item.value == 'files') return true; // Always show files
@@ -1387,6 +1425,8 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                         _i18n.t('collection_type_places'),
                         _i18n.t('collection_type_market'),
                         _i18n.t('collection_type_report'),
+                        _i18n.t('collection_type_groups'),
+                        _i18n.t('collection_type_relay'),
                       ];
                       if (fixedTypeTranslations.contains(_titleController.text)) {
                         _titleController.text = '';

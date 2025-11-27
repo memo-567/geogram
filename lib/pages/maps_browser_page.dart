@@ -11,9 +11,10 @@ import '../models/map_item.dart';
 import '../models/report.dart';
 import '../services/maps_service.dart';
 import '../services/profile_service.dart';
-import '../services/relay_service.dart';
+import '../services/map_tile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/config_service.dart';
 import 'report_detail_page.dart';
 
 /// Maps browser page showing geo-located items
@@ -27,7 +28,9 @@ class MapsBrowserPage extends StatefulWidget {
 class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProviderStateMixin {
   final MapsService _mapsService = MapsService();
   final ProfileService _profileService = ProfileService();
+  final MapTileService _mapTileService = MapTileService();
   final I18nService _i18n = I18nService();
+  final ConfigService _configService = ConfigService();
   final MapController _mapController = MapController();
 
   late TabController _tabController;
@@ -39,6 +42,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   MapItem? _selectedItem;
   final Set<MapItemType> _visibleLayers = Set.from(MapItemType.values);
   double _radiusKm = 30.0;
+  double _currentZoom = 10.0;
   LatLng? _centerPosition;
   bool _isLoading = true;
   final Set<MapItemType> _expandedGroups = Set.from(MapItemType.values);
@@ -79,20 +83,51 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Future<void> _initialize() async {
-    // Get user's saved location
-    final userLocation = _mapsService.getUserLocation();
-    if (userLocation != null) {
+    // Initialize tile caching
+    await _mapTileService.initialize();
+
+    // Try to load saved map state first
+    final savedLat = _configService.getNestedValue('mapState.latitude') as double?;
+    final savedLon = _configService.getNestedValue('mapState.longitude') as double?;
+    final savedZoom = _configService.getNestedValue('mapState.zoom') as double?;
+    final savedRadius = _configService.getNestedValue('mapState.radius') as double?;
+
+    if (savedLat != null && savedLon != null) {
+      // Restore saved position
       setState(() {
-        _centerPosition = LatLng(userLocation.$1, userLocation.$2);
+        _centerPosition = LatLng(savedLat, savedLon);
+        _currentZoom = savedZoom ?? _getZoomForRadius(_radiusKm);
+        _radiusKm = savedRadius ?? 30.0;
       });
+      LogService().log('MapsBrowserPage: Restored saved map state');
     } else {
-      // Default to center of world map
-      setState(() {
-        _centerPosition = const LatLng(20, 0);
-      });
+      // Get user's saved location from profile
+      final userLocation = _mapsService.getUserLocation();
+      if (userLocation != null) {
+        setState(() {
+          _centerPosition = LatLng(userLocation.$1, userLocation.$2);
+          _currentZoom = _getZoomForRadius(_radiusKm);
+        });
+      } else {
+        // Default to center of world map
+        setState(() {
+          _centerPosition = const LatLng(20, 0);
+          _currentZoom = 3.0;
+        });
+      }
     }
 
     await _loadItems();
+  }
+
+  /// Save current map state to config
+  Future<void> _saveMapState() async {
+    if (_centerPosition == null) return;
+
+    await _configService.setNestedValue('mapState.latitude', _centerPosition!.latitude);
+    await _configService.setNestedValue('mapState.longitude', _centerPosition!.longitude);
+    await _configService.setNestedValue('mapState.zoom', _currentZoom);
+    await _configService.setNestedValue('mapState.radius', _radiusKm);
   }
 
   Future<void> _loadItems({bool forceRefresh = false}) async {
@@ -138,19 +173,21 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   void _setRadius(double radius) {
+    final zoom = _getZoomForRadius(radius);
     setState(() {
       _radiusKm = radius;
+      _currentZoom = zoom;
     });
 
     // Zoom map to fit the new radius
     if (_centerPosition != null && _mapReady) {
-      final zoom = _getZoomForRadius(radius);
       _mapController.move(_centerPosition!, zoom);
     }
   }
 
   void _onRadiusChangeEnd(double radius) {
-    // Only reload items when user finishes dragging the slider
+    // Save state and reload items when user finishes dragging the slider
+    _saveMapState();
     _loadItems();
   }
 
@@ -287,32 +324,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
   }
 
-  String _getTileUrl() {
-    try {
-      final relay = RelayService().getPreferredRelay();
-      final profile = _profileService.getProfile();
-
-      if (relay != null && relay.url.isNotEmpty && profile.callsign.isNotEmpty) {
-        var relayUrl = relay.url;
-
-        if (relayUrl.startsWith('ws://')) {
-          relayUrl = relayUrl.replaceFirst('ws://', 'http://');
-        } else if (relayUrl.startsWith('wss://')) {
-          relayUrl = relayUrl.replaceFirst('wss://', 'https://');
-        }
-
-        if (relayUrl.endsWith('/')) {
-          relayUrl = relayUrl.substring(0, relayUrl.length - 1);
-        }
-
-        return '$relayUrl/tiles/${profile.callsign}/{z}/{x}/{y}.png';
-      }
-    } catch (e) {
-      LogService().log('MapsBrowserPage: Error getting relay tile URL: $e');
-    }
-
-    return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -344,70 +355,145 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Widget _buildTopBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          bottom: BorderSide(
-            color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Tab bar
-          SizedBox(
-            width: 200,
-            child: TabBar(
-              controller: _tabController,
-              tabs: [
-                Tab(text: _i18n.t('map_view')),
-                Tab(text: _i18n.t('list_view')),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 550;
+
+        if (isNarrow) {
+          // Portrait/narrow mode: stack radius slider above tabs
+          return Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(
+                bottom: BorderSide(
+                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
+                ),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Radius slider row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Row(
+                    children: [
+                      Text(
+                        _i18n.t('radius'),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Slider(
+                          value: _radiusToSlider(_radiusKm),
+                          min: 0.0,
+                          max: 1.0,
+                          divisions: 100,
+                          label: '${_radiusKm.round()} km',
+                          onChanged: (sliderValue) => _setRadius(_sliderToRadius(sliderValue)),
+                          onChangeEnd: (sliderValue) => _onRadiusChangeEnd(_sliderToRadius(sliderValue)),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 60,
+                        child: Text(
+                          '${_radiusKm.round()} km',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh),
+                        onPressed: () => _loadItems(forceRefresh: true),
+                        tooltip: _i18n.t('refresh'),
+                      ),
+                    ],
+                  ),
+                ),
+                // Tab bar row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: TabBar(
+                    controller: _tabController,
+                    tabs: [
+                      Tab(text: _i18n.t('map_view')),
+                      Tab(text: _i18n.t('list_view')),
+                    ],
+                  ),
+                ),
               ],
             ),
-          ),
+          );
+        }
 
-          const SizedBox(width: 16),
-
-          // Radius slider
-          Text(
-            _i18n.t('radius'),
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 200,
-            child: Slider(
-              value: _radiusToSlider(_radiusKm),
-              min: 0.0,
-              max: 1.0,
-              divisions: 100,
-              label: '${_radiusKm.round()} km',
-              onChanged: (sliderValue) => _setRadius(_sliderToRadius(sliderValue)),
-              onChangeEnd: (sliderValue) => _onRadiusChangeEnd(_sliderToRadius(sliderValue)),
-            ),
-          ),
-          SizedBox(
-            width: 70,
-            child: Text(
-              '${_radiusKm.round()} km',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.bold,
+        // Wide mode: everything in one row
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border(
+              bottom: BorderSide(
+                color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
               ),
             ),
           ),
+          child: Row(
+            children: [
+              // Tab bar
+              SizedBox(
+                width: 200,
+                child: TabBar(
+                  controller: _tabController,
+                  tabs: [
+                    Tab(text: _i18n.t('map_view')),
+                    Tab(text: _i18n.t('list_view')),
+                  ],
+                ),
+              ),
 
-          const SizedBox(width: 8),
+              const SizedBox(width: 16),
 
-          // Refresh button
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => _loadItems(forceRefresh: true),
-            tooltip: _i18n.t('refresh'),
+              // Radius slider
+              Text(
+                _i18n.t('radius'),
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 200,
+                child: Slider(
+                  value: _radiusToSlider(_radiusKm),
+                  min: 0.0,
+                  max: 1.0,
+                  divisions: 100,
+                  label: '${_radiusKm.round()} km',
+                  onChanged: (sliderValue) => _setRadius(_sliderToRadius(sliderValue)),
+                  onChangeEnd: (sliderValue) => _onRadiusChangeEnd(_sliderToRadius(sliderValue)),
+                ),
+              ),
+              SizedBox(
+                width: 70,
+                child: Text(
+                  '${_radiusKm.round()} km',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+
+              const SizedBox(width: 8),
+
+              // Refresh button
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: () => _loadItems(forceRefresh: true),
+                tooltip: _i18n.t('refresh'),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -475,16 +561,13 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         .where((item) => _visibleLayers.contains(item.type))
         .toList();
 
-    // Calculate initial zoom based on current radius
-    final initialZoom = _getZoomForRadius(_radiusKm);
-
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
             initialCenter: _centerPosition!,
-            initialZoom: initialZoom,
+            initialZoom: _currentZoom,
             minZoom: 1.0,
             maxZoom: 18.0,
             onMapReady: () {
@@ -493,17 +576,26 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             onTap: (_, __) {
               setState(() => _selectedItem = null);
             },
+            onPositionChanged: (position, hasGesture) {
+              // Update current zoom and position when user pans/zooms
+              if (hasGesture && position.center != null) {
+                _centerPosition = position.center;
+                _currentZoom = position.zoom;
+                // Save state (debounced by the config service)
+                _saveMapState();
+              }
+            },
           ),
           children: [
             TileLayer(
-              urlTemplate: _getTileUrl(),
+              urlTemplate: _mapTileService.getTileUrl(),
               userAgentPackageName: 'dev.geogram.geogram_desktop',
               subdomains: const [],
               tileBuilder: (context, tileWidget, tile) {
                 return tileWidget;
               },
               evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-              tileProvider: NetworkTileProvider(),
+              tileProvider: _mapTileService.getTileProvider(),
             ),
 
             // Radius circle
@@ -982,14 +1074,34 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             ),
           ),
 
-          // Open details button
-          FilledButton.icon(
-            onPressed: () => _openItemDetail(item),
-            icon: const Icon(Icons.open_in_new, size: 18),
-            label: Text(_i18n.t('open')),
+          // Open details button - icon only in narrow mode
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Check parent width by looking at available space
+              final screenWidth = MediaQuery.of(context).size.width;
+              final isNarrow = screenWidth < 450;
+
+              if (isNarrow) {
+                return IconButton(
+                  onPressed: () => _openItemDetail(item),
+                  icon: const Icon(Icons.open_in_new),
+                  tooltip: _i18n.t('open'),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                  ),
+                );
+              }
+
+              return FilledButton.icon(
+                onPressed: () => _openItemDetail(item),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: Text(_i18n.t('open')),
+              );
+            },
           ),
 
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
 
           // Close button
           IconButton(

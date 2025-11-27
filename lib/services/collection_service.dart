@@ -145,15 +145,18 @@ class CollectionService {
       await _loadSecuritySettings(collection, folder);
 
       // Check if all required files exist (collection.js, tree.json, data.js, index.html)
-      // Only generate missing files, don't validate/regenerate on startup to avoid file handle exhaustion
-      if (!await _hasRequiredFiles(folder)) {
-        stderr.writeln('Missing required files for collection: ${collection.title}');
-        stderr.writeln('Generating tree.json, data.js, and index.html...');
+      // Only generate missing files for files and www types - other types have their own structure
+      // Don't validate/regenerate on startup to avoid file handle exhaustion
+      if (collection.type == 'files' || collection.type == 'www') {
+        if (!await _hasRequiredFiles(folder)) {
+          stderr.writeln('Missing required files for collection: ${collection.title}');
+          stderr.writeln('Generating tree.json, data.js, and index.html...');
 
-        // Generate files synchronously on first load
-        await _generateAndSaveTreeJson(folder);
-        await _generateAndSaveDataJs(folder);
-        await _generateAndSaveIndexHtml(folder);
+          // Generate files synchronously on first load
+          await _generateAndSaveTreeJson(folder);
+          await _generateAndSaveDataJs(folder);
+          await _generateAndSaveIndexHtml(folder);
+        }
       }
       // Note: Validation and regeneration are skipped on startup to prevent "too many open files" errors
       // Tree files will be regenerated when explicitly requested or when collection is modified
@@ -418,6 +421,14 @@ class CollectionService {
         // Initialize places collection structure
         await _initializePlacesCollection(collectionFolder);
         stderr.writeln('Created places collection skeleton');
+      } else if (type == 'groups') {
+        // Initialize groups collection structure
+        await _initializeGroupsCollection(collectionFolder);
+        stderr.writeln('Created groups collection skeleton');
+      } else if (type == 'relay') {
+        // Initialize relay collection structure
+        await _initializeRelayCollection(collectionFolder);
+        stderr.writeln('Created relay collection skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -690,6 +701,80 @@ class CollectionService {
     }
   }
 
+  /// Initialize groups collection with admins.txt and root configuration
+  Future<void> _initializeGroupsCollection(Directory collectionFolder) async {
+    // Get current profile to set as collection admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+
+    // Create group.json at root
+    final groupJsonFile = File('${collectionFolder.path}/group.json');
+    final now = DateTime.now();
+    final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+    final groupData = {
+      'collection': {
+        'id': 'unique-collection-id',
+        'title': 'Groups',
+        'description': 'Community moderation and curation groups',
+        'type': 'groups',
+        'created': timestamp,
+        'updated': timestamp,
+      }
+    };
+    await groupJsonFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(groupData),
+    );
+
+    // Create admins.txt at root
+    final adminsFile = File('${collectionFolder.path}/admins.txt');
+    final adminsContent = '''# ADMINS: Groups Collection
+# Created: $timestamp
+
+${currentProfile.callsign}
+--> npub: ${currentProfile.npub}
+--> signature:
+''';
+    await adminsFile.writeAsString(adminsContent);
+
+    stderr.writeln('Groups collection initialized');
+    if (currentProfile.npub.isNotEmpty) {
+      stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as collection admin');
+    }
+  }
+
+  /// Initialize relay collection with basic structure
+  /// Note: The actual relay configuration is managed by RelayNodeService
+  Future<void> _initializeRelayCollection(Directory collectionFolder) async {
+    // Get current profile
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final now = DateTime.now();
+    final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+    // Create relay.json at root (basic metadata - actual relay config is separate)
+    final relayJsonFile = File('${collectionFolder.path}/relay.json');
+    final relayData = {
+      'collection': {
+        'id': 'relay-collection',
+        'title': 'Relay',
+        'description': 'Configure this device as a relay node',
+        'type': 'relay',
+        'created': timestamp,
+        'updated': timestamp,
+      },
+      'owner': {
+        'callsign': currentProfile.callsign,
+        'npub': currentProfile.npub,
+      },
+    };
+    await relayJsonFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(relayData),
+    );
+
+    stderr.writeln('Relay collection initialized');
+  }
+
   /// Write collection metadata files to disk
   Future<void> _writeCollectionFiles(
     Collection collection,
@@ -703,13 +788,19 @@ class CollectionService {
     final securityJsonFile = File('${folder.path}/extra/security.json');
     await securityJsonFile.writeAsString(collection.generateSecurityJson());
 
-    // Generate and write tree.json, data.js, and index.html
-    // For new collections, generate synchronously so collection is fully ready
-    stderr.writeln('Generating tree.json, data.js, and index.html...');
-    await _generateAndSaveTreeJson(folder);
-    await _generateAndSaveDataJs(folder);
-    await _generateAndSaveIndexHtml(folder);
-    stderr.writeln('Collection files generated successfully');
+    // Only generate tree.json, data.js, and index.html for files and www types
+    // Other types (groups, chat, forum, etc.) have their own structure
+    if (collection.type == 'files' || collection.type == 'www') {
+      // Generate and write tree.json, data.js, and index.html
+      // For new collections, generate synchronously so collection is fully ready
+      stderr.writeln('Generating tree.json, data.js, and index.html...');
+      await _generateAndSaveTreeJson(folder);
+      await _generateAndSaveDataJs(folder);
+      await _generateAndSaveIndexHtml(folder);
+      stderr.writeln('Collection files generated successfully');
+    } else {
+      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${collection.type} type');
+    }
   }
 
   /// Delete a collection
