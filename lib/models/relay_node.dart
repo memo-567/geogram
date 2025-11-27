@@ -344,8 +344,16 @@ class RelayNodeStats {
 class RelayNode {
   final String id;
   final String name;
-  final String callsign;
-  final String npub;
+
+  // Relay identity (X3 prefix) - the relay device's own keypair
+  final String relayCallsign;  // X3 callsign derived from relay npub
+  final String relayNpub;      // Relay's public key
+  final String relayNsec;      // Relay's private key (secret)
+
+  // Operator identity (X1 prefix) - the human managing this relay
+  final String operatorCallsign;  // X1 callsign of the operator
+  final String operatorNpub;      // Operator's public key
+
   final RelayType type;
   final String? networkId;
   final String? networkName;
@@ -361,8 +369,11 @@ class RelayNode {
   const RelayNode({
     required this.id,
     required this.name,
-    required this.callsign,
-    required this.npub,
+    required this.relayCallsign,
+    required this.relayNpub,
+    required this.relayNsec,
+    required this.operatorCallsign,
+    required this.operatorNpub,
     required this.type,
     this.networkId,
     this.networkName,
@@ -375,6 +386,12 @@ class RelayNode {
     required this.created,
     required this.updated,
   });
+
+  /// Backwards compatibility: returns relay callsign
+  String get callsign => relayCallsign;
+
+  /// Backwards compatibility: returns relay npub
+  String get npub => relayNpub;
 
   /// Check if this is a root relay
   bool get isRoot => type == RelayType.root;
@@ -412,11 +429,21 @@ class RelayNode {
   }
 
   factory RelayNode.fromJson(Map<String, dynamic> json) {
+    // Handle backwards compatibility for old format
+    final relayCallsign = json['relayCallsign'] as String? ?? json['callsign'] as String;
+    final relayNpub = json['relayNpub'] as String? ?? json['npub'] as String;
+    final relayNsec = json['relayNsec'] as String? ?? '';
+    final operatorCallsign = json['operatorCallsign'] as String? ?? json['callsign'] as String;
+    final operatorNpub = json['operatorNpub'] as String? ?? json['npub'] as String;
+
     return RelayNode(
       id: json['id'] as String,
       name: json['name'] as String,
-      callsign: json['callsign'] as String,
-      npub: json['npub'] as String,
+      relayCallsign: relayCallsign,
+      relayNpub: relayNpub,
+      relayNsec: relayNsec,
+      operatorCallsign: operatorCallsign,
+      operatorNpub: operatorNpub,
       type: RelayType.values.firstWhere(
         (e) => e.name == json['type'],
         orElse: () => RelayType.node,
@@ -445,8 +472,11 @@ class RelayNode {
     return {
       'id': id,
       'name': name,
-      'callsign': callsign,
-      'npub': npub,
+      'relayCallsign': relayCallsign,
+      'relayNpub': relayNpub,
+      'relayNsec': relayNsec,
+      'operatorCallsign': operatorCallsign,
+      'operatorNpub': operatorNpub,
       'type': type.name,
       if (networkId != null) 'networkId': networkId,
       if (networkName != null) 'networkName': networkName,
@@ -464,8 +494,11 @@ class RelayNode {
   RelayNode copyWith({
     String? id,
     String? name,
-    String? callsign,
-    String? npub,
+    String? relayCallsign,
+    String? relayNpub,
+    String? relayNsec,
+    String? operatorCallsign,
+    String? operatorNpub,
     RelayType? type,
     String? networkId,
     String? networkName,
@@ -481,8 +514,11 @@ class RelayNode {
     return RelayNode(
       id: id ?? this.id,
       name: name ?? this.name,
-      callsign: callsign ?? this.callsign,
-      npub: npub ?? this.npub,
+      relayCallsign: relayCallsign ?? this.relayCallsign,
+      relayNpub: relayNpub ?? this.relayNpub,
+      relayNsec: relayNsec ?? this.relayNsec,
+      operatorCallsign: operatorCallsign ?? this.operatorCallsign,
+      operatorNpub: operatorNpub ?? this.operatorNpub,
       type: type ?? this.type,
       networkId: networkId ?? this.networkId,
       networkName: networkName ?? this.networkName,

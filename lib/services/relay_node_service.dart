@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/relay_node.dart';
 import '../models/relay_network.dart';
+import '../util/nostr_key_generator.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
@@ -97,7 +98,7 @@ class RelayNodeService {
   Future<RelayNode> createRootRelay({
     required String networkName,
     required String networkDescription,
-    required String callsign,
+    required String operatorCallsign,
     required RelayNodeConfig config,
     NetworkPolicy policy = const NetworkPolicy(),
     NetworkCollections collections = const NetworkCollections(),
@@ -111,25 +112,32 @@ class RelayNodeService {
     final id = _generateId();
     final networkId = _generateId();
 
-    // Create the network
+    // Generate relay identity (X3 callsign)
+    final relayKeys = NostrKeys.forRelay();
+    LogService().log('Generated relay identity: ${relayKeys.callsign} (${relayKeys.npub.substring(0, 20)}...)');
+
+    // Create the network with relay as root
     _network = RelayNetwork(
       id: networkId,
       name: networkName,
       description: networkDescription,
-      rootNpub: profile.npub!,
-      rootCallsign: callsign,
+      rootNpub: relayKeys.npub,  // Root is the relay's npub
+      rootCallsign: relayKeys.callsign,  // Root callsign is X3
       policy: policy,
       collections: collections,
       founded: now,
       updated: now,
     );
 
-    // Create the relay node
+    // Create the relay node with separate identities
     _relayNode = RelayNode(
       id: id,
       name: networkName,
-      callsign: callsign,
-      npub: profile.npub!,
+      relayCallsign: relayKeys.callsign,  // X3 callsign
+      relayNpub: relayKeys.npub,
+      relayNsec: relayKeys.nsec,
+      operatorCallsign: operatorCallsign,  // X1 callsign from profile
+      operatorNpub: profile.npub!,
       type: RelayType.root,
       networkId: networkId,
       networkName: networkName,
@@ -142,7 +150,7 @@ class RelayNodeService {
     await _saveRelayConfig();
     await _createRelayDirectories();
 
-    LogService().log('Created root relay: $networkName');
+    LogService().log('Created root relay: $networkName (relay: ${relayKeys.callsign}, operator: $operatorCallsign)');
     _stateController.add(_relayNode);
 
     return _relayNode!;
@@ -151,7 +159,7 @@ class RelayNodeService {
   /// Join an existing network as a node relay
   Future<RelayNode> joinAsNode({
     required String nodeName,
-    required String callsign,
+    required String operatorCallsign,
     required RelayNetwork network,
     required RelayNodeConfig config,
   }) async {
@@ -163,13 +171,20 @@ class RelayNodeService {
     final now = DateTime.now();
     final id = _generateId();
 
+    // Generate relay identity (X3 callsign)
+    final relayKeys = NostrKeys.forRelay();
+    LogService().log('Generated relay identity: ${relayKeys.callsign} (${relayKeys.npub.substring(0, 20)}...)');
+
     _network = network;
 
     _relayNode = RelayNode(
       id: id,
       name: nodeName,
-      callsign: callsign,
-      npub: profile.npub!,
+      relayCallsign: relayKeys.callsign,  // X3 callsign
+      relayNpub: relayKeys.npub,
+      relayNsec: relayKeys.nsec,
+      operatorCallsign: operatorCallsign,  // X1 callsign from profile
+      operatorNpub: profile.npub!,
       type: RelayType.node,
       networkId: network.id,
       networkName: network.name,
@@ -184,7 +199,7 @@ class RelayNodeService {
     await _saveRelayConfig();
     await _createRelayDirectories();
 
-    LogService().log('Joined network as node: $nodeName -> ${network.name}');
+    LogService().log('Joined network as node: $nodeName (relay: ${relayKeys.callsign}, operator: $operatorCallsign)');
     _stateController.add(_relayNode);
 
     return _relayNode!;
@@ -403,11 +418,19 @@ class RelayNodeService {
       await rootFile.writeAsString('''
 # ROOT: ${_network!.name}
 
-NPUB: ${_relayNode!.npub}
-CALLSIGN: ${_relayNode!.callsign}
+## Relay Identity (X3)
+RELAY_CALLSIGN: ${_relayNode!.relayCallsign}
+RELAY_NPUB: ${_relayNode!.relayNpub}
+
+## Operator Identity (X1)
+OPERATOR_CALLSIGN: ${_relayNode!.operatorCallsign}
+OPERATOR_NPUB: ${_relayNode!.operatorNpub}
+
 CREATED: ${_relayNode!.created.toIso8601String()}
 
 Network founder and ultimate authority.
+
+The relay (${_relayNode!.relayCallsign}) is managed by operator ${_relayNode!.operatorCallsign}.
 ''');
     }
   }

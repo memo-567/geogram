@@ -57,10 +57,24 @@ class NostrKeyGenerator {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
   }
 
-  /// Derive callsign from npub
-  /// Format: X1 + first 4 characters after 'npub1'
+  /// Derive user/operator callsign from npub
+  /// Format: X1 + first 4 alphanumeric characters after 'npub1'
   /// Example: npub1abcd... -> X1ABCD
+  /// Max length: 6 characters (2 char prefix + 4 chars)
   static String deriveCallsign(String npub) {
+    return _deriveCallsignWithPrefix(npub, 'X1');
+  }
+
+  /// Derive relay callsign from npub
+  /// Format: X3 + first 4 alphanumeric characters after 'npub1'
+  /// Example: npub1abcd... -> X3ABCD
+  /// Max length: 6 characters (2 char prefix + 4 chars)
+  static String deriveRelayCallsign(String npub) {
+    return _deriveCallsignWithPrefix(npub, 'X3');
+  }
+
+  /// Internal method to derive callsign with given prefix
+  static String _deriveCallsignWithPrefix(String npub, String prefix) {
     if (!npub.toLowerCase().startsWith('npub1')) {
       throw ArgumentError('Invalid npub format');
     }
@@ -68,15 +82,16 @@ class NostrKeyGenerator {
     // Extract data after 'npub1'
     final data = npub.substring(5);
 
-    // Take first 4 characters and uppercase
-    var suffix = data.substring(0, data.length >= 4 ? 4 : data.length).toUpperCase();
+    // Take first 4 alphanumeric characters and uppercase
+    final alphanumeric = data.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    var suffix = alphanumeric.substring(0, alphanumeric.length >= 4 ? 4 : alphanumeric.length).toUpperCase();
 
     // Ensure we have exactly 4 characters (pad with X if needed)
     while (suffix.length < 4) {
       suffix += 'X';
     }
 
-    return 'X1$suffix';
+    return '$prefix$suffix';
   }
 }
 
@@ -91,6 +106,16 @@ class NostrKeys {
     required this.nsec,
     String? callsign,
   }) : callsign = callsign ?? NostrKeyGenerator.deriveCallsign(npub);
+
+  /// Create a relay key pair with X3 callsign prefix
+  factory NostrKeys.forRelay() {
+    final keys = NostrKeyGenerator.generateKeyPair();
+    return NostrKeys(
+      npub: keys.npub,
+      nsec: keys.nsec,
+      callsign: NostrKeyGenerator.deriveRelayCallsign(keys.npub),
+    );
+  }
 
   Map<String, dynamic> toJson() {
     return {

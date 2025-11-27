@@ -121,7 +121,8 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
             controller: _callsignController,
             enabled: false,
             decoration: InputDecoration(
-              labelText: 'Your Callsign',
+              labelText: 'Operator Callsign (X1)',
+              helperText: 'Your identity as the relay operator',
               border: OutlineInputBorder(),
               filled: true,
               fillColor: Colors.grey[800],
@@ -129,13 +130,29 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
           ),
           SizedBox(height: 8),
           Text(
-            'Your identity will be used to sign all network authority. Callsign is set in your profile.',
-            style: TextStyle(color: Colors.grey[600], fontSize: 12),
-          ),
-          SizedBox(height: 4),
-          Text(
             'NPUB: ${_profileService.getProfile().npub ?? "Not set"}',
             style: TextStyle(color: Colors.grey[600], fontSize: 12, fontFamily: 'monospace'),
+          ),
+          SizedBox(height: 16),
+          Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.blue[400], size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'The relay will receive its own X3 callsign (generated from its unique keypair). Your X1 callsign identifies you as the operator.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -469,7 +486,8 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
         children: [
           _buildSummarySection('Network Summary', [
             'Name: ${_networkNameController.text}',
-            'Owner: ${_callsignController.text} (${_profileService.getProfile().npub ?? ""})',
+            'Operator: ${_callsignController.text} (X1)',
+            'Relay: Will be assigned X3 callsign',
             'Type: Root Relay',
           ]),
           SizedBox(height: 16),
@@ -625,7 +643,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
       await _relayNodeService.createRootRelay(
         networkName: _networkNameController.text,
         networkDescription: _networkDescriptionController.text,
-        callsign: _callsignController.text,
+        operatorCallsign: _callsignController.text,
         config: config,
         policy: policy,
         collections: collections,
