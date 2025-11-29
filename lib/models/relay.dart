@@ -4,6 +4,7 @@ import 'dart:math';
 class Relay {
   String url;
   String name;
+  String? callsign; // Relay's X3 callsign (from API)
   String status; // 'preferred', 'backup', 'available'
   bool isConnected;
   int? latency; // in milliseconds
@@ -16,6 +17,7 @@ class Relay {
   Relay({
     required this.url,
     required this.name,
+    this.callsign,
     this.status = 'available',
     this.isConnected = false,
     this.latency,
@@ -31,6 +33,7 @@ class Relay {
     return Relay(
       url: json['url'] as String,
       name: json['name'] as String,
+      callsign: json['callsign'] as String?,
       status: json['status'] as String? ?? 'available',
       isConnected: json['isConnected'] as bool? ?? false,
       latency: json['latency'] as int?,
@@ -49,6 +52,7 @@ class Relay {
     return {
       'url': url,
       'name': name,
+      if (callsign != null) 'callsign': callsign,
       'status': status,
       'isConnected': isConnected,
       if (latency != null) 'latency': latency,
@@ -64,6 +68,7 @@ class Relay {
   Relay copyWith({
     String? url,
     String? name,
+    String? callsign,
     String? status,
     bool? isConnected,
     int? latency,
@@ -76,6 +81,7 @@ class Relay {
     return Relay(
       url: url ?? this.url,
       name: name ?? this.name,
+      callsign: callsign ?? this.callsign,
       status: status ?? this.status,
       isConnected: isConnected ?? this.isConnected,
       latency: latency ?? this.latency,

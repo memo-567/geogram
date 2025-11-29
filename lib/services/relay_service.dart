@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/relay.dart';
+import '../models/relay_chat_room.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/websocket_service.dart';
@@ -267,8 +268,9 @@ class RelayService {
       if (success) {
         final latency = DateTime.now().difference(startTime).inMilliseconds;
 
-        // Fetch relay status to get connected devices count
+        // Fetch relay status to get connected devices count and callsign
         int? connectedDevices;
+        String? relayCallsign;
         try {
           final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
           final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
@@ -276,7 +278,11 @@ class RelayService {
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             connectedDevices = data['connected_devices'] as int?;
+            relayCallsign = data['callsign'] as String?;
             LogService().log('Fetched relay status: $connectedDevices devices connected');
+            if (relayCallsign != null && relayCallsign.isNotEmpty) {
+              LogService().log('Relay callsign: $relayCallsign');
+            }
           }
         } catch (e) {
           LogService().log('Warning: Could not fetch relay status: $e');
@@ -290,12 +296,16 @@ class RelayService {
             isConnected: true,
             latency: latency,
             connectedDevices: connectedDevices,
+            callsign: relayCallsign,
           );
           await _saveRelays();
 
           LogService().log('');
           LogService().log('✓ CONNECTION SUCCESSFUL');
           LogService().log('Relay: ${_relays[index].name}');
+          if (relayCallsign != null && relayCallsign.isNotEmpty) {
+            LogService().log('Callsign: $relayCallsign');
+          }
           LogService().log('Latency: ${latency}ms');
           if (connectedDevices != null) {
             LogService().log('Connected devices: $connectedDevices');
@@ -346,5 +356,141 @@ class RelayService {
       }
       _saveRelays();
     }
+  }
+
+  /// Get currently connected relay
+  Relay? getConnectedRelay() {
+    try {
+      return _relays.firstWhere((r) => r.isConnected);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Get HTTP base URL for a relay
+  String _getHttpBaseUrl(String wsUrl) {
+    return wsUrl
+        .replaceFirst('ws://', 'http://')
+        .replaceFirst('wss://', 'https://');
+  }
+
+  /// Fetch public chat rooms from relay
+  Future<List<RelayChatRoom>> fetchChatRooms(String relayUrl) async {
+    try {
+      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final apiUrl = httpUrl.endsWith('/')
+          ? '${httpUrl}api/chat/rooms'
+          : '$httpUrl/api/chat/rooms';
+
+      LogService().log('Fetching chat rooms from: $apiUrl');
+      final response = await http.get(Uri.parse(apiUrl));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final relayName = data['relay'] as String? ?? '';
+        final roomsData = data['rooms'] as List<dynamic>? ?? [];
+
+        final rooms = roomsData.map((room) {
+          return RelayChatRoom.fromJson(
+            room as Map<String, dynamic>,
+            relayUrl,
+            relayName,
+          );
+        }).toList();
+
+        LogService().log('Fetched ${rooms.length} chat rooms from $relayName');
+        return rooms;
+      } else {
+        LogService().log('Failed to fetch chat rooms: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      LogService().log('Error fetching chat rooms: $e');
+      return [];
+    }
+  }
+
+  /// Fetch messages from a relay chat room
+  Future<List<RelayChatMessage>> fetchRoomMessages(
+    String relayUrl,
+    String roomId, {
+    int limit = 50,
+  }) async {
+    try {
+      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final apiUrl = httpUrl.endsWith('/')
+          ? '${httpUrl}api/chat/rooms/$roomId/messages?limit=$limit'
+          : '$httpUrl/api/chat/rooms/$roomId/messages?limit=$limit';
+
+      LogService().log('Fetching messages from room: $roomId');
+      final response = await http.get(Uri.parse(apiUrl));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final messagesData = data['messages'] as List<dynamic>? ?? [];
+
+        final messages = messagesData.map((msg) {
+          return RelayChatMessage.fromJson(
+            msg as Map<String, dynamic>,
+            roomId,
+          );
+        }).toList();
+
+        LogService().log('Fetched ${messages.length} messages from room $roomId');
+        return messages;
+      } else {
+        LogService().log('Failed to fetch messages: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      LogService().log('Error fetching messages: $e');
+      return [];
+    }
+  }
+
+  /// Post a message to a relay chat room
+  Future<bool> postRoomMessage(
+    String relayUrl,
+    String roomId,
+    String callsign,
+    String content,
+  ) async {
+    try {
+      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final apiUrl = httpUrl.endsWith('/')
+          ? '${httpUrl}api/chat/rooms/$roomId/messages'
+          : '$httpUrl/api/chat/rooms/$roomId/messages';
+
+      LogService().log('Posting message to room: $roomId');
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'callsign': callsign,
+          'content': content,
+        }),
+      );
+
+      if (response.statusCode == 201) {
+        LogService().log('Message posted successfully');
+        return true;
+      } else {
+        LogService().log('Failed to post message: ${response.statusCode}');
+        return false;
+      }
+    } catch (e) {
+      LogService().log('Error posting message: $e');
+      return false;
+    }
+  }
+
+  /// Fetch chat rooms from connected relay
+  Future<List<RelayChatRoom>> fetchConnectedRelayChatRooms() async {
+    final relay = getConnectedRelay();
+    if (relay == null) {
+      LogService().log('No relay connected');
+      return [];
+    }
+    return fetchChatRooms(relay.url);
   }
 }

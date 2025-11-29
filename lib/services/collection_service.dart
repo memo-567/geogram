@@ -144,22 +144,46 @@ class CollectionService {
       // Load security settings (will override defaults if file exists)
       await _loadSecuritySettings(collection, folder);
 
-      // Check if all required files exist (collection.js, tree.json, data.js, index.html)
-      // Only generate missing files for files and www types - other types have their own structure
-      // Don't validate/regenerate on startup to avoid file handle exhaustion
+      // Ensure tree.json exists and is valid for all collection types
+      // tree.json is needed for file browsing via API
+      final treeJsonFile = File('${folder.path}/extra/tree.json');
+      bool needsTreeGeneration = false;
+
+      if (!await treeJsonFile.exists()) {
+        needsTreeGeneration = true;
+      } else {
+        // Check if tree.json is empty
+        final content = await treeJsonFile.readAsString();
+        if (content.trim() == '[]' || content.trim().isEmpty) {
+          // Check if folder has actual content
+          bool hasContent = false;
+          await for (final entity in folder.list()) {
+            final name = entity.path.split('/').last;
+            if (name != 'extra' && name != 'collection.js' &&
+                name != 'index.html' && !name.startsWith('.')) {
+              hasContent = true;
+              break;
+            }
+          }
+          if (hasContent) {
+            needsTreeGeneration = true;
+          }
+        }
+      }
+
+      if (needsTreeGeneration) {
+        stderr.writeln('Generating tree.json for collection: ${collection.title}');
+        await _generateAndSaveTreeJson(folder);
+      }
+
+      // For files and www types, also ensure data.js and index.html exist
       if (collection.type == 'files' || collection.type == 'www') {
         if (!await _hasRequiredFiles(folder)) {
-          stderr.writeln('Missing required files for collection: ${collection.title}');
-          stderr.writeln('Generating tree.json, data.js, and index.html...');
-
-          // Generate files synchronously on first load
-          await _generateAndSaveTreeJson(folder);
+          stderr.writeln('Generating data.js and index.html for collection: ${collection.title}');
           await _generateAndSaveDataJs(folder);
           await _generateAndSaveIndexHtml(folder);
         }
       }
-      // Note: Validation and regeneration are skipped on startup to prevent "too many open files" errors
-      // Tree files will be regenerated when explicitly requested or when collection is modified
 
       // Count files
       await _countCollectionFiles(collection, folder);
@@ -177,29 +201,27 @@ class CollectionService {
     int totalSize = 0;
 
     try {
-      // Read from tree.json instead of scanning filesystem to avoid "too many open files"
+      // Read from tree.json (which should already be generated/validated)
       final treeJsonFile = File('${folder.path}/extra/tree.json');
 
       if (await treeJsonFile.exists()) {
         final content = await treeJsonFile.readAsString();
         final entries = json.decode(content) as List<dynamic>;
 
-        // Recursively count files including those in subdirectories
+        // Count files recursively from nested tree.json structure
         void countRecursive(List<dynamic> items) {
           for (var entry in items) {
             if (entry['type'] == 'file') {
               fileCount++;
               totalSize += entry['size'] as int? ?? 0;
             } else if (entry['type'] == 'directory' && entry['children'] != null) {
-              // Recursively count files in subdirectories
               countRecursive(entry['children'] as List<dynamic>);
             }
           }
         }
-
         countRecursive(entries);
       } else {
-        // If tree.json doesn't exist yet, scan filesystem directly
+        // Fallback: scan filesystem directly if tree.json doesn't exist
         await _scanDirectoryForCount(folder, (count, size) {
           fileCount += count;
           totalSize += size;
@@ -1221,11 +1243,9 @@ ${currentProfile.callsign}
     return allEntities;
   }
 
-  /// Generate and save tree.json
+  /// Generate and save tree.json with proper nested structure
   Future<void> _generateAndSaveTreeJson(Directory folder) async {
     try {
-      final entries = <Map<String, dynamic>>[];
-
       // Check if this is a www type collection to determine if index.html should be included
       bool isWwwType = false;
       final collectionJsFile = File('${folder.path}/collection.js');
@@ -1234,57 +1254,100 @@ ${currentProfile.callsign}
         isWwwType = content.contains('"type": "www"');
       }
 
-      // Use non-recursive scan to avoid "too many open files" error
-      // Build tree manually by processing one level at a time
-      final entities = await _scanDirectoryNonRecursive(folder);
-
-      for (var entity in entities) {
-        final relativePath = entity.path.substring(folder.path.length + 1);
-
-        // Skip hidden files, metadata files, and the extra directory
-        // For www type collections, include index.html as it's content, not metadata
-        if (relativePath.startsWith('.') ||
-            relativePath == 'collection.js' ||
-            (!isWwwType && relativePath == 'index.html') ||
-            relativePath == 'extra' ||
-            relativePath.startsWith('extra/')) {
-          continue;
-        }
-
-        if (entity is Directory) {
-          entries.add({
-            'path': relativePath,
-            'name': entity.path.split('/').last,
-            'type': 'directory',
-          });
-        } else if (entity is File) {
-          final stat = await entity.stat();
-          entries.add({
-            'path': relativePath,
-            'name': entity.path.split('/').last,
-            'type': 'file',
-            'size': stat.size,
-          });
-        }
-      }
-
-      // Sort entries
-      entries.sort((a, b) {
-        if (a['type'] == 'directory' && b['type'] != 'directory') return -1;
-        if (a['type'] != 'directory' && b['type'] == 'directory') return 1;
-        return (a['path'] as String).compareTo(b['path'] as String);
-      });
+      // Build nested tree structure recursively
+      final entries = await _buildTreeJsonRecursive(folder, folder.path, isWwwType);
 
       // Write to tree.json
       final treeJsonFile = File('${folder.path}/extra/tree.json');
       final jsonContent = JsonEncoder.withIndent('  ').convert(entries);
       await treeJsonFile.writeAsString(jsonContent);
 
-      stderr.writeln('Generated tree.json with ${entries.length} entries');
+      // Count total files for logging
+      int fileCount = 0;
+      void countFiles(List<Map<String, dynamic>> items) {
+        for (var item in items) {
+          if (item['type'] == 'file') {
+            fileCount++;
+          } else if (item['children'] != null) {
+            countFiles(item['children'] as List<Map<String, dynamic>>);
+          }
+        }
+      }
+      countFiles(entries);
+
+      stderr.writeln('Generated tree.json with $fileCount files');
     } catch (e) {
       stderr.writeln('Error generating tree.json: $e');
       rethrow;
     }
+  }
+
+  /// Build nested tree structure recursively for tree.json
+  Future<List<Map<String, dynamic>>> _buildTreeJsonRecursive(
+    Directory dir,
+    String rootPath,
+    bool isWwwType,
+  ) async {
+    final entries = <Map<String, dynamic>>[];
+
+    try {
+      final entities = await dir.list(recursive: false, followLinks: false).toList();
+
+      for (var entity in entities) {
+        final name = entity.path.split('/').last;
+
+        // Skip hidden files, metadata files, and the extra directory
+        if (name.startsWith('.') ||
+            name == 'collection.js' ||
+            (!isWwwType && name == 'index.html') ||
+            name == 'extra') {
+          continue;
+        }
+
+        if (entity is Directory) {
+          // Recursively build children
+          final children = await _buildTreeJsonRecursive(entity, rootPath, isWwwType);
+
+          // Calculate total size of directory
+          int totalSize = 0;
+          void sumSize(List<Map<String, dynamic>> items) {
+            for (var item in items) {
+              if (item['type'] == 'file') {
+                totalSize += (item['size'] as int?) ?? 0;
+              } else if (item['children'] != null) {
+                sumSize(item['children'] as List<Map<String, dynamic>>);
+              }
+            }
+          }
+          sumSize(children);
+
+          entries.add({
+            'name': name,
+            'type': 'directory',
+            'size': totalSize,
+            'children': children,
+          });
+        } else if (entity is File) {
+          final stat = await entity.stat();
+          entries.add({
+            'name': name,
+            'type': 'file',
+            'size': stat.size,
+          });
+        }
+      }
+
+      // Sort: directories first, then alphabetically
+      entries.sort((a, b) {
+        if (a['type'] == 'directory' && b['type'] != 'directory') return -1;
+        if (a['type'] != 'directory' && b['type'] == 'directory') return 1;
+        return (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase());
+      });
+    } catch (e) {
+      stderr.writeln('Error building tree for ${dir.path}: $e');
+    }
+
+    return entries;
   }
 
   /// Generate and save data.js with full metadata

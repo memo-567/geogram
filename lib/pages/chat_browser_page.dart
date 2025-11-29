@@ -11,8 +11,11 @@ import '../models/collection.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/chat_settings.dart';
+import '../models/relay_chat_room.dart';
 import '../services/chat_service.dart';
 import '../services/profile_service.dart';
+import '../services/relay_service.dart';
+import '../services/relay_cache_service.dart';
 import '../widgets/channel_list_widget.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
@@ -35,6 +38,8 @@ class ChatBrowserPage extends StatefulWidget {
 class _ChatBrowserPageState extends State<ChatBrowserPage> {
   final ChatService _chatService = ChatService();
   final ProfileService _profileService = ProfileService();
+  final RelayService _relayService = RelayService();
+  final RelayCacheService _cacheService = RelayCacheService();
 
   List<ChatChannel> _channels = [];
   ChatChannel? _selectedChannel;
@@ -42,6 +47,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   bool _isLoading = false;
   bool _isInitialized = false;
   String? _error;
+
+  // Relay chat rooms
+  List<RelayChatRoom> _relayRooms = [];
+  RelayChatRoom? _selectedRelayRoom;
+  List<RelayChatMessage> _relayMessages = [];
+  bool _loadingRelayRooms = false;
 
   @override
   void initState() {
@@ -86,6 +97,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       setState(() {
         _isInitialized = true;
       });
+
+      // Load relay chat rooms if connected
+      _loadRelayRooms();
     } catch (e) {
       setState(() {
         _error = 'Failed to initialize chat: $e';
@@ -97,10 +111,58 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
+  /// Load relay chat rooms from connected relay
+  Future<void> _loadRelayRooms() async {
+    final relay = _relayService.getConnectedRelay();
+    if (relay == null) return;
+
+    setState(() {
+      _loadingRelayRooms = true;
+    });
+
+    try {
+      // Initialize cache service
+      await _cacheService.initialize();
+
+      // Fetch rooms from relay
+      final rooms = await _relayService.fetchChatRooms(relay.url);
+
+      if (rooms.isNotEmpty) {
+        // Cache the rooms using the relay's callsign (from API response)
+        final relayCallsign = rooms.first.relayName;
+        if (relayCallsign.isNotEmpty) {
+          await _cacheService.saveChatRooms(relayCallsign, rooms);
+        }
+      }
+
+      setState(() {
+        _relayRooms = rooms;
+      });
+    } catch (e) {
+      // Try loading from cache using relay's callsign
+      final relay = _relayService.getConnectedRelay();
+      if (relay != null) {
+        // Use callsign if available, fallback to name
+        final cacheKey = relay.callsign ?? relay.name;
+        if (cacheKey.isNotEmpty) {
+          final cachedRooms = await _cacheService.loadChatRooms(cacheKey, relay.url);
+          setState(() {
+            _relayRooms = cachedRooms;
+          });
+        }
+      }
+    } finally {
+      setState(() {
+        _loadingRelayRooms = false;
+      });
+    }
+  }
+
   /// Select a channel and load its messages
   Future<void> _selectChannel(ChatChannel channel) async {
     setState(() {
       _selectedChannel = channel;
+      _selectedRelayRoom = null; // Deselect relay room
       _isLoading = true;
     });
 
@@ -128,15 +190,75 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await _selectChannel(channel);
   }
 
+  /// Select a relay room and load its messages
+  Future<void> _selectRelayRoom(RelayChatRoom room) async {
+    setState(() {
+      _selectedRelayRoom = room;
+      _selectedChannel = null; // Deselect local channel
+      _isLoading = true;
+    });
+
+    try {
+      // Fetch messages from relay
+      final messages = await _relayService.fetchRoomMessages(
+        room.relayUrl,
+        room.id,
+        limit: 100,
+      );
+
+      // Cache messages
+      if (room.relayName.isNotEmpty) {
+        await _cacheService.saveMessages(room.relayName, room.id, messages);
+      }
+
+      setState(() {
+        _relayMessages = messages;
+      });
+    } catch (e) {
+      // Try loading from cache
+      if (room.relayName.isNotEmpty) {
+        final cachedMessages = await _cacheService.loadMessages(
+          room.relayName,
+          room.id,
+        );
+        setState(() {
+          _relayMessages = cachedMessages;
+        });
+      }
+      _showError('Failed to load relay messages: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Convert relay messages to ChatMessage format for display
+  List<ChatMessage> _convertRelayMessages(List<RelayChatMessage> relayMessages) {
+    return relayMessages.map((rm) {
+      return ChatMessage(
+        author: rm.callsign,
+        timestamp: rm.timestamp,
+        content: rm.content,
+      );
+    }).toList();
+  }
+
   /// Send a message
   Future<void> _sendMessage(String content, String? filePath) async {
-    if (_selectedChannel == null) return;
-
     final currentProfile = _profileService.getProfile();
     if (currentProfile.callsign.isEmpty) {
       _showError('No active callsign. Please set up your profile first.');
       return;
     }
+
+    // Handle relay room message
+    if (_selectedRelayRoom != null) {
+      await _sendRelayMessage(content);
+      return;
+    }
+
+    if (_selectedChannel == null) return;
 
     try {
       // Load chat settings
@@ -191,6 +313,44 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       });
     } catch (e) {
       _showError('Failed to send message: $e');
+    }
+  }
+
+  /// Send a message to a relay chat room
+  Future<void> _sendRelayMessage(String content) async {
+    if (_selectedRelayRoom == null) return;
+
+    final currentProfile = _profileService.getProfile();
+
+    try {
+      final success = await _relayService.postRoomMessage(
+        _selectedRelayRoom!.relayUrl,
+        _selectedRelayRoom!.id,
+        currentProfile.callsign,
+        content,
+      );
+
+      if (success) {
+        // Add optimistic update
+        final now = DateTime.now();
+        final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+        final newMessage = RelayChatMessage(
+          timestamp: timestamp,
+          callsign: currentProfile.callsign,
+          content: content,
+          roomId: _selectedRelayRoom!.id,
+        );
+
+        setState(() {
+          _relayMessages.add(newMessage);
+        });
+      } else {
+        _showError('Failed to send message to relay');
+      }
+    } catch (e) {
+      _showError('Failed to send relay message: $e');
     }
   }
 
@@ -483,12 +643,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: !isWideScreen && _selectedChannel != null
+        leading: !isWideScreen && (_selectedChannel != null || _selectedRelayRoom != null)
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
                 onPressed: () {
                   setState(() {
                     _selectedChannel = null;
+                    _selectedRelayRoom = null;
                   });
                 },
               )
@@ -496,8 +657,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         title: LayoutBuilder(
           builder: (context, constraints) {
             // In narrow screen, show collection title when on channel list
-            if (!isWideScreen && _selectedChannel == null) {
+            if (!isWideScreen && _selectedChannel == null && _selectedRelayRoom == null) {
               return Text(widget.collection.title);
+            }
+
+            // Show relay room name if selected
+            if (_selectedRelayRoom != null) {
+              return Text(_selectedRelayRoom!.name);
             }
 
             return Text(
@@ -575,47 +741,47 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           // Desktop/landscape: Two-panel layout
           return Row(
             children: [
-              // Left sidebar - Channel list
-              ChannelListWidget(
-                channels: _channels,
-                selectedChannelId: _selectedChannel?.id,
-                onChannelSelect: _selectChannel,
-                onNewChannel: _showNewChannelDialog,
-              ),
+              // Left sidebar - Channel list with relay rooms
+              _buildChannelSidebar(theme),
               // Right panel - Messages and input
               Expanded(
-                child: _selectedChannel == null
+                child: _selectedChannel == null && _selectedRelayRoom == null
                     ? _buildNoChannelSelected(theme)
-                    : Column(
-                        children: [
-                          // Message list
-                          Expanded(
-                            child: MessageListWidget(
-                              messages: _messages,
-                              isGroupChat: _selectedChannel!.isGroup,
-                              isLoading: _isLoading,
-                              onFileOpen: _openAttachedFile,
-                              onMessageDelete: _deleteMessage,
-                              canDeleteMessage: _canDeleteMessage,
-                            ),
+                    : _selectedRelayRoom != null
+                        ? _buildRelayRoomChat(theme)
+                        : Column(
+                            children: [
+                              // Message list
+                              Expanded(
+                                child: MessageListWidget(
+                                  messages: _messages,
+                                  isGroupChat: _selectedChannel!.isGroup,
+                                  isLoading: _isLoading,
+                                  onFileOpen: _openAttachedFile,
+                                  onMessageDelete: _deleteMessage,
+                                  canDeleteMessage: _canDeleteMessage,
+                                ),
+                              ),
+                              // Message input
+                              MessageInputWidget(
+                                onSend: _sendMessage,
+                                maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
+                                allowFiles:
+                                    _selectedChannel!.config?.fileUpload ?? true,
+                              ),
+                            ],
                           ),
-                          // Message input
-                          MessageInputWidget(
-                            onSend: _sendMessage,
-                            maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
-                            allowFiles:
-                                _selectedChannel!.config?.fileUpload ?? true,
-                          ),
-                        ],
-                      ),
               ),
             ],
           );
         } else {
           // Mobile/portrait: Single panel
-          if (_selectedChannel == null) {
+          if (_selectedChannel == null && _selectedRelayRoom == null) {
             // Show full-width channel list
             return _buildFullWidthChannelList(theme);
+          } else if (_selectedRelayRoom != null) {
+            // Show relay room messages
+            return _buildRelayRoomChat(theme);
           } else {
             // Show chat messages (no duplicate header, using AppBar)
             return Column(
@@ -642,6 +808,165 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           }
         }
       },
+    );
+  }
+
+  /// Build channel sidebar with local channels and relay rooms
+  Widget _buildChannelSidebar(ThemeData theme) {
+    return Container(
+      width: 280,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+        border: Border(
+          right: BorderSide(
+            color: theme.colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Local channels section
+          Expanded(
+            child: ChannelListWidget(
+              channels: _channels,
+              selectedChannelId: _selectedChannel?.id,
+              onChannelSelect: _selectChannel,
+              onNewChannel: _showNewChannelDialog,
+            ),
+          ),
+          // Relay rooms section
+          if (_relayRooms.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant,
+                border: Border(
+                  top: BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.cloud, size: 16, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Relay: ${_relayRooms.first.relayName}',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 200,
+              child: ListView.builder(
+                itemCount: _relayRooms.length,
+                itemBuilder: (context, index) {
+                  final room = _relayRooms[index];
+                  final isSelected = _selectedRelayRoom?.id == room.id;
+
+                  return ListTile(
+                    dense: true,
+                    selected: isSelected,
+                    selectedTileColor: theme.colorScheme.primaryContainer.withOpacity(0.3),
+                    leading: CircleAvatar(
+                      radius: 16,
+                      backgroundColor: theme.colorScheme.tertiaryContainer,
+                      child: Icon(
+                        Icons.forum,
+                        size: 16,
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
+                    ),
+                    title: Text(
+                      room.name,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                    subtitle: room.description.isNotEmpty
+                        ? Text(
+                            room.description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11),
+                          )
+                        : null,
+                    onTap: () => _selectRelayRoom(room),
+                  );
+                },
+              ),
+            ),
+          ],
+          if (_loadingRelayRooms)
+            const Padding(
+              padding: EdgeInsets.all(8.0),
+              child: SizedBox(
+                height: 20,
+                width: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Build relay room chat widget
+  Widget _buildRelayRoomChat(ThemeData theme) {
+    return Column(
+      children: [
+        // Room info header
+        if (_selectedRelayRoom!.description.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _selectedRelayRoom!.description,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        // Message list using converted messages
+        Expanded(
+          child: MessageListWidget(
+            messages: _convertRelayMessages(_relayMessages),
+            isGroupChat: true,
+            isLoading: _isLoading,
+            onFileOpen: (_) {}, // Relay messages don't support file attachments
+            onMessageDelete: (_) {}, // Can't delete relay messages
+            canDeleteMessage: (_) => false,
+          ),
+        ),
+        // Message input (no file upload for relay)
+        MessageInputWidget(
+          onSend: _sendMessage,
+          maxLength: 1000,
+          allowFiles: false,
+        ),
+      ],
     );
   }
 
@@ -706,12 +1031,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ),
           // Channel list
           Expanded(
-            child: ListView.builder(
-              itemCount: sortedChannels.length,
-              itemBuilder: (context, index) {
-                final channel = sortedChannels[index];
-
-                return ListTile(
+            child: ListView(
+              children: [
+                // Local channels
+                ...sortedChannels.map((channel) => ListTile(
                   leading: CircleAvatar(
                     backgroundColor: channel.isGroup
                         ? theme.colorScheme.primaryContainer
@@ -754,8 +1077,75 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                           ? const Text('Group chat')
                           : null),
                   onTap: () => _selectChannelMobile(channel),
-                );
-              },
+                )),
+
+                // Relay rooms section
+                if (_relayRooms.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    margin: const EdgeInsets.only(top: 8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceVariant,
+                      border: Border(
+                        top: BorderSide(
+                          color: theme.colorScheme.outlineVariant,
+                          width: 1,
+                        ),
+                        bottom: BorderSide(
+                          color: theme.colorScheme.outlineVariant,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.cloud, color: theme.colorScheme.primary),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Relay: ${_relayRooms.first.relayName}',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ..._relayRooms.map((room) => ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: theme.colorScheme.tertiaryContainer,
+                      child: Icon(
+                        Icons.forum,
+                        color: theme.colorScheme.onTertiaryContainer,
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(room.name),
+                    subtitle: room.description.isNotEmpty
+                        ? Text(
+                            room.description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : Text('${room.messageCount} messages'),
+                    onTap: () => _selectRelayRoom(room),
+                  )),
+                ],
+
+                // Loading indicator for relay rooms
+                if (_loadingRelayRooms)
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Center(
+                      child: SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],

@@ -288,33 +288,17 @@ class _RelaysPageState extends State<RelaysPage> {
   }
 
   Future<void> _scanNow() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_i18n.t('scanning_relays')),
-        duration: const Duration(seconds: 2),
+    final results = await showDialog<List<NetworkScanResult>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _NetworkScanDialog(
+        relayService: _relayService,
+        i18n: _i18n,
       ),
     );
 
-    try {
-      await RelayDiscoveryService().discover();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('scan_complete')),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
+    if (results != null && results.isNotEmpty) {
       _loadRelays();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('error_during_scan', params: [e.toString()])),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
@@ -1060,6 +1044,335 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
           onPressed: _add,
           child: const Text('Add'),
         ),
+      ],
+    );
+  }
+}
+
+// Network Scan Dialog
+class _NetworkScanDialog extends StatefulWidget {
+  final RelayService relayService;
+  final I18nService i18n;
+
+  const _NetworkScanDialog({
+    required this.relayService,
+    required this.i18n,
+  });
+
+  @override
+  State<_NetworkScanDialog> createState() => _NetworkScanDialogState();
+}
+
+class _NetworkScanDialogState extends State<_NetworkScanDialog> {
+  final RelayDiscoveryService _discoveryService = RelayDiscoveryService();
+  List<NetworkScanResult> _results = [];
+  String _statusMessage = 'Initializing scan...';
+  int _scannedHosts = 0;
+  int _totalHosts = 1;
+  bool _isScanning = true;
+  bool _scanComplete = false;
+  bool _stopRequested = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startScan();
+  }
+
+  Future<void> _startScan() async {
+    final results = await _discoveryService.scanWithProgress(
+      onProgress: (message, scanned, total, foundResults) {
+        if (mounted) {
+          setState(() {
+            _statusMessage = message;
+            _scannedHosts = scanned;
+            _totalHosts = total > 0 ? total : 1;
+            _results = List.from(foundResults);
+          });
+        }
+      },
+      shouldCancel: () => _stopRequested,
+      timeoutMs: 500,
+    );
+
+    if (mounted) {
+      setState(() {
+        _isScanning = false;
+        _scanComplete = true;
+        _results = results;
+      });
+
+      // Auto-add found relays
+      for (var result in results.where((r) => r.type == 'relay')) {
+        await _addRelay(result);
+      }
+    }
+  }
+
+  void _stopScan() {
+    setState(() {
+      _stopRequested = true;
+      _statusMessage = 'Stopping scan...';
+    });
+  }
+
+  Future<void> _addRelay(NetworkScanResult result) async {
+    try {
+      final existingRelays = widget.relayService.getAllRelays();
+      final alreadyExists = existingRelays.any((r) => r.url == result.wsUrl);
+
+      if (!alreadyExists) {
+        // Build a good name: prefer callsign, then name, then description
+        String relayName;
+        if (result.callsign != null && result.callsign!.isNotEmpty) {
+          relayName = result.callsign!;
+        } else if (result.name != null && result.name!.isNotEmpty) {
+          relayName = result.name!;
+        } else if (result.description != null && result.description!.isNotEmpty) {
+          relayName = result.description!;
+        } else {
+          relayName = 'Relay at ${result.ip}';
+        }
+
+        final relay = Relay(
+          url: result.wsUrl,
+          name: relayName,
+          status: 'available',
+          location: result.location,
+          latitude: result.latitude,
+          longitude: result.longitude,
+          connectedDevices: result.connectedDevices,
+        );
+
+        await widget.relayService.addRelay(relay);
+        LogService().log('Added relay from scan: ${relay.name}');
+      }
+    } catch (e) {
+      LogService().log('Error adding relay from scan: $e');
+    }
+  }
+
+  IconData _getDeviceIcon(String type) {
+    switch (type) {
+      case 'relay':
+        return Icons.cloud;
+      case 'desktop':
+        return Icons.computer;
+      case 'client':
+        return Icons.smartphone;
+      default:
+        return Icons.device_unknown;
+    }
+  }
+
+  Color _getDeviceColor(String type) {
+    switch (type) {
+      case 'relay':
+        return Colors.blue;
+      case 'desktop':
+        return Colors.green;
+      case 'client':
+        return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final progress = _totalHosts > 0 ? _scannedHosts / _totalHosts : 0.0;
+
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.radar, color: theme.colorScheme.primary),
+          const SizedBox(width: 12),
+          const Text('Network Scan'),
+        ],
+      ),
+      content: SizedBox(
+        width: 500,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Progress section
+            if (_isScanning) ...[
+              LinearProgressIndicator(value: progress),
+              const SizedBox(height: 8),
+              Text(
+                _statusMessage,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Scanned $_scannedHosts of $_totalHosts hosts',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // Results section
+            if (_results.isNotEmpty) ...[
+              Text(
+                'Found ${_results.length} device(s):',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 300),
+                decoration: BoxDecoration(
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _results.length,
+                  itemBuilder: (context, index) {
+                    final result = _results[index];
+                    return ListTile(
+                      dense: true,
+                      leading: CircleAvatar(
+                        backgroundColor: _getDeviceColor(result.type).withOpacity(0.2),
+                        child: Icon(
+                          _getDeviceIcon(result.type),
+                          color: _getDeviceColor(result.type),
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(
+                        result.displayName,
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (result.description != null && result.description!.isNotEmpty)
+                            Text(
+                              result.description!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
+                            ),
+                          Text(
+                            '${result.ip}:${result.port}',
+                            style: TextStyle(
+                              color: theme.colorScheme.outline,
+                              fontSize: 11,
+                            ),
+                          ),
+                          if (result.location != null)
+                            Text(
+                              result.location!,
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontSize: 11,
+                              ),
+                            ),
+                          if (result.connectedDevices != null)
+                            Text(
+                              '${result.connectedDevices} device(s) connected',
+                              style: TextStyle(
+                                color: theme.colorScheme.tertiary,
+                                fontSize: 11,
+                              ),
+                            ),
+                        ],
+                      ),
+                      trailing: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: _getDeviceColor(result.type).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          result.type.toUpperCase(),
+                          style: TextStyle(
+                            color: _getDeviceColor(result.type),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ] else if (_scanComplete) ...[
+              Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.search_off,
+                      size: 48,
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No devices found on local network',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Tips:\n'
+                      '  - Make sure devices are powered on\n'
+                      '  - Check firewall settings\n'
+                      '  - Ensure devices are on the same network',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
+            if (_scanComplete && _results.where((r) => r.type == 'relay').isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green, size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Found relays have been added automatically',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (_isScanning) ...[
+          TextButton(
+            onPressed: () => Navigator.pop(context, <NetworkScanResult>[]),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _stopRequested ? null : _stopScan,
+            child: Text(_stopRequested ? 'Stopping...' : 'Stop & Use Results'),
+          ),
+        ] else
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _results),
+            child: const Text('Done'),
+          ),
       ],
     );
   }
