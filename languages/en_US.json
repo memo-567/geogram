@@ -1086,5 +1086,7 @@
   "refresh_rooms": "Refresh rooms",
   "no_channels_found": "No channels found",
   "create_channel": "Create Channel",
-  "group_chat": "Group chat"
+  "group_chat": "Group chat",
+  "zoom_in": "Zoom in",
+  "zoom_out": "Zoom out"
 }

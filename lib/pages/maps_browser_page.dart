@@ -905,6 +905,44 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           ],
         ),
 
+        // Zoom controls
+        Positioned(
+          right: 16,
+          top: 16,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Zoom in button
+              FloatingActionButton.small(
+                heroTag: 'zoom_in',
+                onPressed: () {
+                  final newZoom = (_currentZoom + 1).clamp(1.0, 18.0);
+                  setState(() => _currentZoom = newZoom);
+                  if (_mapReady && _centerPosition != null) {
+                    _mapController.move(_centerPosition!, newZoom);
+                  }
+                },
+                tooltip: _i18n.t('zoom_in'),
+                child: const Icon(Icons.add),
+              ),
+              const SizedBox(height: 8),
+              // Zoom out button
+              FloatingActionButton.small(
+                heroTag: 'zoom_out',
+                onPressed: () {
+                  final newZoom = (_currentZoom - 1).clamp(1.0, 18.0);
+                  setState(() => _currentZoom = newZoom);
+                  if (_mapReady && _centerPosition != null) {
+                    _mapController.move(_centerPosition!, newZoom);
+                  }
+                },
+                tooltip: _i18n.t('zoom_out'),
+                child: const Icon(Icons.remove),
+              ),
+            ],
+          ),
+        ),
+
         // Loading overlay with progress indicator
         if (!_mapReady || _isLoading)
           Positioned.fill(

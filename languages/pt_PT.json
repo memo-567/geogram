@@ -1081,5 +1081,7 @@
   "refresh_rooms": "Atualizar salas",
   "no_channels_found": "Nenhum canal encontrado",
   "create_channel": "Criar Canal",
-  "group_chat": "Chat de grupo"
+  "group_chat": "Chat de grupo",
+  "zoom_in": "Aproximar",
+  "zoom_out": "Afastar"
 }
