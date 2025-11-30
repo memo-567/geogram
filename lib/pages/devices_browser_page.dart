@@ -464,30 +464,38 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ),
         ),
 
-        // Collections header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          alignment: Alignment.centerLeft,
-          child: Text(
-            _i18n.t('collections'),
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-
-        // Collections list
+        // Collections grid
         Expanded(
           child: _isLoadingCollections
               ? const Center(child: CircularProgressIndicator())
               : _collections.isEmpty
                   ? _buildNoCollections(theme)
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _collections.length,
-                      itemBuilder: (context, index) {
-                        final collection = _collections[index];
-                        return _buildCollectionTile(theme, collection);
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        // Calculate number of columns based on available width
+                        final availableWidth = constraints.maxWidth;
+                        final crossAxisCount = availableWidth < 400
+                            ? 2
+                            : availableWidth < 600
+                                ? 3
+                                : availableWidth < 900
+                                    ? 4
+                                    : 5;
+
+                        return GridView.builder(
+                          padding: const EdgeInsets.all(16),
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: crossAxisCount,
+                            crossAxisSpacing: 8,
+                            mainAxisSpacing: 8,
+                            childAspectRatio: 1.9,
+                          ),
+                          itemCount: _collections.length,
+                          itemBuilder: (context, index) {
+                            final collection = _collections[index];
+                            return _buildCollectionCard(theme, collection);
+                          },
+                        );
                       },
                     ),
         ),
@@ -495,45 +503,91 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     );
   }
 
-  Widget _buildCollectionTile(ThemeData theme, RemoteCollection collection) {
+  Widget _buildCollectionCard(ThemeData theme, RemoteCollection collection) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: theme.colorScheme.secondaryContainer,
-          child: Icon(
-            _getCollectionIcon(collection.type),
-            color: theme.colorScheme.secondary,
+      elevation: 2,
+      child: InkWell(
+        onTap: () => _openCollection(collection),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Icon and title row
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Badge(
+                    isLabelVisible: collection.fileCount != null && collection.fileCount! > 0,
+                    label: Text('${collection.fileCount ?? 0}'),
+                    child: Icon(
+                      _getCollectionIcon(collection.type),
+                      size: 26,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _getDisplayTitle(collection),
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                            height: 1.15,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (collection.description != null)
+                          Text(
+                            collection.description!,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontSize: 12,
+                              height: 1.15,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        else
+                          Text(
+                            collection.type,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontSize: 12,
+                              height: 1.15,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
-        title: Text(collection.name),
-        subtitle: collection.description != null
-            ? Text(
-                collection.description!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              )
-            : Text(
-                collection.type,
-                style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-              ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (collection.fileCount != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Text(
-                  '${collection.fileCount} ${_i18n.t('files')}',
-                  style: theme.textTheme.bodySmall,
-                ),
-              ),
-            const Icon(Icons.chevron_right),
-          ],
-        ),
-        onTap: () => _openCollection(collection),
       ),
     );
+  }
+
+  String _getDisplayTitle(RemoteCollection collection) {
+    final name = collection.name;
+    if (name.toLowerCase() == 'www') {
+      return 'WWW';
+    }
+    if (name.isNotEmpty) {
+      return name[0].toUpperCase() + name.substring(1);
+    }
+    return name;
   }
 
   IconData _getCollectionIcon(String type) {
