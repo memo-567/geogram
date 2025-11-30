@@ -74,8 +74,11 @@ class LogApiService {
       return _handleLogRequest(request, headers);
     }
 
-    // Debug: log all incoming requests
-    LogService().log('LogApiService: ${request.method} /${request.url.path} (query: ${request.url.queryParameters})');
+    // API status endpoint (for relay discovery compatibility)
+    if ((request.url.path == 'api/status' || request.url.path == 'relay/status') &&
+        request.method == 'GET') {
+      return _handleStatusRequest(headers);
+    }
 
     if (request.url.path == 'files' && request.method == 'GET') {
       return _handleFilesRequest(request, headers);
@@ -114,6 +117,31 @@ class LogApiService {
 
     return shelf.Response.notFound(
       jsonEncode({'error': 'Not found'}),
+      headers: headers,
+    );
+  }
+
+  /// Handle /api/status and /relay/status for discovery compatibility
+  shelf.Response _handleStatusRequest(Map<String, String> headers) {
+    String callsign = '';
+    try {
+      final profile = ProfileService().getProfile();
+      callsign = profile.callsign;
+    } catch (e) {
+      // Profile service not initialized
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'service': 'Geogram Desktop',
+        'version': appVersion,
+        'type': 'desktop',
+        'status': 'online',
+        'callsign': callsign,
+        'name': callsign.isNotEmpty ? callsign : 'Geogram Desktop',
+        'hostname': io.Platform.localHostname,
+        'port': port,
+      }),
       headers: headers,
     );
   }

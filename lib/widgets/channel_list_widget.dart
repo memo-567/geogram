@@ -123,7 +123,7 @@ class ChannelListWidget extends StatelessWidget {
             Icon(
               Icons.chat_bubble_outline,
               size: 48,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
             ),
             const SizedBox(height: 16),
             Text(
@@ -137,7 +137,7 @@ class ChannelListWidget extends StatelessWidget {
             Text(
               'Create a channel to start chatting',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               ),
               textAlign: TextAlign.center,
             ),
@@ -166,7 +166,7 @@ class _ChannelTile extends StatelessWidget {
 
     return Material(
       color: isSelected
-          ? theme.colorScheme.primaryContainer.withOpacity(0.5)
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
           : Colors.transparent,
       child: InkWell(
         onTap: onTap,
@@ -230,7 +230,7 @@ class _ChannelTile extends StatelessWidget {
                       channel.subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant
-                            .withOpacity(0.7),
+                            .withValues(alpha: 0.7),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -271,7 +271,7 @@ class _ChannelTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Icon(

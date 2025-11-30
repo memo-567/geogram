@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -15,6 +16,7 @@ import 'services/relay_service.dart';
 import 'services/relay_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
+import 'services/chat_notification_service.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -96,6 +98,10 @@ void main() async {
     // Start log API service
     await LogApiService().start();
     LogService().log('LogApiService started on port 45678');
+
+    // Initialize chat notification service
+    ChatNotificationService().initialize();
+    LogService().log('ChatNotificationService initialized');
   } catch (e, stackTrace) {
     LogService().log('ERROR during initialization: $e');
     LogService().log('Stack trace: $stackTrace');
@@ -291,6 +297,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
   final CollectionService _collectionService = CollectionService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
+  final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  StreamSubscription<Map<String, int>>? _unreadSubscription;
+  Map<String, int> _unreadCounts = {};
 
   List<Collection> _allCollections = [];
   List<Collection> _filteredCollections = [];
@@ -302,6 +311,16 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     LogService().log('Collections page opened');
     _loadCollections();
+    _subscribeToUnreadCounts();
+  }
+
+  void _subscribeToUnreadCounts() {
+    _unreadCounts = _chatNotificationService.unreadCounts;
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+      setState(() {
+        _unreadCounts = counts;
+      });
+    });
   }
 
   void _onLanguageChanged() {
@@ -312,6 +331,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _searchController.dispose();
+    _unreadSubscription?.cancel();
     super.dispose();
   }
 
@@ -604,6 +624,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             onFavoriteToggle: () => _toggleFavorite(collection),
                                             onDelete: () => _deleteCollection(collection),
                                             onOpenFolder: () => _openFolder(collection),
+                                            unreadCount: collection.type == 'chat' ? _chatNotificationService.totalUnreadCount : 0,
                                           );
                                         },
                                         childCount: fixedCollections.length,
@@ -701,6 +722,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             onFavoriteToggle: () => _toggleFavorite(collection),
                                             onDelete: () => _deleteCollection(collection),
                                             onOpenFolder: () => _openFolder(collection),
+                                            unreadCount: 0, // File collections don't track unread
                                           );
                                         },
                                         childCount: fileCollections.length,
@@ -731,6 +753,7 @@ class _CollectionGridCard extends StatelessWidget {
   final VoidCallback onFavoriteToggle;
   final VoidCallback onDelete;
   final VoidCallback onOpenFolder;
+  final int unreadCount;
 
   const _CollectionGridCard({
     required this.collection,
@@ -738,6 +761,7 @@ class _CollectionGridCard extends StatelessWidget {
     required this.onFavoriteToggle,
     required this.onDelete,
     required this.onOpenFolder,
+    this.unreadCount = 0,
   });
 
   /// Check if this is a fixed collection type
@@ -816,10 +840,14 @@ class _CollectionGridCard extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Icon(
-                            _getCollectionIcon(),
-                            size: 26,
-                            color: theme.colorScheme.primary,
+                          Badge(
+                            isLabelVisible: unreadCount > 0,
+                            label: Text('$unreadCount'),
+                            child: Icon(
+                              _getCollectionIcon(),
+                              size: 26,
+                              color: theme.colorScheme.primary,
+                            ),
                           ),
                           const SizedBox(width: 8),
                           Flexible(

@@ -10,12 +10,14 @@ import '../services/profile_service.dart';
 import '../services/collection_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
+import '../models/update_notification.dart';
 
 /// WebSocket service for relay connections
 class WebSocketService {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  final _updateController = StreamController<UpdateNotification>.broadcast();
   Timer? _reconnectTimer;
   Timer? _pingTimer;
   String? _relayUrl;
@@ -23,6 +25,7 @@ class WebSocketService {
   bool _isReconnecting = false;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
+  Stream<UpdateNotification> get updates => _updateController.stream;
 
   /// Connect to relay and send hello
   Future<bool> connectAndHello(String url) async {
@@ -59,7 +62,7 @@ class WebSocketService {
         callsign: profile.callsign,
       );
       event.calculateId();
-      event.sign(profile.nsec);
+      event.signWithNsec(profile.nsec);
 
       // Build hello message
       final helloMessage = {
@@ -87,12 +90,32 @@ class WebSocketService {
       _subscription = _channel!.stream.listen(
         (message) {
           try {
+            final rawMessage = message as String;
+
+            // Handle lightweight UPDATE notifications (plain string, not JSON)
+            if (rawMessage.startsWith('UPDATE:')) {
+              final update = UpdateNotification.parse(rawMessage);
+              if (update != null) {
+                print('');
+                print('╔══════════════════════════════════════════════════════════════╗');
+                print('║  RECEIVED UPDATE NOTIFICATION                                ║');
+                print('╠══════════════════════════════════════════════════════════════╣');
+                print('║  From relay: ${update.callsign}');
+                print('║  Type: ${update.collectionType}');
+                print('║  Path: ${update.path}');
+                print('╚══════════════════════════════════════════════════════════════╝');
+                print('');
+                _updateController.add(update);
+              }
+              return;
+            }
+
             LogService().log('');
             LogService().log('RECEIVED MESSAGE FROM RELAY');
             LogService().log('══════════════════════════════════════');
-            LogService().log('Raw message: $message');
+            LogService().log('Raw message: $rawMessage');
 
-            final data = jsonDecode(message as String) as Map<String, dynamic>;
+            final data = jsonDecode(rawMessage) as Map<String, dynamic>;
             LogService().log('Message type: ${data['type']}');
 
             if (data['type'] == 'PONG') {
@@ -493,5 +516,6 @@ class WebSocketService {
     _reconnectTimer?.cancel();
     _pingTimer?.cancel();
     _messageController.close();
+    _updateController.close();
   }
 }

@@ -4,6 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'package:path/path.dart' as path;
@@ -12,11 +13,17 @@ import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/chat_settings.dart';
 import '../models/relay_chat_room.dart';
+import '../models/update_notification.dart';
 import '../services/chat_service.dart';
 import '../services/profile_service.dart';
 import '../services/relay_service.dart';
 import '../services/relay_cache_service.dart';
-import '../widgets/channel_list_widget.dart';
+import '../services/chat_notification_service.dart';
+import '../services/log_service.dart';
+import '../models/device_source.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
+import '../widgets/device_chat_sidebar.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/new_channel_dialog.dart';
@@ -40,6 +47,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   final ProfileService _profileService = ProfileService();
   final RelayService _relayService = RelayService();
   final RelayCacheService _cacheService = RelayCacheService();
+  final ChatNotificationService _chatNotificationService = ChatNotificationService();
 
   List<ChatChannel> _channels = [];
   ChatChannel? _selectedChannel;
@@ -53,15 +61,171 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   RelayChatRoom? _selectedRelayRoom;
   List<RelayChatMessage> _relayMessages = [];
   bool _loadingRelayRooms = false;
+  bool _relayReachable = true; // Track if relay is currently reachable
+
+  // Remember last relay info for cache loading when disconnected
+  String? _lastRelayUrl;
+  String? _lastRelayCacheKey;
+
+  // Update notification subscription
+  StreamSubscription<UpdateNotification>? _updateSubscription;
+
+  // Unread counts subscription
+  StreamSubscription<Map<String, int>>? _unreadSubscription;
+  Map<String, int> _unreadCounts = {};
+
+  // Relay status check timer
+  Timer? _relayStatusTimer;
 
   @override
   void initState() {
     super.initState();
     _initializeChat();
+    _setupUpdateListener();
+    _subscribeToUnreadCounts();
+    _startRelayStatusChecker();
+  }
+
+  void _subscribeToUnreadCounts() {
+    _unreadCounts = _chatNotificationService.unreadCounts;
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+      setState(() {
+        _unreadCounts = counts;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _updateSubscription?.cancel();
+    _unreadSubscription?.cancel();
+    _relayStatusTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Set up listener for real-time update notifications
+  void _setupUpdateListener() {
+    // Don't set up if already subscribed
+    if (_updateSubscription != null) return;
+
+    final updates = _relayService.updates;
+    if (updates != null) {
+      LogService().log('Setting up real-time update listener');
+      _updateSubscription = updates.listen(_handleUpdateNotification);
+    }
+  }
+
+  /// Handle incoming update notification
+  void _handleUpdateNotification(UpdateNotification update) {
+    // Only refresh if we're viewing the room that got updated
+    if (update.collectionType == 'chat') {
+      if (_selectedRelayRoom != null && _selectedRelayRoom!.id == update.path) {
+        print('→ Refreshing messages for room: ${update.path}');
+        // Fetch latest messages for the room
+        _refreshRelayMessages();
+      } else {
+        print('→ Update for different room (${update.path}), currently viewing: ${_selectedRelayRoom?.id ?? "none"}');
+      }
+    }
+  }
+
+  /// Refresh relay messages without showing loading indicator
+  Future<void> _refreshRelayMessages() async {
+    if (_selectedRelayRoom == null) return;
+
+    try {
+      final messages = await _relayService.fetchRoomMessages(
+        _selectedRelayRoom!.relayUrl,
+        _selectedRelayRoom!.id,
+        limit: 100,
+      );
+
+      if (mounted) {
+        // Show new messages in console
+        if (messages.isNotEmpty) {
+          final latestMsg = messages.last;
+          print('');
+          print('╔══════════════════════════════════════════════════════════════╗');
+          print('║  NEW MESSAGE RECEIVED                                        ║');
+          print('╠══════════════════════════════════════════════════════════════╣');
+          print('║  Room: ${_selectedRelayRoom!.id}');
+          print('║  From: ${latestMsg.callsign}');
+          print('║  Content: ${latestMsg.content}');
+          print('║  Time: ${latestMsg.timestamp}');
+          print('╚══════════════════════════════════════════════════════════════╝');
+          print('');
+        }
+
+        setState(() {
+          _relayMessages = messages;
+        });
+
+        // Cache messages
+        if (_selectedRelayRoom!.relayName.isNotEmpty) {
+          await _cacheService.saveMessages(
+            _selectedRelayRoom!.relayName,
+            _selectedRelayRoom!.id,
+            messages,
+          );
+        }
+      }
+    } catch (e) {
+      // Silently fail - user is already viewing messages
+    }
+  }
+
+  /// Start periodic relay status checker
+  void _startRelayStatusChecker() {
+    // Check every 10 seconds
+    _relayStatusTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _checkRelayStatus(),
+    );
+  }
+
+  /// Check if relay is reachable and update UI if status changed
+  Future<void> _checkRelayStatus() async {
+    if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) return;
+
+    // Try to set up update listener if not already done (WebSocket might be ready now)
+    _setupUpdateListener();
+
+    final wasReachable = _relayReachable;
+
+    try {
+      // Try to fetch rooms - if it succeeds, relay is reachable
+      final rooms = await _relayService.fetchChatRooms(_lastRelayUrl!);
+
+      if (!mounted) return;
+
+      // Relay is now reachable
+      if (!wasReachable) {
+        LogService().log('Relay status changed: offline -> online');
+        setState(() {
+          _relayReachable = true;
+          _relayRooms = rooms;
+        });
+      }
+
+      // Poll for new messages if viewing a room (fallback when WebSocket not connected)
+      if (_selectedRelayRoom != null && _updateSubscription == null) {
+        // WebSocket not connected - poll for updates
+        _refreshRelayMessages();
+      }
+    } catch (e) {
+      // Relay is not reachable
+      if (mounted && wasReachable) {
+        LogService().log('Relay status changed: online -> offline');
+        setState(() {
+          _relayReachable = false;
+        });
+      }
+    }
   }
 
   /// Initialize chat service and load data
   Future<void> _initializeChat() async {
+    LogService().log('DEBUG _initializeChat: STARTING');
     setState(() {
       _isLoading = true;
       _error = null;
@@ -98,8 +262,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _isInitialized = true;
       });
 
-      // Load relay chat rooms if connected
-      _loadRelayRooms();
+      // Load relay chat rooms - MUST await to ensure rooms are loaded before UI renders
+      await _loadRelayRooms();
     } catch (e) {
       setState(() {
         _error = 'Failed to initialize chat: $e';
@@ -111,51 +275,104 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  /// Load relay chat rooms from connected relay
+  /// Load relay chat rooms from preferred relay (uses HTTP API, doesn't require WebSocket)
   Future<void> _loadRelayRooms() async {
-    final relay = _relayService.getConnectedRelay();
-    if (relay == null) return;
+    LogService().log('DEBUG _loadRelayRooms: STARTING');
+    // Use preferred relay for HTTP API calls - doesn't require WebSocket connection
+    final relay = _relayService.getPreferredRelay();
+    LogService().log('DEBUG _loadRelayRooms: relay=${relay?.name}, url=${relay?.url}');
 
     setState(() {
       _loadingRelayRooms = true;
     });
 
-    try {
-      // Initialize cache service
-      await _cacheService.initialize();
+    // Initialize cache service
+    await _cacheService.initialize();
+    LogService().log('DEBUG _loadRelayRooms: cache initialized, will check for cached devices');
 
-      // Fetch rooms from relay
-      final rooms = await _relayService.fetchChatRooms(relay.url);
+    // If relay has a valid URL, try to fetch from it via HTTP API
+    if (relay != null && relay.url.isNotEmpty) {
+      try {
+        // Remember relay info for cache loading when disconnected
+        _lastRelayUrl = relay.url;
+        _lastRelayCacheKey = relay.callsign ?? relay.name;
 
-      if (rooms.isNotEmpty) {
-        // Cache the rooms using the relay's callsign (from API response)
-        final relayCallsign = rooms.first.relayName;
-        if (relayCallsign.isNotEmpty) {
-          await _cacheService.saveChatRooms(relayCallsign, rooms);
+        // Fetch rooms from relay
+        final rooms = await _relayService.fetchChatRooms(relay.url);
+
+        if (rooms.isNotEmpty) {
+          // Cache the rooms using the relay's callsign (from API response)
+          final relayCallsign = rooms.first.relayName;
+          if (relayCallsign.isNotEmpty) {
+            _lastRelayCacheKey = relayCallsign;
+            await _cacheService.saveChatRooms(relayCallsign, rooms);
+          }
         }
-      }
 
-      setState(() {
-        _relayRooms = rooms;
-      });
-    } catch (e) {
-      // Try loading from cache using relay's callsign
-      final relay = _relayService.getConnectedRelay();
-      if (relay != null) {
-        // Use callsign if available, fallback to name
-        final cacheKey = relay.callsign ?? relay.name;
-        if (cacheKey.isNotEmpty) {
-          final cachedRooms = await _cacheService.loadChatRooms(cacheKey, relay.url);
-          setState(() {
-            _relayRooms = cachedRooms;
-          });
-        }
+        setState(() {
+          _relayRooms = rooms;
+          _relayReachable = true; // Successfully fetched - relay is reachable
+          _loadingRelayRooms = false;
+        });
+        return;
+      } catch (e) {
+        // Fetch failed - will try cache below
+        LogService().log('DEBUG _loadRelayRooms: fetch failed with error: $e');
       }
-    } finally {
-      setState(() {
-        _loadingRelayRooms = false;
-      });
     }
+
+    // Relay is not connected or fetch failed - try loading from cache
+    LogService().log('DEBUG _loadRelayRooms: falling through to cache loading');
+    setState(() {
+      _relayReachable = false;
+    });
+
+    // Try to load from cache using remembered relay info
+    LogService().log('DEBUG _loadRelayRooms: trying cache for _lastRelayCacheKey=$_lastRelayCacheKey');
+    if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
+      final cachedRooms = await _cacheService.loadChatRooms(
+        _lastRelayCacheKey!,
+        _lastRelayUrl ?? '',
+      );
+      LogService().log('DEBUG _loadRelayRooms: loaded ${cachedRooms.length} rooms from cache');
+      if (cachedRooms.isNotEmpty) {
+        // Set relay URL from cached room for status checking
+        if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) {
+          _lastRelayUrl = cachedRooms.first.relayUrl;
+        }
+        setState(() {
+          _relayRooms = cachedRooms;
+          _loadingRelayRooms = false;
+        });
+        LogService().log('DEBUG _loadRelayRooms: SUCCESS - set ${cachedRooms.length} rooms from cache, relayUrl=$_lastRelayUrl');
+        return;
+      }
+    }
+
+    // No remembered relay - try loading from any cached device
+    final cachedDevices = await _cacheService.getCachedDevices();
+    LogService().log('DEBUG _loadRelayRooms: cachedDevices=$cachedDevices');
+    for (final deviceCallsign in cachedDevices) {
+      final cachedRooms = await _cacheService.loadChatRooms(deviceCallsign, '');
+      LogService().log('DEBUG _loadRelayRooms: device=$deviceCallsign, rooms=${cachedRooms.length}');
+      if (cachedRooms.isNotEmpty) {
+        _lastRelayCacheKey = deviceCallsign;
+        // Set relay URL from cached room for status checking
+        if (_lastRelayUrl == null || _lastRelayUrl!.isEmpty) {
+          _lastRelayUrl = cachedRooms.first.relayUrl;
+        }
+        setState(() {
+          _relayRooms = cachedRooms;
+        });
+        LogService().log('DEBUG _loadRelayRooms: set _relayRooms to ${cachedRooms.length} rooms, relayUrl=$_lastRelayUrl');
+        break;
+      }
+    }
+
+    LogService().log('DEBUG _loadRelayRooms: final _relayRooms.length=${_relayRooms.length}');
+    setState(() {
+      _loadingRelayRooms = false;
+    });
   }
 
   /// Select a channel and load its messages
@@ -192,6 +409,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Select a relay room and load its messages
   Future<void> _selectRelayRoom(RelayChatRoom room) async {
+    // Mark this room as current (clears unread count)
+    _chatNotificationService.setCurrentRoom(room.id);
+
     setState(() {
       _selectedRelayRoom = room;
       _selectedChannel = null; // Deselect local channel
@@ -213,9 +433,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       setState(() {
         _relayMessages = messages;
+        _relayReachable = true; // Successfully fetched - relay is reachable
       });
     } catch (e) {
-      // Try loading from cache
+      // Relay not reachable - try loading from cache
+      setState(() {
+        _relayReachable = false;
+      });
+
       if (room.relayName.isNotEmpty) {
         final cachedMessages = await _cacheService.loadMessages(
           room.relayName,
@@ -225,7 +450,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _relayMessages = cachedMessages;
         });
       }
-      _showError('Failed to load relay messages: $e');
+      _showError('Relay offline - showing cached messages');
     } finally {
       setState(() {
         _isLoading = false;
@@ -276,21 +501,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
       }
 
-      // Add signing if enabled
+      // Add signing if enabled - uses BIP-340 Schnorr signature
       if (settings.signMessages &&
           currentProfile.npub.isNotEmpty &&
           currentProfile.nsec.isNotEmpty) {
-        // Add npub
+        // Add npub for verification
         metadata['npub'] = currentProfile.npub;
+        metadata['channel'] = _selectedChannel!.id;
 
-        // TODO: Implement proper NOSTR signing using secp256k1
-        // For now, add a placeholder signature
-        // Real implementation should:
-        // 1. Construct message text to sign (everything before signature)
-        // 2. Hash the message using SHA-256
-        // 3. Sign the hash with nsec using Schnorr signature on secp256k1
-        // 4. Encode signature as hex
-        metadata['signature'] = _generatePlaceholderSignature(
+        // Generate BIP-340 Schnorr signature on secp256k1 curve
+        metadata['signature'] = _generateSchnorrSignature(
           content,
           metadata,
           currentProfile.nsec,
@@ -316,13 +536,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  /// Send a message to a relay chat room
+  /// Send a message to a relay chat room as a signed NOSTR event
   Future<void> _sendRelayMessage(String content) async {
     if (_selectedRelayRoom == null) return;
+
+    // Check if relay is reachable before trying to send
+    if (!_relayReachable) {
+      _showError('Cannot send message - relay is offline');
+      return;
+    }
 
     final currentProfile = _profileService.getProfile();
 
     try {
+      // Send as a properly signed NOSTR event (kind 1 text note)
+      // RelayService handles creating the event, signing with BIP-340 Schnorr,
+      // and sending via WebSocket or HTTP
       final success = await _relayService.postRoomMessage(
         _selectedRelayRoom!.relayUrl,
         _selectedRelayRoom!.id,
@@ -341,6 +570,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           callsign: currentProfile.callsign,
           content: content,
           roomId: _selectedRelayRoom!.id,
+          npub: currentProfile.npub,
         );
 
         setState(() {
@@ -350,7 +580,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _showError('Failed to send message to relay');
       }
     } catch (e) {
-      _showError('Failed to send relay message: $e');
+      // Relay became unreachable - update status
+      setState(() {
+        _relayReachable = false;
+      });
+      _showError('Relay offline - message not sent');
     }
   }
 
@@ -374,18 +608,37 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  /// Generate placeholder signature
-  /// TODO: Replace with proper NOSTR signing implementation
-  String _generatePlaceholderSignature(
+  /// Generate BIP-340 Schnorr signature for a chat message
+  /// Creates a NOSTR event and signs it with the user's private key
+  String _generateSchnorrSignature(
     String content,
     Map<String, String> metadata,
     String nsec,
   ) {
-    // This is a placeholder. Real implementation needs:
-    // - secp256k1 library for Schnorr signatures
-    // - Proper message hashing (SHA-256)
-    // - Signature encoding
-    return 'PLACEHOLDER_SIGNATURE_${DateTime.now().millisecondsSinceEpoch}';
+    try {
+      // Decode nsec to get private key hex
+      final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+      final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
+
+      // Create a NOSTR event for signing
+      final event = NostrEvent.textNote(
+        pubkeyHex: publicKeyHex,
+        content: content,
+        tags: [
+          ['t', 'chat'],
+          ['channel', metadata['channel'] ?? 'main'],
+        ],
+      );
+
+      // Calculate event ID and sign with BIP-340 Schnorr signature
+      event.calculateId();
+      event.sign(privateKeyHex);
+
+      return event.sig ?? '';
+    } catch (e) {
+      LogService().log('Error generating Schnorr signature: $e');
+      return '';
+    }
   }
 
   /// Copy file to channel's files folder
@@ -643,6 +896,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: theme.colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         leading: !isWideScreen && (_selectedChannel != null || _selectedRelayRoom != null)
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
@@ -677,12 +933,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onPressed: _refreshChannel,
             tooltip: 'Refresh',
           ),
-          if (_selectedChannel != null)
-            IconButton(
-              icon: const Icon(Icons.info_outline),
-              onPressed: _showChannelInfo,
-              tooltip: 'Channel info',
-            ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _openSettings,
@@ -728,7 +978,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
     }
 
-    if (_channels.isEmpty) {
+    if (_channels.isEmpty && _relayRooms.isEmpty) {
       return _buildEmptyState(theme);
     }
 
@@ -813,107 +1063,48 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Build channel sidebar with local channels and relay rooms
   Widget _buildChannelSidebar(ThemeData theme) {
-    return Container(
-      width: 280,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
-        border: Border(
-          right: BorderSide(
-            color: theme.colorScheme.outlineVariant,
-            width: 1,
-          ),
-        ),
-      ),
-      child: Column(
-        children: [
-          // Local channels section
-          Expanded(
-            child: ChannelListWidget(
-              channels: _channels,
-              selectedChannelId: _selectedChannel?.id,
-              onChannelSelect: _selectChannel,
-              onNewChannel: _showNewChannelDialog,
-            ),
-          ),
-          // Relay rooms section
-          if (_relayRooms.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceVariant,
-                border: Border(
-                  top: BorderSide(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.cloud, size: 16, color: theme.colorScheme.primary),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Relay: ${_relayRooms.first.relayName}',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(
-              height: 200,
-              child: ListView.builder(
-                itemCount: _relayRooms.length,
-                itemBuilder: (context, index) {
-                  final room = _relayRooms[index];
-                  final isSelected = _selectedRelayRoom?.id == room.id;
+    // Build remote device sources from relay rooms
+    final remoteSources = <DeviceSourceWithRooms>[];
 
-                  return ListTile(
-                    dense: true,
-                    selected: isSelected,
-                    selectedTileColor: theme.colorScheme.primaryContainer.withOpacity(0.3),
-                    leading: CircleAvatar(
-                      radius: 16,
-                      backgroundColor: theme.colorScheme.tertiaryContainer,
-                      child: Icon(
-                        Icons.forum,
-                        size: 16,
-                        color: theme.colorScheme.onTertiaryContainer,
-                      ),
-                    ),
-                    title: Text(
-                      room.name,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    subtitle: room.description.isNotEmpty
-                        ? Text(
-                            room.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11),
-                          )
-                        : null,
-                    onTap: () => _selectRelayRoom(room),
-                  );
-                },
-              ),
-            ),
-          ],
-          if (_loadingRelayRooms)
-            const Padding(
-              padding: EdgeInsets.all(8.0),
-              child: SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-        ],
-      ),
+    if (_relayRooms.isNotEmpty) {
+      // Get relay info from the first room (they all share the same relay)
+      final relayName = _relayRooms.first.relayName;
+      // Get the connected relay to access its callsign
+      final connectedRelay = _relayService.getConnectedRelay();
+
+      remoteSources.add(DeviceSourceWithRooms(
+        device: DeviceSource.relay(
+          id: 'relay_${_lastRelayUrl ?? 'default'}',
+          name: relayName.isNotEmpty ? relayName : (connectedRelay?.name ?? 'Relay'),
+          callsign: connectedRelay?.callsign,
+          url: _lastRelayUrl ?? '',
+          isOnline: _relayReachable,
+          latency: connectedRelay?.latency,
+        ),
+        rooms: _relayRooms,
+        isLoading: _loadingRelayRooms,
+      ));
+    }
+
+    // Get current profile callsign
+    final currentProfile = _profileService.getProfile();
+
+    return DeviceChatSidebar(
+      localChannels: _channels,
+      remoteSources: remoteSources,
+      selectedLocalChannelId: _selectedChannel?.id,
+      selectedRemoteRoom: _selectedRelayRoom != null
+          ? SelectedRemoteRoom(
+              deviceId: 'relay_${_lastRelayUrl ?? 'default'}',
+              roomId: _selectedRelayRoom!.id,
+            )
+          : null,
+      onLocalChannelSelect: _selectChannel,
+      onRemoteRoomSelect: (device, room) => _selectRelayRoom(room),
+      onNewLocalChannel: _showNewChannelDialog,
+      onRefreshDevice: (device) => _loadRelayRooms(),
+      localCallsign: currentProfile.callsign,
+      unreadCounts: _unreadCounts,
     );
   }
 
@@ -921,34 +1112,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Widget _buildRelayRoomChat(ThemeData theme) {
     return Column(
       children: [
-        // Room info header
-        if (_selectedRelayRoom!.description.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
-              border: Border(
-                bottom: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, size: 16, color: theme.colorScheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _selectedRelayRoom!.description,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         // Message list using converted messages
         Expanded(
           child: MessageListWidget(
@@ -960,12 +1123,42 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             canDeleteMessage: (_) => false,
           ),
         ),
-        // Message input (no file upload for relay)
-        MessageInputWidget(
-          onSend: _sendMessage,
-          maxLength: 1000,
-          allowFiles: false,
-        ),
+        // Message input (no file upload for relay) - disabled when offline
+        if (_relayReachable)
+          MessageInputWidget(
+            onSend: _sendMessage,
+            maxLength: 1000,
+            allowFiles: false,
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
+              border: Border(
+                top: BorderSide(
+                  color: theme.colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.signal_cellular_off,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Read-only mode - relay is offline',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -1099,38 +1292,73 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.cloud, color: theme.colorScheme.primary),
+                        // Status indicator dot
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _relayReachable ? Colors.green : Colors.red.shade400,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Icon(Icons.cell_tower, color: theme.colorScheme.primary),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            'Relay: ${_relayRooms.first.relayName}',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _relayRooms.first.relayName,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                _relayReachable ? 'Online' : 'Offline (cached)',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: _relayReachable
+                                      ? Colors.green.shade700
+                                      : theme.colorScheme.error,
+                                ),
+                              ),
+                            ],
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          onPressed: _loadRelayRooms,
+                          tooltip: 'Refresh rooms',
                         ),
                       ],
                     ),
                   ),
-                  ..._relayRooms.map((room) => ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: theme.colorScheme.tertiaryContainer,
-                      child: Icon(
-                        Icons.forum,
-                        color: theme.colorScheme.onTertiaryContainer,
-                        size: 20,
+                  ..._relayRooms.map((room) {
+                    final unreadCount = _unreadCounts[room.id] ?? 0;
+                    return ListTile(
+                      leading: Badge(
+                        isLabelVisible: unreadCount > 0,
+                        label: Text('$unreadCount'),
+                        child: CircleAvatar(
+                          backgroundColor: theme.colorScheme.tertiaryContainer,
+                          child: Icon(
+                            Icons.forum,
+                            color: theme.colorScheme.onTertiaryContainer,
+                            size: 20,
+                          ),
+                        ),
                       ),
-                    ),
-                    title: Text(room.name),
-                    subtitle: room.description.isNotEmpty
-                        ? Text(
-                            room.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          )
-                        : Text('${room.messageCount} messages'),
-                    onTap: () => _selectRelayRoom(room),
-                  )),
+                      title: Text(room.name),
+                      subtitle: room.description.isNotEmpty
+                          ? Text(
+                              room.description,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            )
+                          : Text('${room.messageCount} messages'),
+                      onTap: () => _selectRelayRoom(room),
+                    );
+                  }),
                 ],
 
                 // Loading indicator for relay rooms

@@ -55,12 +55,22 @@ class RelayChatMessage {
   final String callsign;
   final String content;
   final String roomId;
+  final String? npub;      // Author's NOSTR public key (bech32)
+  final String? pubkey;    // Author's public key (hex)
+  final String? signature; // Message signature (BIP-340 Schnorr)
+  final String? eventId;   // NOSTR event ID
+  final int? createdAt;    // Unix timestamp in seconds
 
   RelayChatMessage({
     required this.timestamp,
     required this.callsign,
     required this.content,
     required this.roomId,
+    this.npub,
+    this.pubkey,
+    this.signature,
+    this.eventId,
+    this.createdAt,
   });
 
   factory RelayChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
@@ -69,8 +79,56 @@ class RelayChatMessage {
       callsign: json['callsign'] as String? ?? '',
       content: json['content'] as String? ?? '',
       roomId: roomId,
+      npub: json['npub'] as String?,
+      pubkey: json['pubkey'] as String?,
+      signature: json['signature'] as String?,
+      eventId: json['event_id'] as String?,
+      createdAt: json['created_at'] as int?,
     );
   }
+
+  /// Create from a NOSTR event
+  factory RelayChatMessage.fromNostrEvent(
+    Map<String, dynamic> eventJson,
+    String roomId,
+  ) {
+    final pubkey = eventJson['pubkey'] as String? ?? '';
+    final createdAt = eventJson['created_at'] as int? ?? 0;
+    final content = eventJson['content'] as String? ?? '';
+    final tags = (eventJson['tags'] as List?)?.cast<List>() ?? [];
+
+    // Extract callsign from tags or derive from pubkey
+    String callsign = '';
+    for (final tag in tags) {
+      if (tag.isNotEmpty && tag[0] == 'callsign' && tag.length > 1) {
+        callsign = tag[1] as String;
+        break;
+      }
+    }
+    if (callsign.isEmpty && pubkey.isNotEmpty) {
+      // Derive callsign from pubkey (first 6 chars formatted)
+      callsign = 'X1${pubkey.substring(0, 4).toUpperCase()}';
+    }
+
+    // Format timestamp in geogram format
+    final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+    final timestamp = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
+
+    return RelayChatMessage(
+      timestamp: timestamp,
+      callsign: callsign,
+      content: content,
+      roomId: roomId,
+      pubkey: pubkey,
+      signature: eventJson['sig'] as String?,
+      eventId: eventJson['id'] as String?,
+      createdAt: createdAt,
+    );
+  }
+
+  /// Check if message is signed
+  bool get isSigned => signature != null && signature!.isNotEmpty;
 
   /// Parse the timestamp to DateTime
   DateTime? get dateTime {

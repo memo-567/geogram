@@ -1,104 +1,107 @@
-import 'dart:math';
-import 'dart:typed_data';
+/*
+ * Copyright (c) geogram
+ * License: Apache-2.0
+ *
+ * NOSTR Key Generator - Uses proper secp256k1 cryptography
+ */
 
-/// Generates NOSTR key pairs (npub/nsec)
+import 'nostr_crypto.dart';
+
+/// Generates NOSTR key pairs (npub/nsec) using secp256k1
 class NostrKeyGenerator {
-  /// Generate a new key pair
+  /// Generate a new key pair with proper secp256k1 keys
   static NostrKeys generateKeyPair() {
-    try {
-      final random = Random.secure();
-
-      // Generate 32 bytes for private key (nsec)
-      final privateKeyBytes = Uint8List(32);
-      for (int i = 0; i < 32; i++) {
-        privateKeyBytes[i] = random.nextInt(256);
-      }
-
-      // For public key, we'd normally derive it from private key using secp256k1
-      // For now, generate separate 32 bytes (simplified implementation)
-      final publicKeyBytes = Uint8List(32);
-      for (int i = 0; i < 32; i++) {
-        publicKeyBytes[i] = random.nextInt(256);
-      }
-
-      // Convert to hex and create bech32-like format
-      // Format: npub1[59 hex chars], nsec1[59 hex chars]
-      final npub = 'npub1${_bytesToHex(publicKeyBytes).substring(0, 59)}';
-      final nsec = 'nsec1${_bytesToHex(privateKeyBytes).substring(0, 59)}';
-
-      return NostrKeys(npub: npub, nsec: nsec);
-    } catch (e) {
-      // Fallback to timestamp-based generation
-      return _generateFallbackKeys();
-    }
-  }
-
-  /// Fallback key generation using timestamp
-  static NostrKeys _generateFallbackKeys() {
-    final timestamp = DateTime.now().microsecondsSinceEpoch;
-    final random = Random(timestamp);
-
-    final publicKeyBytes = Uint8List(32);
-    final privateKeyBytes = Uint8List(32);
-
-    for (int i = 0; i < 32; i++) {
-      publicKeyBytes[i] = random.nextInt(256);
-      privateKeyBytes[i] = random.nextInt(256);
-    }
-
-    final npub = 'npub1${_bytesToHex(publicKeyBytes).substring(0, 59)}';
-    final nsec = 'nsec1${_bytesToHex(privateKeyBytes).substring(0, 59)}';
-
-    return NostrKeys(npub: npub, nsec: nsec);
-  }
-
-  /// Convert bytes to hex string
-  static String _bytesToHex(Uint8List bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
+    final keyPair = NostrCrypto.generateKeyPair();
+    return NostrKeys(
+      npub: keyPair.npub,
+      nsec: keyPair.nsec,
+      callsign: keyPair.callsign,
+    );
   }
 
   /// Derive user/operator callsign from npub
-  /// Format: X1 + first 4 alphanumeric characters after 'npub1'
-  /// Example: npub1abcd... -> X1ABCD
-  /// Max length: 6 characters (2 char prefix + 4 chars)
+  /// Format: X1 + first 4 characters after 'npub1'
   static String deriveCallsign(String npub) {
-    return _deriveCallsignWithPrefix(npub, 'X1');
+    return _deriveCallsignFromNpub(npub, 'X1');
   }
 
   /// Derive relay callsign from npub
-  /// Format: X3 + first 4 alphanumeric characters after 'npub1'
-  /// Example: npub1abcd... -> X3ABCD
-  /// Max length: 6 characters (2 char prefix + 4 chars)
+  /// Format: X3 + first 4 characters after 'npub1'
   static String deriveRelayCallsign(String npub) {
-    return _deriveCallsignWithPrefix(npub, 'X3');
+    return _deriveCallsignFromNpub(npub, 'X3');
   }
 
-  /// Internal method to derive callsign with given prefix
-  static String _deriveCallsignWithPrefix(String npub, String prefix) {
-    if (!npub.toLowerCase().startsWith('npub1')) {
+  /// Derive callsign from npub with given prefix
+  /// Takes the first 4 characters after 'npub1' and uppercases them
+  static String _deriveCallsignFromNpub(String npub, String prefix) {
+    if (npub.length < 9 || !npub.toLowerCase().startsWith('npub1')) {
       throw ArgumentError('Invalid npub format');
     }
 
-    // Extract data after 'npub1'
-    final data = npub.substring(5);
-
-    // Take first 4 alphanumeric characters and uppercase
-    final alphanumeric = data.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-    var suffix = alphanumeric.substring(0, alphanumeric.length >= 4 ? 4 : alphanumeric.length).toUpperCase();
-
-    // Ensure we have exactly 4 characters (pad with X if needed)
-    while (suffix.length < 4) {
-      suffix += 'X';
-    }
+    // Extract first 4 characters after 'npub1' and uppercase
+    final suffix = npub.substring(5, 9).toUpperCase();
 
     return '$prefix$suffix';
+  }
+
+  /// Validate npub format
+  static bool isValidNpub(String npub) {
+    try {
+      if (!npub.startsWith('npub1')) return false;
+      NostrCrypto.decodeNpub(npub);
+      return true;
+    } catch (e) {
+      // Accept legacy format too
+      return npub.startsWith('npub1') && npub.length >= 10;
+    }
+  }
+
+  /// Validate nsec format
+  static bool isValidNsec(String nsec) {
+    try {
+      if (!nsec.startsWith('nsec1')) return false;
+      NostrCrypto.decodeNsec(nsec);
+      return true;
+    } catch (e) {
+      // Accept legacy format too
+      return nsec.startsWith('nsec1') && nsec.length >= 10;
+    }
+  }
+
+  /// Get public key hex from npub (returns null if invalid)
+  static String? getPublicKeyHex(String npub) {
+    try {
+      return NostrCrypto.decodeNpub(npub);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Get private key hex from nsec (returns null if invalid)
+  static String? getPrivateKeyHex(String nsec) {
+    try {
+      return NostrCrypto.decodeNsec(nsec);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Derive npub from nsec
+  static String? derivePublicKey(String nsec) {
+    try {
+      final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+      final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
+      return NostrCrypto.encodeNpub(publicKeyHex);
+    } catch (e) {
+      return null;
+    }
   }
 }
 
 /// NOSTR key pair with callsign
 class NostrKeys {
-  final String npub; // Public key (collection ID)
-  final String nsec; // Private key (secret)
+  final String npub; // Public key (bech32 encoded)
+  final String nsec; // Private key (bech32 encoded, secret!)
   final String callsign; // Derived callsign
 
   NostrKeys({
@@ -116,6 +119,12 @@ class NostrKeys {
       callsign: NostrKeyGenerator.deriveRelayCallsign(keys.npub),
     );
   }
+
+  /// Get the hex-encoded public key
+  String? get publicKeyHex => NostrKeyGenerator.getPublicKeyHex(npub);
+
+  /// Get the hex-encoded private key (use with caution!)
+  String? get privateKeyHex => NostrKeyGenerator.getPrivateKeyHex(nsec);
 
   Map<String, dynamic> toJson() {
     return {

@@ -44,6 +44,7 @@ class RelayCacheService {
 
       _initialized = true;
       LogService().log('RelayCacheService initialized at: $_basePath');
+      print('DEBUG RelayCacheService: initialized at $_basePath');
     } catch (e) {
       LogService().log('Error initializing RelayCacheService: $e');
     }
@@ -265,19 +266,25 @@ class RelayCacheService {
 
   /// Get list of cached device callsigns
   Future<List<String>> getCachedDevices() async {
+    print('DEBUG getCachedDevices: kIsWeb=$kIsWeb, _basePath=$_basePath');
     if (kIsWeb || _basePath == null) return [];
 
     try {
       final devicesDir = Directory(_basePath!);
-      if (!await devicesDir.exists()) return [];
+      final exists = await devicesDir.exists();
+      print('DEBUG getCachedDevices: devicesDir=$_basePath exists=$exists');
+      if (!exists) return [];
 
       final entities = await devicesDir.list().toList();
-      return entities
+      final devices = entities
           .whereType<Directory>()
           .map((d) => d.path.split('/').last)
           .toList();
+      print('DEBUG getCachedDevices: found devices=$devices');
+      return devices;
     } catch (e) {
       LogService().log('Error listing cached devices: $e');
+      print('DEBUG getCachedDevices: ERROR $e');
       return [];
     }
   }

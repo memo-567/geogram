@@ -8,96 +8,277 @@ import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../util/nostr_key_generator.dart';
 
-/// Service for managing user profile
+/// Service for managing user profiles (supports multiple callsigns)
 class ProfileService {
   static final ProfileService _instance = ProfileService._internal();
   factory ProfileService() => _instance;
   ProfileService._internal();
 
-  Profile? _profile;
+  /// List of all user profiles/callsigns
+  List<Profile> _profiles = [];
+
+  /// ID of the currently active profile
+  String? _activeProfileId;
+
   bool _initialized = false;
 
-  /// Notifier for profile changes
+  /// Notifier for profile changes (incremented on any change)
   final ValueNotifier<int> profileNotifier = ValueNotifier<int>(0);
+
+  /// Notifier specifically for active profile switches
+  final ValueNotifier<String?> activeProfileNotifier = ValueNotifier<String?>(null);
 
   /// Initialize profile service
   Future<void> initialize() async {
     if (_initialized) return;
 
     try {
-      await _loadProfile();
+      await _loadProfiles();
       _initialized = true;
-      LogService().log('ProfileService initialized');
+      LogService().log('ProfileService initialized with ${_profiles.length} profile(s)');
     } catch (e) {
       LogService().log('Error initializing ProfileService: $e');
+      // Still mark as initialized with a default profile to avoid blocking the app
+      if (_profiles.isEmpty) {
+        final newProfile = Profile();
+        await _generateIdentityForProfile(newProfile);
+        _profiles = [newProfile];
+        _activeProfileId = newProfile.id;
+      }
+      _initialized = true;
     }
   }
 
-  /// Load profile from config
-  Future<void> _loadProfile() async {
+  /// Load profiles from config (supports both legacy single profile and new multi-profile format)
+  Future<void> _loadProfiles() async {
     final config = ConfigService().getAll();
 
-    if (config.containsKey('profile')) {
-      final profileData = config['profile'] as Map<String, dynamic>;
-      _profile = Profile.fromJson(profileData);
+    // Check for new multi-profile format first
+    if (config.containsKey('profiles') && config['profiles'] is List) {
+      final profilesList = config['profiles'] as List;
+      _profiles = profilesList
+          .map((p) => Profile.fromJson(p as Map<String, dynamic>))
+          .toList();
+      _activeProfileId = config['activeProfileId'] as String?;
 
-      // Auto-generate identity if missing
-      if (_profile!.npub.isEmpty || _profile!.nsec.isEmpty) {
-        await _generateIdentity();
-      } else if (_profile!.callsign.isEmpty) {
-        // Derive callsign from existing npub if missing
-        try {
-          _profile!.callsign = NostrKeyGenerator.deriveCallsign(_profile!.npub);
-          await saveProfile(_profile!);
-        } catch (e) {
-          // If derivation fails, generate new identity
-          await _generateIdentity();
-        }
+      // Ensure active profile is valid
+      if (_activeProfileId != null &&
+          !_profiles.any((p) => p.id == _activeProfileId)) {
+        _activeProfileId = _profiles.isNotEmpty ? _profiles.first.id : null;
       }
 
-      LogService().log('Profile loaded from config');
+      // Validate and fix any profiles with invalid NOSTR keys
+      bool profilesUpdated = false;
+      for (final profile in _profiles) {
+        if (!_hasValidNostrKeys(profile)) {
+          LogService().log('Profile ${profile.callsign} has invalid NOSTR keys, regenerating...');
+          await _generateIdentityForProfile(profile);
+          profilesUpdated = true;
+        }
+      }
+      if (profilesUpdated) {
+        await _saveAllProfiles();
+      }
+
+      LogService().log('Loaded ${_profiles.length} profiles from config');
+    }
+    // Fall back to legacy single profile format for migration
+    else if (config.containsKey('profile')) {
+      final profileData = config['profile'] as Map<String, dynamic>;
+      final legacyProfile = Profile.fromJson(profileData);
+
+      // Auto-generate identity if missing or invalid
+      if (!_hasValidNostrKeys(legacyProfile)) {
+        LogService().log('Legacy profile has invalid NOSTR keys, regenerating...');
+        await _generateIdentityForProfile(legacyProfile);
+      } else if (legacyProfile.callsign.isEmpty) {
+        // Derive callsign from existing npub if missing
+        legacyProfile.callsign = NostrKeyGenerator.deriveCallsign(legacyProfile.npub);
+      }
+
+      _profiles = [legacyProfile];
+      _activeProfileId = legacyProfile.id;
+
+      // Migrate to new format
+      await _saveAllProfiles();
+      LogService().log('Migrated legacy profile to multi-profile format');
     } else {
       // Create default profile with identity
-      _profile = Profile();
-      await _generateIdentity();
+      final newProfile = Profile();
+      await _generateIdentityForProfile(newProfile);
+      _profiles = [newProfile];
+      _activeProfileId = newProfile.id;
+      await _saveAllProfiles();
       LogService().log('Created default profile with new identity');
     }
+
+    // Update active profile notifier
+    activeProfileNotifier.value = _activeProfileId;
   }
 
-  /// Generate new NOSTR identity (npub/nsec/callsign)
-  Future<void> _generateIdentity() async {
+  /// Generate new NOSTR identity for a specific profile
+  Future<void> _generateIdentityForProfile(Profile profile) async {
     final keys = NostrKeyGenerator.generateKeyPair();
-    _profile!.npub = keys.npub;
-    _profile!.nsec = keys.nsec;
-    _profile!.callsign = keys.callsign;
+    profile.npub = keys.npub;
+    profile.nsec = keys.nsec;
+    profile.callsign = keys.callsign;
 
     // Set random preferred color if not set
-    if (_profile!.preferredColor.isEmpty) {
+    if (profile.preferredColor.isEmpty) {
       final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
-      _profile!.preferredColor = colors[Random().nextInt(colors.length)];
+      profile.preferredColor = colors[Random().nextInt(colors.length)];
     }
 
-    await saveProfile(_profile!);
-    LogService().log('Generated new identity: ${_profile!.callsign}');
+    LogService().log('Generated new identity: ${profile.callsign}');
   }
 
-  /// Save profile to config
-  Future<void> saveProfile(Profile profile) async {
-    _profile = profile;
-    await ConfigService().set('profile', profile.toJson());
+  /// Check if a profile has valid NOSTR keys (proper bech32 encoding)
+  bool _hasValidNostrKeys(Profile profile) {
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      return false;
+    }
+
+    // Verify keys are proper bech32 by attempting to decode them
+    try {
+      final pubkeyHex = NostrKeyGenerator.getPublicKeyHex(profile.npub);
+      final privkeyHex = NostrKeyGenerator.getPrivateKeyHex(profile.nsec);
+
+      // Both must decode successfully and be correct length
+      if (pubkeyHex == null || privkeyHex == null) {
+        return false;
+      }
+      if (pubkeyHex.length != 64 || privkeyHex.length != 64) {
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      LogService().log('Key validation failed: $e');
+      return false;
+    }
+  }
+
+  /// Save all profiles to config
+  Future<void> _saveAllProfiles() async {
+    await ConfigService().set('profiles', _profiles.map((p) => p.toJson()).toList());
+    await ConfigService().set('activeProfileId', _activeProfileId);
+
+    // Also maintain legacy 'profile' key for backward compatibility
+    final activeProfile = getProfile();
+    await ConfigService().set('profile', activeProfile.toJson());
+
     profileNotifier.value++; // Notify listeners
-    LogService().log('Profile saved to config');
   }
 
-  /// Get current profile
-  Profile getProfile() {
-    if (!_initialized) {
-      throw Exception('ProfileService not initialized');
+  /// Save a specific profile (updates it in the list)
+  Future<void> saveProfile(Profile profile) async {
+    final index = _profiles.indexWhere((p) => p.id == profile.id);
+    if (index >= 0) {
+      _profiles[index] = profile;
+    } else {
+      _profiles.add(profile);
     }
-    return _profile ?? Profile();
+    await _saveAllProfiles();
+    LogService().log('Profile saved: ${profile.callsign}');
   }
 
-  /// Update profile fields
+  /// Get current active profile
+  /// Returns an empty profile if not initialized (for safety during startup)
+  Profile getProfile() {
+    if (!_initialized || _profiles.isEmpty) {
+      return Profile();
+    }
+    return _profiles.firstWhere(
+      (p) => p.id == _activeProfileId,
+      orElse: () => _profiles.first,
+    );
+  }
+
+  /// Get all profiles
+  /// Returns empty list if not initialized (for safety during startup)
+  List<Profile> getAllProfiles() {
+    if (!_initialized) {
+      return [];
+    }
+    return List.unmodifiable(_profiles);
+  }
+
+  /// Get profile by ID
+  Profile? getProfileById(String id) {
+    try {
+      return _profiles.firstWhere((p) => p.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Get profile by callsign
+  Profile? getProfileByCallsign(String callsign) {
+    try {
+      return _profiles.firstWhere(
+        (p) => p.callsign.toLowerCase() == callsign.toLowerCase(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Switch to a different profile by ID
+  Future<void> switchToProfile(String profileId) async {
+    if (!_profiles.any((p) => p.id == profileId)) {
+      throw Exception('Profile not found: $profileId');
+    }
+    _activeProfileId = profileId;
+    activeProfileNotifier.value = profileId;
+    await _saveAllProfiles();
+    LogService().log('Switched to profile: ${getProfile().callsign}');
+  }
+
+  /// Create a new profile with generated identity
+  Future<Profile> createNewProfile({String? nickname}) async {
+    final newProfile = Profile(nickname: nickname ?? '');
+    await _generateIdentityForProfile(newProfile);
+    _profiles.add(newProfile);
+    await _saveAllProfiles();
+    LogService().log('Created new profile: ${newProfile.callsign}');
+    return newProfile;
+  }
+
+  /// Delete a profile by ID (cannot delete the last profile)
+  Future<bool> deleteProfile(String profileId) async {
+    if (_profiles.length <= 1) {
+      LogService().log('Cannot delete the last profile');
+      return false;
+    }
+
+    final index = _profiles.indexWhere((p) => p.id == profileId);
+    if (index < 0) {
+      return false;
+    }
+
+    final deletedProfile = _profiles.removeAt(index);
+
+    // If we deleted the active profile, switch to the first remaining one
+    if (_activeProfileId == profileId) {
+      _activeProfileId = _profiles.first.id;
+      activeProfileNotifier.value = _activeProfileId;
+    }
+
+    await _saveAllProfiles();
+    LogService().log('Deleted profile: ${deletedProfile.callsign}');
+    return true;
+  }
+
+  /// Check if there are multiple profiles
+  bool get hasMultipleProfiles => _profiles.length > 1;
+
+  /// Get the number of profiles
+  int get profileCount => _profiles.length;
+
+  /// Get the active profile ID
+  String? get activeProfileId => _activeProfileId;
+
+  /// Update profile fields for the active profile
   Future<void> updateProfile({
     String? nickname,
     String? description,
@@ -120,9 +301,11 @@ class ProfileService {
     await saveProfile(updatedProfile);
   }
 
-  /// Generate new identity (reset keys)
+  /// Generate new identity for active profile (reset keys)
   Future<void> regenerateIdentity() async {
-    await _generateIdentity();
+    final profile = getProfile();
+    await _generateIdentityForProfile(profile);
+    await saveProfile(profile);
   }
 
   /// Set profile picture from file

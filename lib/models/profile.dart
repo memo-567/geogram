@@ -1,7 +1,7 @@
-import 'dart:convert';
-
-/// User profile model
+/// User profile model - represents a single identity/callsign
 class Profile {
+  /// Unique identifier for this profile (UUID)
+  final String id;
   String callsign;
   String nickname;
   String description;
@@ -12,8 +12,10 @@ class Profile {
   double? latitude; // User's current latitude
   double? longitude; // User's current longitude
   String? locationName; // Human-readable location
+  DateTime createdAt; // When this profile was created
 
   Profile({
+    String? id,
     this.callsign = '',
     this.nickname = '',
     this.description = '',
@@ -24,11 +26,20 @@ class Profile {
     this.latitude,
     this.longitude,
     this.locationName,
-  });
+    DateTime? createdAt,
+  }) : id = id ?? _generateId(),
+       createdAt = createdAt ?? DateTime.now();
+
+  /// Generate a simple unique ID
+  static String _generateId() {
+    return DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
+        (DateTime.now().microsecond).toRadixString(36);
+  }
 
   /// Create a Profile from JSON map
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
+      id: json['id'] as String?,
       callsign: json['callsign'] as String? ?? '',
       nickname: json['nickname'] as String? ?? '',
       description: json['description'] as String? ?? '',
@@ -39,12 +50,16 @@ class Profile {
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
       locationName: json['locationName'] as String?,
+      createdAt: json['createdAt'] != null
+          ? DateTime.tryParse(json['createdAt'] as String)
+          : null,
     );
   }
 
   /// Convert Profile to JSON map
   Map<String, dynamic> toJson() {
     return {
+      'id': id,
       'callsign': callsign,
       'nickname': nickname,
       'description': description,
@@ -55,6 +70,7 @@ class Profile {
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
       if (locationName != null) 'locationName': locationName,
+      'createdAt': createdAt.toIso8601String(),
     };
   }
 
@@ -72,6 +88,7 @@ class Profile {
     String? locationName,
   }) {
     return Profile(
+      id: id, // Preserve the ID
       callsign: callsign ?? this.callsign,
       nickname: nickname ?? this.nickname,
       description: description ?? this.description,
@@ -82,6 +99,21 @@ class Profile {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       locationName: locationName ?? this.locationName,
+      createdAt: createdAt, // Preserve creation time
     );
   }
+
+  /// Display name for this profile (nickname or callsign)
+  String get displayName => nickname.isNotEmpty ? nickname : callsign;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Profile && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'Profile(id: $id, callsign: $callsign, nickname: $nickname)';
 }

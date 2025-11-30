@@ -84,13 +84,13 @@ class MessageBubbleWidget extends StatelessWidget {
                               : theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    // Metadata chips
-                    if (message.metadata.isNotEmpty)
+                    // Metadata chips (file, location, poll - but NOT signature)
+                    if (message.hasFile || message.hasLocation || message.isPoll)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: _buildMetadataChips(context, theme, isOwnMessage),
                       ),
-                    // Timestamp and options
+                    // Timestamp, signature icon, and options
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Row(
@@ -107,18 +107,31 @@ class MessageBubbleWidget extends StatelessWidget {
                               fontSize: 11,
                             ),
                           ),
-                          // Options menu button (moderator only)
-                          if (canDelete && onDelete != null) ...[
+                          // Signed indicator (small icon next to time)
+                          if (message.isSigned) ...[
+                            const SizedBox(width: 4),
+                            Tooltip(
+                              message: 'Signed message',
+                              child: Icon(
+                                Icons.verified,
+                                size: 12,
+                                color: isOwnMessage
+                                    ? theme.colorScheme.onPrimaryContainer
+                                        .withOpacity(0.7)
+                                    : theme.colorScheme.tertiary
+                                        .withOpacity(0.8),
+                              ),
+                            ),
+                          ],
+                          // Options menu button (moderator only, not for own messages)
+                          if (canDelete && onDelete != null && !isOwnMessage) ...[
                             const SizedBox(width: 6),
                             InkWell(
                               onTap: () => _showMessageOptions(context),
                               child: Icon(
                                 Icons.more_horiz,
                                 size: 16,
-                                color: isOwnMessage
-                                    ? theme.colorScheme.onPrimaryContainer
-                                        .withOpacity(0.6)
-                                    : theme.colorScheme.onSurfaceVariant
+                                color: theme.colorScheme.onSurfaceVariant
                                         .withOpacity(0.6),
                               ),
                             ),
@@ -203,25 +216,7 @@ class MessageBubbleWidget extends StatelessWidget {
       );
     }
 
-    // Signed message indicator
-    if (message.isSigned) {
-      chips.add(
-        Chip(
-          avatar: Icon(
-            Icons.verified,
-            size: 16,
-            color: theme.colorScheme.tertiary,
-          ),
-          label: Text(
-            'Signed',
-            style: theme.textTheme.bodySmall,
-          ),
-          backgroundColor: theme.colorScheme.surface,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      );
-    }
+    // Note: Signature indicator is now shown as a small icon next to timestamp
 
     return Wrap(
       spacing: 6,

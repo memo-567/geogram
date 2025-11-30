@@ -2,10 +2,14 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/relay.dart';
 import '../models/relay_chat_room.dart';
+import '../models/update_notification.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/websocket_service.dart';
 import '../services/profile_service.dart';
+import '../services/chat_notification_service.dart';
+import '../util/nostr_event.dart';
+import '../util/nostr_crypto.dart';
 
 /// Service for managing internet relays
 class RelayService {
@@ -47,6 +51,24 @@ class RelayService {
     if (config.containsKey('relays')) {
       final relaysData = config['relays'] as List<dynamic>;
       _relays = relaysData.map((data) => Relay.fromJson(data as Map<String, dynamic>)).toList();
+
+      // Reset connection state - connection status shouldn't persist across app restarts
+      for (var i = 0; i < _relays.length; i++) {
+        if (_relays[i].isConnected) {
+          print('DEBUG RelayService: Resetting isConnected for ${_relays[i].name}');
+          _relays[i] = _relays[i].copyWith(isConnected: false);
+        }
+      }
+
+      // Deduplicate relays with same callsign (e.g., 127.0.0.1 vs LAN IP)
+      final beforeCount = _relays.length;
+      _relays = _deduplicateRelays(_relays);
+      if (_relays.length < beforeCount) {
+        LogService().log('Merged ${beforeCount - _relays.length} duplicate relay entries');
+        await _saveRelays(); // Save deduplicated list
+      }
+
+      print('DEBUG RelayService: After reset, relays=${_relays.map((r) => "${r.name}:${r.isConnected}").toList()}');
       LogService().log('Loaded ${_relays.length} relays from config');
     } else {
       // First time - use default relays
@@ -67,6 +89,74 @@ class RelayService {
     final relaysData = _relays.map((r) => r.toJson()).toList();
     await ConfigService().set('relays', relaysData);
     LogService().log('Saved ${_relays.length} relays to config');
+  }
+
+  /// Deduplicate relays with same callsign (e.g., localhost vs LAN IP)
+  /// Prefers non-localhost URLs and entries with more info
+  List<Relay> _deduplicateRelays(List<Relay> relays) {
+    if (relays.isEmpty) return relays;
+
+    final Map<String, Relay> uniqueRelays = {};
+
+    for (var relay in relays) {
+      // Create a unique key based on callsign+port, or name+port if no callsign
+      String key;
+      final uri = Uri.tryParse(relay.url);
+      final port = uri?.port ?? 8080;
+
+      if (relay.callsign != null && relay.callsign!.isNotEmpty) {
+        // Use callsign + port as key (same relay on different IPs has same callsign)
+        key = '${relay.callsign}:$port';
+      } else if (relay.name.isNotEmpty) {
+        // Fallback to name + port
+        key = '${relay.name}:$port';
+      } else {
+        // No way to identify, keep all entries (use URL as key)
+        key = relay.url;
+      }
+
+      if (uniqueRelays.containsKey(key)) {
+        final existing = uniqueRelays[key]!;
+        // Prefer non-localhost entry (LAN IP is more useful for other devices)
+        final existingIsLocalhost = existing.url.contains('127.0.0.1') || existing.url.contains('localhost');
+        final newIsLocalhost = relay.url.contains('127.0.0.1') || relay.url.contains('localhost');
+
+        if (existingIsLocalhost && !newIsLocalhost) {
+          // Replace localhost with LAN IP, preserve status
+          uniqueRelays[key] = relay.copyWith(status: existing.status);
+        } else if (!existingIsLocalhost && newIsLocalhost) {
+          // Keep the existing LAN IP
+        } else if (_relayHasMoreInfo(relay, existing)) {
+          // Keep the one with more info, preserve status
+          uniqueRelays[key] = relay.copyWith(status: existing.status);
+        }
+        // Otherwise keep existing
+      } else {
+        uniqueRelays[key] = relay;
+      }
+    }
+
+    return uniqueRelays.values.toList();
+  }
+
+  /// Check if relay a has more info than relay b
+  bool _relayHasMoreInfo(Relay a, Relay b) {
+    int scoreA = 0;
+    int scoreB = 0;
+
+    if (a.callsign != null && a.callsign!.isNotEmpty) scoreA++;
+    if (b.callsign != null && b.callsign!.isNotEmpty) scoreB++;
+
+    if (a.location != null && a.location!.isNotEmpty) scoreA++;
+    if (b.location != null && b.location!.isNotEmpty) scoreB++;
+
+    if (a.latitude != null) scoreA++;
+    if (b.latitude != null) scoreB++;
+
+    if (a.connectedDevices != null) scoreA++;
+    if (b.connectedDevices != null) scoreB++;
+
+    return scoreA > scoreB;
   }
 
   /// Get all relays
@@ -98,9 +188,33 @@ class RelayService {
   /// Add a new relay
   Future<void> addRelay(Relay relay) async {
     // Check if URL already exists
-    final exists = _relays.any((r) => r.url == relay.url);
-    if (exists) {
+    final existsByUrl = _relays.any((r) => r.url == relay.url);
+    if (existsByUrl) {
       throw Exception('Relay URL already exists');
+    }
+
+    // Check if callsign already exists (same relay on different IP)
+    if (relay.callsign != null && relay.callsign!.isNotEmpty) {
+      final existsByCallsign = _relays.indexWhere(
+        (r) => r.callsign == relay.callsign && r.callsign != null,
+      );
+      if (existsByCallsign != -1) {
+        final existing = _relays[existsByCallsign];
+        // Update existing entry if new one has better URL (non-localhost)
+        final existingIsLocalhost = existing.url.contains('127.0.0.1') || existing.url.contains('localhost');
+        final newIsLocalhost = relay.url.contains('127.0.0.1') || relay.url.contains('localhost');
+
+        if (existingIsLocalhost && !newIsLocalhost) {
+          // Replace localhost with LAN IP
+          _relays[existsByCallsign] = relay.copyWith(status: existing.status);
+          await _saveRelays();
+          LogService().log('Updated relay URL from localhost to ${relay.url}');
+          return;
+        } else {
+          LogService().log('Relay with callsign ${relay.callsign} already exists at ${existing.url}');
+          return; // Don't add duplicate
+        }
+      }
     }
 
     _relays.add(relay);
@@ -313,6 +427,9 @@ class RelayService {
           LogService().log('══════════════════════════════════════');
         }
 
+        // Notify ChatNotificationService to reconnect to the updates stream
+        ChatNotificationService().reconnect();
+
         return true;
       } else {
         LogService().log('');
@@ -367,6 +484,9 @@ class RelayService {
     }
   }
 
+  /// Get stream of update notifications from connected relay
+  Stream<UpdateNotification>? get updates => _wsService?.updates;
+
   /// Get HTTP base URL for a relay
   String _getHttpBaseUrl(String wsUrl) {
     return wsUrl
@@ -406,7 +526,7 @@ class RelayService {
       }
     } catch (e) {
       LogService().log('Error fetching chat rooms: $e');
-      return [];
+      rethrow; // Rethrow so caller can fall back to cache
     }
   }
 
@@ -444,44 +564,161 @@ class RelayService {
       }
     } catch (e) {
       LogService().log('Error fetching messages: $e');
-      return [];
+      rethrow; // Rethrow so caller can fall back to cache
     }
   }
 
-  /// Post a message to a relay chat room
+  /// Post a message to a relay chat room as a NOSTR event
+  /// Creates a signed kind 1 text note and sends via WebSocket or HTTP
   Future<bool> postRoomMessage(
     String relayUrl,
     String roomId,
     String callsign,
-    String content,
-  ) async {
+    String content, {
+    bool useNostrProtocol = true,
+  }) async {
     try {
-      final httpUrl = _getHttpBaseUrl(relayUrl);
-      final apiUrl = httpUrl.endsWith('/')
-          ? '${httpUrl}api/chat/rooms/$roomId/messages'
-          : '$httpUrl/api/chat/rooms/$roomId/messages';
+      final profile = ProfileService().getProfile();
 
-      LogService().log('Posting message to room: $roomId');
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'callsign': callsign,
-          'content': content,
-        }),
-      );
+      if (useNostrProtocol && _wsService != null && _wsService!.isConnected) {
+        // Create NOSTR event (kind 1 text note)
+        final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
 
-      if (response.statusCode == 201) {
-        LogService().log('Message posted successfully');
+        final event = NostrEvent.textNote(
+          pubkeyHex: pubkeyHex,
+          content: content,
+          tags: [
+            ['t', 'chat'],
+            ['room', roomId],
+            ['callsign', callsign],
+          ],
+        );
+
+        // Calculate ID and sign with BIP-340 Schnorr signature
+        event.calculateId();
+        event.signWithNsec(profile.nsec);
+
+        // Send via NOSTR protocol: ["EVENT", {...}]
+        final nostrMessage = NostrRelayMessage.event(event);
+        final jsonMessage = jsonEncode(nostrMessage);
+
+        // Console output for debugging
+        print('');
+        print('╔══════════════════════════════════════════════════════════════╗');
+        print('║  SENDING MESSAGE (WebSocket/NOSTR)                           ║');
+        print('╠══════════════════════════════════════════════════════════════╣');
+        print('║  Room: $roomId');
+        print('║  Callsign: $callsign');
+        print('║  Content: $content');
+        print('║  Event ID: ${event.id?.substring(0, 32)}...');
+        print('║  Kind: ${event.kind}');
+        print('╚══════════════════════════════════════════════════════════════╝');
+        print('');
+
+        _wsService!.send({'nostr_event': nostrMessage});
         return true;
       } else {
-        LogService().log('Failed to post message: ${response.statusCode}');
-        return false;
+        // Fallback to HTTP API with NOSTR signature
+        final httpUrl = _getHttpBaseUrl(relayUrl);
+        final apiUrl = httpUrl.endsWith('/')
+            ? '${httpUrl}api/chat/rooms/$roomId/messages'
+            : '$httpUrl/api/chat/rooms/$roomId/messages';
+
+        LogService().log('Posting message via HTTP to room: $roomId');
+
+        // Create NOSTR event for signature
+        final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+        final event = NostrEvent.textNote(
+          pubkeyHex: pubkeyHex,
+          content: content,
+          tags: [
+            ['t', 'chat'],
+            ['room', roomId],
+            ['callsign', callsign],
+          ],
+        );
+        event.calculateId();
+        event.signWithNsec(profile.nsec);
+
+        // Console output for debugging
+        print('');
+        print('╔══════════════════════════════════════════════════════════════╗');
+        print('║  SENDING MESSAGE (HTTP)                                      ║');
+        print('╠══════════════════════════════════════════════════════════════╣');
+        print('║  Room: $roomId');
+        print('║  Callsign: $callsign');
+        print('║  Content: $content');
+        print('║  Event ID: ${event.id?.substring(0, 32)}...');
+        print('║  Pubkey: ${pubkeyHex.substring(0, 16)}...');
+        print('╚══════════════════════════════════════════════════════════════╝');
+        print('');
+
+        // Self-verify the signature before sending
+        final selfVerify = NostrCrypto.schnorrVerify(event.id!, event.sig!, pubkeyHex);
+        if (!selfVerify) {
+          print('⚠ WARNING: Desktop cannot verify its own signature!');
+        }
+
+        // Build request body with NOSTR event data
+        final body = <String, dynamic>{
+          'callsign': callsign,
+          'content': content,
+          'npub': profile.npub,
+          'pubkey': pubkeyHex,
+          'event_id': event.id,
+          'signature': event.sig,
+          'created_at': event.createdAt,
+        };
+
+        final response = await http.post(
+          Uri.parse(apiUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        );
+
+        if (response.statusCode == 201) {
+          LogService().log('Message posted successfully (HTTP)');
+          return true;
+        } else {
+          LogService().log('Failed to post message: ${response.statusCode} - ${response.body}');
+          return false;
+        }
       }
     } catch (e) {
       LogService().log('Error posting message: $e');
       return false;
     }
+  }
+
+  /// Subscribe to a chat room for real-time NOSTR events
+  void subscribeToRoom(String roomId) {
+    if (_wsService == null || !_wsService!.isConnected) {
+      LogService().log('Cannot subscribe: not connected to relay');
+      return;
+    }
+
+    final subscriptionId = 'room_$roomId';
+    final filter = {
+      'kinds': [1], // Text notes
+      '#room': [roomId], // Filter by room tag
+      'limit': 50,
+    };
+
+    final reqMessage = NostrRelayMessage.req(subscriptionId, filter);
+    _wsService!.send({'nostr_req': reqMessage});
+    LogService().log('Subscribed to room: $roomId');
+  }
+
+  /// Unsubscribe from a chat room
+  void unsubscribeFromRoom(String roomId) {
+    if (_wsService == null || !_wsService!.isConnected) {
+      return;
+    }
+
+    final subscriptionId = 'room_$roomId';
+    final closeMessage = NostrRelayMessage.close(subscriptionId);
+    _wsService!.send({'nostr_close': closeMessage});
+    LogService().log('Unsubscribed from room: $roomId');
   }
 
   /// Fetch chat rooms from connected relay
