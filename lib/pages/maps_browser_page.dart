@@ -4,9 +4,13 @@
  */
 
 import 'dart:math' as math;
+import 'dart:io' show Platform;
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import '../models/map_item.dart';
 import '../models/report.dart';
 import '../services/maps_service.dart';
@@ -51,6 +55,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   int _tilesLoading = 0;
   int _tilesLoaded = 0;
   bool _mapReady = false;
+  bool _isDetectingLocation = false;
 
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
@@ -290,6 +295,137 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     });
   }
 
+  /// Auto-detect current location using GPS (Android) or IP (Desktop)
+  Future<void> _autoDetectLocation() async {
+    setState(() => _isDetectingLocation = true);
+
+    try {
+      // Check if we're on Android (use GPS) or Desktop (use IP)
+      if (Platform.isAndroid || Platform.isIOS) {
+        await _detectLocationViaGPS();
+      } else {
+        // Desktop: use IP-based geolocation
+        await _detectLocationViaIP();
+      }
+    } catch (e) {
+      LogService().log('MapsBrowserPage: Error detecting location: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('location_detection_failed')),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDetectingLocation = false);
+      }
+    }
+  }
+
+  /// Detect location via GPS (for Android/iOS)
+  Future<void> _detectLocationViaGPS() async {
+    // Check if location services are enabled
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('location_services_disabled')),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Check permission
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('location_permission_denied')),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('location_permission_permanent_denied')),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Get current position
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+
+    _updateLocationAndReload(position.latitude, position.longitude, 'location_detected_gps');
+  }
+
+  /// Detect location via IP address (for Desktop)
+  Future<void> _detectLocationViaIP() async {
+    final response = await http.get(
+      Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['status'] == 'success') {
+        final lat = (data['lat'] as num).toDouble();
+        final lon = (data['lon'] as num).toDouble();
+        _updateLocationAndReload(lat, lon, 'location_detected');
+      } else {
+        throw Exception('IP geolocation failed');
+      }
+    } else {
+      throw Exception('Failed to fetch IP location');
+    }
+  }
+
+  /// Update the map center and reload items
+  void _updateLocationAndReload(double lat, double lon, String successMessageKey) {
+    setState(() {
+      _centerPosition = LatLng(lat, lon);
+      _currentZoom = _getZoomForRadius(_radiusKm);
+    });
+
+    // Move map to new position
+    if (_mapReady) {
+      _mapController.move(_centerPosition!, _currentZoom);
+    }
+
+    // Save and reload
+    _saveMapState();
+    _loadItems();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t(successMessageKey)),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
   Color _getTypeColor(MapItemType type) {
     switch (type) {
       case MapItemType.event:
@@ -404,6 +540,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                         ),
                       ),
                       IconButton(
+                        icon: _isDetectingLocation
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              )
+                            : const Icon(Icons.my_location),
+                        onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                        tooltip: _i18n.t('auto_detect_location'),
+                      ),
+                      IconButton(
                         icon: const Icon(Icons.refresh),
                         onPressed: () => _loadItems(forceRefresh: true),
                         tooltip: _i18n.t('refresh'),
@@ -483,6 +633,22 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               ),
 
               const SizedBox(width: 8),
+
+              // Auto-detect location button
+              IconButton(
+                icon: _isDetectingLocation
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      )
+                    : const Icon(Icons.my_location),
+                onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                tooltip: _i18n.t('auto_detect_location'),
+              ),
 
               // Refresh button
               IconButton(
