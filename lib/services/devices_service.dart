@@ -228,35 +228,7 @@ class DevicesService {
 
       LogService().log('DevicesService: Fetching collections from $baseUrl');
 
-      // Try to fetch chat rooms (works for relays)
-      try {
-        final chatResponse = await http.get(
-          Uri.parse('$baseUrl/api/chat/rooms'),
-        ).timeout(const Duration(seconds: 10));
-
-        LogService().log('DevicesService: Chat rooms response: ${chatResponse.statusCode}');
-
-        if (chatResponse.statusCode == 200) {
-          final data = json.decode(chatResponse.body);
-          LogService().log('DevicesService: Chat data: $data');
-
-          if (data['rooms'] is List) {
-            for (final room in data['rooms']) {
-              collections.add(RemoteCollection(
-                name: room['name'] ?? room['id'] ?? 'Chat',
-                deviceCallsign: device.callsign,
-                type: 'chat',
-                description: room['description'],
-                fileCount: room['message_count'],
-              ));
-            }
-          }
-        }
-      } catch (e) {
-        LogService().log('DevicesService: Error fetching chat rooms: $e');
-      }
-
-      // Try to fetch file collections (works for desktop devices)
+      // Fetch collection folders from /files endpoint
       try {
         final filesResponse = await http.get(
           Uri.parse('$baseUrl/files'),
@@ -272,12 +244,15 @@ class DevicesService {
             for (final entry in data['entries']) {
               if (entry['isDirectory'] == true || entry['type'] == 'directory') {
                 final name = entry['name'] as String;
-                // Skip hidden folders and system folders
-                if (!name.startsWith('.') && name != 'extra') {
+                final lowerName = name.toLowerCase();
+
+                // Only include known collection types (same as local collections)
+                if (_isKnownCollectionType(lowerName)) {
                   collections.add(RemoteCollection(
                     name: name,
                     deviceCallsign: device.callsign,
-                    type: _guessCollectionType(name),
+                    type: lowerName,
+                    fileCount: entry['size'] is int ? entry['size'] : null,
                   ));
                 }
               }
@@ -286,6 +261,31 @@ class DevicesService {
         }
       } catch (e) {
         LogService().log('DevicesService: Error fetching files: $e');
+      }
+
+      // If no collections found via /files, check if it's a relay with chat
+      if (collections.isEmpty) {
+        try {
+          final chatResponse = await http.get(
+            Uri.parse('$baseUrl/api/chat/rooms'),
+          ).timeout(const Duration(seconds: 10));
+
+          if (chatResponse.statusCode == 200) {
+            final data = json.decode(chatResponse.body);
+            if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
+              // This relay has chat rooms, add a chat collection
+              collections.add(RemoteCollection(
+                name: 'Chat',
+                deviceCallsign: device.callsign,
+                type: 'chat',
+                description: '${(data['rooms'] as List).length} rooms',
+                fileCount: (data['rooms'] as List).length,
+              ));
+            }
+          }
+        } catch (e) {
+          LogService().log('DevicesService: Error fetching chat rooms: $e');
+        }
       }
 
       // Update device
@@ -304,6 +304,16 @@ class DevicesService {
     }
 
     return await _loadCachedCollections(device.callsign);
+  }
+
+  /// Check if folder name is a known collection type
+  bool _isKnownCollectionType(String name) {
+    const knownTypes = {
+      'chat', 'forum', 'blog', 'events', 'news',
+      'www', 'postcards', 'contacts', 'places',
+      'market', 'report', 'groups',
+    };
+    return knownTypes.contains(name.toLowerCase());
   }
 
   /// Load cached collections for offline browsing
@@ -340,22 +350,6 @@ class DevicesService {
     } catch (e) {
       LogService().log('DevicesService: Error caching collections: $e');
     }
-  }
-
-  /// Guess collection type from name
-  String _guessCollectionType(String name) {
-    final lower = name.toLowerCase();
-    if (lower.contains('chat')) return 'chat';
-    if (lower.contains('blog')) return 'blog';
-    if (lower.contains('forum')) return 'forum';
-    if (lower.contains('contact')) return 'contacts';
-    if (lower.contains('event')) return 'events';
-    if (lower.contains('place')) return 'places';
-    if (lower.contains('news')) return 'news';
-    if (lower.contains('www') || lower.contains('web')) return 'www';
-    if (lower.contains('doc')) return 'documents';
-    if (lower.contains('photo') || lower.contains('image')) return 'photos';
-    return 'files';
   }
 
   /// Add a device from discovery or manual entry
