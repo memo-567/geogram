@@ -37,6 +37,7 @@ import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
 import 'pages/relay_dashboard_page.dart';
+import 'pages/devices_browser_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -153,7 +154,7 @@ class _HomePageState extends State<HomePage> {
   static const List<Widget> _pages = [
     CollectionsPage(),
     MapsBrowserPage(),
-    DevicesPage(),
+    DevicesBrowserPage(),
     SettingsPage(),
     LogPage(),
   ];
@@ -1620,39 +1621,7 @@ class GeoChatPage extends StatelessWidget {
   }
 }
 
-// Devices Page
-class DevicesPage extends StatelessWidget {
-  const DevicesPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final i18n = I18nService();
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.devices,
-            size: 64,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            i18n.t('devices'),
-            style: Theme.of(context).textTheme.headlineMedium,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            i18n.t('connected_devices_will_be_listed_here'),
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+// DevicesPage has been moved to pages/devices_browser_page.dart
 
 // Log Page
 class LogPage extends StatefulWidget {

@@ -1088,5 +1088,15 @@
   "create_channel": "Create Channel",
   "group_chat": "Group chat",
   "zoom_in": "Zoom in",
-  "zoom_out": "Zoom out"
+  "zoom_out": "Zoom out",
+  "cached": "Cached",
+  "offline": "Offline",
+  "select_device_to_browse": "Select a device to browse its collections",
+  "no_devices_found": "No devices found",
+  "no_devices_hint": "Connect to a relay or discover devices on the network to see them here",
+  "no_collections_found": "No collections found",
+  "device_has_no_public_collections": "This device has no public collections",
+  "device_offline_no_cache": "Device is offline and no cached data available",
+  "visibility": "Visibility",
+  "files": "files"
 }
