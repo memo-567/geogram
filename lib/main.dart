@@ -86,6 +86,11 @@ void main() async {
     await ProfileService().initialize();
     LogService().log('ProfileService initialized');
 
+    // Set active callsign for collection storage path
+    final profile = ProfileService().getProfile();
+    await CollectionService().setActiveCallsign(profile.callsign);
+    LogService().log('CollectionService callsign set: ${profile.callsign}');
+
     await RelayService().initialize();
     LogService().log('RelayService initialized');
 
@@ -408,8 +413,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
     );
   }
 
-  Future<void> _toggleFavorite(Collection collection) async {
-    await _collectionService.toggleFavorite(collection);
+  void _toggleFavorite(Collection collection) {
+    _collectionService.toggleFavorite(collection);
     setState(() {});
     LogService().log('Toggled favorite for ${collection.title}');
   }
@@ -770,14 +775,21 @@ class _CollectionGridCard extends StatelessWidget {
   bool _isFixedCollectionType() {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'groups'
+      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'report', 'relay'
     };
     return fixedTypes.contains(collection.type);
   }
 
-  /// Get display title with proper capitalization for fixed types
+  /// Get display title with proper capitalization and translation for fixed types
   String _getDisplayTitle() {
+    final i18n = I18nService();
     if (_isFixedCollectionType() && collection.title.isNotEmpty) {
+      // Try to get translated label for known collection types
+      final key = 'collection_type_${collection.type}';
+      final translated = i18n.t(key);
+      if (translated != key) {
+        return translated;
+      }
       // Special case for www -> WWW
       if (collection.title.toLowerCase() == 'www') {
         return 'WWW';
@@ -812,6 +824,10 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.store;
       case 'groups':
         return Icons.groups;
+      case 'report':
+        return Icons.assignment;
+      case 'relay':
+        return Icons.cell_tower;
       default:
         return Icons.folder_special;
     }
@@ -847,7 +863,7 @@ class _CollectionGridCard extends StatelessWidget {
                             label: Text('$unreadCount'),
                             child: Icon(
                               _getCollectionIcon(),
-                              size: 26,
+                              size: 32,
                               color: theme.colorScheme.primary,
                             ),
                           ),
@@ -1508,7 +1524,7 @@ class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
                 title: const Text('Use default folder'),
                 subtitle: Text(
                   _useAutoFolder
-                      ? '~/Documents/geogram/collections'
+                      ? '~/Documents/geogram/devices/${CollectionService().currentCallsign ?? "..."}'
                       : 'Choose custom location',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),

@@ -65,7 +65,7 @@ class RelayService {
       _relays = _deduplicateRelays(_relays);
       if (_relays.length < beforeCount) {
         LogService().log('Merged ${beforeCount - _relays.length} duplicate relay entries');
-        await _saveRelays(); // Save deduplicated list
+        _saveRelays(); // Save deduplicated list
       }
 
       print('DEBUG RelayService: After reset, relays=${_relays.map((r) => "${r.name}:${r.isConnected}").toList()}');
@@ -79,15 +79,15 @@ class RelayService {
         _relays[0] = _relays[0].copyWith(status: 'preferred');
       }
 
-      await _saveRelays();
+      _saveRelays();
       LogService().log('Created default relay configuration');
     }
   }
 
   /// Save relays to config
-  Future<void> _saveRelays() async {
+  void _saveRelays() {
     final relaysData = _relays.map((r) => r.toJson()).toList();
-    await ConfigService().set('relays', relaysData);
+    ConfigService().set('relays', relaysData);
     LogService().log('Saved ${_relays.length} relays to config');
   }
 
@@ -186,11 +186,13 @@ class RelayService {
   }
 
   /// Add a new relay
-  Future<void> addRelay(Relay relay) async {
+  /// Returns true if relay was added, false if it already exists
+  Future<bool> addRelay(Relay relay) async {
     // Check if URL already exists
     final existsByUrl = _relays.any((r) => r.url == relay.url);
     if (existsByUrl) {
-      throw Exception('Relay URL already exists');
+      LogService().log('Relay URL already exists: ${relay.url}');
+      return false;
     }
 
     // Check if callsign already exists (same relay on different IP)
@@ -207,19 +209,20 @@ class RelayService {
         if (existingIsLocalhost && !newIsLocalhost) {
           // Replace localhost with LAN IP
           _relays[existsByCallsign] = relay.copyWith(status: existing.status);
-          await _saveRelays();
+          _saveRelays();
           LogService().log('Updated relay URL from localhost to ${relay.url}');
-          return;
+          return true;
         } else {
           LogService().log('Relay with callsign ${relay.callsign} already exists at ${existing.url}');
-          return; // Don't add duplicate
+          return false;
         }
       }
     }
 
     _relays.add(relay);
-    await _saveRelays();
+    _saveRelays();
     LogService().log('Added relay: ${relay.name}');
+    return true;
   }
 
   /// Update relay
@@ -230,7 +233,7 @@ class RelayService {
     }
 
     _relays[index] = updatedRelay;
-    await _saveRelays();
+    _saveRelays();
     LogService().log('Updated relay: ${updatedRelay.name}');
   }
 
@@ -247,7 +250,7 @@ class RelayService {
     final index = _relays.indexWhere((r) => r.url == url);
     if (index != -1) {
       _relays[index] = _relays[index].copyWith(status: 'preferred');
-      await _saveRelays();
+      _saveRelays();
       LogService().log('Set preferred relay: ${_relays[index].name}');
     }
   }
@@ -312,7 +315,7 @@ class RelayService {
       }
     }
 
-    await _saveRelays();
+    _saveRelays();
     LogService().log('Set backup relay: ${_relays[index].name}');
   }
 
@@ -321,7 +324,7 @@ class RelayService {
     final index = _relays.indexWhere((r) => r.url == url);
     if (index != -1) {
       _relays[index] = _relays[index].copyWith(status: 'available');
-      await _saveRelays();
+      _saveRelays();
       LogService().log('Set relay as available: ${_relays[index].name}');
     }
   }
@@ -332,7 +335,7 @@ class RelayService {
     if (index != -1) {
       final relay = _relays[index];
       _relays.removeAt(index);
-      await _saveRelays();
+      _saveRelays();
       LogService().log('Deleted relay: ${relay.name}');
     }
   }
@@ -351,7 +354,7 @@ class RelayService {
         latency: 50 + (url.hashCode % 100), // Simulated latency
       );
 
-      await _saveRelays();
+      _saveRelays();
       LogService().log('Tested relay: ${_relays[index].name}');
     }
   }
@@ -412,7 +415,7 @@ class RelayService {
             connectedDevices: connectedDevices,
             callsign: relayCallsign,
           );
-          await _saveRelays();
+          _saveRelays();
 
           LogService().log('');
           LogService().log('✓ CONNECTION SUCCESSFUL');
@@ -443,7 +446,7 @@ class RelayService {
             lastChecked: DateTime.now(),
             isConnected: false,
           );
-          await _saveRelays();
+          _saveRelays();
         }
 
         return false;

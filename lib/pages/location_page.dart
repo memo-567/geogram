@@ -6,7 +6,7 @@ import 'dart:convert';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
-import '../services/map_tile_service.dart';
+import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
 
 class LocationPage extends StatefulWidget {
   const LocationPage({super.key});
@@ -29,6 +29,7 @@ class _LocationPageState extends State<LocationPage> {
   bool _hasLocation = false;
   bool _isOnline = true;
   bool _locationFromIP = false;
+  bool _mapInitialized = false;
 
   @override
   void initState() {
@@ -40,6 +41,12 @@ class _LocationPageState extends State<LocationPage> {
   Future<void> _initializeMap() async {
     // Initialize tile caching
     await _mapTileService.initialize();
+    // Rebuild after initialization to ensure GeogramTileProvider is used
+    if (mounted) {
+      setState(() {
+        _mapInitialized = true;
+      });
+    }
   }
 
   @override
@@ -247,54 +254,174 @@ class _LocationPageState extends State<LocationPage> {
               children: [
                 // Map Widget
                 Expanded(
-                  child: FlutterMap(
-                    mapController: _mapController,
-                    options: MapOptions(
-                      initialCenter: _currentPosition,
-                      initialZoom: 5.0,
-                      minZoom: 1.0,
-                      maxZoom: 18.0,
-                      onTap: _onMapTap,
-                    ),
+                  child: Stack(
                     children: [
-                      TileLayer(
-                        urlTemplate: _mapTileService.getTileUrl(),
-                        userAgentPackageName: 'dev.geogram.geogram_desktop',
-                        subdomains: const [], // No subdomains for relay/OSM
-                        tileProvider: _mapTileService.getTileProvider(),
-                        errorTileCallback: (tile, error, stackTrace) {
-                          // Map tiles failed to load - probably offline
-                          if (!_isOnline) return;
-                          setState(() {
-                            _isOnline = false;
-                          });
-                          LogService().log('Map tiles unavailable - offline mode');
-                        },
-                      ),
-                      MarkerLayer(
-                        markers: [
-                          if (_hasLocation)
-                            Marker(
-                              point: _currentPosition,
-                              width: 60,
-                              height: 60,
-                              child: Column(
-                                children: [
-                                  Icon(
-                                    Icons.location_pin,
-                                    color: Colors.red,
-                                    size: 40,
-                                    shadows: [
-                                      Shadow(
-                                        blurRadius: 4,
-                                        color: Colors.black.withOpacity(0.5),
+                      FlutterMap(
+                        mapController: _mapController,
+                        options: MapOptions(
+                          initialCenter: _currentPosition,
+                          initialZoom: 5.0,
+                          minZoom: 1.0,
+                          maxZoom: 18.0,
+                          interactionOptions: const InteractionOptions(
+                            flags: InteractiveFlag.all,
+                          ),
+                          onTap: _onMapTap,
+                        ),
+                        children: [
+                          ValueListenableBuilder<MapLayerType>(
+                            valueListenable: _mapTileService.layerTypeNotifier,
+                            builder: (context, layerType, child) {
+                              return TileLayer(
+                                urlTemplate: _mapTileService.getTileUrl(layerType),
+                                userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                subdomains: const [], // No subdomains for relay/OSM
+                                tileProvider: _mapTileService.getTileProvider(layerType),
+                                errorTileCallback: (tile, error, stackTrace) {
+                                  // Map tiles failed to load - probably offline
+                                  if (!_isOnline) return;
+                                  setState(() {
+                                    _isOnline = false;
+                                  });
+                                  LogService().log('Map tiles unavailable - offline mode');
+                                },
+                              );
+                            },
+                          ),
+                          // Labels overlay for satellite view (city names, roads, etc.)
+                          ValueListenableBuilder<MapLayerType>(
+                            valueListenable: _mapTileService.layerTypeNotifier,
+                            builder: (context, layerType, child) {
+                              if (layerType != MapLayerType.satellite) {
+                                return const SizedBox.shrink();
+                              }
+                              return TileLayer(
+                                urlTemplate: _mapTileService.getLabelsUrl(),
+                                userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                subdomains: const [],
+                                tileProvider: _mapTileService.getLabelsProvider(),
+                              );
+                            },
+                          ),
+                          // Transport labels overlay for satellite view (road names, route numbers)
+                          ValueListenableBuilder<MapLayerType>(
+                            valueListenable: _mapTileService.layerTypeNotifier,
+                            builder: (context, layerType, child) {
+                              if (layerType != MapLayerType.satellite) {
+                                return const SizedBox.shrink();
+                              }
+                              return Opacity(
+                                opacity: 0.6, // Soften road colors
+                                child: TileLayer(
+                                  urlTemplate: _mapTileService.getTransportLabelsUrl(),
+                                  userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                  subdomains: const [],
+                                  tileProvider: _mapTileService.getTransportLabelsProvider(),
+                                ),
+                              );
+                            },
+                          ),
+                          MarkerLayer(
+                            markers: [
+                              if (_hasLocation)
+                                Marker(
+                                  point: _currentPosition,
+                                  width: 60,
+                                  height: 60,
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.location_pin,
+                                        color: Colors.red,
+                                        size: 40,
+                                        shadows: [
+                                          Shadow(
+                                            blurRadius: 4,
+                                            color: Colors.black.withOpacity(0.5),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      // Tile loading status indicator
+                      ValueListenableBuilder<TileLoadingStatus>(
+                        valueListenable: _mapTileService.statusNotifier,
+                        builder: (context, status, child) {
+                          if (!status.isLoading && !status.hasFailures) {
+                            return const SizedBox.shrink();
+                          }
+                          return Positioned(
+                            bottom: 16,
+                            left: 16,
+                            right: 16,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: status.hasFailures
+                                    ? Colors.orange.shade800.withValues(alpha: 0.9)
+                                    : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (status.isLoading) ...[
+                                    SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Theme.of(context).colorScheme.onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      _i18n.t('loading_tiles', params: [status.loadingCount.toString()]),
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ] else if (status.hasFailures) ...[
+                                    const Icon(Icons.cloud_off, size: 16, color: Colors.white),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        _i18n.t('tiles_failed', params: [status.failedCount.toString()]),
+                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
-                        ],
+                          );
+                        },
+                      ),
+                      // Layer toggle button
+                      Positioned(
+                        top: 16,
+                        right: 16,
+                        child: ValueListenableBuilder<MapLayerType>(
+                          valueListenable: _mapTileService.layerTypeNotifier,
+                          builder: (context, layerType, child) {
+                            return FloatingActionButton.small(
+                              heroTag: 'layer_toggle',
+                              onPressed: () => _mapTileService.toggleLayer(),
+                              tooltip: layerType == MapLayerType.standard
+                                  ? _i18n.t('switch_to_satellite')
+                                  : _i18n.t('switch_to_standard'),
+                              child: Icon(
+                                layerType == MapLayerType.standard
+                                    ? Icons.satellite_alt
+                                    : Icons.map,
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ],
                   ),

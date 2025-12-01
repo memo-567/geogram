@@ -5,6 +5,7 @@ class Relay {
   String url;
   String name;
   String? callsign; // Relay's X3 callsign (from API)
+  String? description; // Relay description from API
   String status; // 'preferred', 'backup', 'available'
   bool isConnected;
   int? latency; // in milliseconds
@@ -18,6 +19,7 @@ class Relay {
     required this.url,
     required this.name,
     this.callsign,
+    this.description,
     this.status = 'available',
     this.isConnected = false,
     this.latency,
@@ -34,6 +36,7 @@ class Relay {
       url: json['url'] as String,
       name: json['name'] as String,
       callsign: json['callsign'] as String?,
+      description: json['description'] as String?,
       status: json['status'] as String? ?? 'available',
       isConnected: json['isConnected'] as bool? ?? false,
       latency: json['latency'] as int?,
@@ -53,6 +56,7 @@ class Relay {
       'url': url,
       'name': name,
       if (callsign != null) 'callsign': callsign,
+      if (description != null) 'description': description,
       'status': status,
       'isConnected': isConnected,
       if (latency != null) 'latency': latency,
@@ -69,6 +73,7 @@ class Relay {
     String? url,
     String? name,
     String? callsign,
+    String? description,
     String? status,
     bool? isConnected,
     int? latency,
@@ -82,6 +87,7 @@ class Relay {
       url: url ?? this.url,
       name: name ?? this.name,
       callsign: callsign ?? this.callsign,
+      description: description ?? this.description,
       status: status ?? this.status,
       isConnected: isConnected ?? this.isConnected,
       latency: latency ?? this.latency,

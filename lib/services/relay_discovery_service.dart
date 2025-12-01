@@ -63,9 +63,9 @@ class RelayDiscoveryService {
 
   Timer? _discoveryTimer;
   bool _isScanning = false;
-  final List<int> _ports = [80, 8080, 8081, 45678, 3000, 5000]; // Common relay/app ports
+  final List<int> _ports = [8080, 80, 8081, 45678, 3000, 5000]; // Common relay/app ports (8080 first as most common)
   final Duration _scanInterval = const Duration(minutes: 5);
-  final Duration _requestTimeout = const Duration(milliseconds: 500);
+  final Duration _requestTimeout = const Duration(milliseconds: 1500); // Increased timeout for reliability
   final Duration _startupDelay = const Duration(seconds: 5);
   static const int _maxConcurrentConnections = 30; // Limit concurrent connections to avoid "too many open files"
 
@@ -98,6 +98,11 @@ class RelayDiscoveryService {
     _discoveryTimer = null;
   }
 
+  /// Reset scanning state (useful if a previous scan crashed)
+  void resetScanState() {
+    _isScanning = false;
+  }
+
   /// Manual scan with progress callback - returns list of found devices
   Future<List<NetworkScanResult>> scanWithProgress({
     ScanProgressCallback? onProgress,
@@ -109,9 +114,10 @@ class RelayDiscoveryService {
       return [];
     }
 
+    // Force reset if stuck (singleton state could be stale)
     if (_isScanning) {
-      onProgress?.call('Scan already in progress', 0, 0, []);
-      return [];
+      LogService().log('Previous scan was stuck, forcing reset');
+      _isScanning = false;
     }
 
     _isScanning = true;
@@ -161,21 +167,24 @@ class RelayDiscoveryService {
         }
       }
 
-      // Total: localhost ports + (254 hosts * ports per range)
-      final totalHosts = _ports.length + (ranges.length * 254 * _ports.length);
+      // Total: localhost ports (x2 for both localhost and 127.0.0.1) + (254 hosts * ports per range)
+      final totalHosts = (_ports.length * 2) + (ranges.length * 254 * _ports.length);
       int scannedHosts = 0;
 
       onProgress?.call('Scanning localhost...', scannedHosts, totalHosts, results);
 
-      // Always scan localhost first
-      for (var port in _ports) {
-        if (shouldCancel?.call() == true) break;
-        final result = await _checkGeogramDevice('127.0.0.1', port, timeoutMs);
-        if (result != null) {
-          addResult(result);
-          onProgress?.call('Found: ${result.type} at 127.0.0.1:$port', scannedHosts, totalHosts, results);
+      // Always scan localhost first - try both 'localhost' hostname and '127.0.0.1'
+      // Some systems resolve localhost to IPv6 ::1, so we need to check both
+      for (var host in ['localhost', '127.0.0.1']) {
+        for (var port in _ports) {
+          if (shouldCancel?.call() == true) break;
+          final result = await _checkGeogramDevice(host, port, timeoutMs);
+          if (result != null) {
+            addResult(result);
+            onProgress?.call('Found: ${result.type} at $host:$port', scannedHosts, totalHosts, results);
+          }
+          scannedHosts++;
         }
-        scannedHosts++;
       }
 
       // Scan each network range
@@ -315,8 +324,10 @@ class RelayDiscoveryService {
           final data = jsonDecode(body) as Map<String, dynamic>;
 
           String type = 'unknown';
+          final serviceField = data['service'];
+
           if (body.contains('Geogram Relay') || body.contains('geogram-relay') ||
-              data['service'] == 'Geogram Relay Server') {
+              serviceField == 'Geogram Relay Server') {
             type = 'relay';
           } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop')) {
             type = 'desktop';

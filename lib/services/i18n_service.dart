@@ -82,7 +82,7 @@ class I18nService {
     await _loadLanguage(language);
 
     // Save to config for persistence
-    await ConfigService().setNestedValue('settings.language', language);
+    ConfigService().setNestedValue('settings.language', language);
 
     languageNotifier.value = language;
 

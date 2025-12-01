@@ -624,7 +624,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                           )
                         else
                           Text(
-                            collection.type,
+                            _getCollectionTypeLabel(collection.type),
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                               fontSize: 12,
@@ -647,9 +647,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   String _getDisplayTitle(RemoteCollection collection) {
     final name = collection.name;
-    if (name.toLowerCase() == 'www') {
-      return 'WWW';
+    // Check if name matches a known collection type and translate it
+    final knownTypes = ['chat', 'blog', 'forum', 'contacts', 'events', 'places',
+                        'news', 'www', 'postcards', 'market', 'report', 'groups',
+                        'relay', 'documents', 'photos', 'files'];
+    if (knownTypes.contains(name.toLowerCase())) {
+      return _getCollectionTypeLabel(name.toLowerCase());
     }
+    // Fallback: capitalize first letter
     if (name.isNotEmpty) {
       return name[0].toUpperCase() + name.substring(1);
     }
@@ -668,8 +673,26 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'www': return Icons.language;
       case 'documents': return Icons.description;
       case 'photos': return Icons.photo_library;
+      case 'report': return Icons.assignment;
+      case 'market': return Icons.store;
+      case 'groups': return Icons.group;
+      case 'postcards': return Icons.mail;
       default: return Icons.folder;
     }
+  }
+
+  String _getCollectionTypeLabel(String type) {
+    final key = 'collection_type_$type';
+    final translated = _i18n.t(key);
+    // If translation exists (not returning the key itself), use it
+    if (translated != key) {
+      return translated;
+    }
+    // Fallback: capitalize first letter
+    if (type.isNotEmpty) {
+      return type[0].toUpperCase() + type.substring(1);
+    }
+    return type;
   }
 
   Widget _buildEmptyState(ThemeData theme) {

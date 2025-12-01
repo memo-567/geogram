@@ -80,17 +80,17 @@ class RelayNodeService {
   }
 
   /// Save relay configuration to storage
-  Future<void> _saveRelayConfig() async {
+  void _saveRelayConfig() {
     if (_relayNode != null) {
-      await _configService.set('relayNode', _relayNode!.toJson());
+      _configService.set('relayNode', _relayNode!.toJson());
     } else {
-      await _configService.remove('relayNode');
+      _configService.remove('relayNode');
     }
 
     if (_network != null) {
-      await _configService.set('relayNetwork', _network!.toJson());
+      _configService.set('relayNetwork', _network!.toJson());
     } else {
-      await _configService.remove('relayNetwork');
+      _configService.remove('relayNetwork');
     }
   }
 
@@ -147,7 +147,7 @@ class RelayNodeService {
       updated: now,
     );
 
-    await _saveRelayConfig();
+    _saveRelayConfig();
     await _createRelayDirectories();
 
     LogService().log('Created root relay: $networkName (relay: ${relayKeys.callsign}, operator: $operatorCallsign)');
@@ -196,7 +196,7 @@ class RelayNodeService {
       updated: now,
     );
 
-    await _saveRelayConfig();
+    _saveRelayConfig();
     await _createRelayDirectories();
 
     LogService().log('Joined network as node: $nodeName (relay: ${relayKeys.callsign}, operator: $operatorCallsign)');
@@ -245,7 +245,7 @@ class RelayNodeService {
         _updateStats();
       });
 
-      await _saveRelayConfig();
+      _saveRelayConfig();
       _stateController.add(_relayNode);
 
       LogService().log('Relay started successfully');
@@ -292,7 +292,7 @@ class RelayNodeService {
       );
       _startedAt = null;
 
-      await _saveRelayConfig();
+      _saveRelayConfig();
       _stateController.add(_relayNode);
 
       LogService().log('Relay stopped');
@@ -318,7 +318,7 @@ class RelayNodeService {
       updated: DateTime.now(),
     );
 
-    await _saveRelayConfig();
+    _saveRelayConfig();
     _stateController.add(_relayNode);
 
     LogService().log('Relay config updated');
@@ -341,7 +341,7 @@ class RelayNodeService {
     _relayNode = null;
     _network = null;
 
-    await _saveRelayConfig();
+    _saveRelayConfig();
     _stateController.add(null);
 
     LogService().log('Relay deleted');

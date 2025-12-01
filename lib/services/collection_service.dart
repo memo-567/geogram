@@ -21,33 +21,76 @@ class CollectionService {
   factory CollectionService() => _instance;
   CollectionService._internal();
 
+  Directory? _devicesDir;
   Directory? _collectionsDir;
+  String? _currentCallsign;
   final ConfigService _configService = ConfigService();
 
   /// Get the default collections directory path
   String getDefaultCollectionsPath() {
     if (_collectionsDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
+      throw Exception('CollectionService not initialized. Call init() and setActiveCallsign() first.');
     }
     return _collectionsDir!.path;
   }
 
-  /// Initialize the collection service
+  /// Get the devices directory path (base for all callsign folders)
+  String getDevicesPath() {
+    if (_devicesDir == null) {
+      throw Exception('CollectionService not initialized. Call init() first.');
+    }
+    return _devicesDir!.path;
+  }
+
+  /// Get the current active callsign
+  String? get currentCallsign => _currentCallsign;
+
+  /// Initialize the collection service (basic setup)
   Future<void> init() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      _collectionsDir = Directory('${appDir.path}/geogram/collections');
+      _devicesDir = Directory('${appDir.path}/geogram/devices');
 
-      if (!await _collectionsDir!.exists()) {
-        await _collectionsDir!.create(recursive: true);
+      if (!await _devicesDir!.exists()) {
+        await _devicesDir!.create(recursive: true);
       }
 
       // Use stderr for init logs since LogService might not be ready
-      stderr.writeln('CollectionService initialized: ${_collectionsDir!.path}');
+      stderr.writeln('CollectionService initialized: ${_devicesDir!.path}');
     } catch (e) {
       stderr.writeln('Error initializing CollectionService: $e');
       rethrow;
     }
+  }
+
+  /// Set the active callsign and configure the collections directory
+  /// This should be called after ProfileService is initialized
+  Future<void> setActiveCallsign(String callsign) async {
+    if (_devicesDir == null) {
+      throw Exception('CollectionService not initialized. Call init() first.');
+    }
+
+    // Sanitize callsign for folder name (alphanumeric, underscore, dash)
+    final sanitizedCallsign = _sanitizeCallsign(callsign);
+    _currentCallsign = sanitizedCallsign;
+
+    _collectionsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
+
+    if (!await _collectionsDir!.exists()) {
+      await _collectionsDir!.create(recursive: true);
+    }
+
+    stderr.writeln('CollectionService active callsign: $sanitizedCallsign');
+    stderr.writeln('Collections directory: ${_collectionsDir!.path}');
+  }
+
+  /// Sanitize callsign for use as folder name
+  String _sanitizeCallsign(String callsign) {
+    // Keep only alphanumeric, underscore, and dash characters
+    return callsign
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')  // Collapse multiple underscores
+        .replaceAll(RegExp(r'^_|_$'), ''); // Remove leading/trailing underscores
   }
 
   /// Get the collections directory
@@ -287,7 +330,7 @@ class CollectionService {
       stderr.writeln('Creating collection with ID (npub): $id');
 
       // Store keys in config
-      await _configService.storeCollectionKeys(keys);
+      _configService.storeCollectionKeys(keys);
 
       // Determine folder name based on type
       String folderName;
@@ -838,13 +881,13 @@ ${currentProfile.callsign}
 
     // Remove from favorites if present
     if (collection.isFavorite) {
-      await _configService.toggleFavorite(collection.id);
+      _configService.toggleFavorite(collection.id);
     }
   }
 
   /// Toggle favorite status of a collection
-  Future<void> toggleFavorite(Collection collection) async {
-    await _configService.toggleFavorite(collection.id);
+  void toggleFavorite(Collection collection) {
+    _configService.toggleFavorite(collection.id);
     collection.isFavorite = !collection.isFavorite;
   }
 

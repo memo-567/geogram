@@ -220,171 +220,53 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Profile picture and fields in a row
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Profile Picture and Preferred Color on the left
-                      SizedBox(
-                        width: 160,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                  // Profile picture and fields - responsive layout
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Use vertical layout for narrow screens (< 500px)
+                      final isNarrow = constraints.maxWidth < 500;
+
+                      if (isNarrow) {
+                        // Portrait/mobile layout - stack vertically
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            // Profile Picture
-                            Center(
-                              child: GestureDetector(
-                                onTap: _pickProfileImage,
-                                child: Container(
-                                  width: 100,
-                                  height: 100,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                    image: (_profileImagePath != null && !kIsWeb)
-                                        ? DecorationImage(
-                                            image: FileImage(io.File(_profileImagePath!)),
-                                            fit: BoxFit.cover,
-                                          )
-                                        : null,
-                                  ),
-                                  child: _profileImagePath == null
-                                      ? Icon(
-                                          Icons.person,
-                                          size: 50,
-                                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                        )
-                                      : null,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            OutlinedButton.icon(
-                              onPressed: _pickProfileImage,
-                              icon: const Icon(Icons.upload, size: 16),
-                              label: Text(
-                                _profileImagePath == null ? _i18n.t('upload') : _i18n.t('change'),
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                minimumSize: const Size(0, 0),
-                              ),
-                            ),
-                            if (_profileImagePath != null) ...[
-                              const SizedBox(height: 4),
-                              Center(
-                                child: IconButton(
-                                  icon: const Icon(Icons.delete, size: 20),
-                                  onPressed: _removeProfileImage,
-                                  tooltip: _i18n.t('remove_picture'),
-                                  color: Theme.of(context).colorScheme.error,
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                ),
-                              ),
-                            ],
-
+                            // Profile Picture centered
+                            _buildProfilePictureSection(context),
                             const SizedBox(height: 24),
-
                             // Preferred Color
-                            Text(
-                              _i18n.t('preferred_color'),
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 8),
-                            DropdownButtonFormField<String>(
-                              value: _profile != null && _colorOptions.contains(_profile!.preferredColor.toLowerCase())
-                                  ? _profile!.preferredColor.toLowerCase()
-                                  : 'blue',
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                filled: true,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              ),
-                              items: _colorOptions.map((color) {
-                                return DropdownMenuItem(
-                                  value: color,
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: _getColorFromName(color),
-                                          shape: BoxShape.circle,
-                                          border: Border.all(color: Colors.grey),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _i18n.t(color),
-                                        style: const TextStyle(fontSize: 13),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
-                              onChanged: (value) async {
-                                if (value != null && _profile != null) {
-                                  final updatedProfile = _profile!.copyWith(
-                                    preferredColor: value.toLowerCase(),
-                                  );
-                                  await _profileService.saveProfile(updatedProfile);
-                                  setState(() {
-                                    _profile = updatedProfile;
-                                  });
-                                }
-                              },
-                            ),
+                            _buildPreferredColorSection(context),
+                            const SizedBox(height: 24),
+                            // Form fields
+                            _buildFormFieldsSection(context),
                           ],
-                        ),
-                      ),
-
-                      const SizedBox(width: 24),
-
-                      // Form fields on the right
-                      Expanded(
-                        child: Column(
+                        );
+                      } else {
+                        // Landscape/desktop layout - side by side
+                        return Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Nickname Field
-                            Text(
-                              _i18n.t('nickname'),
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: _nicknameController,
-                              decoration: InputDecoration(
-                                hintText: _i18n.t('enter_your_nickname'),
-                                border: const OutlineInputBorder(),
-                                filled: true,
+                            // Profile Picture and Preferred Color on the left
+                            SizedBox(
+                              width: 160,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildProfilePictureSection(context),
+                                  const SizedBox(height: 24),
+                                  _buildPreferredColorSection(context),
+                                ],
                               ),
-                              maxLength: 50,
                             ),
-
-                            const SizedBox(height: 16),
-
-                            // Description Field
-                            Text(
-                              _i18n.t('description'),
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: _descriptionController,
-                              decoration: InputDecoration(
-                                hintText: _i18n.t('tell_about_yourself'),
-                                border: const OutlineInputBorder(),
-                                filled: true,
-                              ),
-                              maxLines: 4,
-                              maxLength: 200,
+                            const SizedBox(width: 24),
+                            // Form fields on the right
+                            Expanded(
+                              child: _buildFormFieldsSection(context),
                             ),
                           ],
-                        ),
-                      ),
-                    ],
+                        );
+                      }
+                    },
                   ),
 
                   const SizedBox(height: 32),
@@ -533,6 +415,160 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildProfilePictureSection(BuildContext context) {
+    return Column(
+      children: [
+        // Profile Picture
+        Center(
+          child: GestureDetector(
+            onTap: _pickProfileImage,
+            child: Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                image: (_profileImagePath != null && !kIsWeb)
+                    ? DecorationImage(
+                        image: FileImage(io.File(_profileImagePath!)),
+                        fit: BoxFit.cover,
+                      )
+                    : null,
+              ),
+              child: _profileImagePath == null
+                  ? Icon(
+                      Icons.person,
+                      size: 60,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    )
+                  : null,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _pickProfileImage,
+          icon: const Icon(Icons.upload, size: 20),
+          label: Text(
+            _profileImagePath == null ? _i18n.t('upload') : _i18n.t('change'),
+            style: const TextStyle(fontSize: 14),
+          ),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          ),
+        ),
+        if (_profileImagePath != null) ...[
+          const SizedBox(height: 8),
+          TextButton.icon(
+            icon: const Icon(Icons.delete, size: 18),
+            label: Text(_i18n.t('remove_picture')),
+            onPressed: _removeProfileImage,
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPreferredColorSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _i18n.t('preferred_color'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          value: _profile != null && _colorOptions.contains(_profile!.preferredColor.toLowerCase())
+              ? _profile!.preferredColor.toLowerCase()
+              : 'blue',
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            filled: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+          items: _colorOptions.map((color) {
+            return DropdownMenuItem(
+              value: color,
+              child: Row(
+                children: [
+                  Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: _getColorFromName(color),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.grey),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _i18n.t(color),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+          onChanged: (value) async {
+            if (value != null && _profile != null) {
+              final updatedProfile = _profile!.copyWith(
+                preferredColor: value.toLowerCase(),
+              );
+              await _profileService.saveProfile(updatedProfile);
+              setState(() {
+                _profile = updatedProfile;
+              });
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFormFieldsSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Nickname Field
+        Text(
+          _i18n.t('nickname'),
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _nicknameController,
+          decoration: InputDecoration(
+            hintText: _i18n.t('enter_your_nickname'),
+            border: const OutlineInputBorder(),
+            filled: true,
+          ),
+          maxLength: 50,
+        ),
+        const SizedBox(height: 16),
+        // Description Field
+        Text(
+          _i18n.t('description'),
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _descriptionController,
+          decoration: InputDecoration(
+            hintText: _i18n.t('tell_about_yourself'),
+            border: const OutlineInputBorder(),
+            filled: true,
+          ),
+          maxLines: 4,
+          maxLength: 200,
+        ),
+      ],
     );
   }
 

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
+import '../services/collection_service.dart';
 import '../util/nostr_key_generator.dart';
 
 /// Service for managing user profiles (supports multiple callsigns)
@@ -77,7 +78,7 @@ class ProfileService {
         }
       }
       if (profilesUpdated) {
-        await _saveAllProfiles();
+        _saveAllProfiles();
       }
 
       LogService().log('Loaded ${_profiles.length} profiles from config');
@@ -100,7 +101,7 @@ class ProfileService {
       _activeProfileId = legacyProfile.id;
 
       // Migrate to new format
-      await _saveAllProfiles();
+      _saveAllProfiles();
       LogService().log('Migrated legacy profile to multi-profile format');
     } else {
       // Create default profile with identity
@@ -108,7 +109,7 @@ class ProfileService {
       await _generateIdentityForProfile(newProfile);
       _profiles = [newProfile];
       _activeProfileId = newProfile.id;
-      await _saveAllProfiles();
+      _saveAllProfiles();
       LogService().log('Created default profile with new identity');
     }
 
@@ -159,13 +160,13 @@ class ProfileService {
   }
 
   /// Save all profiles to config
-  Future<void> _saveAllProfiles() async {
-    await ConfigService().set('profiles', _profiles.map((p) => p.toJson()).toList());
-    await ConfigService().set('activeProfileId', _activeProfileId);
+  void _saveAllProfiles() {
+    ConfigService().set('profiles', _profiles.map((p) => p.toJson()).toList());
+    ConfigService().set('activeProfileId', _activeProfileId);
 
     // Also maintain legacy 'profile' key for backward compatibility
     final activeProfile = getProfile();
-    await ConfigService().set('profile', activeProfile.toJson());
+    ConfigService().set('profile', activeProfile.toJson());
 
     profileNotifier.value++; // Notify listeners
   }
@@ -178,7 +179,7 @@ class ProfileService {
     } else {
       _profiles.add(profile);
     }
-    await _saveAllProfiles();
+    _saveAllProfiles();
     LogService().log('Profile saved: ${profile.callsign}');
   }
 
@@ -230,8 +231,13 @@ class ProfileService {
     }
     _activeProfileId = profileId;
     activeProfileNotifier.value = profileId;
-    await _saveAllProfiles();
-    LogService().log('Switched to profile: ${getProfile().callsign}');
+    _saveAllProfiles();
+
+    // Update CollectionService to use the new profile's storage path
+    final newProfile = getProfile();
+    await CollectionService().setActiveCallsign(newProfile.callsign);
+
+    LogService().log('Switched to profile: ${newProfile.callsign}');
   }
 
   /// Create a new profile with generated identity
@@ -239,7 +245,7 @@ class ProfileService {
     final newProfile = Profile(nickname: nickname ?? '');
     await _generateIdentityForProfile(newProfile);
     _profiles.add(newProfile);
-    await _saveAllProfiles();
+    _saveAllProfiles();
     LogService().log('Created new profile: ${newProfile.callsign}');
     return newProfile;
   }
@@ -264,7 +270,7 @@ class ProfileService {
       activeProfileNotifier.value = _activeProfileId;
     }
 
-    await _saveAllProfiles();
+    _saveAllProfiles();
     LogService().log('Deleted profile: ${deletedProfile.callsign}');
     return true;
   }

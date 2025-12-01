@@ -115,24 +115,42 @@ class _RelaysPageState extends State<RelaysPage> {
 
     if (result != null) {
       try {
+        // Auto-set as preferred if this is the first relay
+        final existingRelays = _relayService.getAllRelays();
+        final isFirstRelay = existingRelays.isEmpty;
+
         final relay = Relay(
           url: result['url']!,
           name: result['name']!,
-          status: 'available',
+          callsign: result['callsign'],
+          description: result['description'],
+          status: isFirstRelay ? 'preferred' : 'available',
           location: result['location'],
           latitude: result['latitude'] != null ? double.tryParse(result['latitude']!) : null,
           longitude: result['longitude'] != null ? double.tryParse(result['longitude']!) : null,
         );
 
-        await _relayService.addRelay(relay);
+        final added = await _relayService.addRelay(relay);
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('added_relay', params: [relay.name]))),
-          );
+          if (added) {
+            final message = isFirstRelay
+                ? 'Added ${relay.name} as preferred relay'
+                : _i18n.t('added_relay', params: [relay.name]);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(message)),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Relay already exists: ${relay.name}'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
         }
 
-        _loadRelays();
+        await _loadRelays();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -651,11 +669,23 @@ class _RelayCard extends StatelessWidget {
                               fontWeight: FontWeight.bold,
                             ),
                       ),
+                      if (relay.description != null && relay.description!.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          relay.description!,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                       const SizedBox(height: 2),
                       Text(
                         relay.url,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(context).colorScheme.outline,
+                              fontSize: 11,
                             ),
                       ),
                       if (relay.location != null) ...[
@@ -862,7 +892,7 @@ class _RelayCard extends StatelessWidget {
   }
 }
 
-// Add Relay Dialog
+// Add Relay Dialog - simplified to just IP:port input
 class _AddRelayDialog extends StatefulWidget {
   const _AddRelayDialog();
 
@@ -871,178 +901,241 @@ class _AddRelayDialog extends StatefulWidget {
 }
 
 class _AddRelayDialogState extends State<_AddRelayDialog> {
-  final _nameController = TextEditingController();
-  final _urlController = TextEditingController();
-  final _locationController = TextEditingController();
-  final _latitudeController = TextEditingController();
-  final _longitudeController = TextEditingController();
+  final _addressController = TextEditingController();
+  bool _isConnecting = false;
+  String? _statusMessage;
+  bool _isError = false;
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _urlController.dispose();
-    _locationController.dispose();
-    _latitudeController.dispose();
-    _longitudeController.dispose();
+    _addressController.dispose();
     super.dispose();
   }
 
-  void _add() {
-    final name = _nameController.text.trim();
-    final url = _urlController.text.trim();
-    final location = _locationController.text.trim();
-    final latText = _latitudeController.text.trim();
-    final lonText = _longitudeController.text.trim();
+  Future<void> _connect() async {
+    final address = _addressController.text.trim();
 
-    if (name.isEmpty || url.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in name and URL')),
-      );
+    if (address.isEmpty) {
+      setState(() {
+        _statusMessage = 'Please enter an address';
+        _isError = true;
+      });
       return;
     }
 
-    if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('URL must start with wss:// or ws://')),
-      );
+    // Parse address - support formats: host:port, host (default port 80)
+    String host;
+    int port;
+
+    // Remove any protocol prefix if user accidentally added it
+    String cleanAddress = address
+        .replaceAll('wss://', '')
+        .replaceAll('ws://', '')
+        .replaceAll('https://', '')
+        .replaceAll('http://', '');
+
+    // Remove trailing slash
+    if (cleanAddress.endsWith('/')) {
+      cleanAddress = cleanAddress.substring(0, cleanAddress.length - 1);
+    }
+
+    if (cleanAddress.contains(':')) {
+      final parts = cleanAddress.split(':');
+      host = parts[0];
+      port = int.tryParse(parts[1]) ?? 80;
+    } else {
+      host = cleanAddress;
+      port = 80;
+    }
+
+    if (host.isEmpty) {
+      setState(() {
+        _statusMessage = 'Invalid address format';
+        _isError = true;
+      });
       return;
     }
 
-    final result = <String, String>{
-      'name': name,
-      'url': url,
-    };
+    setState(() {
+      _isConnecting = true;
+      _statusMessage = 'Connecting to $host:$port...';
+      _isError = false;
+    });
 
-    if (location.isNotEmpty) {
-      result['location'] = location;
-    }
+    try {
+      // Try to fetch relay info from API first
+      Map<String, dynamic>? relayInfo;
+      String? workingProtocol;
 
-    if (latText.isNotEmpty && lonText.isNotEmpty) {
-      final lat = double.tryParse(latText);
-      final lon = double.tryParse(lonText);
+      // Try HTTPS first, then HTTP
+      for (final protocol in ['https', 'http']) {
+        try {
+          setState(() {
+            _statusMessage = 'Trying $protocol://$host:$port...';
+          });
 
-      if (lat == null || lon == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid coordinates. Use decimal format.')),
-        );
+          final response = await http.get(
+            Uri.parse('$protocol://$host:$port/api/status'),
+          ).timeout(const Duration(seconds: 5));
+
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            if (data['service'] == 'Geogram Relay Server') {
+              relayInfo = data;
+              workingProtocol = protocol == 'https' ? 'wss' : 'ws';
+              break;
+            }
+          }
+        } catch (_) {
+          // Try next protocol
+        }
+      }
+
+      if (relayInfo == null) {
+        setState(() {
+          _statusMessage = 'Could not connect to relay at $host:$port';
+          _isError = true;
+          _isConnecting = false;
+        });
         return;
       }
 
-      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Coordinates out of range')),
-        );
-        return;
+      // Extract relay details from API response
+      final name = relayInfo['name'] as String? ??
+                   relayInfo['callsign'] as String? ??
+                   '$host:$port';
+      final callsign = relayInfo['callsign'] as String?;
+      final description = relayInfo['description'] as String?;
+      final location = relayInfo['location'] as Map<String, dynamic>?;
+
+      String? locationStr;
+      double? latitude;
+      double? longitude;
+
+      if (location != null) {
+        final city = location['city'] as String?;
+        final country = location['country'] as String?;
+        if (city != null && country != null) {
+          locationStr = '$city, $country';
+        } else if (city != null) {
+          locationStr = city;
+        } else if (country != null) {
+          locationStr = country;
+        }
+        latitude = (location['latitude'] as num?)?.toDouble();
+        longitude = (location['longitude'] as num?)?.toDouble();
       }
 
-      result['latitude'] = latText;
-      result['longitude'] = lonText;
-    }
+      setState(() {
+        _statusMessage = 'Connected! Found relay: $name';
+        _isError = false;
+      });
 
-    Navigator.pop(context, result);
+      // Wait a moment to show success message
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (!mounted) return;
+
+      // Return the relay info
+      Navigator.pop(context, {
+        'name': name,
+        'url': '$workingProtocol://$host:$port',
+        if (callsign != null) 'callsign': callsign,
+        if (locationStr != null) 'location': locationStr,
+        if (latitude != null) 'latitude': latitude.toString(),
+        if (longitude != null) 'longitude': longitude.toString(),
+        if (description != null) 'description': description,
+      });
+
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Connection failed: $e';
+        _isError = true;
+        _isConnecting = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return AlertDialog(
-      title: const Text('Add Custom Relay'),
-      content: SingleChildScrollView(
-        child: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Relay Name *',
-                  hintText: 'e.g., My Custom Relay',
-                  border: OutlineInputBorder(),
-                ),
-                autofocus: true,
-                textInputAction: TextInputAction.next,
+      title: const Text('Add Relay'),
+      content: SizedBox(
+        width: 350,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _addressController,
+              decoration: const InputDecoration(
+                labelText: 'Relay Address',
+                hintText: 'e.g., 127.0.0.1:8080 or relay.example.com',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.dns),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _urlController,
-                decoration: const InputDecoration(
-                  labelText: 'Relay URL *',
-                  hintText: 'wss://relay.example.com',
-                  border: OutlineInputBorder(),
-                ),
-                textInputAction: TextInputAction.next,
+              autofocus: true,
+              enabled: !_isConnecting,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _connect(),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Enter IP:port or hostname:port',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
-              Text(
-                'Optional Location Information',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _locationController,
-                decoration: const InputDecoration(
-                  labelText: 'Location',
-                  hintText: 'e.g., Tokyo, Japan',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.location_on),
-                ),
-                textInputAction: TextInputAction.next,
-              ),
+            ),
+            if (_statusMessage != null) ...[
               const SizedBox(height: 16),
               Row(
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _latitudeController,
-                      decoration: const InputDecoration(
-                        labelText: 'Latitude',
-                        hintText: '35.6762',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                      textInputAction: TextInputAction.next,
+                  if (_isConnecting)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(
+                      _isError ? Icons.error : Icons.check_circle,
+                      size: 16,
+                      color: _isError ? Colors.red : Colors.green,
                     ),
-                  ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: TextField(
-                      controller: _longitudeController,
-                      decoration: const InputDecoration(
-                        labelText: 'Longitude',
-                        hintText: '139.6503',
-                        border: OutlineInputBorder(),
+                    child: Text(
+                      _statusMessage!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: _isError ? Colors.red : Colors.green,
                       ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _add(),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                '* Required fields',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
             ],
-          ),
+          ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _isConnecting ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _add,
-          child: const Text('Add'),
+          onPressed: _isConnecting ? null : _connect,
+          child: _isConnecting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Connect'),
         ),
       ],
     );
@@ -1092,7 +1185,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
         }
       },
       shouldCancel: () => _stopRequested,
-      timeoutMs: 500,
+      timeoutMs: 1500, // Increased timeout for reliability
     );
 
     if (mounted) {
@@ -1118,33 +1211,31 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
 
   Future<void> _addRelay(NetworkScanResult result) async {
     try {
-      final existingRelays = widget.relayService.getAllRelays();
-      final alreadyExists = existingRelays.any((r) => r.url == result.wsUrl);
+      // Build a good name: prefer callsign, then name, then description
+      String relayName;
+      if (result.callsign != null && result.callsign!.isNotEmpty) {
+        relayName = result.callsign!;
+      } else if (result.name != null && result.name!.isNotEmpty) {
+        relayName = result.name!;
+      } else if (result.description != null && result.description!.isNotEmpty) {
+        relayName = result.description!;
+      } else {
+        relayName = 'Relay at ${result.ip}';
+      }
 
-      if (!alreadyExists) {
-        // Build a good name: prefer callsign, then name, then description
-        String relayName;
-        if (result.callsign != null && result.callsign!.isNotEmpty) {
-          relayName = result.callsign!;
-        } else if (result.name != null && result.name!.isNotEmpty) {
-          relayName = result.name!;
-        } else if (result.description != null && result.description!.isNotEmpty) {
-          relayName = result.description!;
-        } else {
-          relayName = 'Relay at ${result.ip}';
-        }
+      final relay = Relay(
+        url: result.wsUrl,
+        name: relayName,
+        callsign: result.callsign,
+        status: 'available',
+        location: result.location,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        connectedDevices: result.connectedDevices,
+      );
 
-        final relay = Relay(
-          url: result.wsUrl,
-          name: relayName,
-          status: 'available',
-          location: result.location,
-          latitude: result.latitude,
-          longitude: result.longitude,
-          connectedDevices: result.connectedDevices,
-        );
-
-        await widget.relayService.addRelay(relay);
+      final added = await widget.relayService.addRelay(relay);
+      if (added) {
         LogService().log('Added relay from scan: ${relay.name}');
       }
     } catch (e) {

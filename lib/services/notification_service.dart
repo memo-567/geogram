@@ -35,15 +35,15 @@ class NotificationService {
     } else {
       // Create default settings
       _settings = NotificationSettings();
-      await _saveSettings();
+      _saveSettings();
       LogService().log('Created default notification settings');
     }
   }
 
   /// Save settings to config.json
-  Future<void> _saveSettings() async {
+  void _saveSettings() {
     if (_settings != null) {
-      await ConfigService().set('notifications', _settings!.toJson());
+      ConfigService().set('notifications', _settings!.toJson());
       LogService().log('Saved notification settings to config');
     }
   }
@@ -59,14 +59,14 @@ class NotificationService {
   /// Update settings
   Future<void> updateSettings(NotificationSettings settings) async {
     _settings = settings;
-    await _saveSettings();
+    _saveSettings();
   }
 
   /// Update master enable/disable
   Future<void> setEnabled(bool enabled) async {
     if (_settings != null) {
       _settings = _settings!.copyWith(enableNotifications: enabled);
-      await _saveSettings();
+      _saveSettings();
     }
   }
 
@@ -86,7 +86,7 @@ class NotificationService {
         notifyRelayStatus: relayStatus,
         notifySystemAlerts: systemAlerts,
       );
-      await _saveSettings();
+      _saveSettings();
     }
   }
 
@@ -97,7 +97,7 @@ class NotificationService {
         soundEnabled: sound,
         vibrationEnabled: vibration,
       );
-      await _saveSettings();
+      _saveSettings();
     }
   }
 }

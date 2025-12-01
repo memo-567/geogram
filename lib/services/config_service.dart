@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -14,6 +15,11 @@ class ConfigService {
   File? _configFile;
   Map<String, dynamic> _config = {};
   static const String _webStorageKey = 'geogram_config';
+
+  /// Debounce timer for save operations
+  Timer? _saveDebounceTimer;
+  bool _pendingSave = false;
+  static const Duration _saveDebounceDuration = Duration(milliseconds: 500);
 
   /// Initialize the config service and load existing configuration
   Future<void> init() async {
@@ -39,7 +45,7 @@ class ConfigService {
       await _load();
     } else {
       _createDefaultConfig();
-      await _save();
+      await _saveImmediate();
     }
   }
 
@@ -52,11 +58,11 @@ class ConfigService {
       } catch (e) {
         print('Error loading web config: $e');
         _createDefaultConfig();
-        await _save();
+        await _saveImmediate();
       }
     } else {
       _createDefaultConfig();
-      await _save();
+      await _saveImmediate();
     }
   }
 
@@ -86,8 +92,19 @@ class ConfigService {
     }
   }
 
-  /// Save configuration to storage
-  Future<void> _save() async {
+  /// Save configuration to storage (debounced to prevent too many file operations)
+  void _save() {
+    // Cancel any pending save and schedule a new one
+    _saveDebounceTimer?.cancel();
+    _pendingSave = true;
+    _saveDebounceTimer = Timer(_saveDebounceDuration, () {
+      _saveImmediate();
+    });
+  }
+
+  /// Save configuration immediately (used for initial save and when needed)
+  Future<void> _saveImmediate() async {
+    _pendingSave = false;
     if (kIsWeb) {
       try {
         final contents = JsonEncoder.withIndent('  ').convert(_config);
@@ -111,15 +128,15 @@ class ConfigService {
   }
 
   /// Set a configuration value
-  Future<void> set(String key, dynamic value) async {
+  void set(String key, dynamic value) {
     _config[key] = value;
-    await _save();
+    _save();
   }
 
   /// Remove a configuration value
-  Future<void> remove(String key) async {
+  void remove(String key) {
     _config.remove(key);
-    await _save();
+    _save();
   }
 
   /// Get nested configuration value using dot notation
@@ -139,7 +156,7 @@ class ConfigService {
   }
 
   /// Set nested configuration value using dot notation
-  Future<void> setNestedValue(String path, dynamic value) async {
+  void setNestedValue(String path, dynamic value) {
     final keys = path.split('.');
     Map<String, dynamic> current = _config;
 
@@ -152,7 +169,7 @@ class ConfigService {
     }
 
     current[keys.last] = value;
-    await _save();
+    _save();
   }
 
   /// Check if a collection is favorited
@@ -162,7 +179,7 @@ class ConfigService {
   }
 
   /// Toggle favorite status of a collection
-  Future<void> toggleFavorite(String collectionId) async {
+  void toggleFavorite(String collectionId) {
     final favorites = List<String>.from(
       getNestedValue('collections.favorites', <String>[]) as List
     );
@@ -173,7 +190,7 @@ class ConfigService {
       favorites.add(collectionId);
     }
 
-    await setNestedValue('collections.favorites', favorites);
+    setNestedValue('collections.favorites', favorites);
   }
 
   /// Get the full configuration map
@@ -182,7 +199,7 @@ class ConfigService {
   }
 
   /// Store collection npub/nsec key pair
-  Future<void> storeCollectionKeys(NostrKeys keys) async {
+  void storeCollectionKeys(NostrKeys keys) {
     // Ensure collectionKeys section exists
     if (!_config.containsKey('collectionKeys')) {
       _config['collectionKeys'] = <String, dynamic>{};
@@ -191,7 +208,7 @@ class ConfigService {
     final collectionKeys = _config['collectionKeys'] as Map<String, dynamic>;
     collectionKeys[keys.npub] = keys.toJson();
 
-    await _save();
+    _save();
     stderr.writeln('Stored keys for collection: ${keys.npub}');
   }
 
