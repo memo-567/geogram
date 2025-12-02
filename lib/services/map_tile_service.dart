@@ -633,7 +633,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
       final cachePath = _getTileCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        final cachedBytes = await cacheFile.readAsBytes();
+        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
         if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           // Cache hit with valid image - try to decode
           try {
@@ -940,7 +940,7 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
       final cachePath = _getLabelsCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        final cachedBytes = await cacheFile.readAsBytes();
+        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
         if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
             final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
@@ -1141,7 +1141,7 @@ class GeogramTransportLabelsImageProvider extends ImageProvider<GeogramTransport
       final cachePath = _getTransportCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        final cachedBytes = await cacheFile.readAsBytes();
+        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
         if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
             final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
@@ -1301,7 +1301,7 @@ class GeogramBordersImageProvider extends ImageProvider<GeogramBordersImageProvi
       final cachePath = _getBordersCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
-        final cachedBytes = await cacheFile.readAsBytes();
+        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
         if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
           try {
             final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
