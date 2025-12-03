@@ -1,0 +1,1508 @@
+// Pure Dart relay server for CLI mode (no Flutter dependencies)
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
+
+/// App version constant
+const String cliAppVersion = '1.4.1';
+
+/// Relay server settings
+class PureRelaySettings {
+  int port;
+  bool enabled;
+  bool tileServerEnabled;
+  bool osmFallbackEnabled;
+  int maxZoomLevel;
+  int maxCacheSize; // in MB
+  String? description;
+  String? location;
+  double? latitude;
+  double? longitude;
+  String callsign;
+  bool enableAprs;
+  bool enableCors;
+  int httpRequestTimeout;
+  int maxConnectedDevices;
+
+  // Relay role configuration
+  String relayRole; // 'root' or 'node'
+  String? networkId;
+  String? parentRelayUrl; // For node relays
+
+  // Setup flag
+  bool setupComplete;
+
+  // SSL/TLS configuration
+  bool enableSsl;
+  String? sslDomain;
+  String? sslEmail;
+  bool sslAutoRenew;
+  String? sslCertPath;
+  String? sslKeyPath;
+  int sslPort;
+
+  PureRelaySettings({
+    this.port = 8080,
+    this.enabled = false,
+    this.tileServerEnabled = true,
+    this.osmFallbackEnabled = true,
+    this.maxZoomLevel = 15,
+    this.maxCacheSize = 500,
+    this.description,
+    this.location,
+    this.latitude,
+    this.longitude,
+    this.callsign = 'X3DESK',
+    this.enableAprs = false,
+    this.enableCors = true,
+    this.httpRequestTimeout = 30000,
+    this.maxConnectedDevices = 100,
+    this.relayRole = '',
+    this.networkId,
+    this.parentRelayUrl,
+    this.setupComplete = false,
+    this.enableSsl = false,
+    this.sslDomain,
+    this.sslEmail,
+    this.sslAutoRenew = true,
+    this.sslCertPath,
+    this.sslKeyPath,
+    this.sslPort = 8443,
+  });
+
+  factory PureRelaySettings.fromJson(Map<String, dynamic> json) {
+    return PureRelaySettings(
+      port: json['port'] as int? ?? 8080,
+      enabled: json['enabled'] as bool? ?? false,
+      tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
+      osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
+      maxZoomLevel: json['maxZoomLevel'] as int? ?? 15,
+      maxCacheSize: json['maxCacheSize'] as int? ?? 500,
+      description: json['description'] as String?,
+      location: json['location'] as String?,
+      latitude: json['latitude'] as double?,
+      longitude: json['longitude'] as double?,
+      callsign: json['callsign'] as String? ?? 'X3DESK',
+      enableAprs: json['enableAprs'] as bool? ?? false,
+      enableCors: json['enableCors'] as bool? ?? true,
+      httpRequestTimeout: json['httpRequestTimeout'] as int? ?? 30000,
+      maxConnectedDevices: json['maxConnectedDevices'] as int? ?? 100,
+      relayRole: json['relayRole'] as String? ?? '',
+      networkId: json['networkId'] as String?,
+      parentRelayUrl: json['parentRelayUrl'] as String?,
+      setupComplete: json['setupComplete'] as bool? ?? false,
+      enableSsl: json['enableSsl'] as bool? ?? false,
+      sslDomain: json['sslDomain'] as String?,
+      sslEmail: json['sslEmail'] as String?,
+      sslAutoRenew: json['sslAutoRenew'] as bool? ?? true,
+      sslCertPath: json['sslCertPath'] as String?,
+      sslKeyPath: json['sslKeyPath'] as String?,
+      sslPort: json['sslPort'] as int? ?? 8443,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'port': port,
+        'enabled': enabled,
+        'tileServerEnabled': tileServerEnabled,
+        'osmFallbackEnabled': osmFallbackEnabled,
+        'maxZoomLevel': maxZoomLevel,
+        'maxCacheSize': maxCacheSize,
+        'description': description,
+        'location': location,
+        'latitude': latitude,
+        'longitude': longitude,
+        'callsign': callsign,
+        'enableAprs': enableAprs,
+        'enableCors': enableCors,
+        'httpRequestTimeout': httpRequestTimeout,
+        'maxConnectedDevices': maxConnectedDevices,
+        'relayRole': relayRole,
+        'networkId': networkId,
+        'parentRelayUrl': parentRelayUrl,
+        'setupComplete': setupComplete,
+        'enableSsl': enableSsl,
+        'sslDomain': sslDomain,
+        'sslEmail': sslEmail,
+        'sslAutoRenew': sslAutoRenew,
+        'sslCertPath': sslCertPath,
+        'sslKeyPath': sslKeyPath,
+        'sslPort': sslPort,
+      };
+
+  PureRelaySettings copyWith({
+    int? port,
+    bool? enabled,
+    bool? tileServerEnabled,
+    bool? osmFallbackEnabled,
+    int? maxZoomLevel,
+    int? maxCacheSize,
+    String? description,
+    String? location,
+    double? latitude,
+    double? longitude,
+    String? callsign,
+    bool? enableAprs,
+    bool? enableCors,
+    int? httpRequestTimeout,
+    int? maxConnectedDevices,
+    String? relayRole,
+    String? networkId,
+    String? parentRelayUrl,
+    bool? setupComplete,
+    bool? enableSsl,
+    String? sslDomain,
+    String? sslEmail,
+    bool? sslAutoRenew,
+    String? sslCertPath,
+    String? sslKeyPath,
+    int? sslPort,
+  }) {
+    return PureRelaySettings(
+      port: port ?? this.port,
+      enabled: enabled ?? this.enabled,
+      tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
+      osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,
+      maxZoomLevel: maxZoomLevel ?? this.maxZoomLevel,
+      maxCacheSize: maxCacheSize ?? this.maxCacheSize,
+      description: description ?? this.description,
+      location: location ?? this.location,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      callsign: callsign ?? this.callsign,
+      enableAprs: enableAprs ?? this.enableAprs,
+      enableCors: enableCors ?? this.enableCors,
+      httpRequestTimeout: httpRequestTimeout ?? this.httpRequestTimeout,
+      maxConnectedDevices: maxConnectedDevices ?? this.maxConnectedDevices,
+      relayRole: relayRole ?? this.relayRole,
+      networkId: networkId ?? this.networkId,
+      parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
+      setupComplete: setupComplete ?? this.setupComplete,
+      enableSsl: enableSsl ?? this.enableSsl,
+      sslDomain: sslDomain ?? this.sslDomain,
+      sslEmail: sslEmail ?? this.sslEmail,
+      sslAutoRenew: sslAutoRenew ?? this.sslAutoRenew,
+      sslCertPath: sslCertPath ?? this.sslCertPath,
+      sslKeyPath: sslKeyPath ?? this.sslKeyPath,
+      sslPort: sslPort ?? this.sslPort,
+    );
+  }
+
+  /// Check if setup needs to be run
+  bool needsSetup() {
+    return !setupComplete || callsign.isEmpty || relayRole.isEmpty;
+  }
+}
+
+/// Log entry for CLI log history
+class LogEntry {
+  final DateTime timestamp;
+  final String level;
+  final String message;
+
+  LogEntry(this.timestamp, this.level, this.message);
+
+  @override
+  String toString() =>
+      '[${timestamp.toIso8601String()}] [$level] $message';
+}
+
+/// Chat room
+class ChatRoom {
+  final String id;
+  String name;
+  String description;
+  final String creatorCallsign;
+  final DateTime createdAt;
+  DateTime lastActivity;
+  final List<ChatMessage> messages = [];
+  bool isPublic;
+
+  ChatRoom({
+    required this.id,
+    required this.name,
+    this.description = '',
+    required this.creatorCallsign,
+    DateTime? createdAt,
+    this.isPublic = true,
+  })  : createdAt = createdAt ?? DateTime.now(),
+        lastActivity = createdAt ?? DateTime.now();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'description': description,
+        'creator': creatorCallsign,
+        'created_at': createdAt.toIso8601String(),
+        'last_activity': lastActivity.toIso8601String(),
+        'message_count': messages.length,
+        'is_public': isPublic,
+      };
+}
+
+/// Chat message
+class ChatMessage {
+  final String id;
+  final String roomId;
+  final String senderCallsign;
+  final String content;
+  final DateTime timestamp;
+
+  ChatMessage({
+    required this.id,
+    required this.roomId,
+    required this.senderCallsign,
+    required this.content,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'room_id': roomId,
+        'sender': senderCallsign,
+        'content': content,
+        'timestamp': timestamp.toIso8601String(),
+      };
+}
+
+/// Connected WebSocket client
+class PureConnectedClient {
+  final WebSocket socket;
+  final String id;
+  String? callsign;
+  String? deviceType;
+  String? version;
+  String? address;
+  DateTime connectedAt;
+  DateTime lastActivity;
+
+  PureConnectedClient({
+    required this.socket,
+    required this.id,
+    this.callsign,
+    this.deviceType,
+    this.version,
+    this.address,
+  })  : connectedAt = DateTime.now(),
+        lastActivity = DateTime.now();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'callsign': callsign ?? 'Unknown',
+        'device_type': deviceType ?? 'Unknown',
+        'version': version,
+        'address': address,
+        'connected_at': connectedAt.toIso8601String(),
+        'last_activity': lastActivity.toIso8601String(),
+      };
+}
+
+/// Server statistics
+class ServerStats {
+  int totalConnections = 0;
+  int totalMessages = 0;
+  int totalTileRequests = 0;
+  int totalApiRequests = 0;
+  int tilesCached = 0;
+  int tilesServedFromCache = 0;
+  int tilesDownloaded = 0;
+  DateTime? lastConnection;
+  DateTime? lastMessage;
+  DateTime? lastTileRequest;
+
+  Map<String, dynamic> toJson() => {
+        'total_connections': totalConnections,
+        'total_messages': totalMessages,
+        'total_tile_requests': totalTileRequests,
+        'total_api_requests': totalApiRequests,
+        'tiles_cached': tilesCached,
+        'tiles_served_from_cache': tilesServedFromCache,
+        'tiles_downloaded': tilesDownloaded,
+        'last_connection': lastConnection?.toIso8601String(),
+        'last_message': lastMessage?.toIso8601String(),
+        'last_tile_request': lastTileRequest?.toIso8601String(),
+      };
+}
+
+/// Tile cache for relay server
+class PureTileCache {
+  final Map<String, Uint8List> _cache = {};
+  final Map<String, DateTime> _timestamps = {};
+  int _currentSize = 0;
+  final int maxSizeBytes;
+
+  PureTileCache({int maxSizeMB = 500}) : maxSizeBytes = maxSizeMB * 1024 * 1024;
+
+  Uint8List? get(String key) {
+    final data = _cache[key];
+    if (data != null) {
+      _timestamps[key] = DateTime.now();
+    }
+    return data;
+  }
+
+  void put(String key, Uint8List data) {
+    if (_cache.containsKey(key)) {
+      _currentSize -= _cache[key]!.length;
+    }
+
+    while (_currentSize + data.length > maxSizeBytes && _cache.isNotEmpty) {
+      _evictOldest();
+    }
+
+    _cache[key] = data;
+    _timestamps[key] = DateTime.now();
+    _currentSize += data.length;
+  }
+
+  void _evictOldest() {
+    if (_timestamps.isEmpty) return;
+
+    String? oldestKey;
+    DateTime? oldestTime;
+
+    for (final entry in _timestamps.entries) {
+      if (oldestTime == null || entry.value.isBefore(oldestTime)) {
+        oldestTime = entry.value;
+        oldestKey = entry.key;
+      }
+    }
+
+    if (oldestKey != null && _cache.containsKey(oldestKey)) {
+      _currentSize -= _cache[oldestKey]!.length;
+      _cache.remove(oldestKey);
+      _timestamps.remove(oldestKey);
+    }
+  }
+
+  int get size => _cache.length;
+  int get sizeBytes => _currentSize;
+
+  void clear() {
+    _cache.clear();
+    _timestamps.clear();
+    _currentSize = 0;
+  }
+
+  static bool isValidImageData(Uint8List data) {
+    if (data.length < 8) return false;
+    return data[0] == 0x89 &&
+        data[1] == 0x50 &&
+        data[2] == 0x4E &&
+        data[3] == 0x47;
+  }
+}
+
+/// Pure Dart relay server for CLI mode
+class PureRelayServer {
+  HttpServer? _httpServer;
+  PureRelaySettings _settings = PureRelaySettings();
+  final Map<String, PureConnectedClient> _clients = {};
+  final PureTileCache _tileCache = PureTileCache();
+  final Map<String, ChatRoom> _chatRooms = {};
+  final List<LogEntry> _logs = [];
+  final ServerStats _stats = ServerStats();
+  bool _running = false;
+  bool _quietMode = false;
+  DateTime? _startTime;
+  String? _tilesDirectory;
+  String? _configPath;
+  String? _dataDir;
+
+  static const int maxLogEntries = 1000;
+
+  bool get isRunning => _running;
+  int get connectedDevices => _clients.length;
+  PureRelaySettings get settings => _settings;
+  DateTime? get startTime => _startTime;
+  List<LogEntry> get logs => List.unmodifiable(_logs);
+  ServerStats get stats => _stats;
+  Map<String, PureConnectedClient> get clients => Map.unmodifiable(_clients);
+  Map<String, ChatRoom> get chatRooms => Map.unmodifiable(_chatRooms);
+  bool get quietMode => _quietMode;
+  set quietMode(bool value) => _quietMode = value;
+  String? get dataDir => _dataDir;
+
+  /// Initialize relay server
+  Future<void> initialize() async {
+    final homeDir = Platform.environment['HOME'] ?? '/tmp';
+    _dataDir = '$homeDir/.geogram-desktop';
+    _configPath = '$_dataDir/relay_config.json';
+    _tilesDirectory = '$_dataDir/tiles';
+
+    await Directory(_dataDir!).create(recursive: true);
+    await Directory(_tilesDirectory!).create(recursive: true);
+
+    await _loadSettings();
+
+    // Create default chat room
+    _chatRooms['general'] = ChatRoom(
+      id: 'general',
+      name: 'General',
+      description: 'General discussion',
+      creatorCallsign: _settings.callsign,
+    );
+
+    _log('INFO', 'Pure Relay Server initialized');
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final configFile = File(_configPath!);
+      if (await configFile.exists()) {
+        final content = await configFile.readAsString();
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        _settings = PureRelaySettings.fromJson(json);
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to load settings: $e');
+    }
+  }
+
+  Future<void> saveSettings() async {
+    try {
+      final configFile = File(_configPath!);
+      await configFile.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(_settings.toJson()),
+      );
+      _log('INFO', 'Settings saved');
+    } catch (e) {
+      _log('ERROR', 'Failed to save settings: $e');
+    }
+  }
+
+  Future<void> reloadSettings() async {
+    await _loadSettings();
+    _log('INFO', 'Settings reloaded');
+  }
+
+  Future<void> updateSettings(PureRelaySettings settings) async {
+    final wasRunning = _running;
+    final oldPort = _settings.port;
+
+    _settings = settings;
+    await saveSettings();
+
+    if (wasRunning && oldPort != settings.port) {
+      await stop();
+      await start();
+    }
+  }
+
+  void setSetting(String key, dynamic value) {
+    switch (key) {
+      case 'port':
+        _settings = _settings.copyWith(port: value as int);
+        break;
+      case 'callsign':
+        _settings = _settings.copyWith(callsign: value as String);
+        break;
+      case 'description':
+        _settings = _settings.copyWith(description: value as String);
+        break;
+      case 'location':
+        _settings = _settings.copyWith(location: value as String);
+        break;
+      case 'tileServerEnabled':
+        _settings = _settings.copyWith(tileServerEnabled: value as bool);
+        break;
+      case 'osmFallbackEnabled':
+        _settings = _settings.copyWith(osmFallbackEnabled: value as bool);
+        break;
+      case 'maxZoomLevel':
+        _settings = _settings.copyWith(maxZoomLevel: value as int);
+        break;
+      case 'maxCacheSize':
+        _settings = _settings.copyWith(maxCacheSize: value as int);
+        break;
+      case 'enableAprs':
+        _settings = _settings.copyWith(enableAprs: value as bool);
+        break;
+      case 'enableCors':
+        _settings = _settings.copyWith(enableCors: value as bool);
+        break;
+      case 'maxConnectedDevices':
+        _settings = _settings.copyWith(maxConnectedDevices: value as int);
+        break;
+      default:
+        throw ArgumentError('Unknown setting: $key');
+    }
+  }
+
+  Future<bool> start() async {
+    if (_running) {
+      _log('WARN', 'Relay server already running');
+      return true;
+    }
+
+    try {
+      _httpServer = await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        _settings.port,
+        shared: true,
+      );
+
+      _running = true;
+      _startTime = DateTime.now();
+
+      _log('INFO', 'Relay server started on port ${_settings.port}');
+
+      _httpServer!.listen(_handleRequest, onError: (error) {
+        _log('ERROR', 'Server error: $error');
+      });
+
+      return true;
+    } catch (e) {
+      _log('ERROR', 'Failed to start relay server: $e');
+      return false;
+    }
+  }
+
+  Future<void> stop() async {
+    if (!_running) return;
+
+    for (final client in _clients.values) {
+      await client.socket.close();
+    }
+    _clients.clear();
+
+    await _httpServer?.close(force: true);
+    _httpServer = null;
+    _running = false;
+    _startTime = null;
+
+    _log('INFO', 'Relay server stopped');
+  }
+
+  Future<void> restart() async {
+    _log('INFO', 'Restarting relay server...');
+    await stop();
+    await Future.delayed(const Duration(milliseconds: 500));
+    await start();
+  }
+
+  /// Kick a device by callsign
+  bool kickDevice(String callsign) {
+    final clientEntry = _clients.entries.firstWhere(
+      (e) => e.value.callsign?.toLowerCase() == callsign.toLowerCase(),
+      orElse: () => MapEntry('', PureConnectedClient(
+        socket: WebSocket.fromUpgradedSocket(Socket.connect('localhost', 0) as dynamic),
+        id: '',
+      )),
+    );
+
+    if (clientEntry.key.isNotEmpty) {
+      clientEntry.value.socket.close();
+      _clients.remove(clientEntry.key);
+      _log('INFO', 'Kicked device: $callsign');
+      return true;
+    }
+    return false;
+  }
+
+  /// Broadcast message to all connected clients
+  void broadcast(String message) {
+    final payload = jsonEncode({
+      'type': 'broadcast',
+      'message': message,
+      'from': _settings.callsign,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+
+    for (final client in _clients.values) {
+      try {
+        client.socket.add(payload);
+      } catch (e) {
+        _log('ERROR', 'Failed to broadcast to ${client.callsign}: $e');
+      }
+    }
+    _log('INFO', 'Broadcast sent to ${_clients.length} clients');
+  }
+
+  /// Scan network for devices
+  Future<List<Map<String, dynamic>>> scanNetwork({int timeout = 2000}) async {
+    final results = <Map<String, dynamic>>[];
+    final localIps = await _getLocalIPs();
+
+    for (final localIp in localIps) {
+      final prefix = localIp.substring(0, localIp.lastIndexOf('.'));
+      final futures = <Future<Map<String, dynamic>?>>[];
+
+      for (int i = 1; i <= 254; i++) {
+        final ip = '$prefix.$i';
+        if (ip == localIp) continue;
+
+        futures.add(_pingDevice(ip, 8080, timeout));
+      }
+
+      final scanResults = await Future.wait(futures);
+      results.addAll(scanResults.whereType<Map<String, dynamic>>());
+    }
+
+    return results;
+  }
+
+  Future<List<String>> _getLocalIPs() async {
+    final interfaces = await NetworkInterface.list();
+    return interfaces
+        .expand((i) => i.addresses)
+        .where((a) => a.type == InternetAddressType.IPv4 && !a.isLoopback)
+        .map((a) => a.address)
+        .toList();
+  }
+
+  Future<Map<String, dynamic>?> _pingDevice(String ip, int port, int timeout) async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://$ip:$port/api/status'),
+      ).timeout(Duration(milliseconds: timeout));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return {
+          'ip': ip,
+          'port': port,
+          'callsign': data['callsign'] ?? 'Unknown',
+          'type': data['relay_mode'] == true ? 'relay' : 'device',
+          'version': data['version'] ?? 'Unknown',
+          'name': data['name'] ?? 'Unknown',
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Ping a specific device
+  Future<Map<String, dynamic>?> pingDevice(String address) async {
+    final parts = address.split(':');
+    final ip = parts[0];
+    final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 8080 : 8080;
+    return _pingDevice(ip, port, 5000);
+  }
+
+  // Chat room management
+  ChatRoom? createChatRoom(String id, String name, {String? description}) {
+    if (_chatRooms.containsKey(id)) return null;
+
+    final room = ChatRoom(
+      id: id,
+      name: name,
+      description: description ?? '',
+      creatorCallsign: _settings.callsign,
+    );
+    _chatRooms[id] = room;
+    _log('INFO', 'Chat room created: $name ($id)');
+    return room;
+  }
+
+  bool deleteChatRoom(String id) {
+    if (id == 'general') return false; // Can't delete general
+    if (_chatRooms.remove(id) != null) {
+      _log('INFO', 'Chat room deleted: $id');
+      return true;
+    }
+    return false;
+  }
+
+  bool renameChatRoom(String oldId, String newName) {
+    final room = _chatRooms[oldId];
+    if (room == null) return false;
+    room.name = newName;
+    _log('INFO', 'Chat room renamed: $oldId -> $newName');
+    return true;
+  }
+
+  void postMessage(String roomId, String content) {
+    final room = _chatRooms[roomId];
+    if (room == null) return;
+
+    final message = ChatMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      roomId: roomId,
+      senderCallsign: _settings.callsign,
+      content: content,
+    );
+    room.messages.add(message);
+    room.lastActivity = DateTime.now();
+    _stats.totalMessages++;
+    _stats.lastMessage = DateTime.now();
+
+    // Broadcast to connected clients
+    final payload = jsonEncode({
+      'type': 'chat_message',
+      'room': roomId,
+      'message': message.toJson(),
+    });
+    for (final client in _clients.values) {
+      try {
+        client.socket.add(payload);
+      } catch (_) {}
+    }
+  }
+
+  List<ChatMessage> getChatHistory(String roomId, {int limit = 20}) {
+    final room = _chatRooms[roomId];
+    if (room == null) return [];
+    final messages = room.messages;
+    if (messages.length <= limit) return messages;
+    return messages.sublist(messages.length - limit);
+  }
+
+  bool deleteMessage(String roomId, String messageId) {
+    final room = _chatRooms[roomId];
+    if (room == null) return false;
+    final idx = room.messages.indexWhere((m) => m.id == messageId);
+    if (idx >= 0) {
+      room.messages.removeAt(idx);
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _handleRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+    _stats.totalApiRequests++;
+
+    try {
+      if (WebSocketTransformer.isUpgradeRequest(request)) {
+        await _handleWebSocket(request);
+        return;
+      }
+
+      if (_settings.enableCors) {
+        request.response.headers.add('Access-Control-Allow-Origin', '*');
+        request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+        request.response.headers.add('Access-Control-Allow-Headers', 'Content-Type');
+      }
+
+      if (method == 'OPTIONS') {
+        request.response.statusCode = 200;
+        await request.response.close();
+        return;
+      }
+
+      if (path == '/api/status' || path == '/status') {
+        await _handleStatus(request);
+      } else if (path == '/api/stats') {
+        await _handleStats(request);
+      } else if (path == '/api/devices') {
+        await _handleDevices(request);
+      } else if (path == '/api/chat/rooms') {
+        await _handleChatRooms(request);
+      } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
+        await _handleRoomMessages(request);
+      } else if (path.startsWith('/tiles/')) {
+        _stats.totalTileRequests++;
+        _stats.lastTileRequest = DateTime.now();
+        await _handleTileRequest(request);
+      } else if (path == '/api/cli' && method == 'POST') {
+        await _handleCliCommand(request);
+      } else if (path == '/') {
+        await _handleRoot(request);
+      } else {
+        request.response.statusCode = 404;
+        request.response.write('Not Found');
+      }
+    } catch (e) {
+      _log('ERROR', 'Request error: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal Server Error');
+    }
+
+    await request.response.close();
+  }
+
+  Future<void> _handleWebSocket(HttpRequest request) async {
+    try {
+      final socket = await WebSocketTransformer.upgrade(request);
+      final clientId = DateTime.now().millisecondsSinceEpoch.toString();
+      final client = PureConnectedClient(
+        socket: socket,
+        id: clientId,
+        address: request.connectionInfo?.remoteAddress.address,
+      );
+
+      _clients[clientId] = client;
+      _stats.totalConnections++;
+      _stats.lastConnection = DateTime.now();
+      _log('INFO', 'WebSocket client connected: $clientId from ${client.address}');
+
+      socket.listen(
+        (data) => _handleWebSocketMessage(client, data),
+        onDone: () {
+          _clients.remove(clientId);
+          _log('INFO', 'WebSocket client disconnected: ${client.callsign ?? clientId}');
+        },
+        onError: (error) {
+          _log('ERROR', 'WebSocket error: $error');
+          _clients.remove(clientId);
+        },
+      );
+    } catch (e) {
+      _log('ERROR', 'WebSocket upgrade failed: $e');
+    }
+  }
+
+  void _handleWebSocketMessage(PureConnectedClient client, dynamic data) {
+    try {
+      client.lastActivity = DateTime.now();
+
+      if (data is String) {
+        final message = jsonDecode(data) as Map<String, dynamic>;
+        final type = message['type'] as String?;
+
+        switch (type) {
+          case 'hello':
+            client.callsign = message['callsign'] as String?;
+            client.deviceType = message['device_type'] as String?;
+            client.version = message['version'] as String?;
+
+            final response = {
+              'type': 'hello_response',
+              'server': 'geogram-desktop-relay',
+              'version': cliAppVersion,
+              'callsign': _settings.callsign,
+            };
+            client.socket.add(jsonEncode(response));
+            _log('INFO', 'Hello from: ${client.callsign}');
+            break;
+
+          case 'chat_message':
+            final roomId = message['room'] as String? ?? 'general';
+            final content = message['content'] as String?;
+            if (content != null && client.callsign != null) {
+              final room = _chatRooms[roomId];
+              if (room != null) {
+                final msg = ChatMessage(
+                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                  roomId: roomId,
+                  senderCallsign: client.callsign!,
+                  content: content,
+                );
+                room.messages.add(msg);
+                room.lastActivity = DateTime.now();
+                _stats.totalMessages++;
+                _stats.lastMessage = DateTime.now();
+
+                // Broadcast to other clients
+                final payload = jsonEncode({
+                  'type': 'chat_message',
+                  'room': roomId,
+                  'message': msg.toJson(),
+                });
+                for (final c in _clients.values) {
+                  if (c.id != client.id) {
+                    try {
+                      c.socket.add(payload);
+                    } catch (_) {}
+                  }
+                }
+              }
+            }
+            break;
+        }
+      }
+    } catch (e) {
+      _log('ERROR', 'WebSocket message error: $e');
+    }
+  }
+
+  Future<void> _handleStatus(HttpRequest request) async {
+    final uptime = _startTime != null
+        ? DateTime.now().difference(_startTime!).inSeconds
+        : 0;
+
+    final status = {
+      'name': 'Geogram Desktop Relay',
+      'version': cliAppVersion,
+      'callsign': _settings.callsign,
+      'description': _settings.description ?? 'Geogram Desktop Relay Server',
+      'connected_devices': _clients.length,
+      'uptime': uptime,
+      'relay_mode': true,
+      'location': _settings.location,
+      'latitude': _settings.latitude,
+      'longitude': _settings.longitude,
+      'tile_server': _settings.tileServerEnabled,
+      'osm_fallback': _settings.osmFallbackEnabled,
+      'cache_size': _tileCache.size,
+      'cache_size_bytes': _tileCache.sizeBytes,
+      'enable_aprs': _settings.enableAprs,
+      'chat_rooms': _chatRooms.length,
+    };
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(status));
+  }
+
+  Future<void> _handleStats(HttpRequest request) async {
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(_stats.toJson()));
+  }
+
+  Future<void> _handleDevices(HttpRequest request) async {
+    final devices = _clients.values.map((c) => c.toJson()).toList();
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'devices': devices}));
+  }
+
+  Future<void> _handleRoot(HttpRequest request) async {
+    final uptime = _startTime != null
+        ? DateTime.now().difference(_startTime!).inSeconds
+        : 0;
+
+    request.response.headers.contentType = ContentType.html;
+    request.response.write('''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Geogram Desktop Relay</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background: #1a1a2e; color: #eee; }
+    h1 { color: #00d9ff; }
+    .info { background: #16213e; padding: 15px; border-radius: 5px; margin: 10px 0; }
+    .info p { margin: 5px 0; }
+    a { color: #00d9ff; }
+    .stat { display: inline-block; margin-right: 20px; }
+    .stat-value { font-size: 24px; font-weight: bold; color: #00d9ff; }
+    .stat-label { font-size: 12px; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Geogram Desktop Relay</h1>
+  <div class="info">
+    <p><strong>Callsign:</strong> ${_settings.callsign}</p>
+    <p><strong>Version:</strong> $cliAppVersion</p>
+    <p><strong>Description:</strong> ${_settings.description ?? 'Geogram Desktop Relay Server'}</p>
+  </div>
+  <div class="info">
+    <div class="stat"><div class="stat-value">${_clients.length}</div><div class="stat-label">Connected Devices</div></div>
+    <div class="stat"><div class="stat-value">${_chatRooms.length}</div><div class="stat-label">Chat Rooms</div></div>
+    <div class="stat"><div class="stat-value">${_formatUptimeShort(uptime)}</div><div class="stat-label">Uptime</div></div>
+    <div class="stat"><div class="stat-value">${_tileCache.size}</div><div class="stat-label">Cached Tiles</div></div>
+  </div>
+  <div class="info">
+    <p><strong>API Endpoints:</strong></p>
+    <p><a href="/api/status">/api/status</a> - Server status</p>
+    <p><a href="/api/stats">/api/stats</a> - Server statistics</p>
+    <p><a href="/api/devices">/api/devices</a> - Connected devices</p>
+    <p><a href="/api/chat/rooms">/api/chat/rooms</a> - Chat rooms</p>
+  </div>
+</body>
+</html>
+''');
+  }
+
+  String _formatUptimeShort(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    if (seconds < 3600) return '${seconds ~/ 60}m';
+    if (seconds < 86400) return '${seconds ~/ 3600}h';
+    return '${seconds ~/ 86400}d';
+  }
+
+  Future<void> _handleChatRooms(HttpRequest request) async {
+    if (request.method == 'GET') {
+      final rooms = _chatRooms.values.map((r) => r.toJson()).toList();
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'relay': _settings.callsign,
+        'rooms': rooms,
+      }));
+    } else if (request.method == 'POST') {
+      final body = await utf8.decoder.bind(request).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final id = data['id'] as String?;
+      final name = data['name'] as String?;
+      if (id != null && name != null) {
+        final room = createChatRoom(id, name, description: data['description'] as String?);
+        if (room != null) {
+          request.response.statusCode = 201;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(room.toJson()));
+        } else {
+          request.response.statusCode = 409;
+          request.response.write('Room already exists');
+        }
+      } else {
+        request.response.statusCode = 400;
+        request.response.write('Missing id or name');
+      }
+    }
+  }
+
+  Future<void> _handleRoomMessages(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.split('/');
+    final roomId = parts.length > 4 ? parts[4] : 'general';
+
+    if (request.method == 'GET') {
+      final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '20') ?? 20;
+      final messages = getChatHistory(roomId, limit: limit).map((m) => m.toJson()).toList();
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'room': roomId,
+        'messages': messages,
+      }));
+    } else if (request.method == 'POST') {
+      final body = await utf8.decoder.bind(request).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final content = data['content'] as String?;
+      if (content != null) {
+        postMessage(roomId, content);
+        request.response.statusCode = 201;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'status': 'ok'}));
+      } else {
+        request.response.statusCode = 400;
+        request.response.write('Missing content');
+      }
+    }
+  }
+
+  Future<void> _handleCliCommand(HttpRequest request) async {
+    final body = await utf8.decoder.bind(request).join();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final command = data['command'] as String?;
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'status': 'ok',
+      'command': command,
+      'message': 'CLI commands not yet implemented via API',
+    }));
+  }
+
+  Future<void> _handleTileRequest(HttpRequest request) async {
+    if (!_settings.tileServerEnabled) {
+      request.response.statusCode = 404;
+      request.response.write('Tile server disabled');
+      return;
+    }
+
+    final path = request.uri.path;
+    final regex = RegExp(r'/tiles/([^/]+)/(\d+)/(\d+)/(\d+)\.png');
+    final match = regex.firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid tile path');
+      return;
+    }
+
+    final z = int.parse(match.group(2)!);
+    final x = int.parse(match.group(3)!);
+    final y = int.parse(match.group(4)!);
+
+    final layer = request.uri.queryParameters['layer'] ?? 'standard';
+    final isSatellite = layer.toLowerCase() == 'satellite';
+
+    if (z < 0 || z > 18) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid zoom level');
+      return;
+    }
+
+    final cacheKey = '$layer/$z/$x/$y';
+    var tileData = _tileCache.get(cacheKey);
+
+    if (tileData != null) {
+      _stats.tilesServedFromCache++;
+      request.response.headers.contentType = ContentType('image', 'png');
+      request.response.add(tileData);
+      return;
+    }
+
+    final diskPath = '$_tilesDirectory/$layer/$z/$x/$y.png';
+    final diskFile = File(diskPath);
+    if (await diskFile.exists()) {
+      tileData = await diskFile.readAsBytes();
+      _tileCache.put(cacheKey, tileData);
+      _stats.tilesServedFromCache++;
+      request.response.headers.contentType = ContentType('image', 'png');
+      request.response.add(tileData);
+      return;
+    }
+
+    if (_settings.osmFallbackEnabled) {
+      tileData = await _fetchTileFromInternet(z, x, y, isSatellite);
+
+      if (tileData != null) {
+        _stats.tilesDownloaded++;
+        if (z <= _settings.maxZoomLevel) {
+          _tileCache.put(cacheKey, tileData);
+          _stats.tilesCached++;
+        }
+        await _saveTileToDisk(diskPath, tileData);
+
+        request.response.headers.contentType = ContentType('image', 'png');
+        request.response.add(tileData);
+        return;
+      }
+    }
+
+    request.response.statusCode = 404;
+    request.response.write('Tile not found');
+  }
+
+  Future<Uint8List?> _fetchTileFromInternet(int z, int x, int y, bool satellite) async {
+    try {
+      final url = satellite
+          ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/$z/$y/$x'
+          : 'https://tile.openstreetmap.org/$z/$x/$y.png';
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Geogram-Desktop-Relay/$cliAppVersion'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = Uint8List.fromList(response.bodyBytes);
+        if (PureTileCache.isValidImageData(data)) {
+          return data;
+        }
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to fetch tile: $e');
+    }
+    return null;
+  }
+
+  Future<void> _saveTileToDisk(String path, Uint8List data) async {
+    try {
+      final file = File(path);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(data);
+    } catch (e) {
+      _log('ERROR', 'Failed to save tile to disk: $e');
+    }
+  }
+
+  Map<String, dynamic> getStatus() {
+    final uptime = _startTime != null
+        ? DateTime.now().difference(_startTime!).inSeconds
+        : 0;
+
+    return {
+      'running': _running,
+      'port': _settings.port,
+      'callsign': _settings.callsign,
+      'connected_devices': _clients.length,
+      'uptime': uptime,
+      'cache_size': _tileCache.size,
+      'cache_size_mb': (_tileCache.sizeBytes / (1024 * 1024)).toStringAsFixed(2),
+      'chat_rooms': _chatRooms.length,
+      'total_messages': _stats.totalMessages,
+    };
+  }
+
+  void clearCache() {
+    _tileCache.clear();
+    _log('INFO', 'Tile cache cleared');
+  }
+
+  List<LogEntry> getLogs({int limit = 20}) {
+    if (_logs.length <= limit) return _logs;
+    return _logs.sublist(_logs.length - limit);
+  }
+
+  void _log(String level, String message) {
+    final entry = LogEntry(DateTime.now(), level, message);
+    _logs.add(entry);
+    if (_logs.length > maxLogEntries) {
+      _logs.removeAt(0);
+    }
+    if (!_quietMode) {
+      stderr.writeln(entry.toString());
+    }
+  }
+}
+
+/// SSL Certificate Manager for Let's Encrypt
+class SslCertificateManager {
+  final PureRelaySettings settings;
+  final String _sslDir;
+  Timer? _renewalTimer;
+  final Map<String, String> _challengeResponses = {};
+
+  // Certificate file paths
+  String get accountKeyPath => '$_sslDir/account.key';
+  String get domainKeyPath => '$_sslDir/domain.key';
+  String get certPath => '$_sslDir/certificate.crt';
+  String get chainPath => '$_sslDir/certificate-chain.crt';
+  String get fullChainPath => '$_sslDir/fullchain.pem';
+
+  // Let's Encrypt ACME endpoints
+  static const String productionAcme = 'https://acme-v02.api.letsencrypt.org/directory';
+  static const String stagingAcme = 'https://acme-staging-v02.api.letsencrypt.org/directory';
+
+  SslCertificateManager(this.settings, String dataDir)
+      : _sslDir = '$dataDir/ssl';
+
+  /// Initialize SSL directory
+  Future<void> initialize() async {
+    await Directory(_sslDir).create(recursive: true);
+  }
+
+  /// Start auto-renewal timer (check every 12 hours)
+  void startAutoRenewal() {
+    if (!settings.sslAutoRenew) return;
+
+    _renewalTimer?.cancel();
+    _renewalTimer = Timer.periodic(const Duration(hours: 12), (_) async {
+      await checkAndRenew();
+    });
+  }
+
+  /// Stop auto-renewal timer
+  void stop() {
+    _renewalTimer?.cancel();
+    _renewalTimer = null;
+  }
+
+  /// Check if certificate exists and is valid
+  bool hasCertificate() {
+    final certFile = File(certPath);
+    return certFile.existsSync();
+  }
+
+  /// Get certificate info
+  Future<Map<String, dynamic>> getStatus() async {
+    final status = <String, dynamic>{
+      'domain': settings.sslDomain ?? '(not set)',
+      'email': settings.sslEmail ?? '(not set)',
+      'enabled': settings.enableSsl,
+      'autoRenew': settings.sslAutoRenew,
+      'hasCertificate': hasCertificate(),
+    };
+
+    if (hasCertificate()) {
+      final certInfo = await _getCertificateInfo();
+      status.addAll(certInfo);
+    }
+
+    return status;
+  }
+
+  /// Get certificate expiration info
+  Future<Map<String, dynamic>> _getCertificateInfo() async {
+    try {
+      // Read certificate and parse expiration
+      final certFile = File(certPath);
+      if (!await certFile.exists()) {
+        return {'error': 'Certificate file not found'};
+      }
+
+      final certPem = await certFile.readAsString();
+
+      // Parse the certificate to extract expiration date
+      // This is a simplified check - in production you'd use proper X509 parsing
+      final expiry = _parseCertificateExpiry(certPem);
+
+      if (expiry != null) {
+        final now = DateTime.now();
+        final daysUntilExpiry = expiry.difference(now).inDays;
+
+        return {
+          'expiresAt': expiry.toIso8601String(),
+          'daysUntilExpiry': daysUntilExpiry,
+          'isValid': daysUntilExpiry > 0,
+          'certPath': certPath,
+        };
+      }
+
+      return {
+        'certPath': certPath,
+        'status': 'Certificate exists but could not parse expiry',
+      };
+    } catch (e) {
+      return {'error': e.toString()};
+    }
+  }
+
+  /// Parse certificate expiry from PEM (simplified)
+  DateTime? _parseCertificateExpiry(String pemCert) {
+    // This would need proper X509 parsing in production
+    // For now, return null and rely on file existence
+    return null;
+  }
+
+  /// Check and renew if needed (30 days before expiry)
+  Future<bool> checkAndRenew() async {
+    if (!hasCertificate()) return false;
+
+    final info = await _getCertificateInfo();
+    final daysUntilExpiry = info['daysUntilExpiry'] as int?;
+
+    if (daysUntilExpiry != null && daysUntilExpiry <= 30) {
+      return await renewCertificate(staging: false);
+    }
+
+    return true;
+  }
+
+  /// Request new certificate
+  Future<bool> requestCertificate({bool staging = false}) async {
+    if (settings.sslDomain == null || settings.sslDomain!.isEmpty) {
+      throw Exception('Domain not configured. Use: ssl domain <domain>');
+    }
+
+    if (settings.sslEmail == null || settings.sslEmail!.isEmpty) {
+      throw Exception('Email not configured. Use: ssl email <email>');
+    }
+
+    final acmeUrl = staging ? stagingAcme : productionAcme;
+
+    try {
+      // Step 1: Generate account key if not exists
+      if (!File(accountKeyPath).existsSync()) {
+        await _generateKey(accountKeyPath);
+      }
+
+      // Step 2: Generate domain key if not exists
+      if (!File(domainKeyPath).existsSync()) {
+        await _generateKey(domainKeyPath);
+      }
+
+      // Step 3: Request certificate using ACME protocol
+      // Note: This is a simplified implementation
+      // In production, you'd use a proper ACME client library
+
+      final result = await _requestWithAcme(
+        acmeUrl: acmeUrl,
+        domain: settings.sslDomain!,
+        email: settings.sslEmail!,
+        staging: staging,
+      );
+
+      return result;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Renew existing certificate
+  Future<bool> renewCertificate({bool staging = false}) async {
+    return await requestCertificate(staging: staging);
+  }
+
+  /// Generate RSA key using openssl
+  Future<void> _generateKey(String keyPath) async {
+    final result = await Process.run('openssl', [
+      'genrsa',
+      '-out', keyPath,
+      '4096',
+    ]);
+
+    if (result.exitCode != 0) {
+      throw Exception('Failed to generate key: ${result.stderr}');
+    }
+  }
+
+  /// Request certificate using ACME protocol (uses certbot)
+  Future<bool> _requestWithAcme({
+    required String acmeUrl,
+    required String domain,
+    required String email,
+    required bool staging,
+  }) async {
+    // Check if certbot is available
+    final which = await Process.run('which', ['certbot']);
+    if (which.exitCode != 0) {
+      throw Exception(
+        'certbot not found. Install with: sudo apt install certbot\n'
+        'Or use: sudo snap install certbot --classic'
+      );
+    }
+
+    // Build certbot command
+    final args = [
+      'certonly',
+      '--webroot',
+      '-w', _sslDir,
+      '-d', domain,
+      '--email', email,
+      '--agree-tos',
+      '--non-interactive',
+      '--cert-path', certPath,
+      '--key-path', domainKeyPath,
+      '--fullchain-path', fullChainPath,
+    ];
+
+    if (staging) {
+      args.add('--staging');
+    }
+
+    final result = await Process.run('sudo', ['certbot', ...args]);
+
+    if (result.exitCode != 0) {
+      // Provide alternative manual method
+      throw Exception(
+        'certbot failed: ${result.stderr}\n\n'
+        'Alternative: Generate certificate manually:\n'
+        '1. Install certbot: sudo apt install certbot\n'
+        '2. Run: sudo certbot certonly --standalone -d $domain\n'
+        '3. Copy certificates to $_sslDir\n'
+        '4. Set paths with: ssl certpath <path> and ssl keypath <path>'
+      );
+    }
+
+    return true;
+  }
+
+  /// Get challenge response for ACME HTTP-01 validation
+  String? getChallengeResponse(String token) {
+    return _challengeResponses[token];
+  }
+
+  /// Set challenge response for ACME HTTP-01 validation
+  void setChallengeResponse(String token, String response) {
+    _challengeResponses[token] = response;
+  }
+
+  /// Clear challenge response
+  void clearChallengeResponse(String token) {
+    _challengeResponses.remove(token);
+  }
+
+  /// Generate self-signed certificate for testing
+  Future<bool> generateSelfSigned(String domain) async {
+    try {
+      // Generate private key
+      var result = await Process.run('openssl', [
+        'genrsa',
+        '-out', domainKeyPath,
+        '2048',
+      ]);
+
+      if (result.exitCode != 0) {
+        throw Exception('Failed to generate key: ${result.stderr}');
+      }
+
+      // Generate self-signed certificate
+      result = await Process.run('openssl', [
+        'req',
+        '-new',
+        '-x509',
+        '-key', domainKeyPath,
+        '-out', certPath,
+        '-days', '365',
+        '-subj', '/CN=$domain/O=Geogram/C=XX',
+      ]);
+
+      if (result.exitCode != 0) {
+        throw Exception('Failed to generate certificate: ${result.stderr}');
+      }
+
+      // Copy to fullchain
+      await File(certPath).copy(fullChainPath);
+
+      return true;
+    } catch (e) {
+      rethrow;
+    }
+  }
+}

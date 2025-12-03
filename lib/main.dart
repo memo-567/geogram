@@ -17,10 +17,12 @@ import 'services/relay_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
+import 'services/update_service.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
+import 'pages/update_page.dart';
 import 'pages/relays_page.dart';
 import 'pages/location_page.dart';
 import 'pages/notifications_page.dart';
@@ -38,8 +40,34 @@ import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
 import 'pages/relay_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
+import 'cli/console.dart';
 
 void main() async {
+  // Check for CLI mode before Flutter initialization
+  if (!kIsWeb) {
+    final args = Platform.executableArguments;
+    // Also check the script arguments (everything after --)
+    final scriptArgs = <String>[];
+    bool foundDashes = false;
+    for (final arg in args) {
+      if (arg == '--') {
+        foundDashes = true;
+        continue;
+      }
+      if (foundDashes) {
+        scriptArgs.add(arg);
+      }
+    }
+    // Combine all possible argument sources
+    final allArgs = [...args, ...scriptArgs];
+
+    if (allArgs.contains('-cli') || allArgs.contains('--cli')) {
+      // Run CLI mode without Flutter
+      await runCliMode(allArgs);
+      return;
+    }
+  }
+
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize window manager for desktop platforms (not web or mobile)
@@ -96,6 +124,9 @@ void main() async {
 
     await NotificationService().initialize();
     LogService().log('NotificationService initialized');
+
+    await UpdateService().initialize();
+    LogService().log('UpdateService initialized');
 
     // Start relay auto-discovery
     RelayDiscoveryService().start();
@@ -1974,6 +2005,18 @@ class _SettingsPageState extends State<SettingsPage> {
           subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
           trailing: const Icon(Icons.chevron_right),
           onTap: _showLanguageDialog,
+        ),
+        ListTile(
+          leading: const Icon(Icons.system_update),
+          title: const Text('Software Updates'),
+          subtitle: const Text('Check for updates and rollback'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const UpdatePage()),
+            );
+          },
         ),
         ListTile(
           leading: const Icon(Icons.info_outlined),

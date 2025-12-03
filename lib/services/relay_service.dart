@@ -385,9 +385,11 @@ class RelayService {
       if (success) {
         final latency = DateTime.now().difference(startTime).inMilliseconds;
 
-        // Fetch relay status to get connected devices count and callsign
+        // Fetch relay status to get connected devices count, callsign, name and description
         int? connectedDevices;
         String? relayCallsign;
+        String? relayName;
+        String? relayDescription;
         try {
           final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
           final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
@@ -396,9 +398,14 @@ class RelayService {
             final data = jsonDecode(response.body);
             connectedDevices = data['connected_devices'] as int?;
             relayCallsign = data['callsign'] as String?;
+            relayName = data['name'] as String?;
+            relayDescription = data['description'] as String?;
             LogService().log('Fetched relay status: $connectedDevices devices connected');
             if (relayCallsign != null && relayCallsign.isNotEmpty) {
               LogService().log('Relay callsign: $relayCallsign');
+            }
+            if (relayName != null && relayName.isNotEmpty) {
+              LogService().log('Relay name: $relayName');
             }
           }
         } catch (e) {
@@ -414,6 +421,8 @@ class RelayService {
             latency: latency,
             connectedDevices: connectedDevices,
             callsign: relayCallsign,
+            name: relayName ?? _relays[index].name,
+            description: relayDescription,
           );
           _saveRelays();
 
@@ -422,6 +431,9 @@ class RelayService {
           LogService().log('Relay: ${_relays[index].name}');
           if (relayCallsign != null && relayCallsign.isNotEmpty) {
             LogService().log('Callsign: $relayCallsign');
+          }
+          if (_relays[index].description != null && _relays[index].description!.isNotEmpty) {
+            LogService().log('Description: ${_relays[index].description}');
           }
           LogService().log('Latency: ${latency}ms');
           if (connectedDevices != null) {

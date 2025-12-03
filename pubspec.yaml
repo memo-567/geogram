@@ -53,6 +53,8 @@ dependencies:
   shelf: ^1.4.0
   flutter_markdown: ^0.7.4+1
   geolocator: ^13.0.2
+  dart_console: ^4.1.2       # Terminal input/output for CLI mode
+  ensemble_ts_interpreter: ^1.0.3  # JavaScript interpreter for game scripting
 
 dev_dependencies:
   flutter_test:
