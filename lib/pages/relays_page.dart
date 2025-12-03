@@ -923,9 +923,9 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
       return;
     }
 
-    // Parse address - support formats: host:port, host (default port 80)
+    // Parse address - support formats: host:port, host (auto-detect protocol)
     String host;
-    int port;
+    int? explicitPort;
 
     // Remove any protocol prefix if user accidentally added it
     String cleanAddress = address
@@ -942,10 +942,9 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
     if (cleanAddress.contains(':')) {
       final parts = cleanAddress.split(':');
       host = parts[0];
-      port = int.tryParse(parts[1]) ?? 80;
+      explicitPort = int.tryParse(parts[1]);
     } else {
       host = cleanAddress;
-      port = 80;
     }
 
     if (host.isEmpty) {
@@ -958,7 +957,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
 
     setState(() {
       _isConnecting = true;
-      _statusMessage = 'Connecting to $host:$port...';
+      _statusMessage = 'Connecting to $host...';
       _isError = false;
     });
 
@@ -966,34 +965,50 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
       // Try to fetch relay info from API first
       Map<String, dynamic>? relayInfo;
       String? workingProtocol;
+      int? workingPort;
 
-      // Try HTTPS first, then HTTP
-      for (final protocol in ['https', 'http']) {
+      // Build list of protocol+port combinations to try
+      // If user specified a port, try that port with both protocols
+      // Otherwise, try standard ports: HTTPS on 443, HTTP on 80
+      final attempts = <({String protocol, int port})>[];
+      if (explicitPort != null) {
+        // User specified a port - try both protocols on that port
+        attempts.add((protocol: 'https', port: explicitPort));
+        attempts.add((protocol: 'http', port: explicitPort));
+      } else {
+        // No port specified - try standard ports
+        attempts.add((protocol: 'https', port: 443));
+        attempts.add((protocol: 'http', port: 80));
+      }
+
+      for (final attempt in attempts) {
         try {
           setState(() {
-            _statusMessage = 'Trying $protocol://$host:$port...';
+            _statusMessage = 'Trying ${attempt.protocol}://$host:${attempt.port}...';
           });
 
           final response = await http.get(
-            Uri.parse('$protocol://$host:$port/api/status'),
+            Uri.parse('${attempt.protocol}://$host:${attempt.port}/api/status'),
           ).timeout(const Duration(seconds: 5));
 
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
             if (data['service'] == 'Geogram Relay Server') {
               relayInfo = data;
-              workingProtocol = protocol == 'https' ? 'wss' : 'ws';
+              workingProtocol = attempt.protocol == 'https' ? 'wss' : 'ws';
+              workingPort = attempt.port;
               break;
             }
           }
         } catch (_) {
-          // Try next protocol
+          // Try next protocol+port combination
         }
       }
 
-      if (relayInfo == null) {
+      if (relayInfo == null || workingPort == null) {
+        final triedPorts = attempts.map((a) => '${a.protocol}:${a.port}').join(', ');
         setState(() {
-          _statusMessage = 'Could not connect to relay at $host:$port';
+          _statusMessage = 'Could not connect to relay at $host (tried $triedPorts)';
           _isError = true;
           _isConnecting = false;
         });
@@ -1003,7 +1018,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
       // Extract relay details from API response
       final name = relayInfo['name'] as String? ??
                    relayInfo['callsign'] as String? ??
-                   '$host:$port';
+                   '$host:$workingPort';
       final callsign = relayInfo['callsign'] as String?;
       final description = relayInfo['description'] as String?;
       final location = relayInfo['location'] as Map<String, dynamic>?;
@@ -1039,7 +1054,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
       // Return the relay info
       Navigator.pop(context, {
         'name': name,
-        'url': '$workingProtocol://$host:$port',
+        'url': '$workingProtocol://$host:$workingPort',
         if (callsign != null) 'callsign': callsign,
         if (locationStr != null) 'location': locationStr,
         if (latitude != null) 'latitude': latitude.toString(),

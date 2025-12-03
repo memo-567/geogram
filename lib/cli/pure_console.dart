@@ -1,13 +1,20 @@
 // Pure Dart console for CLI mode (no Flutter dependencies)
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dart_console/dart_console.dart';
 
 import 'pure_relay.dart';
+import 'cli_profile_service.dart';
+import 'cli_chat_service.dart';
+import 'cli_location_service.dart';
+import '../models/profile.dart';
+import '../models/chat_message.dart' as chat;
 import 'game/game_config.dart';
 import 'game/game_parser.dart';
 import 'game/game_engine.dart';
 import 'game/game_screen.dart';
+import '../services/storage_config.dart';
 
 /// Completion candidate
 class Candidate {
@@ -28,47 +35,250 @@ class PureConsole {
   /// Current chat room (when in /chat/<room>)
   String? _currentChatRoom;
 
-  /// Root directories in virtual filesystem
-  static const List<String> rootDirs = ['relay', 'devices', 'chat', 'config', 'logs', 'ssl', 'games'];
+  /// Root directories - relay-only dirs filtered dynamically
+  static const List<String> _allRootDirs = ['relay', 'devices', 'chat', 'config', 'logs', 'ssl', 'games'];
+  static const List<String> _relayOnlyDirs = ['relay', 'ssl', 'logs'];
 
-  /// Global commands available everywhere
-  static const List<String> globalCommands = [
+  /// Get root directories based on profile type (sorted alphabetically)
+  List<String> get rootDirs {
+    final profile = _profileService.activeProfile;
+    final dirs = profile?.isRelay == true
+        ? List<String>.from(_allRootDirs)
+        : _allRootDirs.where((d) => !_relayOnlyDirs.contains(d)).toList();
+    dirs.sort();
+    return dirs;
+  }
+
+  /// Global commands - relay-only commands filtered dynamically
+  static const List<String> _allGlobalCommands = [
     'help', 'status', 'stats', 'ls', 'cd', 'pwd', 'df',
     'relay', 'devices', 'chat', 'config', 'logs',
     'broadcast', 'kick', 'quiet', 'verbose', 'restart', 'reload',
     'clear', 'quit', 'exit', 'shutdown',
     'top', 'tail', 'head', 'cat', 'setup', 'ssl',
-    'play', 'games'
+    'play', 'games', 'profile'
   ];
+  static const List<String> _relayOnlyCommands = ['relay', 'ssl', 'logs', 'broadcast', 'kick', 'restart', 'reload', 'shutdown'];
+
+  /// Get global commands based on profile type
+  List<String> get globalCommands {
+    final profile = _profileService.activeProfile;
+    if (profile?.isRelay == true) {
+      return _allGlobalCommands;
+    }
+    return _allGlobalCommands.where((c) => !_relayOnlyCommands.contains(c)).toList();
+  }
 
   /// Sub-commands for main commands
   static const Map<String, List<String>> subCommands = {
     'relay': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
-    'devices': ['list', 'scan', 'ping', 'kick'],
+    'devices': ['list', 'scan', 'ping'],
     'chat': ['list', 'info', 'create', 'delete', 'rename', 'history', 'say', 'delmsg'],
     'config': ['set', 'save'],
     'df': ['-h'],
     'ssl': ['domain', 'email', 'request', 'test', 'renew', 'autorenew', 'selfsigned', 'enable', 'disable'],
     'games': ['list', 'info'],
+    'profile': ['list', 'add', 'switch', 'delete', 'show'],
+  };
+
+  /// Descriptions for sub-commands (shown in tab completion)
+  static const Map<String, String> subCommandDescriptions = {
+    // Relay
+    'relay.start': 'Start the relay server',
+    'relay.stop': 'Stop the relay server',
+    'relay.status': 'Show relay status',
+    'relay.restart': 'Restart the relay',
+    'relay.port': 'Get/set port',
+    'relay.callsign': 'Get/set callsign',
+    'relay.cache': 'Manage cache',
+    // Devices
+    'devices.list': 'List all devices',
+    'devices.scan': 'Scan network',
+    'devices.ping': 'Ping a device',
+    // Chat
+    'chat.list': 'List chat rooms',
+    'chat.info': 'Show room details',
+    'chat.create': 'Create a room',
+    'chat.delete': 'Delete a room',
+    'chat.rename': 'Rename a room',
+    'chat.history': 'Show messages',
+    'chat.say': 'Send a message',
+    'chat.delmsg': 'Delete a message',
+    // Config
+    'config.set': 'Set a value',
+    'config.save': 'Save config',
+    // SSL
+    'ssl.domain': 'Get/set domain',
+    'ssl.email': 'Get/set email',
+    'ssl.request': 'Request certificate',
+    'ssl.test': 'Test certificate',
+    'ssl.renew': 'Renew certificate',
+    'ssl.autorenew': 'Auto-renewal on/off',
+    'ssl.selfsigned': 'Generate self-signed',
+    'ssl.enable': 'Enable SSL',
+    'ssl.disable': 'Disable SSL',
+    // Games
+    'games.list': 'List games',
+    'games.info': 'Show game info',
+    // Profile
+    'profile.list': 'List profiles',
+    'profile.add': 'Create profile',
+    'profile.switch': 'Switch profile',
+    'profile.delete': 'Delete profile',
+    'profile.show': 'Show current',
+    // df
+    'df.-h': 'Human readable',
+  };
+
+  /// Command syntax help - shown when user types "command ?" or "command subcommand ?"
+  static const Map<String, String> commandHelp = {
+    // Global commands
+    'help': 'help - Show available commands',
+    'status': 'status - Show relay/client status',
+    'stats': 'stats - Show statistics',
+    'ls': 'ls [path] - List directory contents',
+    'cd': 'cd <path> - Change directory',
+    'pwd': 'pwd - Print working directory',
+    'df': 'df [-h] - Show disk usage',
+    'clear': 'clear - Clear the screen',
+    'quit': 'quit - Exit the console',
+    'exit': 'exit - Exit the console',
+    'setup': 'setup - Run initial setup wizard',
+    'broadcast': 'broadcast <message> - Send message to all connected devices',
+    'kick': 'kick <callsign> - Disconnect a device from the relay',
+    // Relay commands
+    'relay': 'relay <subcommand> - Manage relay (start|stop|status|restart|port|callsign|cache)',
+    'relay start': 'relay start - Start the relay server',
+    'relay stop': 'relay stop - Stop the relay server',
+    'relay status': 'relay status - Show relay status',
+    'relay restart': 'relay restart - Restart the relay server',
+    'relay port': 'relay port [port] - Get or set relay port (1-65535)',
+    'relay callsign': 'relay callsign [callsign] - Get or set relay callsign',
+    'relay cache': 'relay cache [clear] - Show cache stats or clear cache',
+    'start': 'start - Start the relay server',
+    'stop': 'stop - Stop the relay server',
+    'restart': 'restart - Restart the relay server',
+    'port': 'port [port] - Get or set relay port (1-65535)',
+    'callsign': 'callsign [callsign] - Get or set relay callsign',
+    'cache': 'cache [clear] - Show cache stats or clear cache',
+    // Devices commands
+    'devices': 'devices <subcommand> - Manage devices (list|scan|ping)',
+    'devices list': 'devices list - List all known devices',
+    'devices scan': 'devices scan [-t timeout_ms] - Scan network for devices',
+    'devices ping': 'devices ping <ip[:port]> - Ping a device',
+    'list': 'list - List items in current context',
+    'scan': 'scan [-t timeout_ms] - Scan network for devices (default: 2000ms)',
+    'ping': 'ping <ip[:port]> - Ping a device at the specified address',
+    // Chat commands
+    'chat': 'chat <subcommand> - Manage chat (list|info|create|delete|rename|history|say|delmsg)',
+    'chat list': 'chat list - List all chat rooms',
+    'chat info': 'chat info <room_id> - Show chat room details',
+    'chat create': 'chat create <id> <name> [description] - Create a chat room (id: no spaces, use quotes for name/desc with spaces)',
+    'chat delete': 'chat delete <room_id> - Delete a chat room',
+    'chat rename': 'chat rename <room_id> <new_name> - Rename a chat room',
+    'chat history': 'chat history <room_id> [limit] - Show chat history',
+    'chat say': 'chat say <room_id> <message> - Send a message to a chat room',
+    'chat delmsg': 'chat delmsg <message_id> - Delete a message',
+    'info': 'info <room_id> - Show chat room details',
+    'create': 'create <id> <name> [description] - Create a chat room (id: no spaces, use quotes for name/desc with spaces)',
+    'delete': 'delete <room_id> - Delete a chat room',
+    'rename': 'rename <room_id> <new_name> - Rename a chat room',
+    'history': 'history [limit] - Show chat history (default: 50)',
+    'say': 'say <message> - Send a message to the current chat room',
+    'delmsg': 'delmsg <message_id> - Delete a message',
+    'messages': 'messages [limit] - Show recent messages (default: 50)',
+    // Config commands
+    'config': 'config <subcommand> - Manage configuration (set|show|location)',
+    'config set': 'config set <key> <value> - Set a configuration value',
+    'config show': 'config show - Show all configuration values',
+    'set': 'set <key> <value> - Set a configuration value',
+    'show': 'show - Show all configuration values',
+    'location': 'location - Auto-detect location via IP address',
+    // SSL commands
+    'ssl': 'ssl <subcommand> - Manage SSL certificates',
+    'ssl domain': 'ssl domain [domain] - Get or set SSL domain',
+    'ssl email': 'ssl email [email] - Get or set SSL contact email',
+    'ssl request': 'ssl request - Request SSL certificate from Let\'s Encrypt',
+    'ssl test': 'ssl test - Request test certificate (staging)',
+    'ssl renew': 'ssl renew - Renew SSL certificate',
+    'ssl autorenew': 'ssl autorenew [on|off] - Enable/disable auto-renewal',
+    'ssl selfsigned': 'ssl selfsigned - Generate self-signed certificate',
+    'ssl enable': 'ssl enable - Enable SSL',
+    'ssl disable': 'ssl disable - Disable SSL',
+    'ssl status': 'ssl status - Show SSL status',
+    'domain': 'domain [domain] - Get or set SSL domain',
+    'email': 'email [email] - Get or set SSL contact email',
+    'request': 'request - Request SSL certificate from Let\'s Encrypt',
+    'test': 'test - Request test certificate (staging)',
+    'renew': 'renew - Renew SSL certificate',
+    'autorenew': 'autorenew [on|off] - Enable/disable auto-renewal',
+    'selfsigned': 'selfsigned - Generate self-signed certificate',
+    'enable': 'enable - Enable SSL',
+    'disable': 'disable - Disable SSL',
+    // Profile commands
+    'profile': 'profile <subcommand> - Manage profiles (list|add|switch|delete|show)',
+    'profile list': 'profile list - List all profiles',
+    'profile add': 'profile add - Create a new profile',
+    'profile switch': 'profile switch <callsign> - Switch to a different profile',
+    'profile delete': 'profile delete <callsign> - Delete a profile',
+    'profile show': 'profile show - Show current profile details',
+    // Games commands
+    'games': 'games <subcommand> - Games (list|info|play)',
+    'games list': 'games list - List available games',
+    'games info': 'games info <game_id> - Show game details',
+    'play': 'play <game_id> - Start playing a game',
   };
 
   /// Directory-specific commands (when inside these directories)
-  static const Map<String, List<String>> dirCommands = {
-    '/relay': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
-    '/devices': ['list', 'scan', 'ping', 'kick'],
-    '/chat': ['list', 'info', 'create', 'delete', 'rename', 'history', 'say', 'delmsg', 'messages'],
-    '/config': ['set', 'save'],
-    '/logs': [],
-    '/ssl': ['domain', 'email', 'request', 'test', 'renew', 'autorenew', 'selfsigned', 'enable', 'disable', 'status'],
-    '/games': ['list', 'info', 'play'],
+  Map<String, List<String>> get dirCommands {
+    final profile = _profileService.activeProfile;
+    final isRelay = profile?.isRelay == true;
+
+    return {
+      if (isRelay) '/relay': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
+      '/devices': ['list', 'scan', 'ping'],
+      '/chat': ['list', 'info', 'create', 'delete', 'rename', 'history', 'say', 'delmsg', 'messages'],
+      '/config': ['set', 'show', 'location'],
+      if (isRelay) '/logs': [],
+      if (isRelay) '/ssl': ['domain', 'email', 'request', 'test', 'renew', 'autorenew', 'selfsigned', 'enable', 'disable', 'status'],
+      '/games': ['list', 'info', 'play'],
+    };
+  }
+
+  /// Config keys with their types for validation
+  /// Types: 'string', 'bool', 'int', 'double'
+  static const Map<String, String> configKeyTypes = {
+    'nickname': 'string',
+    'description': 'string',
+    'preferredColor': 'string',
+    'latitude': 'double',
+    'longitude': 'double',
+    'locationName': 'string',
+    'enableAprs': 'bool',
+    // Relay-only settings
+    'port': 'int',
+    'tileServerEnabled': 'bool',
+    'osmFallbackEnabled': 'bool',
+    'maxZoomLevel': 'int',
+    'maxCacheSize': 'int',
+    'enableCors': 'bool',
+    'maxConnectedDevices': 'int',
   };
 
-  /// Config keys for completion
-  static const List<String> configKeys = [
-    'port', 'callsign', 'description', 'location', 'latitude', 'longitude',
-    'tileServerEnabled', 'osmFallbackEnabled', 'maxZoomLevel', 'maxCacheSize',
-    'enableAprs', 'enableCors', 'maxConnectedDevices'
+  /// Config keys that are relay-only
+  static const List<String> _relayOnlyConfigKeys = [
+    'port', 'tileServerEnabled', 'osmFallbackEnabled', 'maxZoomLevel',
+    'maxCacheSize', 'enableCors', 'maxConnectedDevices'
   ];
+
+  /// Get config keys based on profile type
+  List<String> get configKeys {
+    final profile = _profileService.activeProfile;
+    if (profile?.isRelay == true) {
+      return configKeyTypes.keys.toList();
+    }
+    return configKeyTypes.keys.where((k) => !_relayOnlyConfigKeys.contains(k)).toList();
+  }
 
   /// Command history
   final List<String> _history = [];
@@ -81,6 +291,12 @@ class PureConsole {
   /// Relay server instance
   final PureRelayServer _relay = PureRelayServer();
 
+  /// CLI Profile service
+  final CliProfileService _profileService = CliProfileService();
+
+  /// CLI Chat service
+  final CliChatService _chatService = CliChatService();
+
   /// SSL certificate manager
   SslCertificateManager? _sslManager;
 
@@ -92,12 +308,18 @@ class PureConsole {
     // Check for --setup flag
     final forceSetup = args.contains('--setup') || args.contains('-s');
 
+    // Parse --data-dir argument for custom storage location
+    final customDataDir = parseDataDirFromArgs(args);
+
+    // Initialize storage configuration first
+    await StorageConfig().init(customBaseDir: customDataDir);
+
     await _initializeServices();
     _printBanner();
 
-    // Check if setup is needed
-    if (forceSetup || _relay.settings.needsSetup()) {
-      if (_relay.settings.needsSetup()) {
+    // Check if setup is needed (no profiles exist)
+    if (forceSetup || _profileService.needsSetup()) {
+      if (_profileService.needsSetup()) {
         stdout.writeln('\x1B[33mInitial setup required.\x1B[0m');
         stdout.writeln();
       }
@@ -109,11 +331,26 @@ class PureConsole {
 
   Future<void> _initializeServices() async {
     try {
+      // Initialize profile service first
+      await _profileService.initialize();
+
+      // Initialize relay server
       await _relay.initialize();
+
+      // Initialize chat service if we have an active profile
+      final activeProfile = _profileService.activeProfile;
+      if (activeProfile != null) {
+        await _chatService.initialize(
+          activeProfile.callsign,
+          npub: activeProfile.npub,
+          nsec: activeProfile.nsec,
+        );
+      }
 
       // Initialize SSL manager
       _sslManager = SslCertificateManager(_relay.settings, _relay.dataDir!);
       await _sslManager!.initialize();
+      _sslManager!.setRelayServer(_relay);
       _sslManager!.startAutoRenewal();
 
       // Initialize game engine
@@ -133,14 +370,25 @@ class PureConsole {
       await _relay.stop();
     }
     // Reset console to normal mode
-    _console.rawMode = false;
+    _cleanupAsyncStdin();
+    stdin.echoMode = true;
+    stdin.lineMode = true;
   }
 
   void _printBanner() {
     stdout.writeln();
     stdout.writeln('\x1B[36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln('\x1B[36m  Geogram Desktop v$cliAppVersion - CLI Mode\x1B[0m');
-    stdout.writeln('\x1B[36m  Relay Callsign: ${_relay.settings.callsign}\x1B[0m');
+
+    final activeProfile = _profileService.activeProfile;
+    if (activeProfile != null) {
+      final typeStr = activeProfile.isRelay ? 'Relay' : 'Client';
+      stdout.writeln('\x1B[36m  Active Profile: ${activeProfile.callsign} ($typeStr)\x1B[0m');
+    } else {
+      stdout.writeln('\x1B[33m  No profile configured\x1B[0m');
+    }
+
+    stdout.writeln('\x1B[36m  Data Directory: ${StorageConfig().baseDir}\x1B[0m');
     stdout.writeln('\x1B[36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln();
     stdout.writeln('Type "help" for available commands.');
@@ -169,7 +417,16 @@ class PureConsole {
 
       // If in a chat room, treat non-command input as a message
       if (_currentChatRoom != null && !input.startsWith('/') && !_isCommand(input)) {
-        _relay.postMessage(_currentChatRoom!, input);
+        final success = await _chatService.postMessage(_currentChatRoom!, input);
+        if (success) {
+          // IRC-style: move up, clear line, show formatted message
+          final now = DateTime.now();
+          final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+          final callsign = _profileService.activeProfile?.callsign ?? 'You';
+          // Move cursor up one line, clear it, print message
+          stdout.write('\x1B[A\x1B[2K\r');
+          stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[36m$callsign:\x1B[0m $input');
+        }
         continue;
       }
 
@@ -196,6 +453,43 @@ class PureConsole {
   /// Console instance for terminal control
   final Console _console = Console();
 
+  /// Stdin byte queue for async reading
+  final _stdinQueue = <int>[];
+  StreamSubscription<List<int>>? _stdinSubscription;
+  Completer<int>? _byteCompleter;
+
+  /// Initialize async stdin reading
+  void _initAsyncStdin() {
+    if (_stdinSubscription != null) return;
+    stdin.echoMode = false;
+    stdin.lineMode = false;
+    _stdinSubscription = stdin.listen((data) {
+      _stdinQueue.addAll(data);
+      // Complete any pending read
+      if (_byteCompleter != null && !_byteCompleter!.isCompleted && _stdinQueue.isNotEmpty) {
+        _byteCompleter!.complete(_stdinQueue.removeAt(0));
+        _byteCompleter = null;
+      }
+    });
+  }
+
+  /// Read a single byte asynchronously to allow event loop to process HTTP requests
+  Future<int> _readByteAsync() async {
+    if (_stdinQueue.isNotEmpty) {
+      return _stdinQueue.removeAt(0);
+    }
+    _byteCompleter = Completer<int>();
+    return _byteCompleter!.future;
+  }
+
+  /// Cleanup async stdin
+  void _cleanupAsyncStdin() {
+    _stdinSubscription?.cancel();
+    _stdinSubscription = null;
+    _stdinQueue.clear();
+    _byteCompleter = null;
+  }
+
   /// Read a line with TAB completion and history support
   Future<String?> _readLineWithCompletion(String prompt) async {
     // Check if stdin is a terminal
@@ -208,11 +502,11 @@ class PureConsole {
     var buffer = '';
     var index = 0; // cursor position
 
-    // Use dart_console's rawMode for reliable terminal mode control
-    _console.rawMode = true;
+    // Use async stdin reading to allow HTTP server to process requests
+    _initAsyncStdin();
     try {
       while (true) {
-        final byte = stdin.readByteSync();
+        final byte = await _readByteAsync();
         if (byte == -1) continue; // EOF, keep reading
 
         // Enter (CR or LF)
@@ -378,9 +672,9 @@ class PureConsole {
           }
         }
       }
-    } finally {
-      // Restore terminal to normal mode
-      _console.rawMode = false;
+    } catch (e) {
+      // On error, just return what we have
+      return buffer.isEmpty ? null : buffer.trim();
     }
   }
 
@@ -496,7 +790,8 @@ class PureConsole {
 
   /// Get completion candidates based on current input
   List<Candidate> _getCompletions(String buffer) {
-    final parts = buffer.split(RegExp(r'\s+'));
+    // Filter out empty strings from split (happens with trailing spaces)
+    final parts = buffer.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
     if (parts.isEmpty) {
       return _getContextAwareCommands('');
     }
@@ -526,7 +821,7 @@ class PureConsole {
 
       // Check for sub-commands
       if (subCommands.containsKey(firstWord)) {
-        return _filterCandidates(subCommands[firstWord]!, partial);
+        return _filterSubCommands(firstWord, subCommands[firstWord]!, partial);
       }
 
       // Special completions based on command
@@ -634,6 +929,10 @@ class PureConsole {
       if (localCmd == 'play' || localCmd == 'info') {
         return _completeGameFiles(partial);
       }
+    } else if (_currentPath == '/ssl') {
+      if (localCmd == 'autorenew') {
+        return _filterCandidates(['on', 'off'], partial);
+      }
     }
 
     return [];
@@ -672,9 +971,9 @@ class PureConsole {
       } else if (baseDir == 'chat' && pathParts.length == 2) {
         // Completing chat room name
         final roomPartial = pathParts[1].toLowerCase();
-        for (final roomId in _relay.chatRooms.keys) {
-          if (roomId.toLowerCase().startsWith(roomPartial)) {
-            candidates.add(Candidate('/chat/$roomId', display: '/chat/$roomId/', group: 'chat room', complete: false));
+        for (final channel in _chatService.channels) {
+          if (channel.id.toLowerCase().startsWith(roomPartial)) {
+            candidates.add(Candidate('/chat/${channel.id}', display: '/chat/${channel.id}/', group: 'chat room', complete: false));
           }
         }
       }
@@ -689,9 +988,9 @@ class PureConsole {
         }
       }
     } else if (_currentPath == '/chat') {
-      for (final roomId in _relay.chatRooms.keys) {
-        if (roomId.toLowerCase().startsWith(lowerPartial)) {
-          candidates.add(Candidate(roomId, display: '$roomId/', group: 'chat room', complete: false));
+      for (final channel in _chatService.channels) {
+        if (channel.id.toLowerCase().startsWith(lowerPartial)) {
+          candidates.add(Candidate(channel.id, display: '${channel.id}/', group: 'chat room', complete: false));
         }
       }
     } else if (_currentPath == '/devices') {
@@ -726,9 +1025,9 @@ class PureConsole {
     final candidates = <Candidate>[];
     final lowerPartial = partial.toLowerCase();
 
-    for (final room in _relay.chatRooms.values) {
-      if (room.id.toLowerCase().startsWith(lowerPartial)) {
-        candidates.add(Candidate(room.id, display: '${room.id} (${room.name})', group: 'room'));
+    for (final channel in _chatService.channels) {
+      if (channel.id.toLowerCase().startsWith(lowerPartial)) {
+        candidates.add(Candidate(channel.id, display: '${channel.id} (${channel.name})', group: 'room'));
       }
     }
 
@@ -764,6 +1063,20 @@ class PureConsole {
         .toList();
   }
 
+  /// Filter sub-commands with descriptions
+  List<Candidate> _filterSubCommands(String command, List<String> options, String partial) {
+    final lowerPartial = partial.toLowerCase();
+    return options
+        .where((opt) => opt.toLowerCase().startsWith(lowerPartial))
+        .map((opt) {
+          final descKey = '$command.$opt';
+          final desc = subCommandDescriptions[descKey];
+          final display = desc != null ? '$opt - $desc' : opt;
+          return Candidate(opt, display: display, group: '$command subcommands');
+        })
+        .toList();
+  }
+
   /// Find common prefix among candidates
   String _findCommonPrefix(List<String> strings) {
     if (strings.isEmpty) return '';
@@ -791,8 +1104,10 @@ class PureConsole {
       if (entry.key != null) {
         stdout.writeln('\x1B[33m${entry.key}:\x1B[0m');
       }
-      final displays = entry.value.map((c) => c.display).toList();
-      _printColumns(displays);
+      // Print one item per line for readability
+      for (final c in entry.value) {
+        stdout.writeln('  ${c.display}');
+      }
     }
   }
 
@@ -852,6 +1167,12 @@ class PureConsole {
   }
 
   Future<bool> _processCommand(String command, List<String> args) async {
+    // Check for help request (command ends with ? or last arg is ?)
+    if (command == '?' || (args.isNotEmpty && args.last == '?')) {
+      _showCommandHelp(command == '?' ? null : command, args.where((a) => a != '?').toList());
+      return false;
+    }
+
     // Context-specific commands when in /relay
     if (_currentPath == '/relay' || _currentPath.startsWith('/relay/')) {
       switch (command) {
@@ -877,10 +1198,13 @@ class PureConsole {
     if (_currentChatRoom != null) {
       switch (command) {
         case 'messages':
-          _handleChatHistory(args);
+          await _handleChatHistory(args);
           return false;
         case 'delmsg':
-          _handleDeleteMessage(args);
+          await _handleDeleteMessage(args);
+          return false;
+        case 'ls':
+          await _handleChatHistory(args);
           return false;
       }
     }
@@ -921,6 +1245,97 @@ class PureConsole {
       }
     }
 
+    // Context-specific commands when in /devices
+    if (_currentPath == '/devices') {
+      switch (command) {
+        case 'list':
+          _listDevices();
+          return false;
+        case 'scan':
+          await _scanDevices(args);
+          return false;
+        case 'ping':
+          if (args.isEmpty) {
+            _printError('Usage: ping <ip[:port]>');
+          } else {
+            await _pingDevice(args[0]);
+          }
+          return false;
+      }
+    }
+
+    // Context-specific commands when in /chat
+    if (_currentPath == '/chat') {
+      switch (command) {
+        case 'list':
+          await _listChatRooms();
+          return false;
+        case 'info':
+          if (args.isEmpty) {
+            _printError('Usage: info <room_id>');
+          } else {
+            await _showChatInfo(args[0]);
+          }
+          return false;
+        case 'create':
+          if (args.length < 2) {
+            _printError('Usage: create <id> <name> [description]');
+          } else {
+            final desc = args.length > 2 ? args.sublist(2).join(' ') : null;
+            await _createChatRoom(args[0], args[1], desc);
+          }
+          return false;
+        case 'delete':
+          if (args.isEmpty) {
+            _printError('Usage: delete <room_id>');
+          } else {
+            await _deleteChatRoom(args[0]);
+          }
+          return false;
+        case 'rename':
+          if (args.length < 2) {
+            _printError('Usage: rename <room_id> <new_name>');
+          } else {
+            await _renameChatRoom(args[0], args[1]);
+          }
+          return false;
+        case 'history':
+          if (args.isEmpty) {
+            _printError('Usage: history <room_id> [limit]');
+          } else {
+            final limit = args.length > 1 ? int.tryParse(args[1]) : null;
+            await _showChatHistory(args[0], limit ?? 50);
+          }
+          return false;
+        case 'say':
+          if (args.length < 2) {
+            _printError('Usage: say <room_id> <message>');
+          } else {
+            await _postMessage(args[0], args.sublist(1).join(' '));
+          }
+          return false;
+      }
+    }
+
+    // Context-specific commands when in /config
+    if (_currentPath == '/config') {
+      switch (command) {
+        case 'set':
+          if (args.length < 2) {
+            _printError('Usage: set <key> <value>');
+          } else {
+            await _setConfig(args[0], args.sublist(1).join(' '));
+          }
+          return false;
+        case 'show':
+          _showConfigList();
+          return false;
+        case 'location':
+          await _handleLocationDetect();
+          return false;
+      }
+    }
+
     // Global commands
     switch (command) {
       case 'help':
@@ -937,7 +1352,7 @@ class PureConsole {
         _handleLs(args);
         break;
       case 'cd':
-        _handleCd(args);
+        await _handleCd(args);
         break;
       case 'pwd':
         stdout.writeln(_currentPath);
@@ -998,6 +1413,9 @@ class PureConsole {
         break;
       case 'setup':
         await _handleSetup();
+        break;
+      case 'profile':
+        await _handleProfile(args);
         break;
       case 'ssl':
         await _handleSsl(args);
@@ -1107,6 +1525,43 @@ class PureConsole {
     stdout.writeln('    /ssl/              SSL/TLS certificates (cd ssl, then run commands)');
     stdout.writeln('    /games/            Markdown-based text adventure games');
     stdout.writeln();
+    stdout.writeln('  \x1B[90mTip: Type "command ?" for syntax help (e.g., "chat create ?")\x1B[0m');
+    stdout.writeln();
+  }
+
+  /// Show help for a specific command
+  void _showCommandHelp(String? command, List<String> subArgs) {
+    String helpKey;
+
+    if (command == null) {
+      // Just "?" was typed - show general help
+      _printHelp();
+      return;
+    }
+
+    // Build the help key based on command and subcommand
+    if (subArgs.isNotEmpty) {
+      // Try "command subcommand" first (e.g., "chat create")
+      helpKey = '$command ${subArgs.first}';
+      if (!commandHelp.containsKey(helpKey)) {
+        // Fall back to just the subcommand for context-specific help
+        helpKey = subArgs.first;
+      }
+    } else {
+      helpKey = command;
+    }
+
+    final help = commandHelp[helpKey];
+    if (help != null) {
+      stdout.writeln();
+      stdout.writeln('\x1B[1mSyntax:\x1B[0m $help');
+      stdout.writeln();
+    } else {
+      stdout.writeln();
+      stdout.writeln('\x1B[33mNo help available for "$helpKey"\x1B[0m');
+      stdout.writeln('Type "help" for a list of available commands.');
+      stdout.writeln();
+    }
   }
 
   void _printStatus() {
@@ -1164,7 +1619,63 @@ class PureConsole {
 
   // --- Relay commands ---
 
+  /// Check if relay commands are allowed in current context
+  bool _isRelayContextAllowed() {
+    // Check if active profile is a relay
+    final activeProfile = _profileService.activeProfile;
+    if (activeProfile != null && activeProfile.isRelay) {
+      return true;
+    }
+
+    // Check if we're inside a managed relay's device folder
+    if (_currentPath.startsWith('/devices/')) {
+      final parts = _currentPath.split('/');
+      if (parts.length >= 3) {
+        final callsign = parts[2];
+        if (_profileService.isManagedRelay(callsign)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Get the relay callsign from current context
+  String? _getRelayCallsignFromContext() {
+    // First check if we're in a device folder
+    if (_currentPath.startsWith('/devices/')) {
+      final parts = _currentPath.split('/');
+      if (parts.length >= 3) {
+        final callsign = parts[2];
+        if (_profileService.isManagedRelay(callsign)) {
+          return callsign;
+        }
+      }
+    }
+
+    // Fall back to active profile if it's a relay
+    final activeProfile = _profileService.activeProfile;
+    if (activeProfile != null && activeProfile.isRelay) {
+      return activeProfile.callsign;
+    }
+
+    return null;
+  }
+
   Future<void> _handleRelay(List<String> args) async {
+    // Check if relay commands are allowed
+    if (!_isRelayContextAllowed()) {
+      _printError('Relay commands require a relay profile or being in a managed relay folder.');
+      stdout.writeln('Current profile: ${_profileService.activeProfile?.callsign ?? "none"}');
+      stdout.writeln();
+      stdout.writeln('Options:');
+      stdout.writeln('  - Create a relay profile: \x1B[36msetup\x1B[0m (choose option 2)');
+      stdout.writeln('  - Switch to a relay profile: \x1B[36mprofile switch <relay-callsign>\x1B[0m');
+      stdout.writeln('  - Navigate to a managed relay: \x1B[36mcd /devices/<relay-callsign>\x1B[0m');
+      return;
+    }
+
     if (args.isEmpty) {
       _printRelayStatus();
       return;
@@ -1351,36 +1862,65 @@ class PureConsole {
           await _pingDevice(args[1]);
         }
         break;
-      case 'kick':
-        if (args.length < 2) {
-          _printError('Usage: devices kick <callsign>');
-        } else {
-          _handleKick(args.sublist(1));
-        }
-        break;
       default:
-        _printError('Unknown devices command. Available: list, scan, ping, kick');
+        _printError('Unknown devices command. Available: list, scan, ping');
     }
   }
 
   void _listDevices() {
-    final clients = _relay.clients;
-
     stdout.writeln();
-    stdout.writeln('\x1B[1mConnected Devices (${clients.length})\x1B[0m');
+
+    // Get all devices sorted (owned first, then cached)
+    final allDevices = _profileService.getAllDevicesSorted();
+
+    // Section 1: My Devices (owned profiles)
+    final ownedDevices = allDevices.where((d) => d['owned'] == true).toList();
+    stdout.writeln('\x1B[1mMy Devices (${ownedDevices.length})\x1B[0m');
+    stdout.writeln('-' * 60);
+
+    if (ownedDevices.isEmpty) {
+      stdout.writeln('  No profiles configured. Run "setup" to create one.');
+    } else {
+      for (final device in ownedDevices) {
+        final isActive = device['active'] == true;
+        final activeMarker = isActive ? '\x1B[32m*\x1B[0m' : ' ';
+        final typeStr = device['type'] == 'relay' ? '\x1B[33mrelay\x1B[0m' : '\x1B[36mclient\x1B[0m';
+        final callsign = device['callsign'] as String;
+        final nickname = device['nickname'] as String;
+        final displayName = nickname.isNotEmpty ? '$callsign ($nickname)' : callsign;
+        stdout.writeln('$activeMarker \x1B[1m$displayName\x1B[0m - $typeStr');
+      }
+    }
+    stdout.writeln();
+
+    // Section 2: Cached/Known Devices
+    final cachedDevices = allDevices.where((d) => d['owned'] != true).toList();
+    if (cachedDevices.isNotEmpty) {
+      stdout.writeln('\x1B[1mKnown Devices (${cachedDevices.length})\x1B[0m');
+      stdout.writeln('-' * 60);
+      for (final device in cachedDevices) {
+        final callsign = device['callsign'] as String;
+        final typeStr = device['type'] ?? 'unknown';
+        stdout.writeln('  $callsign - $typeStr');
+      }
+      stdout.writeln();
+    }
+
+    // Section 3: Currently Connected (relay clients)
+    final clients = _relay.clients;
+    stdout.writeln('\x1B[1mConnected Now (${clients.length})\x1B[0m');
     stdout.writeln('-' * 60);
 
     if (clients.isEmpty) {
-      stdout.writeln('No devices connected');
+      stdout.writeln('  No devices connected to this relay');
     } else {
-      stdout.writeln('${'Callsign'.padRight(12)} ${'Type'.padRight(10)} ${'Address'.padRight(16)} Connected');
-      stdout.writeln('-' * 60);
       for (final client in clients.values) {
         final connectedAgo = DateTime.now().difference(client.connectedAt);
+        final isOwned = _profileService.isOwnedCallsign(client.callsign ?? '');
+        final ownedMarker = isOwned ? '\x1B[32m*\x1B[0m' : ' ';
         stdout.writeln(
-          '${(client.callsign ?? 'Unknown').padRight(12)} '
-          '${(client.deviceType ?? 'Unknown').padRight(10)} '
-          '${(client.address ?? 'Unknown').padRight(16)} '
+          '$ownedMarker ${(client.callsign ?? 'Unknown').padRight(12)} '
+          '${(client.deviceType ?? '-').padRight(10)} '
           '${_formatDuration(connectedAgo)} ago'
         );
       }
@@ -1453,19 +1993,19 @@ class PureConsole {
 
   Future<void> _handleChat(List<String> args) async {
     if (args.isEmpty) {
-      _listChatRooms();
+      await _listChatRooms();
       return;
     }
 
     switch (args[0].toLowerCase()) {
       case 'list':
-        _listChatRooms();
+        await _listChatRooms();
         break;
       case 'info':
         if (args.length < 2) {
           _printError('Usage: chat info <room_id>');
         } else {
-          _showChatInfo(args[1]);
+          await _showChatInfo(args[1]);
         }
         break;
       case 'create':
@@ -1473,46 +2013,42 @@ class PureConsole {
           _printError('Usage: chat create <id> <name> [description]');
         } else {
           final desc = args.length > 3 ? args.sublist(3).join(' ') : null;
-          _createChatRoom(args[1], args[2], desc);
+          await _createChatRoom(args[1], args[2], desc);
         }
         break;
       case 'delete':
         if (args.length < 2) {
           _printError('Usage: chat delete <room_id>');
         } else {
-          _deleteChatRoom(args[1]);
+          await _deleteChatRoom(args[1]);
         }
         break;
       case 'rename':
         if (args.length < 3) {
           _printError('Usage: chat rename <old_id> <new_name>');
         } else {
-          _renameChatRoom(args[1], args[2]);
+          await _renameChatRoom(args[1], args[2]);
         }
         break;
       case 'history':
         if (args.length < 2) {
           _printError('Usage: chat history <room_id> [count]');
         } else {
-          _showChatHistory(args[1], args.length > 2 ? int.tryParse(args[2]) : null);
+          await _showChatHistory(args[1], args.length > 2 ? int.tryParse(args[2]) : null);
         }
         break;
       case 'say':
         if (args.length < 3) {
           _printError('Usage: chat say <room_id> <message>');
         } else {
-          _postMessage(args[1], args.sublist(2).join(' '));
+          await _postMessage(args[1], args.sublist(2).join(' '));
         }
         break;
       case 'delmsg':
         if (args.length < 3) {
           _printError('Usage: chat delmsg <room_id> <message_id>');
         } else {
-          if (_relay.deleteMessage(args[1], args[2])) {
-            stdout.writeln('Message deleted');
-          } else {
-            _printError('Message not found');
-          }
+          await _handleDeleteMessage([args[1], args[2]]);
         }
         break;
       default:
@@ -1520,184 +2056,362 @@ class PureConsole {
     }
   }
 
-  void _listChatRooms() {
-    final rooms = _relay.chatRooms;
+  Future<void> _listChatRooms() async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
+      return;
+    }
+
+    final channels = _chatService.channels;
 
     stdout.writeln();
-    stdout.writeln('\x1B[1mChat Rooms (${rooms.length})\x1B[0m');
+    stdout.writeln('\x1B[1mChat Rooms (${channels.length})\x1B[0m');
     stdout.writeln('-' * 50);
 
-    for (final room in rooms.values) {
+    for (final channel in channels) {
+      final msgCount = await _chatService.getMessageCount(channel.id);
       stdout.writeln(
-        '${room.id.padRight(15)} '
-        '${room.name.padRight(20)} '
-        '${room.messages.length} msgs'
+        '${channel.id.padRight(15)} '
+        '${channel.name.padRight(20)} '
+        '$msgCount msgs'
       );
     }
     stdout.writeln();
   }
 
-  void _showChatInfo(String roomId) {
-    final room = _relay.chatRooms[roomId];
-    if (room == null) {
+  Future<void> _showChatInfo(String roomId) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
+      return;
+    }
+
+    final channel = _chatService.getChannel(roomId);
+    if (channel == null) {
       _printError('Room not found: $roomId');
       return;
     }
 
+    final msgCount = await _chatService.getMessageCount(roomId);
+
     stdout.writeln();
-    stdout.writeln('\x1B[1mChat Room: ${room.name}\x1B[0m');
+    stdout.writeln('\x1B[1mChat Room: ${channel.name}\x1B[0m');
     stdout.writeln('-' * 40);
-    stdout.writeln('ID:          ${room.id}');
-    stdout.writeln('Name:        ${room.name}');
-    stdout.writeln('Description: ${room.description.isEmpty ? '(none)' : room.description}');
-    stdout.writeln('Creator:     ${room.creatorCallsign}');
-    stdout.writeln('Created:     ${room.createdAt.toLocal()}');
-    stdout.writeln('Last Active: ${room.lastActivity.toLocal()}');
-    stdout.writeln('Messages:    ${room.messages.length}');
-    stdout.writeln('Public:      ${room.isPublic ? 'Yes' : 'No'}');
+    stdout.writeln('ID:          ${channel.id}');
+    stdout.writeln('Name:        ${channel.name}');
+    stdout.writeln('Description: ${channel.description ?? '(none)'}');
+    stdout.writeln('Type:        ${channel.type.name}');
+    stdout.writeln('Created:     ${channel.created.toLocal()}');
+    if (channel.lastMessageTime != null) {
+      stdout.writeln('Last Active: ${channel.lastMessageTime!.toLocal()}');
+    }
+    stdout.writeln('Messages:    $msgCount');
+    stdout.writeln('Public:      ${channel.isPublic ? 'Yes' : 'No'}');
     stdout.writeln();
   }
 
-  void _createChatRoom(String id, String name, String? description) {
-    final room = _relay.createChatRoom(id, name, description: description);
-    if (room != null) {
+  Future<void> _createChatRoom(String id, String name, String? description) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
+      return;
+    }
+
+    final channel = await _chatService.createChannel(id, name, description: description);
+    if (channel != null) {
       stdout.writeln('\x1B[32mChat room created: $name ($id)\x1B[0m');
     } else {
       _printError('Room with ID "$id" already exists');
     }
   }
 
-  void _deleteChatRoom(String id) {
-    if (id == 'general') {
-      _printError('Cannot delete the general room');
+  Future<void> _deleteChatRoom(String id) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
       return;
     }
-    if (_relay.deleteChatRoom(id)) {
+
+    if (id == 'main') {
+      _printError('Cannot delete the main room');
+      return;
+    }
+    if (await _chatService.deleteChannel(id)) {
       stdout.writeln('\x1B[32mChat room deleted: $id\x1B[0m');
     } else {
       _printError('Room not found: $id');
     }
   }
 
-  void _renameChatRoom(String id, String newName) {
-    if (_relay.renameChatRoom(id, newName)) {
+  Future<void> _renameChatRoom(String id, String newName) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
+      return;
+    }
+
+    if (await _chatService.renameChannel(id, newName)) {
       stdout.writeln('\x1B[32mRoom renamed to: $newName\x1B[0m');
     } else {
       _printError('Room not found: $id');
     }
   }
 
-  void _showChatHistory(String roomId, int? limit) {
-    final messages = _relay.getChatHistory(roomId, limit: limit ?? 20);
-    if (messages.isEmpty) {
-      stdout.writeln('No messages in room');
+  Future<void> _showChatHistory(String roomId, int? limit) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
       return;
     }
 
-    stdout.writeln();
-    for (final msg in messages) {
-      final time = msg.timestamp.toLocal();
-      final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-      stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[36m${msg.senderCallsign}:\x1B[0m ${msg.content}');
+    final messages = await _chatService.loadMessages(roomId, limit: limit ?? 20);
+    if (messages.isEmpty) {
+      return; // Silent if no messages
     }
-    stdout.writeln();
+
+    for (final msg in messages) {
+      final time = msg.dateTime.toLocal();
+      final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+      stdout.writeln('\x1B[33m[$timeStr]\x1B[0m \x1B[36m${msg.author}:\x1B[0m ${msg.content}');
+    }
   }
 
-  void _postMessage(String roomId, String message) {
-    if (!_relay.chatRooms.containsKey(roomId)) {
+  Future<void> _postMessage(String roomId, String message) async {
+    if (!_chatService.isInitialized) {
+      _printError('Chat not initialized. Please create a profile first.');
+      return;
+    }
+
+    if (_chatService.getChannel(roomId) == null) {
       _printError('Room not found: $roomId');
       return;
     }
-    _relay.postMessage(roomId, message);
-    stdout.writeln('Message sent');
+
+    if (await _chatService.postMessage(roomId, message)) {
+      stdout.writeln('Message sent');
+    } else {
+      _printError('Failed to send message');
+    }
   }
 
-  void _handleChatHistory(List<String> args) {
+  Future<void> _handleChatHistory(List<String> args) async {
     if (_currentChatRoom == null) return;
     final limit = args.isNotEmpty ? int.tryParse(args[0]) : null;
-    _showChatHistory(_currentChatRoom!, limit);
+    await _showChatHistory(_currentChatRoom!, limit);
   }
 
-  void _handleDeleteMessage(List<String> args) {
-    if (_currentChatRoom == null || args.isEmpty) return;
-    if (_relay.deleteMessage(_currentChatRoom!, args[0])) {
-      stdout.writeln('Message deleted');
-    } else {
-      _printError('Message not found');
-    }
+  Future<void> _handleDeleteMessage(List<String> args) async {
+    if (!_chatService.isInitialized || _currentChatRoom == null || args.isEmpty) return;
+
+    // For now, show error since delete by ID isn't directly supported
+    // Would need to load messages and find by timestamp
+    _printError('Delete by message ID not yet implemented. Use timestamp format.');
   }
 
   // --- Config commands ---
 
   Future<void> _handleConfig(List<String> args) async {
     if (args.isEmpty) {
-      _showConfig();
+      _showConfigList();
       return;
     }
 
     switch (args[0].toLowerCase()) {
       case 'set':
         if (args.length < 3) {
-          _printError('Usage: config set <key> <value>');
+          _printError('Usage: set <key> <value>');
         } else {
           await _setConfig(args[1], args.sublist(2).join(' '));
         }
         break;
-      case 'save':
-        await _relay.saveSettings();
-        stdout.writeln('\x1B[32mConfiguration saved\x1B[0m');
+      case 'show':
+        _showConfigList();
         break;
       default:
-        _printError('Unknown config command. Available: set, save');
+        _printError('Unknown config command. Available: set, show');
     }
   }
 
-  void _showConfig() {
-    final settings = _relay.settings;
+  /// Get the current value of a config key from the profile
+  dynamic _getConfigValue(String key) {
+    final profile = _profileService.activeProfile;
+    if (profile == null) return null;
 
-    stdout.writeln();
-    stdout.writeln('\x1B[1mConfiguration\x1B[0m');
-    stdout.writeln('-' * 40);
-    stdout.writeln('port:               ${settings.port}');
-    stdout.writeln('callsign:           ${settings.callsign}');
-    stdout.writeln('description:        ${settings.description ?? '(not set)'}');
-    stdout.writeln('location:           ${settings.location ?? '(not set)'}');
-    stdout.writeln('latitude:           ${settings.latitude ?? '(not set)'}');
-    stdout.writeln('longitude:          ${settings.longitude ?? '(not set)'}');
-    stdout.writeln('tileServerEnabled:  ${settings.tileServerEnabled}');
-    stdout.writeln('osmFallbackEnabled: ${settings.osmFallbackEnabled}');
-    stdout.writeln('maxZoomLevel:       ${settings.maxZoomLevel}');
-    stdout.writeln('maxCacheSize:       ${settings.maxCacheSize}');
-    stdout.writeln('enableAprs:         ${settings.enableAprs}');
-    stdout.writeln('enableCors:         ${settings.enableCors}');
-    stdout.writeln('maxConnectedDevices: ${settings.maxConnectedDevices}');
-    stdout.writeln();
-    stdout.writeln('Use "config set <key> <value>" to change settings');
-    stdout.writeln('Use "config save" to persist changes');
-    stdout.writeln();
+    switch (key) {
+      case 'nickname': return profile.nickname;
+      case 'description': return profile.description;
+      case 'preferredColor': return profile.preferredColor;
+      case 'latitude': return profile.latitude;
+      case 'longitude': return profile.longitude;
+      case 'locationName': return profile.locationName;
+      case 'enableAprs': return profile.enableAprs;
+      // Relay settings
+      case 'port': return profile.port ?? _relay.settings.port;
+      case 'tileServerEnabled': return profile.tileServerEnabled;
+      case 'osmFallbackEnabled': return profile.osmFallbackEnabled;
+      case 'maxZoomLevel': return _relay.settings.maxZoomLevel;
+      case 'maxCacheSize': return _relay.settings.maxCacheSize;
+      case 'enableCors': return _relay.settings.enableCors;
+      case 'maxConnectedDevices': return _relay.settings.maxConnectedDevices;
+      default: return null;
+    }
+  }
+
+  /// Show config keys with values (for ls in /config)
+  void _showConfigList() {
+    final keys = configKeys;
+    final maxKeyLen = keys.map((k) => k.length).reduce((a, b) => a > b ? a : b);
+
+    for (final key in keys) {
+      final value = _getConfigValue(key);
+      final type = configKeyTypes[key] ?? 'string';
+      final valueStr = value?.toString() ?? '\x1B[90m(not set)\x1B[0m';
+      final typeStr = '\x1B[90m[$type]\x1B[0m';
+
+      stdout.writeln('${key.padRight(maxKeyLen)}  $valueStr  $typeStr');
+    }
+  }
+
+  /// Validate a value against the expected type
+  String? _validateConfigValue(String key, String value) {
+    final type = configKeyTypes[key];
+    if (type == null) {
+      return 'Unknown config key: $key';
+    }
+
+    switch (type) {
+      case 'bool':
+        if (value.toLowerCase() != 'true' && value.toLowerCase() != 'false') {
+          return '$key must be true or false';
+        }
+        break;
+      case 'int':
+        if (int.tryParse(value) == null) {
+          return '$key must be an integer';
+        }
+        break;
+      case 'double':
+        if (double.tryParse(value) == null) {
+          return '$key must be a number';
+        }
+        break;
+      case 'string':
+        // Any string is valid
+        break;
+    }
+    return null;
   }
 
   Future<void> _setConfig(String key, String value) async {
+    // Check if key is valid for this profile type
+    if (!configKeys.contains(key)) {
+      _printError('Unknown config key: $key');
+      _printError('Available keys: ${configKeys.join(', ')}');
+      return;
+    }
+
+    // Validate value
+    final error = _validateConfigValue(key, value);
+    if (error != null) {
+      _printError(error);
+      return;
+    }
+
     try {
+      // Parse value based on type
+      final type = configKeyTypes[key]!;
       dynamic parsedValue;
-      if (value == 'true') {
-        parsedValue = true;
-      } else if (value == 'false') {
-        parsedValue = false;
-      } else if (int.tryParse(value) != null) {
-        parsedValue = int.parse(value);
-      } else if (double.tryParse(value) != null) {
-        parsedValue = double.parse(value);
-      } else {
-        parsedValue = value;
+      switch (type) {
+        case 'bool':
+          parsedValue = value.toLowerCase() == 'true';
+          break;
+        case 'int':
+          parsedValue = int.parse(value);
+          break;
+        case 'double':
+          parsedValue = double.parse(value);
+          break;
+        default:
+          parsedValue = value;
       }
 
-      _relay.setSetting(key, parsedValue);
-      stdout.writeln('\x1B[32m$key set to $value\x1B[0m');
-      stdout.writeln('Use "config save" to persist changes');
+      // Update the profile
+      final profile = _profileService.activeProfile;
+      if (profile != null) {
+        Profile updatedProfile;
+        switch (key) {
+          case 'nickname':
+            updatedProfile = profile.copyWith(nickname: parsedValue);
+            break;
+          case 'description':
+            updatedProfile = profile.copyWith(description: parsedValue);
+            break;
+          case 'preferredColor':
+            updatedProfile = profile.copyWith(preferredColor: parsedValue);
+            break;
+          case 'latitude':
+            updatedProfile = profile.copyWith(latitude: parsedValue);
+            break;
+          case 'longitude':
+            updatedProfile = profile.copyWith(longitude: parsedValue);
+            break;
+          case 'locationName':
+            updatedProfile = profile.copyWith(locationName: parsedValue);
+            break;
+          case 'enableAprs':
+            updatedProfile = profile.copyWith(enableAprs: parsedValue);
+            break;
+          case 'port':
+            updatedProfile = profile.copyWith(port: parsedValue);
+            _relay.setSetting(key, parsedValue);
+            break;
+          case 'tileServerEnabled':
+            updatedProfile = profile.copyWith(tileServerEnabled: parsedValue);
+            break;
+          case 'osmFallbackEnabled':
+            updatedProfile = profile.copyWith(osmFallbackEnabled: parsedValue);
+            break;
+          default:
+            // Relay-only settings stored in relay settings
+            _relay.setSetting(key, parsedValue);
+            stdout.writeln('\x1B[32m$key set to $value\x1B[0m');
+            return;
+        }
+
+        await _profileService.updateProfile(updatedProfile);
+        stdout.writeln('\x1B[32m$key set to $value\x1B[0m');
+      }
     } catch (e) {
       _printError('Failed to set $key: $e');
     }
+  }
+
+  /// Auto-detect location via IP address
+  Future<void> _handleLocationDetect() async {
+    stdout.writeln('Detecting location via IP address...');
+
+    final locationService = CliLocationService();
+    final result = await locationService.detectLocationViaIP();
+
+    if (result == null) {
+      _printError('Failed to detect location. Please check your internet connection.');
+      return;
+    }
+
+    // Update profile with detected location
+    final profile = _profileService.activeProfile;
+    if (profile == null) {
+      _printError('No active profile');
+      return;
+    }
+
+    final updatedProfile = profile.copyWith(
+      latitude: result.latitude,
+      longitude: result.longitude,
+      locationName: result.locationName,
+    );
+
+    await _profileService.updateProfile(updatedProfile);
+
+    stdout.writeln('\x1B[32mLocation detected successfully:\x1B[0m');
+    stdout.writeln('  Location: ${result.locationName}');
+    stdout.writeln('  Latitude: ${result.latitude}');
+    stdout.writeln('  Longitude: ${result.longitude}');
   }
 
   // --- Logs command ---
@@ -2016,23 +2730,287 @@ class PureConsole {
     }
   }
 
+  // --- Profile commands ---
+
+  Future<void> _handleProfile(List<String> args) async {
+    if (args.isEmpty) {
+      // Show current profile
+      await _showCurrentProfile();
+      return;
+    }
+
+    final subCommand = args[0].toLowerCase();
+    final subArgs = args.length > 1 ? args.sublist(1) : <String>[];
+
+    switch (subCommand) {
+      case 'list':
+        await _listProfiles();
+        break;
+      case 'show':
+        await _showCurrentProfile();
+        break;
+      case 'add':
+        await _handleSetup(); // Reuse setup wizard
+        break;
+      case 'switch':
+        if (subArgs.isEmpty) {
+          _printError('Usage: profile switch <callsign>');
+          return;
+        }
+        await _switchProfile(subArgs[0]);
+        break;
+      case 'delete':
+        if (subArgs.isEmpty) {
+          _printError('Usage: profile delete <callsign>');
+          return;
+        }
+        await _deleteProfile(subArgs[0]);
+        break;
+      default:
+        _printError('Unknown profile command: $subCommand');
+        stdout.writeln('Available: list, show, add, switch, delete');
+    }
+  }
+
+  Future<void> _showCurrentProfile() async {
+    final profile = _profileService.activeProfile;
+    if (profile == null) {
+      stdout.writeln('\x1B[33mNo profile configured. Run "setup" to create one.\x1B[0m');
+      return;
+    }
+
+    final typeStr = profile.isRelay ? 'Relay (X3)' : 'Client (X1)';
+    stdout.writeln();
+    stdout.writeln('\x1B[1mActive Profile:\x1B[0m');
+    stdout.writeln('  Type:        \x1B[36m$typeStr\x1B[0m');
+    stdout.writeln('  Callsign:    \x1B[36m${profile.callsign}\x1B[0m');
+    stdout.writeln('  Nickname:    \x1B[36m${profile.nickname.isEmpty ? '(not set)' : profile.nickname}\x1B[0m');
+    stdout.writeln('  Description: \x1B[36m${profile.description.isEmpty ? '(not set)' : profile.description}\x1B[0m');
+    if (profile.locationName != null) {
+      stdout.writeln('  Location:    \x1B[36m${profile.locationName}\x1B[0m');
+    }
+    stdout.writeln('  npub:        \x1B[90m${profile.npub}\x1B[0m');
+    stdout.writeln('  Created:     \x1B[90m${profile.createdAt.toIso8601String().substring(0, 10)}\x1B[0m');
+
+    if (profile.isRelay) {
+      stdout.writeln();
+      stdout.writeln('\x1B[1mRelay Settings:\x1B[0m');
+      stdout.writeln('  Port:        \x1B[36m${profile.port ?? 8080}\x1B[0m');
+      stdout.writeln('  Role:        \x1B[36m${profile.relayRole ?? 'not set'}\x1B[0m');
+      if (profile.parentRelayUrl != null) {
+        stdout.writeln('  Parent URL:  \x1B[36m${profile.parentRelayUrl}\x1B[0m');
+      }
+    }
+    stdout.writeln();
+  }
+
+  Future<void> _listProfiles() async {
+    final profiles = _profileService.profiles;
+    if (profiles.isEmpty) {
+      stdout.writeln('\x1B[33mNo profiles configured. Run "setup" to create one.\x1B[0m');
+      return;
+    }
+
+    stdout.writeln();
+    stdout.writeln('\x1B[1mProfiles:\x1B[0m');
+    stdout.writeln();
+
+    for (final profile in profiles) {
+      final isActive = profile.id == _profileService.activeProfile?.id;
+      final typeStr = profile.isRelay ? 'relay' : 'client';
+      final activeStr = isActive ? '\x1B[32m*\x1B[0m ' : '  ';
+      final displayName = profile.nickname.isNotEmpty
+          ? '${profile.callsign} (${profile.nickname})'
+          : profile.callsign;
+
+      stdout.writeln('$activeStr\x1B[36m$displayName\x1B[0m - $typeStr');
+    }
+    stdout.writeln();
+    stdout.writeln('Total: ${profiles.length} profile(s)');
+    stdout.writeln('Use "profile switch <callsign>" to change active profile.');
+    stdout.writeln();
+  }
+
+  Future<void> _switchProfile(String callsign) async {
+    final profile = _profileService.getProfileByCallsign(callsign);
+    if (profile == null) {
+      _printError('Profile not found: $callsign');
+      return;
+    }
+
+    await _profileService.setActiveProfile(profile.id);
+
+    // Reinitialize chat service for the new profile
+    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
+
+    // If switching to a relay, update relay settings
+    if (profile.isRelay) {
+      final newSettings = _relay.settings.copyWith(
+        callsign: profile.callsign,
+        relayRole: profile.relayRole,
+        parentRelayUrl: profile.parentRelayUrl,
+        networkId: profile.networkId,
+        port: profile.port,
+        description: profile.description,
+        location: profile.locationName,
+        latitude: profile.latitude,
+        longitude: profile.longitude,
+        enableAprs: profile.enableAprs,
+        tileServerEnabled: profile.tileServerEnabled,
+        osmFallbackEnabled: profile.osmFallbackEnabled,
+        setupComplete: true,
+      );
+      await _relay.updateSettings(newSettings);
+    }
+
+    stdout.writeln('\x1B[32mSwitched to profile: ${profile.callsign}\x1B[0m');
+  }
+
+  Future<void> _deleteProfile(String callsign) async {
+    final profile = _profileService.getProfileByCallsign(callsign);
+    if (profile == null) {
+      _printError('Profile not found: $callsign');
+      return;
+    }
+
+    final confirm = await _promptConfirm(
+      'Delete profile ${profile.callsign}? This cannot be undone',
+      false,
+    );
+
+    if (!confirm) {
+      stdout.writeln('Cancelled.');
+      return;
+    }
+
+    await _profileService.deleteProfile(profile.id);
+    stdout.writeln('\x1B[32mProfile deleted: ${profile.callsign}\x1B[0m');
+
+    if (_profileService.profiles.isEmpty) {
+      stdout.writeln('\x1B[33mNo profiles remaining. Run "setup" to create a new one.\x1B[0m');
+    }
+  }
+
   // --- Setup wizard ---
 
   Future<void> _handleSetup() async {
     stdout.writeln();
     stdout.writeln('\x1B[1;36m' + '=' * 60 + '\x1B[0m');
-    stdout.writeln('\x1B[1;36m  Geogram Desktop Relay Setup Wizard\x1B[0m');
+    stdout.writeln('\x1B[1;36m  Geogram Desktop Setup Wizard\x1B[0m');
     stdout.writeln('\x1B[1;36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln();
 
-    // Step 1: Relay Identity
-    _printSection('STEP 1: RELAY IDENTITY');
-    final callsign = await _generateCallsign();
+    // Step 1: Choose profile type
+    _printSection('STEP 1: PROFILE TYPE');
+    stdout.writeln('What would you like to create?');
+    stdout.writeln('  \x1B[33m1)\x1B[0m Client - Regular user profile for messaging and browsing');
+    stdout.writeln('  \x1B[33m2)\x1B[0m Relay  - Server that routes messages between devices');
+    stdout.writeln();
+
+    final typeChoice = await _promptChoice('Enter choice (1 or 2)', ['1', '2']);
+    final isRelay = typeChoice == '2';
+
+    if (isRelay) {
+      await _handleRelaySetup();
+    } else {
+      await _handleClientSetup();
+    }
+  }
+
+  /// Setup wizard for client profile
+  Future<void> _handleClientSetup() async {
+    stdout.writeln();
+    stdout.writeln('Creating \x1B[32mClient Profile\x1B[0m...');
+    stdout.writeln();
+
+    // Generate keys and callsign
+    _printSection('STEP 2: CLIENT IDENTITY');
+    final keys = CliProfileService.generateKeys();
+    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.client);
+    stdout.writeln('Generated client callsign: \x1B[32m$callsign\x1B[0m');
+    stdout.writeln();
+
+    // Step 3: Client Info
+    _printSection('STEP 3: PROFILE INFORMATION');
+
+    final nickname = await _promptInputWithDefault('Nickname (display name)', '');
+    final description = await _promptInputWithDefault('Description (about you)', '');
+    final location = await _promptInputWithDefault('Location (optional)', '');
+
+    double? latitude;
+    double? longitude;
+    if (location.isNotEmpty) {
+      final latStr = await _promptInputWithDefault('Latitude (optional)', '');
+      final lonStr = await _promptInputWithDefault('Longitude (optional)', '');
+      latitude = latStr.isNotEmpty ? double.tryParse(latStr) : null;
+      longitude = lonStr.isNotEmpty ? double.tryParse(lonStr) : null;
+    }
+    stdout.writeln();
+
+    // Summary
+    _printSection('SETUP SUMMARY');
+    stdout.writeln('Client Profile:');
+    stdout.writeln('  Callsign:    \x1B[36m$callsign\x1B[0m');
+    stdout.writeln('  Nickname:    \x1B[36m${nickname.isEmpty ? '(not set)' : nickname}\x1B[0m');
+    stdout.writeln('  Description: \x1B[36m${description.isEmpty ? '(not set)' : description}\x1B[0m');
+    if (location.isNotEmpty) {
+      stdout.writeln('  Location:    \x1B[36m$location\x1B[0m');
+    }
+    stdout.writeln();
+    stdout.writeln('Identity Keys:');
+    stdout.writeln('  npub: \x1B[90m${keys['npub']!}\x1B[0m');
+    stdout.writeln('  nsec: \x1B[90m(stored securely)\x1B[0m');
+    stdout.writeln();
+
+    final confirm = await _promptConfirm('Save this profile?', true);
+    if (!confirm) {
+      stdout.writeln('\x1B[33mSetup cancelled. No profile created.\x1B[0m');
+      return;
+    }
+
+    // Create profile
+    final profile = Profile(
+      type: ProfileType.client,
+      callsign: callsign,
+      nickname: nickname,
+      description: description,
+      npub: keys['npub']!,
+      nsec: keys['nsec']!,
+      locationName: location.isNotEmpty ? location : null,
+      latitude: latitude,
+      longitude: longitude,
+    );
+
+    await _profileService.addProfile(profile);
+
+    // Initialize chat service for the new profile
+    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
+
+    stdout.writeln();
+    stdout.writeln('\x1B[32mClient profile created successfully!\x1B[0m');
+    stdout.writeln();
+    stdout.writeln('Your callsign is: \x1B[36m$callsign\x1B[0m');
+    stdout.writeln();
+    stdout.writeln('Type "help" to see available commands.');
+    stdout.writeln('Type "profile" to view your profile.');
+    stdout.writeln();
+  }
+
+  /// Setup wizard for relay profile
+  Future<void> _handleRelaySetup() async {
+    stdout.writeln();
+    stdout.writeln('Creating \x1B[32mRelay Profile\x1B[0m...');
+    stdout.writeln();
+
+    // Generate keys and callsign
+    _printSection('STEP 2: RELAY IDENTITY');
+    final keys = CliProfileService.generateKeys();
+    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.relay);
     stdout.writeln('Generated relay callsign: \x1B[32m$callsign\x1B[0m');
     stdout.writeln();
 
-    // Step 2: Relay Role
-    _printSection('STEP 2: RELAY NETWORK ROLE');
+    // Step 3: Relay Role
+    _printSection('STEP 3: RELAY NETWORK ROLE');
     stdout.writeln('Select relay role:');
     stdout.writeln('  \x1B[33m1)\x1B[0m Root Relay - Primary relay (accepts node connections)');
     stdout.writeln('  \x1B[33m2)\x1B[0m Node Relay - Connects to an existing root relay');
@@ -2050,7 +3028,6 @@ class PureConsole {
       stdout.writeln('Configuring as \x1B[33mNode Relay\x1B[0m');
       stdout.writeln();
 
-      // Validate parent URL
       while (parentUrl == null || parentUrl.isEmpty) {
         parentUrl = await _promptInput('Root relay WebSocket URL (e.g., ws://relay.example.com:8080): ');
         if (parentUrl != null && parentUrl.isNotEmpty) {
@@ -2064,37 +3041,31 @@ class PureConsole {
     }
     stdout.writeln();
 
-    // Step 3: Server Settings
-    _printSection('STEP 3: SERVER SETTINGS');
+    // Step 4: Server Settings
+    _printSection('STEP 4: SERVER SETTINGS');
 
-    final portStr = await _promptInputWithDefault('Server port', '${_relay.settings.port}');
+    final portStr = await _promptInputWithDefault('Server port', '8080');
     final port = int.tryParse(portStr) ?? 8080;
 
     final description = await _promptInputWithDefault(
       'Server description',
-      _relay.settings.description ?? 'Geogram Desktop Relay',
+      'Geogram Relay',
     );
 
-    final location = await _promptInputWithDefault(
-      'Location (optional)',
-      _relay.settings.location ?? '',
-    );
+    final location = await _promptInputWithDefault('Location (optional)', '');
 
-    String? latStr;
-    String? lonStr;
     double? latitude;
     double? longitude;
-
     if (location.isNotEmpty) {
-      latStr = await _promptInputWithDefault('Latitude (optional)', '');
-      lonStr = await _promptInputWithDefault('Longitude (optional)', '');
+      final latStr = await _promptInputWithDefault('Latitude (optional)', '');
+      final lonStr = await _promptInputWithDefault('Longitude (optional)', '');
       latitude = latStr.isNotEmpty ? double.tryParse(latStr) : null;
       longitude = lonStr.isNotEmpty ? double.tryParse(lonStr) : null;
     }
     stdout.writeln();
 
-    // Step 4: Features
-    _printSection('STEP 4: FEATURES');
+    // Step 5: Features
+    _printSection('STEP 5: FEATURES');
 
     final enableAprs = await _promptConfirm('Enable APRS-IS announcements?', false);
     final enableTiles = await _promptConfirm('Enable tile server?', true);
@@ -2103,7 +3074,7 @@ class PureConsole {
 
     // Summary
     _printSection('SETUP SUMMARY');
-    stdout.writeln('Relay Configuration:');
+    stdout.writeln('Relay Profile:');
     stdout.writeln('  Callsign:       \x1B[36m$callsign\x1B[0m');
     stdout.writeln('  Role:           \x1B[36m${isRoot ? 'ROOT' : 'NODE'}\x1B[0m');
     if (!isRoot && parentUrl != null) {
@@ -2119,9 +3090,6 @@ class PureConsole {
     if (location.isNotEmpty) {
       stdout.writeln('  Location:       \x1B[36m$location\x1B[0m');
     }
-    if (latitude != null && longitude != null) {
-      stdout.writeln('  Coordinates:    \x1B[36m$latitude, $longitude\x1B[0m');
-    }
     stdout.writeln();
     stdout.writeln('Features:');
     stdout.writeln('  APRS:           ${enableAprs ? '\x1B[32mEnabled\x1B[0m' : '\x1B[33mDisabled\x1B[0m'}');
@@ -2133,11 +3101,35 @@ class PureConsole {
 
     final confirm = await _promptConfirm('Save this configuration?', true);
     if (!confirm) {
-      stdout.writeln('\x1B[33mSetup cancelled. No changes saved.\x1B[0m');
+      stdout.writeln('\x1B[33mSetup cancelled. No relay created.\x1B[0m');
       return;
     }
 
-    // Apply settings
+    // Create relay profile
+    final profile = Profile(
+      type: ProfileType.relay,
+      callsign: callsign,
+      description: description,
+      npub: keys['npub']!,
+      nsec: keys['nsec']!,
+      locationName: location.isNotEmpty ? location : null,
+      latitude: latitude,
+      longitude: longitude,
+      port: port,
+      relayRole: isRoot ? 'root' : 'node',
+      parentRelayUrl: parentUrl,
+      networkId: networkId,
+      tileServerEnabled: enableTiles,
+      osmFallbackEnabled: enableOsmFallback,
+      enableAprs: enableAprs,
+    );
+
+    await _profileService.addProfile(profile);
+
+    // Initialize chat service for the new profile
+    await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
+
+    // Also update relay server settings
     final newSettings = _relay.settings.copyWith(
       callsign: callsign,
       relayRole: isRoot ? 'root' : 'node',
@@ -2153,11 +3145,12 @@ class PureConsole {
       osmFallbackEnabled: enableOsmFallback,
       setupComplete: true,
     );
-
     await _relay.updateSettings(newSettings);
 
     stdout.writeln();
-    stdout.writeln('\x1B[32mConfiguration saved successfully!\x1B[0m');
+    stdout.writeln('\x1B[32mRelay profile created successfully!\x1B[0m');
+    stdout.writeln();
+    stdout.writeln('Your relay callsign is: \x1B[36m$callsign\x1B[0m');
     stdout.writeln();
     stdout.writeln('To start the relay server, type: \x1B[36mrelay start\x1B[0m');
     stdout.writeln();
@@ -2166,16 +3159,6 @@ class PureConsole {
   void _printSection(String title) {
     stdout.writeln('\x1B[1;33m--- $title ---\x1B[0m');
     stdout.writeln();
-  }
-
-  Future<String> _generateCallsign() async {
-    // Generate X3 + random alphanumeric suffix
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final random = DateTime.now().millisecondsSinceEpoch;
-    final suffix = String.fromCharCodes(
-      List.generate(4, (i) => chars.codeUnitAt((random ~/ (i + 1)) % chars.length)),
-    );
-    return 'X3$suffix';
   }
 
   Future<String> _promptInput(String prompt) async {
@@ -2307,6 +3290,7 @@ class PureConsole {
     final domain = args[0];
     final settings = _relay.settings.copyWith(sslDomain: domain);
     await _relay.updateSettings(settings);
+    _sslManager?.updateSettings(_relay.settings);
     stdout.writeln('\x1B[32mSSL domain set to: $domain\x1B[0m');
   }
 
@@ -2324,6 +3308,7 @@ class PureConsole {
 
     final settings = _relay.settings.copyWith(sslEmail: email);
     await _relay.updateSettings(settings);
+    _sslManager?.updateSettings(_relay.settings);
     stdout.writeln('\x1B[32mSSL email set to: $email\x1B[0m');
   }
 
@@ -2382,6 +3367,7 @@ class PureConsole {
 
     final settings = _relay.settings.copyWith(sslAutoRenew: enabled);
     await _relay.updateSettings(settings);
+    _sslManager?.updateSettings(_relay.settings);
 
     if (enabled) {
       _sslManager?.startAutoRenewal();
@@ -2433,6 +3419,7 @@ class PureConsole {
       sslKeyPath: enable ? _sslManager!.domainKeyPath : null,
     );
     await _relay.updateSettings(settings);
+    _sslManager?.updateSettings(_relay.settings);
 
     if (enable) {
       stdout.writeln('\x1B[32mSSL/HTTPS enabled\x1B[0m');
@@ -2569,31 +3556,50 @@ class PureConsole {
     } else if (path == '/devices') {
       _listDevices();
     } else if (path == '/chat') {
-      for (final room in _relay.chatRooms.values) {
-        stdout.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
+      for (final channel in _chatService.channels) {
+        stdout.writeln('\x1B[34m${channel.id}/\x1B[0m  ${channel.name}');
       }
     } else if (path.startsWith('/chat/')) {
       final roomId = path.substring('/chat/'.length);
-      final room = _relay.chatRooms[roomId];
-      if (room != null) {
-        stdout.writeln('${room.messages.length} messages');
-        stdout.writeln('Last activity: ${room.lastActivity.toLocal()}');
+      final channel = _chatService.getChannel(roomId);
+      if (channel != null) {
+        _chatService.getMessageCount(roomId).then((count) {
+          stdout.writeln('$count messages');
+          if (channel.lastMessageTime != null) {
+            stdout.writeln('Last activity: ${channel.lastMessageTime!.toLocal()}');
+          }
+        });
       } else {
         _printError('Room not found');
       }
     } else if (path == '/config') {
-      stdout.writeln('relay_config.json');
+      _showConfigList();
     } else if (path == '/logs') {
       stdout.writeln('(${_relay.logs.length} log entries)');
     } else if (path == '/ssl') {
-      final sslEnabled = _relay.settings.enableSsl ? '\x1B[32mEnabled\x1B[0m' : '\x1B[33mDisabled\x1B[0m';
+      final sslEnabled = _relay.settings.enableSsl;
       final hasCert = _sslManager?.hasCertificate() == true;
-      final certStatus = hasCert ? '\x1B[32mInstalled\x1B[0m' : '\x1B[33mNot installed\x1B[0m';
-      stdout.writeln('status       $sslEnabled');
-      stdout.writeln('certificate  $certStatus');
-      stdout.writeln('domain       ${_relay.settings.sslDomain ?? "(not set)"}');
-      stdout.writeln('email        ${_relay.settings.sslEmail ?? "(not set)"}');
-      stdout.writeln('autorenew    ${_relay.settings.sslAutoRenew ? "on" : "off"}');
+
+      stdout.writeln('\x1B[1mSSL/TLS Status\x1B[0m');
+      stdout.writeln('─' * 40);
+      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_relay.settings.sslPort}' : '\x1B[33mDisabled\x1B[0m'}');
+      stdout.writeln('Certificate: ${hasCert ? '\x1B[32mInstalled\x1B[0m' : '\x1B[33mNot installed\x1B[0m'}');
+      stdout.writeln('Domain:      ${_relay.settings.sslDomain ?? '\x1B[33m(not set)\x1B[0m'}');
+      stdout.writeln('Email:       ${_relay.settings.sslEmail ?? '\x1B[33m(not set)\x1B[0m'}');
+      stdout.writeln('Auto-renew:  ${_relay.settings.sslAutoRenew ? '\x1B[32mon\x1B[0m' : '\x1B[33moff\x1B[0m'}');
+      stdout.writeln('');
+      stdout.writeln('\x1B[1mCommands\x1B[0m (run from /ssl)');
+      stdout.writeln('─' * 40);
+      stdout.writeln('domain <domain>   Set domain for certificate');
+      stdout.writeln('email <email>     Set Let\'s Encrypt contact email');
+      stdout.writeln('request           Request production certificate');
+      stdout.writeln('test              Request staging (test) certificate');
+      stdout.writeln('renew             Force certificate renewal');
+      stdout.writeln('autorenew on|off  Toggle auto-renewal');
+      stdout.writeln('selfsigned        Generate self-signed certificate');
+      stdout.writeln('enable            Enable HTTPS server');
+      stdout.writeln('disable           Disable HTTPS server');
+      stdout.writeln('status            Show detailed certificate info');
     } else if (path == '/games') {
       _listGames();
     } else {
@@ -2601,7 +3607,7 @@ class PureConsole {
     }
   }
 
-  void _handleCd(List<String> args) {
+  Future<void> _handleCd(List<String> args) async {
     if (args.isEmpty) {
       _currentPath = '/';
       _currentChatRoom = null;
@@ -2616,10 +3622,12 @@ class PureConsole {
       // Check if we're entering a chat room
       if (target.startsWith('/chat/') && target.length > '/chat/'.length) {
         final roomId = target.substring('/chat/'.length).split('/')[0];
-        if (_relay.chatRooms.containsKey(roomId)) {
+        final channel = _chatService.getChannel(roomId);
+        if (channel != null) {
           _currentChatRoom = roomId;
-          stdout.writeln('Entered chat room: ${_relay.chatRooms[roomId]!.name}');
-          stdout.writeln('Type messages directly, or use /messages, /delmsg commands');
+          stdout.writeln('--- ${channel.name} ---');
+          // Show recent messages when entering
+          await _showChatHistory(roomId, 10);
         } else {
           _printError('Room not found: $roomId');
           _currentPath = '/chat';

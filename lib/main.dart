@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart' if (dart.library.html) 'platform/window_manager_stub.dart';
@@ -18,6 +17,7 @@ import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/update_service.dart';
+import 'services/storage_config.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -40,6 +40,8 @@ import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
 import 'pages/relay_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
+import 'pages/profile_management_page.dart';
+import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
 void main() async {
@@ -100,6 +102,11 @@ void main() async {
   LogService().log('Geogram Desktop starting...');
 
   try {
+    // Initialize storage configuration first (all other services depend on it)
+    // Checks GEOGRAM_DATA_DIR environment variable, defaults to current directory
+    await StorageConfig().init();
+    LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
+
     // Initialize services
     await ConfigService().init();
     LogService().log('ConfigService initialized');
@@ -195,18 +202,6 @@ class _HomePageState extends State<HomePage> {
     LogPage(),
   ];
 
-  /// Get title text from profile or default app name
-  String _getTitleText() {
-    final profile = _profileService.getProfile();
-    if (profile.callsign.isNotEmpty) {
-      if (profile.nickname.isNotEmpty) {
-        return '${profile.callsign} - ${profile.nickname}';
-      }
-      return profile.callsign;
-    }
-    return _i18n.t('app_name');
-  }
-
   @override
   void initState() {
     super.initState();
@@ -236,13 +231,23 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            const Icon(Icons.folder_special),
-            const SizedBox(width: 8),
-            Text(_getTitleText()),
-          ],
-        ),
+        title: const ProfileSwitcher(),
+        actions: [
+          // Show relay indicator if current profile is a relay
+          if (_profileService.getProfile().isRelay)
+            IconButton(
+              icon: const Icon(Icons.cell_tower),
+              tooltip: _i18n.t('relay_dashboard'),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const RelayDashboardPage(),
+                  ),
+                );
+              },
+            ),
+        ],
       ),
       drawer: NavigationDrawer(
         selectedIndex: _selectedIndex,
@@ -333,6 +338,7 @@ class CollectionsPage extends StatefulWidget {
 
 class _CollectionsPageState extends State<CollectionsPage> {
   final CollectionService _collectionService = CollectionService();
+  final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
@@ -347,9 +353,16 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void initState() {
     super.initState();
     _i18n.languageNotifier.addListener(_onLanguageChanged);
+    _profileService.activeProfileNotifier.addListener(_onProfileChanged);
     LogService().log('Collections page opened');
     _loadCollections();
     _subscribeToUnreadCounts();
+  }
+
+  void _onProfileChanged() {
+    // Profile changed, reload collections for the new profile
+    LogService().log('Profile changed, reloading collections');
+    _loadCollections();
   }
 
   void _subscribeToUnreadCounts() {
@@ -368,6 +381,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   @override
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
     _searchController.dispose();
     _unreadSubscription?.cancel();
     super.dispose();
@@ -1887,21 +1901,28 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final I18nService _i18n = I18nService();
+  final ProfileService _profileService = ProfileService();
 
   @override
   void initState() {
     super.initState();
     // Listen to language changes to rebuild the UI
     _i18n.languageNotifier.addListener(_onLanguageChanged);
+    _profileService.profileNotifier.addListener(_onProfileChanged);
   }
 
   @override
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
+    _profileService.profileNotifier.removeListener(_onProfileChanged);
     super.dispose();
   }
 
   void _onLanguageChanged() {
+    setState(() {});
+  }
+
+  void _onProfileChanged() {
     setState(() {});
   }
 
@@ -1986,6 +2007,20 @@ class _SettingsPageState extends State<SettingsPage> {
             );
           },
         ),
+        // Show relay settings only for relay profiles
+        if (_profileService.getProfile().isRelay)
+          ListTile(
+            leading: const Icon(Icons.cell_tower, color: Colors.orange),
+            title: Text(_i18n.t('relay_settings')),
+            subtitle: Text(_i18n.t('configure_relay_server')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const RelayDashboardPage()),
+              );
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.notifications_outlined),
           title: Text(_i18n.t('notifications')),

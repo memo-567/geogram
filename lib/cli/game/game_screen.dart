@@ -16,6 +16,10 @@ class GameScreen {
 
   /// Show game intro/title screen
   Future<void> showIntro(String title) async {
+    // Drain any buffered input from CLI transition
+    _drainBufferedInput();
+    _firstRead = false; // Mark as drained so _readSingleKey doesn't drain again
+
     StoryUtils.clearScreen();
     stdout.writeln();
 
@@ -27,7 +31,24 @@ class GameScreen {
 
     stdout.writeln();
     stdout.writeln('    \x1B[90mPress Enter to start...\x1B[0m');
-    stdin.readLineSync();
+
+    // Use raw mode to wait for Enter specifically
+    // This also consumes any buffered garbage bytes
+    stdin.echoMode = false;
+    stdin.lineMode = false;
+    try {
+      // Wait for Enter specifically, ignore all other keys
+      while (true) {
+        final byte = stdin.readByteSync();
+        if (byte == -1) continue; // EOF, retry
+        if (byte == 13 || byte == 10) break; // CR or LF = Enter
+        if (byte == 3) return; // CTRL+C = quit
+        // Ignore all other keys - this drains any garbage
+      }
+    } finally {
+      stdin.lineMode = true;
+      stdin.echoMode = true;
+    }
   }
 
   /// Show player status bar
@@ -152,15 +173,28 @@ class GameScreen {
 
   /// Drain any buffered input from stdin using async stream with timeout
   void _drainBufferedInput() {
-    // Use process to reset terminal and clear any pending input
+    // Use tcflush to properly flush the terminal input buffer
     try {
-      // Reset terminal to clear any buffered state from CLI's readline
-      Process.runSync('stty', ['sane'], runInShell: true);
-      // Brief pause to let any pending data arrive
-      sleep(Duration(milliseconds: 50));
+      // tcflush TCIFLUSH (0) flushes data received but not read
+      // We can use Python to call tcflush since Dart doesn't have direct access
+      Process.runSync('python3', [
+        '-c',
+        'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)'
+      ]);
     } catch (e) {
-      // Ignore errors - stty might not be available
+      // If Python fails, try alternative: use 'read' with timeout to drain
+      try {
+        // Use bash read with timeout to drain any buffered input
+        Process.runSync('bash', [
+          '-c',
+          'read -t 0.1 -n 10000 discard 2>/dev/null || true'
+        ]);
+      } catch (e2) {
+        // Ignore - best effort
+      }
     }
+    // Brief pause to ensure flush completes
+    sleep(Duration(milliseconds: 50));
   }
 
   /// Read a single key without requiring ENTER
@@ -179,14 +213,11 @@ class GameScreen {
 
       var byte = stdin.readByteSync();
 
-      // Retry on EOF - can happen briefly at startup
-      var retries = 0;
-      while (byte == -1 && retries < 10) {
-        retries++;
-        sleep(Duration(milliseconds: 50));
+      // Keep retrying on EOF - can happen due to terminal state transitions
+      while (byte == -1) {
+        sleep(Duration(milliseconds: 100));
         byte = stdin.readByteSync();
       }
-      if (byte == -1) return 'q'; // Still EOF after retries - give up
 
       // Handle escape sequences (arrow keys, etc.)
       if (byte == 27) { // ESC

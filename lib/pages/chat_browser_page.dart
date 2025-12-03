@@ -90,13 +90,48 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Relay status check timer
   Timer? _relayStatusTimer;
 
+  // File change subscription for CLI/external updates
+  StreamSubscription<ChatFileChange>? _fileChangeSubscription;
+
   @override
   void initState() {
     super.initState();
     _initializeChat();
     _setupUpdateListener();
     _subscribeToUnreadCounts();
+    _subscribeToFileChanges();
     _startRelayStatusChecker();
+  }
+
+  /// Subscribe to file changes for real-time updates from CLI
+  void _subscribeToFileChanges() {
+    _fileChangeSubscription = _chatService.onFileChange.listen((change) {
+      // Reload messages if the changed channel is currently selected
+      if (_selectedChannel != null && _selectedChannel!.id == change.channelId) {
+        _refreshLocalMessages();
+      }
+    });
+    // Note: startWatching() is called after channels are loaded in _initializeChat
+  }
+
+  /// Refresh local channel messages without showing loading indicator
+  Future<void> _refreshLocalMessages() async {
+    if (_selectedChannel == null) return;
+
+    try {
+      final messages = await _chatService.loadMessages(
+        _selectedChannel!.id,
+        limit: 100,
+      );
+
+      if (mounted) {
+        setState(() {
+          _messages = messages;
+        });
+      }
+    } catch (e) {
+      // Silently fail on refresh errors
+    }
   }
 
   void _subscribeToUnreadCounts() {
@@ -112,6 +147,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   void dispose() {
     _updateSubscription?.cancel();
     _unreadSubscription?.cancel();
+    _fileChangeSubscription?.cancel();
+    _chatService.stopWatching();
     _relayStatusTimer?.cancel();
     super.dispose();
   }
@@ -271,6 +308,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Load channels
       _channels = _chatService.channels;
+
+      // Start watching for file changes now that channels are loaded
+      _chatService.startWatching();
 
       // Select main channel by default only in wide screen mode
       if (_channels.isNotEmpty && mounted) {
@@ -610,11 +650,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         metadata['channel'] = _selectedChannel!.id;
 
         // Generate BIP-340 Schnorr signature on secp256k1 curve
-        metadata['signature'] = _generateSchnorrSignature(
+        final signature = _generateSchnorrSignature(
           content,
           metadata,
           currentProfile.nsec,
         );
+        if (signature.isNotEmpty) {
+          metadata['signature'] = signature;
+          metadata['verified'] = 'true'; // Self-signed messages are verified
+        }
       }
 
       // Create message object

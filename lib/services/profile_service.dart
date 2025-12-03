@@ -118,11 +118,20 @@ class ProfileService {
   }
 
   /// Generate new NOSTR identity for a specific profile
-  Future<void> _generateIdentityForProfile(Profile profile) async {
+  Future<void> _generateIdentityForProfile(Profile profile, {ProfileType? type}) async {
     final keys = NostrKeyGenerator.generateKeyPair();
     profile.npub = keys.npub;
     profile.nsec = keys.nsec;
-    profile.callsign = keys.callsign;
+
+    // Generate callsign with appropriate prefix based on type
+    final profileType = type ?? profile.type;
+    if (profileType == ProfileType.relay) {
+      // Relay callsigns start with X3
+      profile.callsign = 'X3${keys.callsign.substring(2)}';
+    } else {
+      // Client callsigns start with X1
+      profile.callsign = keys.callsign;
+    }
 
     // Set random preferred color if not set
     if (profile.preferredColor.isEmpty) {
@@ -130,7 +139,7 @@ class ProfileService {
       profile.preferredColor = colors[Random().nextInt(colors.length)];
     }
 
-    LogService().log('Generated new identity: ${profile.callsign}');
+    LogService().log('Generated new identity: ${profile.callsign} (${profileType.name})');
   }
 
   /// Check if a profile has valid NOSTR keys (proper bech32 encoding)
@@ -230,23 +239,72 @@ class ProfileService {
       throw Exception('Profile not found: $profileId');
     }
     _activeProfileId = profileId;
-    activeProfileNotifier.value = profileId;
     _saveAllProfiles();
 
-    // Update CollectionService to use the new profile's storage path
+    // Update CollectionService to use the new profile's storage path BEFORE notifying listeners
     final newProfile = getProfile();
     await CollectionService().setActiveCallsign(newProfile.callsign);
+
+    // Notify listeners AFTER callsign is updated so they load correct collections
+    activeProfileNotifier.value = profileId;
 
     LogService().log('Switched to profile: ${newProfile.callsign}');
   }
 
+  /// Activate a profile (can have multiple active profiles)
+  void activateProfile(String profileId) {
+    final profile = _profiles.firstWhere(
+      (p) => p.id == profileId,
+      orElse: () => throw Exception('Profile not found: $profileId'),
+    );
+    profile.isActive = true;
+    _saveAllProfiles();
+    profileNotifier.notifyListeners();
+    LogService().log('Activated profile: ${profile.callsign}');
+  }
+
+  /// Deactivate a profile
+  void deactivateProfile(String profileId) {
+    final profile = _profiles.firstWhere(
+      (p) => p.id == profileId,
+      orElse: () => throw Exception('Profile not found: $profileId'),
+    );
+    profile.isActive = false;
+    _saveAllProfiles();
+    profileNotifier.notifyListeners();
+    LogService().log('Deactivated profile: ${profile.callsign}');
+  }
+
+  /// Toggle profile active state
+  void toggleProfileActive(String profileId) {
+    final profile = _profiles.firstWhere(
+      (p) => p.id == profileId,
+      orElse: () => throw Exception('Profile not found: $profileId'),
+    );
+    profile.isActive = !profile.isActive;
+    _saveAllProfiles();
+    profileNotifier.notifyListeners();
+    LogService().log('Toggled profile ${profile.callsign} active: ${profile.isActive}');
+  }
+
+  /// Get all active profiles
+  List<Profile> getActiveProfiles() {
+    return _profiles.where((p) => p.isActive).toList();
+  }
+
   /// Create a new profile with generated identity
-  Future<Profile> createNewProfile({String? nickname}) async {
-    final newProfile = Profile(nickname: nickname ?? '');
-    await _generateIdentityForProfile(newProfile);
+  Future<Profile> createNewProfile({
+    String? nickname,
+    ProfileType type = ProfileType.client,
+  }) async {
+    final newProfile = Profile(
+      nickname: nickname ?? '',
+      type: type,
+    );
+    await _generateIdentityForProfile(newProfile, type: type);
     _profiles.add(newProfile);
     _saveAllProfiles();
-    LogService().log('Created new profile: ${newProfile.callsign}');
+    LogService().log('Created new profile: ${newProfile.callsign} (${type.name})');
     return newProfile;
   }
 

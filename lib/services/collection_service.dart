@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
-import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:mime/mime.dart';
 import '../models/collection.dart';
 import '../models/chat_channel.dart';
@@ -14,6 +14,7 @@ import '../util/tlsh.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
 import 'profile_service.dart';
+import 'storage_config.dart';
 
 /// Service for managing collections on disk
 class CollectionService {
@@ -25,6 +26,9 @@ class CollectionService {
   Directory? _collectionsDir;
   String? _currentCallsign;
   final ConfigService _configService = ConfigService();
+
+  /// Notifier for when callsign/collections change (incremented on change)
+  final callsignNotifier = ValueNotifier<int>(0);
 
   /// Get the default collections directory path
   String getDefaultCollectionsPath() {
@@ -46,10 +50,20 @@ class CollectionService {
   String? get currentCallsign => _currentCallsign;
 
   /// Initialize the collection service (basic setup)
+  ///
+  /// Uses StorageConfig for path management. StorageConfig must be initialized
+  /// before calling this method.
   Future<void> init() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      _devicesDir = Directory('${appDir.path}/geogram/devices');
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) {
+        throw StateError(
+          'StorageConfig must be initialized before CollectionService. '
+          'Call StorageConfig().init() first.',
+        );
+      }
+
+      _devicesDir = Directory(storageConfig.devicesDir);
 
       if (!await _devicesDir!.exists()) {
         await _devicesDir!.create(recursive: true);
@@ -82,6 +96,9 @@ class CollectionService {
 
     stderr.writeln('CollectionService active callsign: $sanitizedCallsign');
     stderr.writeln('Collections directory: ${_collectionsDir!.path}');
+
+    // Notify listeners that callsign changed
+    callsignNotifier.value++;
   }
 
   /// Sanitize callsign for use as folder name
@@ -140,7 +157,21 @@ class CollectionService {
     final collectionJsFile = File('${folder.path}/collection.js');
 
     if (!await collectionJsFile.exists()) {
-      return null;
+      // Check if this is a chat folder created by CLI (has channels.json or main/ folder)
+      final channelsFile = File('${folder.path}/extra/channels.json');
+      final mainFolder = Directory('${folder.path}/main');
+
+      if (await channelsFile.exists() || await mainFolder.exists()) {
+        // This is a chat collection without collection.js - auto-create it
+        stderr.writeln('Auto-creating collection.js for chat folder: ${folder.path}');
+        await _autoCreateChatCollection(folder);
+        // Now try loading again
+        if (!await collectionJsFile.exists()) {
+          return null;
+        }
+      } else {
+        return null;
+      }
     }
 
     try {
@@ -499,6 +530,54 @@ class CollectionService {
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
       // Don't fail collection creation if skeleton creation fails
+    }
+  }
+
+  /// Auto-create collection.js for a chat folder created by CLI
+  /// This allows the desktop to recognize chat collections created via CLI
+  Future<void> _autoCreateChatCollection(Directory folder) async {
+    try {
+      // Generate a collection ID based on folder name
+      final folderName = folder.path.split('/').last;
+      final keys = NostrKeyGenerator.generateKeyPair();
+      final id = keys.npub;
+
+      // Store keys in config
+      _configService.storeCollectionKeys(keys);
+
+      // Ensure extra directory exists
+      final extraDir = Directory('${folder.path}/extra');
+      if (!await extraDir.exists()) {
+        await extraDir.create(recursive: true);
+      }
+
+      // Create collection object
+      final collection = Collection(
+        id: id,
+        title: 'Chat',
+        description: 'Chat messages',
+        type: 'chat',
+        updated: DateTime.now().toIso8601String(),
+        storagePath: folder.path,
+        isOwned: true,
+        isFavorite: false,
+        filesCount: 0,
+        totalSize: 0,
+      );
+
+      // Write collection.js
+      final collectionJsFile = File('${folder.path}/collection.js');
+      await collectionJsFile.writeAsString(collection.generateCollectionJs());
+
+      // Write security.json if it doesn't exist
+      final securityFile = File('${folder.path}/extra/security.json');
+      if (!await securityFile.exists()) {
+        await securityFile.writeAsString(collection.generateSecurityJson());
+      }
+
+      stderr.writeln('Auto-created chat collection: ${folder.path}');
+    } catch (e) {
+      stderr.writeln('Error auto-creating chat collection: $e');
     }
   }
 

@@ -46,3 +46,11 @@ app.*.map.json
 
 # Development symlinks
 /data
+
+# Local runtime data
+config.json
+relay_config.json
+devices/
+tiles/
+ssl/
+logs/

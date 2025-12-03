@@ -1,7 +1,14 @@
+/// Profile type - client or relay
+enum ProfileType {
+  client, // X1 prefix - regular user
+  relay,  // X3 prefix - relay server
+}
+
 /// User profile model - represents a single identity/callsign
 class Profile {
   /// Unique identifier for this profile (UUID)
   final String id;
+  ProfileType type;
   String callsign;
   String nickname;
   String description;
@@ -14,8 +21,21 @@ class Profile {
   String? locationName; // Human-readable location
   DateTime createdAt; // When this profile was created
 
+  // Profile activation state (multiple profiles can be active simultaneously)
+  bool isActive;
+
+  // Relay-specific settings (only used when type == relay)
+  int? port;
+  String? relayRole; // 'root' or 'node'
+  String? parentRelayUrl;
+  String? networkId;
+  bool tileServerEnabled;
+  bool osmFallbackEnabled;
+  bool enableAprs;
+
   Profile({
     String? id,
+    this.type = ProfileType.client,
     this.callsign = '',
     this.nickname = '',
     this.description = '',
@@ -27,8 +47,19 @@ class Profile {
     this.longitude,
     this.locationName,
     DateTime? createdAt,
+    this.isActive = true,
+    this.port,
+    this.relayRole,
+    this.parentRelayUrl,
+    this.networkId,
+    this.tileServerEnabled = true,
+    this.osmFallbackEnabled = true,
+    this.enableAprs = false,
   }) : id = id ?? _generateId(),
        createdAt = createdAt ?? DateTime.now();
+
+  bool get isRelay => type == ProfileType.relay;
+  bool get isClient => type == ProfileType.client;
 
   /// Generate a simple unique ID
   static String _generateId() {
@@ -40,6 +71,7 @@ class Profile {
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
       id: json['id'] as String?,
+      type: json['type'] == 'relay' ? ProfileType.relay : ProfileType.client,
       callsign: json['callsign'] as String? ?? '',
       nickname: json['nickname'] as String? ?? '',
       description: json['description'] as String? ?? '',
@@ -53,6 +85,14 @@ class Profile {
       createdAt: json['createdAt'] != null
           ? DateTime.tryParse(json['createdAt'] as String)
           : null,
+      isActive: json['isActive'] as bool? ?? false,
+      port: json['port'] as int?,
+      relayRole: json['relayRole'] as String?,
+      parentRelayUrl: json['parentRelayUrl'] as String?,
+      networkId: json['networkId'] as String?,
+      tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
+      osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
+      enableAprs: json['enableAprs'] as bool? ?? false,
     );
   }
 
@@ -60,6 +100,7 @@ class Profile {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'type': type == ProfileType.relay ? 'relay' : 'client',
       'callsign': callsign,
       'nickname': nickname,
       'description': description,
@@ -71,11 +112,20 @@ class Profile {
       if (longitude != null) 'longitude': longitude,
       if (locationName != null) 'locationName': locationName,
       'createdAt': createdAt.toIso8601String(),
+      'isActive': isActive,
+      if (port != null) 'port': port,
+      if (relayRole != null) 'relayRole': relayRole,
+      if (parentRelayUrl != null) 'parentRelayUrl': parentRelayUrl,
+      if (networkId != null) 'networkId': networkId,
+      'tileServerEnabled': tileServerEnabled,
+      'osmFallbackEnabled': osmFallbackEnabled,
+      'enableAprs': enableAprs,
     };
   }
 
   /// Create a copy of this profile
   Profile copyWith({
+    ProfileType? type,
     String? callsign,
     String? nickname,
     String? description,
@@ -86,9 +136,18 @@ class Profile {
     double? latitude,
     double? longitude,
     String? locationName,
+    bool? isActive,
+    int? port,
+    String? relayRole,
+    String? parentRelayUrl,
+    String? networkId,
+    bool? tileServerEnabled,
+    bool? osmFallbackEnabled,
+    bool? enableAprs,
   }) {
     return Profile(
       id: id, // Preserve the ID
+      type: type ?? this.type,
       callsign: callsign ?? this.callsign,
       nickname: nickname ?? this.nickname,
       description: description ?? this.description,
@@ -100,6 +159,14 @@ class Profile {
       longitude: longitude ?? this.longitude,
       locationName: locationName ?? this.locationName,
       createdAt: createdAt, // Preserve creation time
+      isActive: isActive ?? this.isActive,
+      port: port ?? this.port,
+      relayRole: relayRole ?? this.relayRole,
+      parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
+      networkId: networkId ?? this.networkId,
+      tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
+      osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,
+      enableAprs: enableAprs ?? this.enableAprs,
     );
   }
 

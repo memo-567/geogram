@@ -5,9 +5,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import '../services/storage_config.dart';
 
 /// App version constant
-const String cliAppVersion = '1.4.1';
+const String cliAppVersion = '1.5.1';
 
 /// Relay server settings
 class PureRelaySettings {
@@ -248,6 +249,9 @@ class ChatMessage {
   final String id;
   final String roomId;
   final String senderCallsign;
+  final String? senderNpub;
+  final String? senderPubkey;
+  final String? signature;
   final String content;
   final DateTime timestamp;
 
@@ -255,6 +259,9 @@ class ChatMessage {
     required this.id,
     required this.roomId,
     required this.senderCallsign,
+    this.senderNpub,
+    this.senderPubkey,
+    this.signature,
     required this.content,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
@@ -263,6 +270,9 @@ class ChatMessage {
         'id': id,
         'room_id': roomId,
         'sender': senderCallsign,
+        if (senderNpub != null) 'npub': senderNpub,
+        if (senderPubkey != null) 'pubkey': senderPubkey,
+        if (signature != null) 'signature': signature,
         'content': content,
         'timestamp': timestamp.toIso8601String(),
       };
@@ -399,6 +409,7 @@ class PureTileCache {
 /// Pure Dart relay server for CLI mode
 class PureRelayServer {
   HttpServer? _httpServer;
+  HttpServer? _httpsServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
   final PureTileCache _tileCache = PureTileCache();
@@ -427,13 +438,23 @@ class PureRelayServer {
   String? get dataDir => _dataDir;
 
   /// Initialize relay server
+  ///
+  /// Uses StorageConfig for path management. StorageConfig must be initialized
+  /// before calling this method.
   Future<void> initialize() async {
-    final homeDir = Platform.environment['HOME'] ?? '/tmp';
-    _dataDir = '$homeDir/.geogram-desktop';
-    _configPath = '$_dataDir/relay_config.json';
-    _tilesDirectory = '$_dataDir/tiles';
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      throw StateError(
+        'StorageConfig must be initialized before PureRelayServer. '
+        'Call StorageConfig().init() first.',
+      );
+    }
 
-    await Directory(_dataDir!).create(recursive: true);
+    _dataDir = storageConfig.baseDir;
+    _configPath = storageConfig.relayConfigPath;
+    _tilesDirectory = storageConfig.tilesDir;
+
+    // StorageConfig already creates directories, but ensure tiles exists
     await Directory(_tilesDirectory!).create(recursive: true);
 
     await _loadSettings();
@@ -447,6 +468,7 @@ class PureRelayServer {
     );
 
     _log('INFO', 'Pure Relay Server initialized');
+    _log('INFO', 'Data directory: $_dataDir');
   }
 
   Future<void> _loadSettings() async {
@@ -539,6 +561,7 @@ class PureRelayServer {
     }
 
     try {
+      // Start HTTP server
       _httpServer = await HttpServer.bind(
         InternetAddress.anyIPv4,
         _settings.port,
@@ -548,16 +571,78 @@ class PureRelayServer {
       _running = true;
       _startTime = DateTime.now();
 
-      _log('INFO', 'Relay server started on port ${_settings.port}');
+      _log('INFO', 'HTTP server started on port ${_settings.port}');
 
       _httpServer!.listen(_handleRequest, onError: (error) {
-        _log('ERROR', 'Server error: $error');
+        _log('ERROR', 'HTTP server error: $error');
       });
+
+      // Start HTTPS server if SSL is enabled
+      if (_settings.enableSsl) {
+        await _startHttpsServer();
+      }
 
       return true;
     } catch (e) {
       _log('ERROR', 'Failed to start relay server: $e');
       return false;
+    }
+  }
+
+  /// Start HTTPS server with SSL certificates
+  Future<void> _startHttpsServer() async {
+    final certPath = _settings.sslCertPath;
+    final keyPath = _settings.sslKeyPath;
+
+    if (certPath == null || keyPath == null) {
+      _log('WARN', 'SSL enabled but certificate paths not configured');
+      return;
+    }
+
+    final certFile = File(certPath);
+    final keyFile = File(keyPath);
+
+    // Also check for fullchain.pem in ssl directory
+    final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
+    final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
+    final fullchainFile = fullchainPath != null ? File(fullchainPath) : null;
+
+    // Try fullchain first, then fall back to individual cert
+    String? certToUse;
+    if (fullchainFile != null && await fullchainFile.exists()) {
+      certToUse = fullchainPath;
+    } else if (await certFile.exists()) {
+      certToUse = certPath;
+    }
+
+    if (certToUse == null || !await keyFile.exists()) {
+      _log('WARN', 'SSL certificate files not found:');
+      _log('WARN', '  Certificate: ${certToUse ?? certPath} (${certToUse != null ? "found" : "not found"})');
+      _log('WARN', '  Key: $keyPath (${await keyFile.exists() ? "found" : "not found"})');
+      return;
+    }
+
+    try {
+      final context = SecurityContext()
+        ..useCertificateChain(certToUse)
+        ..usePrivateKey(keyPath);
+
+      _httpsServer = await HttpServer.bindSecure(
+        InternetAddress.anyIPv4,
+        _settings.sslPort,
+        context,
+        shared: true,
+      );
+
+      _log('INFO', 'HTTPS server started on port ${_settings.sslPort}');
+
+      _httpsServer!.listen(_handleRequest, onError: (error) {
+        _log('ERROR', 'HTTPS server error: $error');
+      });
+    } catch (e) {
+      _log('ERROR', 'Failed to start HTTPS server: $e');
+      _log('ERROR', 'Certificate: $certToUse');
+      _log('ERROR', 'Key: $keyPath');
     }
   }
 
@@ -571,6 +656,10 @@ class PureRelayServer {
 
     await _httpServer?.close(force: true);
     _httpServer = null;
+
+    await _httpsServer?.close(force: true);
+    _httpsServer = null;
+
     _running = false;
     _startTime = null;
 
@@ -787,14 +876,28 @@ class PureRelayServer {
 
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path == '/relay/status') {
+        await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
       } else if (path == '/api/devices') {
         await _handleDevices(request);
+      } else if (path.startsWith('/device/')) {
+        await _handleDeviceProxy(request);
+      } else if (path == '/search') {
+        await _handleSearch(request);
       } else if (path == '/api/chat/rooms') {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
         await _handleRoomMessages(request);
+      } else if (path == '/api/relay/send' && method == 'POST') {
+        await _handleRelaySend(request);
+      } else if (path == '/api/groups') {
+        await _handleGroups(request);
+      } else if (path.startsWith('/api/groups/')) {
+        await _handleGroupDetails(request);
+      } else if (path.startsWith('/.well-known/acme-challenge/')) {
+        await _handleAcmeChallenge(request);
       } else if (path.startsWith('/tiles/')) {
         _stats.totalTileRequests++;
         _stats.lastTileRequest = DateTime.now();
@@ -803,6 +906,8 @@ class PureRelayServer {
         await _handleCliCommand(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (_isCallsignPath(path)) {
+        await _handleCallsignWww(request);
       } else {
         request.response.statusCode = 404;
         request.response.write('Not Found');
@@ -857,9 +962,37 @@ class PureRelayServer {
 
         switch (type) {
           case 'hello':
-            client.callsign = message['callsign'] as String?;
-            client.deviceType = message['device_type'] as String?;
-            client.version = message['version'] as String?;
+            // Extract client info - support both direct fields and Nostr event format
+            String? callsign = message['callsign'] as String?;
+            String? deviceType = message['device_type'] as String?;
+            String? version = message['version'] as String?;
+
+            // Check for Nostr event format (used by desktop/mobile clients)
+            final event = message['event'] as Map<String, dynamic>?;
+            if (event != null) {
+              // Extract callsign from event tags: [['callsign', 'VALUE'], ...]
+              final tags = event['tags'] as List<dynamic>?;
+              if (tags != null) {
+                for (final tag in tags) {
+                  if (tag is List && tag.length >= 2 && tag[0] == 'callsign') {
+                    callsign = tag[1] as String?;
+                  }
+                }
+              }
+              // Detect device type from content
+              final content = event['content'] as String? ?? '';
+              if (content.contains('Desktop')) {
+                deviceType = 'desktop';
+              } else if (content.contains('Mobile') || content.contains('Android') || content.contains('iOS')) {
+                deviceType = 'mobile';
+              } else {
+                deviceType = 'client';
+              }
+            }
+
+            client.callsign = callsign;
+            client.deviceType = deviceType;
+            client.version = version;
 
             final response = {
               'type': 'hello_response',
@@ -868,7 +1001,97 @@ class PureRelayServer {
               'callsign': _settings.callsign,
             };
             client.socket.add(jsonEncode(response));
-            _log('INFO', 'Hello from: ${client.callsign}');
+            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"} (${client.deviceType ?? "unknown"})');
+            break;
+
+          case 'PING':
+            // Respond to PING with PONG
+            final response = {
+              'type': 'PONG',
+              'timestamp': DateTime.now().millisecondsSinceEpoch,
+            };
+            client.socket.add(jsonEncode(response));
+            break;
+
+          case 'PONG':
+            // Client responded to our ping - just update activity time
+            break;
+
+          case 'REGISTER':
+            // Device registration with capabilities
+            client.callsign = message['callsign'] as String?;
+            client.deviceType = message['device_type'] as String?;
+            client.version = message['version'] as String?;
+
+            // Capabilities and collections are provided but not stored yet
+            // Future: store these for device capability discovery
+            // message['capabilities'] as List<dynamic>?;
+            // message['collections'] as List<dynamic>?;
+
+            final response = {
+              'type': 'REGISTER_ACK',
+              'success': true,
+              'relay_callsign': _settings.callsign,
+              'relay_version': cliAppVersion,
+              'timestamp': DateTime.now().millisecondsSinceEpoch,
+            };
+            client.socket.add(jsonEncode(response));
+            _log('INFO', 'Device registered: ${client.callsign} (${client.deviceType})');
+            break;
+
+          case 'HTTP_RESPONSE':
+            // Response from device for a proxied HTTP request
+            final requestId = message['requestId'] as String?;
+            if (requestId != null && _pendingProxyRequests.containsKey(requestId)) {
+              final completer = _pendingProxyRequests[requestId]!;
+              if (!completer.isCompleted) {
+                completer.complete(message);
+              }
+            }
+            break;
+
+          case 'COLLECTIONS_REQUEST':
+            // Request for device's collections
+            final targetCallsign = message['callsign'] as String?;
+            if (targetCallsign != null) {
+              // Forward to the target device
+              final targetClient = _clients.values.firstWhere(
+                (c) => c.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
+                orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
+              );
+
+              if (targetClient.id.isNotEmpty) {
+                final forwardMsg = {
+                  'type': 'COLLECTIONS_REQUEST',
+                  'from': client.callsign,
+                  'requestId': message['requestId'],
+                };
+                targetClient.socket.add(jsonEncode(forwardMsg));
+              } else {
+                // Device not connected
+                final errorResponse = {
+                  'type': 'COLLECTIONS_RESPONSE',
+                  'requestId': message['requestId'],
+                  'error': 'Device not connected',
+                  'callsign': targetCallsign,
+                };
+                client.socket.add(jsonEncode(errorResponse));
+              }
+            }
+            break;
+
+          case 'COLLECTIONS_RESPONSE':
+            // Forward collection response to the requester
+            final fromCallsign = message['from'] as String?;
+            if (fromCallsign != null) {
+              final requester = _clients.values.firstWhere(
+                (c) => c.callsign?.toLowerCase() == fromCallsign.toLowerCase(),
+                orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
+              );
+              if (requester.id.isNotEmpty) {
+                requester.socket.add(data);
+              }
+            }
             break;
 
           case 'chat_message':
@@ -878,9 +1101,12 @@ class PureRelayServer {
               final room = _chatRooms[roomId];
               if (room != null) {
                 final msg = ChatMessage(
-                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                  id: message['event_id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
                   roomId: roomId,
                   senderCallsign: client.callsign!,
+                  senderNpub: message['npub'] as String?,
+                  senderPubkey: message['pubkey'] as String?,
+                  signature: message['signature'] as String?,
                   content: content,
                 );
                 room.messages.add(msg);
@@ -917,6 +1143,7 @@ class PureRelayServer {
         : 0;
 
     final status = {
+      'service': 'Geogram Relay Server',
       'name': 'Geogram Desktop Relay',
       'version': cliAppVersion,
       'callsign': _settings.callsign,
@@ -933,6 +1160,10 @@ class PureRelayServer {
       'cache_size_bytes': _tileCache.sizeBytes,
       'enable_aprs': _settings.enableAprs,
       'chat_rooms': _chatRooms.length,
+      'http_port': _settings.port,
+      'https_enabled': _settings.enableSsl,
+      'https_port': _settings.enableSsl ? _settings.sslPort : null,
+      'https_running': _httpsServer != null,
     };
 
     request.response.headers.contentType = ContentType.json;
@@ -949,6 +1180,378 @@ class PureRelayServer {
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({'devices': devices}));
   }
+
+  /// GET /relay/status - List connected devices and relays
+  Future<void> _handleRelayStatus(HttpRequest request) async {
+    final devices = _clients.values
+        .where((c) => c.deviceType != 'relay')
+        .map((c) => {
+              'callsign': c.callsign,
+              'uptime_seconds': DateTime.now().difference(c.connectedAt).inSeconds,
+              'idle_seconds': DateTime.now().difference(c.lastActivity).inSeconds,
+              'connected_at': c.connectedAt.toIso8601String(),
+            })
+        .toList();
+
+    final relays = _clients.values
+        .where((c) => c.deviceType == 'relay')
+        .map((c) => {
+              'callsign': c.callsign,
+              'uptime_seconds': DateTime.now().difference(c.connectedAt).inSeconds,
+              'connected_at': c.connectedAt.toIso8601String(),
+            })
+        .toList();
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'connected_devices': devices.length,
+      'connected_relays': relays.length,
+      'devices': devices,
+      'relays': relays,
+    }));
+  }
+
+  /// Handle /device/{callsign} and /device/{callsign}/* requests
+  Future<void> _handleDeviceProxy(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.substring('/device/'.length).split('/');
+    final callsign = parts.first;
+    final subPath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '';
+
+    // Find the client by callsign
+    PureConnectedClient? foundClient;
+    for (final c in _clients.values) {
+      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
+        foundClient = c;
+        break;
+      }
+    }
+
+    if (foundClient == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'callsign': callsign,
+        'connected': false,
+        'error': 'Device not connected',
+      }));
+      return;
+    }
+
+    final client = foundClient;
+
+    // If just /device/{callsign} with no subpath, return device info
+    if (subPath.isEmpty) {
+      final uptime = DateTime.now().difference(client.connectedAt).inSeconds;
+      final idleTime = DateTime.now().difference(client.lastActivity).inSeconds;
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'callsign': client.callsign,
+        'connected': true,
+        'uptime': uptime,
+        'idleTime': idleTime,
+        'deviceType': client.deviceType,
+        'version': client.version,
+        'address': client.address,
+      }));
+      return;
+    }
+
+    // Proxy request to device via WebSocket
+    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    final proxyRequest = {
+      'type': 'HTTP_REQUEST',
+      'requestId': requestId,
+      'method': request.method,
+      'path': subPath,
+      'headers': request.headers.toString(),
+      'body': '',
+    };
+
+    // Read request body if present
+    if (request.contentLength > 0) {
+      final body = await utf8.decodeStream(request);
+      proxyRequest['body'] = body;
+    }
+
+    // Send request to device and wait for response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingProxyRequests[requestId] = completer;
+
+    try {
+      client.socket.add(jsonEncode(proxyRequest));
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => {
+          'type': 'HTTP_RESPONSE',
+          'statusCode': 504,
+          'responseBody': 'Gateway Timeout',
+        },
+      );
+
+      request.response.statusCode = response['statusCode'] ?? 500;
+      if (response['responseHeaders'] != null) {
+        try {
+          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+          headers.forEach((key, value) {
+            request.response.headers.add(key, value.toString());
+          });
+        } catch (_) {}
+      }
+
+      final body = response['responseBody'] ?? '';
+      final isBase64 = response['isBase64'] == true;
+      if (isBase64) {
+        request.response.add(base64Decode(body));
+      } else {
+        request.response.write(body);
+      }
+    } catch (e) {
+      request.response.statusCode = 502;
+      request.response.write('Bad Gateway: $e');
+    } finally {
+      _pendingProxyRequests.remove(requestId);
+    }
+  }
+
+  /// GET /search - Search across connected devices
+  Future<void> _handleSearch(HttpRequest request) async {
+    final query = request.uri.queryParameters['q'];
+    final limitStr = request.uri.queryParameters['limit'];
+    final limit = limitStr != null ? int.tryParse(limitStr) ?? 50 : 50;
+
+    if (query == null || query.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': "Missing query parameter 'q'"}));
+      return;
+    }
+
+    // For now, return empty results - full implementation would search device collections
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'query': query,
+      'total_results': 0,
+      'limit': limit,
+      'results': [],
+    }));
+  }
+
+  /// POST /api/relay/send - Send NOSTR-signed message from relay
+  Future<void> _handleRelaySend(HttpRequest request) async {
+    try {
+      final body = await utf8.decodeStream(request);
+      final data = jsonDecode(body) as Map<String, dynamic>;
+
+      final room = data['room'] as String? ?? 'general';
+      final content = data['content'] as String?;
+      final callsign = data['callsign'] as String? ?? _settings.callsign;
+
+      if (content == null || content.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Missing content'}));
+        return;
+      }
+
+      final chatRoom = _chatRooms[room];
+      if (chatRoom == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Room not found'}));
+        return;
+      }
+
+      final msg = ChatMessage(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        roomId: room,
+        senderCallsign: callsign,
+        content: content,
+      );
+      chatRoom.messages.add(msg);
+      chatRoom.lastActivity = DateTime.now();
+      _stats.totalMessages++;
+
+      // Broadcast to connected clients
+      final payload = jsonEncode({
+        'type': 'chat_message',
+        'room': room,
+        'message': msg.toJson(),
+      });
+
+      int notified = 0;
+      for (final client in _clients.values) {
+        try {
+          client.socket.add(payload);
+          notified++;
+        } catch (_) {}
+      }
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'message': 'Message sent',
+        'room': room,
+        'callsign': callsign,
+        'content': content,
+        'devices_notified': notified,
+        'connected_devices': _clients.length,
+      }));
+    } catch (e) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid request: $e'}));
+    }
+  }
+
+  /// GET /api/groups - List all groups
+  Future<void> _handleGroups(HttpRequest request) async {
+    // Groups are not yet implemented - return empty list
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'relay': _settings.callsign,
+      'groups': [],
+      'count': 0,
+    }));
+  }
+
+  /// GET /api/groups/{groupId} or /api/groups/{groupId}/members
+  Future<void> _handleGroupDetails(HttpRequest request) async {
+    final path = request.uri.path;
+    final groupId = path.replaceFirst('/api/groups/', '').split('/').first;
+
+    // Groups are not yet implemented
+    request.response.statusCode = 404;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'error': 'Group not found',
+      'groupId': groupId,
+    }));
+  }
+
+  /// ACME challenge tokens for Let's Encrypt
+  final Map<String, String> _acmeChallenges = {};
+
+  /// Set an ACME challenge token
+  void setAcmeChallenge(String token, String response) {
+    _acmeChallenges[token] = response;
+  }
+
+  /// Clear an ACME challenge token
+  void clearAcmeChallenge(String token) {
+    _acmeChallenges.remove(token);
+  }
+
+  /// GET /.well-known/acme-challenge/{token}
+  Future<void> _handleAcmeChallenge(HttpRequest request) async {
+    final token = request.uri.path.replaceFirst('/.well-known/acme-challenge/', '');
+    final response = _acmeChallenges[token];
+
+    if (response != null) {
+      request.response.headers.contentType = ContentType.text;
+      request.response.write(response);
+    } else {
+      request.response.statusCode = 404;
+      request.response.write('Not Found');
+    }
+  }
+
+  /// Check if path looks like a callsign for WWW serving
+  bool _isCallsignPath(String path) {
+    if (path.length < 2) return false;
+    final firstPart = path.substring(1).split('/').first;
+    // Callsigns are typically X followed by numbers/letters
+    return RegExp(r'^X[0-9][A-Z0-9]{3,}$', caseSensitive: false).hasMatch(firstPart);
+  }
+
+  /// GET /{callsign} or /{callsign}/* - Serve WWW collection from device
+  Future<void> _handleCallsignWww(HttpRequest request) async {
+    final path = request.uri.path;
+    final parts = path.substring(1).split('/');
+    final callsign = parts.first;
+    final filePath = parts.length > 1 ? parts.sublist(1).join('/') : 'index.html';
+
+    // Find the client by callsign
+    PureConnectedClient? foundClient;
+    for (final c in _clients.values) {
+      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
+        foundClient = c;
+        break;
+      }
+    }
+
+    if (foundClient == null) {
+      request.response.statusCode = 404;
+      request.response.write('Device not connected');
+      return;
+    }
+
+    final client = foundClient;
+
+    // Proxy to device's www collection
+    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    final proxyRequest = {
+      'type': 'HTTP_REQUEST',
+      'requestId': requestId,
+      'method': 'GET',
+      'path': '/collections/www/$filePath',
+      'headers': '',
+      'body': '',
+    };
+
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingProxyRequests[requestId] = completer;
+
+    try {
+      client.socket.add(jsonEncode(proxyRequest));
+
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => {'statusCode': 504, 'responseBody': 'Gateway Timeout'},
+      );
+
+      request.response.statusCode = response['statusCode'] ?? 500;
+      final body = response['responseBody'] ?? '';
+      final isBase64 = response['isBase64'] == true;
+
+      // Set content type based on file extension
+      final ext = filePath.split('.').last.toLowerCase();
+      final contentTypes = {
+        'html': 'text/html',
+        'htm': 'text/html',
+        'css': 'text/css',
+        'js': 'application/javascript',
+        'json': 'application/json',
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'svg': 'image/svg+xml',
+        'ico': 'image/x-icon',
+        'txt': 'text/plain',
+      };
+      final contentType = contentTypes[ext] ?? 'application/octet-stream';
+      request.response.headers.set('Content-Type', contentType);
+
+      if (isBase64) {
+        request.response.add(base64Decode(body));
+      } else {
+        request.response.write(body);
+      }
+    } catch (e) {
+      request.response.statusCode = 502;
+      request.response.write('Bad Gateway: $e');
+    } finally {
+      _pendingProxyRequests.remove(requestId);
+    }
+  }
+
+  /// Pending proxy requests waiting for device response
+  final Map<String, Completer<Map<String, dynamic>>> _pendingProxyRequests = {};
 
   Future<void> _handleRoot(HttpRequest request) async {
     final uptime = _startTime != null
@@ -1039,26 +1642,94 @@ class PureRelayServer {
     final parts = path.split('/');
     final roomId = parts.length > 4 ? parts[4] : 'general';
 
+    final room = _chatRooms[roomId];
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
     if (request.method == 'GET') {
-      final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '20') ?? 20;
+      final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '50') ?? 50;
       final messages = getChatHistory(roomId, limit: limit).map((m) => m.toJson()).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
-        'room': roomId,
+        'room_id': roomId,
+        'room_name': room.name,
         'messages': messages,
+        'count': messages.length,
       }));
     } else if (request.method == 'POST') {
-      final body = await utf8.decoder.bind(request).join();
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final content = data['content'] as String?;
-      if (content != null) {
-        postMessage(roomId, content);
+      try {
+        final body = await utf8.decoder.bind(request).join();
+        final data = jsonDecode(body) as Map<String, dynamic>;
+
+        final callsign = data['callsign'] as String?;
+        final content = data['content'] as String?;
+
+        if (callsign == null || callsign.isEmpty) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing callsign'}));
+          return;
+        }
+
+        if (content == null || content.isEmpty) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing content'}));
+          return;
+        }
+
+        // Optional NOSTR fields
+        final npub = data['npub'] as String?;
+        final pubkey = data['pubkey'] as String?;
+        final eventId = data['event_id'] as String?;
+        final signature = data['signature'] as String?;
+        final createdAt = data['created_at'] as int?;
+
+        // Create message
+        final msg = ChatMessage(
+          id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          roomId: roomId,
+          senderCallsign: callsign,
+          senderNpub: npub,
+          senderPubkey: pubkey,
+          signature: signature,
+          content: content,
+          timestamp: createdAt != null
+              ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
+              : DateTime.now(),
+        );
+
+        room.messages.add(msg);
+        room.lastActivity = DateTime.now();
+        _stats.totalMessages++;
+        _stats.lastMessage = DateTime.now();
+
+        // Broadcast to connected WebSocket clients
+        final payload = jsonEncode({
+          'type': 'chat_message',
+          'room': roomId,
+          'message': msg.toJson(),
+        });
+        for (final client in _clients.values) {
+          try {
+            client.socket.add(payload);
+          } catch (_) {}
+        }
+
         request.response.statusCode = 201;
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'status': 'ok'}));
-      } else {
+        request.response.write(jsonEncode({
+          'success': true,
+          'message': 'Message posted',
+        }));
+      } catch (e) {
         request.response.statusCode = 400;
-        request.response.write('Missing content');
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid request: $e'}));
       }
     }
   }
@@ -1223,8 +1894,16 @@ class PureRelayServer {
 
 /// SSL Certificate Manager for Let's Encrypt
 class SslCertificateManager {
-  final PureRelaySettings settings;
+  PureRelaySettings _settings;
   final String _sslDir;
+
+  /// Update settings reference (called when relay settings change)
+  void updateSettings(PureRelaySettings newSettings) {
+    _settings = newSettings;
+  }
+
+  /// Get current settings
+  PureRelaySettings get settings => _settings;
   Timer? _renewalTimer;
   final Map<String, String> _challengeResponses = {};
 
@@ -1239,8 +1918,9 @@ class SslCertificateManager {
   static const String productionAcme = 'https://acme-v02.api.letsencrypt.org/directory';
   static const String stagingAcme = 'https://acme-staging-v02.api.letsencrypt.org/directory';
 
-  SslCertificateManager(this.settings, String dataDir)
-      : _sslDir = '$dataDir/ssl';
+  SslCertificateManager(PureRelaySettings settings, String dataDir)
+      : _settings = settings,
+        _sslDir = '$dataDir/ssl';
 
   /// Initialize SSL directory
   Future<void> initialize() async {
@@ -1402,55 +2082,566 @@ class SslCertificateManager {
     }
   }
 
-  /// Request certificate using ACME protocol (uses certbot)
+  // Reference to relay server for challenge handling
+  PureRelayServer? _relayServer;
+
+  /// Set relay server reference for ACME challenge handling
+  void setRelayServer(PureRelayServer server) {
+    _relayServer = server;
+  }
+
+  /// Request certificate using native ACME protocol implementation
+  /// Works on all platforms (Linux, Windows, macOS, Android)
   Future<bool> _requestWithAcme({
     required String acmeUrl,
     required String domain,
     required String email,
     required bool staging,
   }) async {
-    // Check if certbot is available
-    final which = await Process.run('which', ['certbot']);
-    if (which.exitCode != 0) {
-      throw Exception(
-        'certbot not found. Install with: sudo apt install certbot\n'
-        'Or use: sudo snap install certbot --classic'
+    stdout.writeln('Starting ACME certificate request...');
+    stdout.writeln('Domain: $domain');
+    stdout.writeln('Email: $email');
+    stdout.writeln('Environment: ${staging ? "staging" : "production"}');
+    stdout.writeln('');
+
+    try {
+      // Step 1: Get ACME directory
+      stdout.writeln('[1/7] Fetching ACME directory...');
+      final directory = await _fetchAcmeDirectory(acmeUrl);
+
+      // Step 2: Generate or load account key
+      stdout.writeln('[2/7] Loading/generating account key...');
+      final accountKey = await _loadOrGenerateAccountKey();
+
+      // Step 3: Create/fetch ACME account
+      stdout.writeln('[3/7] Creating ACME account...');
+      final accountUrl = await _createAcmeAccount(
+        directory: directory,
+        accountKey: accountKey,
+        email: email,
       );
-    }
 
-    // Build certbot command
-    final args = [
-      'certonly',
-      '--webroot',
-      '-w', _sslDir,
-      '-d', domain,
-      '--email', email,
-      '--agree-tos',
-      '--non-interactive',
-      '--cert-path', certPath,
-      '--key-path', domainKeyPath,
-      '--fullchain-path', fullChainPath,
-    ];
-
-    if (staging) {
-      args.add('--staging');
-    }
-
-    final result = await Process.run('sudo', ['certbot', ...args]);
-
-    if (result.exitCode != 0) {
-      // Provide alternative manual method
-      throw Exception(
-        'certbot failed: ${result.stderr}\n\n'
-        'Alternative: Generate certificate manually:\n'
-        '1. Install certbot: sudo apt install certbot\n'
-        '2. Run: sudo certbot certonly --standalone -d $domain\n'
-        '3. Copy certificates to $_sslDir\n'
-        '4. Set paths with: ssl certpath <path> and ssl keypath <path>'
+      // Step 4: Create new order
+      stdout.writeln('[4/7] Creating certificate order...');
+      final order = await _createOrder(
+        directory: directory,
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        domain: domain,
       );
+
+      // Step 5: Complete HTTP-01 challenges
+      stdout.writeln('[5/7] Completing HTTP-01 challenge...');
+      await _completeHttpChallenge(
+        directory: directory,
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        order: order,
+        domain: domain,
+      );
+
+      // Step 6: Finalize order with CSR
+      stdout.writeln('[6/7] Finalizing order...');
+      await _finalizeOrder(
+        directory: directory,
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        order: order,
+        domain: domain,
+      );
+
+      // Step 7: Download certificate
+      stdout.writeln('[7/7] Downloading certificate...');
+      await _downloadCertificate(
+        directory: directory,
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        order: order,
+      );
+
+      stdout.writeln('');
+      stdout.writeln('Certificate successfully obtained!');
+      return true;
+    } catch (e) {
+      stdout.writeln('ACME request failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Fetch ACME directory
+  Future<Map<String, dynamic>> _fetchAcmeDirectory(String url) async {
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode != 200) {
+      throw Exception('Failed to fetch ACME directory: ${response.statusCode}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Load existing account key or generate new one
+  Future<Map<String, dynamic>> _loadOrGenerateAccountKey() async {
+    final keyFile = File(accountKeyPath);
+
+    if (await keyFile.exists()) {
+      // Parse existing PEM key
+      final pem = await keyFile.readAsString();
+      return _parsePrivateKeyPem(pem);
     }
 
-    return true;
+    // Generate new key using openssl (more reliable cross-platform)
+    await _generateKey(accountKeyPath);
+    final pem = await keyFile.readAsString();
+    return _parsePrivateKeyPem(pem);
+  }
+
+  /// Parse PEM private key and extract components for JWK
+  Map<String, dynamic> _parsePrivateKeyPem(String pem) {
+    // For ACME, we need the key in a format we can use for JWS signing
+    // We'll use openssl to extract the public key components
+    return {
+      'pem': pem,
+      'path': accountKeyPath,
+    };
+  }
+
+  /// Create ACME account
+  Future<String> _createAcmeAccount({
+    required Map<String, dynamic> directory,
+    required Map<String, dynamic> accountKey,
+    required String email,
+  }) async {
+    final newAccountUrl = directory['newAccount'] as String;
+    final newNonceUrl = directory['newNonce'] as String;
+
+    // Get initial nonce
+    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
+    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+    // Create account request
+    final payload = {
+      'termsOfServiceAgreed': true,
+      'contact': ['mailto:$email'],
+    };
+
+    final response = await _signedAcmeRequest(
+      url: newAccountUrl,
+      payload: payload,
+      accountKey: accountKey,
+      nonce: nonce,
+      useJwk: true,
+    );
+
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw Exception('Failed to create ACME account: ${response.statusCode} ${response.body}');
+    }
+
+    // Account URL is in Location header
+    final accountUrl = response.headers['location'];
+    if (accountUrl == null) {
+      throw Exception('No account URL in response');
+    }
+
+    return accountUrl;
+  }
+
+  /// Create new certificate order
+  Future<Map<String, dynamic>> _createOrder({
+    required Map<String, dynamic> directory,
+    required Map<String, dynamic> accountKey,
+    required String accountUrl,
+    required String domain,
+  }) async {
+    final newOrderUrl = directory['newOrder'] as String;
+    final newNonceUrl = directory['newNonce'] as String;
+
+    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
+    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+    final payload = {
+      'identifiers': [
+        {'type': 'dns', 'value': domain}
+      ],
+    };
+
+    final response = await _signedAcmeRequest(
+      url: newOrderUrl,
+      payload: payload,
+      accountKey: accountKey,
+      accountUrl: accountUrl,
+      nonce: nonce,
+    );
+
+    if (response.statusCode != 201) {
+      throw Exception('Failed to create order: ${response.statusCode} ${response.body}');
+    }
+
+    final order = jsonDecode(response.body) as Map<String, dynamic>;
+    order['url'] = response.headers['location'];
+    return order;
+  }
+
+  /// Complete HTTP-01 challenge
+  Future<void> _completeHttpChallenge({
+    required Map<String, dynamic> directory,
+    required Map<String, dynamic> accountKey,
+    required String accountUrl,
+    required Map<String, dynamic> order,
+    required String domain,
+  }) async {
+    final authorizations = order['authorizations'] as List;
+    final newNonceUrl = directory['newNonce'] as String;
+
+    for (final authzUrl in authorizations) {
+      // Fetch authorization
+      var nonceResponse = await http.head(Uri.parse(newNonceUrl));
+      var nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+      final authzResponse = await _signedAcmeRequest(
+        url: authzUrl as String,
+        payload: null, // POST-as-GET
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        nonce: nonce,
+      );
+
+      final authz = jsonDecode(authzResponse.body) as Map<String, dynamic>;
+      final challenges = authz['challenges'] as List;
+
+      // Find HTTP-01 challenge
+      final http01 = challenges.firstWhere(
+        (c) => c['type'] == 'http-01',
+        orElse: () => null,
+      );
+
+      if (http01 == null) {
+        throw Exception('No HTTP-01 challenge available');
+      }
+
+      final token = http01['token'] as String;
+      final challengeUrl = http01['url'] as String;
+
+      // Compute key authorization
+      final keyAuthz = await _computeKeyAuthorization(token, accountKey);
+
+      // Set challenge response on relay server
+      if (_relayServer != null) {
+        _relayServer!.setAcmeChallenge(token, keyAuthz);
+        stdout.writeln('  Challenge token set: $token');
+      } else {
+        throw Exception('Relay server not available for challenge');
+      }
+
+      // Tell ACME server to verify
+      nonceResponse = await http.head(Uri.parse(newNonceUrl));
+      nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+      final challengeResponse = await _signedAcmeRequest(
+        url: challengeUrl,
+        payload: {},
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        nonce: nonce,
+      );
+
+      if (challengeResponse.statusCode != 200) {
+        throw Exception('Challenge request failed: ${challengeResponse.statusCode}');
+      }
+
+      // Poll for completion
+      stdout.writeln('  Waiting for challenge verification...');
+      for (var i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(seconds: 2));
+
+        nonceResponse = await http.head(Uri.parse(newNonceUrl));
+        nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+        final statusResponse = await _signedAcmeRequest(
+          url: authzUrl as String,
+          payload: null,
+          accountKey: accountKey,
+          accountUrl: accountUrl,
+          nonce: nonce,
+        );
+
+        final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
+        final authzStatus = status['status'] as String?;
+
+        if (authzStatus == 'valid') {
+          stdout.writeln('  Challenge verified!');
+          break;
+        } else if (authzStatus == 'invalid') {
+          throw Exception('Challenge validation failed: ${status['challenges']}');
+        }
+        stdout.write('.');
+      }
+
+      // Cleanup challenge
+      _relayServer?.clearAcmeChallenge(token);
+    }
+  }
+
+  /// Compute key authorization for challenge
+  Future<String> _computeKeyAuthorization(String token, Map<String, dynamic> accountKey) async {
+    // Key authorization = token.thumbprint
+    // For now, use a simplified approach with openssl
+    final thumbprint = await _computeJwkThumbprint(accountKey);
+    return '$token.$thumbprint';
+  }
+
+  /// Compute JWK thumbprint (SHA-256 of canonical JWK)
+  Future<String> _computeJwkThumbprint(Map<String, dynamic> accountKey) async {
+    // Extract public key components using openssl
+    final keyPath = accountKey['path'] as String;
+
+    // Get modulus (n) and exponent (e)
+    final nResult = await Process.run('openssl', [
+      'rsa', '-in', keyPath, '-noout', '-modulus'
+    ]);
+    final eResult = await Process.run('openssl', [
+      'rsa', '-in', keyPath, '-noout', '-text'
+    ]);
+
+    if (nResult.exitCode != 0) {
+      throw Exception('Failed to extract key modulus');
+    }
+
+    // Parse modulus
+    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
+    final modulusBytes = _hexToBytes(modulusHex);
+    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
+
+    // Public exponent is typically 65537 (0x010001)
+    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
+
+    // Canonical JWK for thumbprint
+    final jwk = '{"e":"$e","kty":"RSA","n":"$n"}';
+
+    // SHA-256 hash
+    final hashResult = await Process.run('sh', ['-c', 'echo -n \'$jwk\' | openssl dgst -sha256 -binary | base64 | tr -d "=" | tr "/+" "_-"']);
+
+    return (hashResult.stdout as String).trim();
+  }
+
+  List<int> _hexToBytes(String hex) {
+    final result = <int>[];
+    for (var i = 0; i < hex.length; i += 2) {
+      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
+    }
+    return result;
+  }
+
+  /// Finalize order with CSR
+  Future<void> _finalizeOrder({
+    required Map<String, dynamic> directory,
+    required Map<String, dynamic> accountKey,
+    required String accountUrl,
+    required Map<String, dynamic> order,
+    required String domain,
+  }) async {
+    final finalizeUrl = order['finalize'] as String;
+    final newNonceUrl = directory['newNonce'] as String;
+
+    // Generate domain key if needed
+    if (!File(domainKeyPath).existsSync()) {
+      await _generateKey(domainKeyPath);
+    }
+
+    // Generate CSR in DER format directly
+    final csrDerPath = '$_sslDir/domain.csr.der';
+    final csrResult = await Process.run('openssl', [
+      'req', '-new',
+      '-key', domainKeyPath,
+      '-outform', 'DER',
+      '-out', csrDerPath,
+      '-subj', '/CN=$domain',
+    ]);
+
+    if (csrResult.exitCode != 0) {
+      throw Exception('Failed to generate CSR: ${csrResult.stderr}');
+    }
+
+    // Read CSR binary file and encode as base64url
+    final csrDer = await File(csrDerPath).readAsBytes();
+    final csrB64 = base64Url.encode(csrDer).replaceAll('=', '');
+
+    // Finalize
+    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
+    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+    final response = await _signedAcmeRequest(
+      url: finalizeUrl,
+      payload: {'csr': csrB64},
+      accountKey: accountKey,
+      accountUrl: accountUrl,
+      nonce: nonce,
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to finalize order: ${response.statusCode} ${response.body}');
+    }
+
+    // Update order with response
+    final updatedOrder = jsonDecode(response.body) as Map<String, dynamic>;
+    order.addAll(updatedOrder);
+
+    // Poll for ready status
+    stdout.writeln('  Waiting for certificate issuance...');
+    final orderUrl = order['url'] as String;
+
+    for (var i = 0; i < 30; i++) {
+      await Future.delayed(const Duration(seconds: 2));
+
+      final checkNonceResponse = await http.head(Uri.parse(newNonceUrl));
+      final checkNonce = checkNonceResponse.headers['replay-nonce'] ?? '';
+
+      final statusResponse = await _signedAcmeRequest(
+        url: orderUrl,
+        payload: null,
+        accountKey: accountKey,
+        accountUrl: accountUrl,
+        nonce: checkNonce,
+      );
+
+      final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
+      final orderStatus = status['status'] as String?;
+
+      if (orderStatus == 'valid') {
+        order['certificate'] = status['certificate'];
+        stdout.writeln('  Certificate ready!');
+        return;
+      } else if (orderStatus == 'invalid') {
+        throw Exception('Order became invalid');
+      }
+    }
+
+    throw Exception('Timeout waiting for certificate');
+  }
+
+  /// Download certificate
+  Future<void> _downloadCertificate({
+    required Map<String, dynamic> directory,
+    required Map<String, dynamic> accountKey,
+    required String accountUrl,
+    required Map<String, dynamic> order,
+  }) async {
+    final certUrl = order['certificate'] as String?;
+    if (certUrl == null) {
+      throw Exception('No certificate URL in order');
+    }
+
+    final newNonceUrl = directory['newNonce'] as String;
+    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
+    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
+
+    final response = await _signedAcmeRequest(
+      url: certUrl,
+      payload: null,
+      accountKey: accountKey,
+      accountUrl: accountUrl,
+      nonce: nonce,
+      accept: 'application/pem-certificate-chain',
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to download certificate: ${response.statusCode}');
+    }
+
+    // Save certificate chain
+    final certChain = response.body;
+    await File(fullChainPath).writeAsString(certChain);
+    await File(certPath).writeAsString(certChain);
+
+    stdout.writeln('  Certificate saved to: $fullChainPath');
+  }
+
+  /// Make signed ACME request using external openssl
+  Future<http.Response> _signedAcmeRequest({
+    required String url,
+    required dynamic payload,
+    required Map<String, dynamic> accountKey,
+    required String nonce,
+    String? accountUrl,
+    bool useJwk = false,
+    String accept = 'application/json',
+  }) async {
+    final keyPath = accountKey['path'] as String;
+
+    // Create protected header
+    final protected = <String, dynamic>{
+      'alg': 'RS256',
+      'nonce': nonce,
+      'url': url,
+    };
+
+    if (useJwk) {
+      // For new account, include JWK
+      protected['jwk'] = await _getJwk(keyPath);
+    } else {
+      // For other requests, use kid
+      protected['kid'] = accountUrl;
+    }
+
+    final protectedB64 = base64Url.encode(utf8.encode(jsonEncode(protected))).replaceAll('=', '');
+
+    // Encode payload
+    String payloadB64;
+    if (payload == null) {
+      payloadB64 = ''; // POST-as-GET
+    } else {
+      payloadB64 = base64Url.encode(utf8.encode(jsonEncode(payload))).replaceAll('=', '');
+    }
+
+    // Sign with openssl
+    final signingInput = '$protectedB64.$payloadB64';
+    final signResult = await Process.run('sh', [
+      '-c',
+      'echo -n "$signingInput" | openssl dgst -sha256 -sign "$keyPath" | base64 | tr -d "\\n" | tr "/+" "_-" | tr -d "="'
+    ]);
+
+    if (signResult.exitCode != 0) {
+      throw Exception('Failed to sign request: ${signResult.stderr}');
+    }
+
+    final signature = (signResult.stdout as String).trim();
+
+    final body = jsonEncode({
+      'protected': protectedB64,
+      'payload': payloadB64,
+      'signature': signature,
+    });
+
+    return await http.post(
+      Uri.parse(url),
+      headers: {
+        'Content-Type': 'application/jose+json',
+        'Accept': accept,
+      },
+      body: body,
+    );
+  }
+
+  /// Get JWK from key file
+  Future<Map<String, dynamic>> _getJwk(String keyPath) async {
+    // Extract public key components
+    final nResult = await Process.run('openssl', [
+      'rsa', '-in', keyPath, '-noout', '-modulus'
+    ]);
+
+    if (nResult.exitCode != 0) {
+      throw Exception('Failed to extract modulus');
+    }
+
+    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
+    final modulusBytes = _hexToBytes(modulusHex);
+    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
+
+    // Public exponent (65537)
+    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
+
+    return {
+      'kty': 'RSA',
+      'n': n,
+      'e': e,
+    };
   }
 
   /// Get challenge response for ACME HTTP-01 validation

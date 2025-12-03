@@ -194,15 +194,13 @@ class GameEngine {
     await screen.showCombatIntro(game.player, opponentInstance);
 
     // Combat loop
-    var firstTurn = false; // Already showed intro
+    var firstTurn = true; // Skip status on first turn since intro was just shown
     while (true) {
-      // Show combat status (stats only on subsequent turns)
-      if (firstTurn) {
-        await screen.showCombatIntro(game.player, opponentInstance);
-        firstTurn = false;
-      } else {
+      // Show combat status (stats only, skip on first turn since intro already showed)
+      if (!firstTurn) {
         await screen.showCombatStatus(game.player, opponentInstance);
       }
+      firstTurn = false;
 
       // Get player action (Attack or Run)
       final playerAction = await screen.getCombatAction(availableActions);

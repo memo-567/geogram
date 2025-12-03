@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path_provider/path_provider.dart';
 import '../util/nostr_key_generator.dart';
 import '../platform/web_storage.dart' if (dart.library.io) '../platform/web_storage_stub.dart';
+import 'storage_config.dart';
 
 /// Service for managing application configuration stored in config.json
 class ConfigService {
@@ -31,15 +31,19 @@ class ConfigService {
   }
 
   /// Initialize for native platforms (file-based storage)
+  ///
+  /// Uses StorageConfig for path management. StorageConfig must be initialized
+  /// before calling this method.
   Future<void> _initNative() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final configDir = Directory('${appDir.path}/geogram');
-
-    if (!await configDir.exists()) {
-      await configDir.create(recursive: true);
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      throw StateError(
+        'StorageConfig must be initialized before ConfigService. '
+        'Call StorageConfig().init() first.',
+      );
     }
 
-    _configFile = File('${configDir.path}/config.json');
+    _configFile = File(storageConfig.configPath);
 
     if (await _configFile!.exists()) {
       await _load();
@@ -113,6 +117,10 @@ class ConfigService {
         print('Error saving web config: $e');
       }
     } else {
+      if (_configFile == null) {
+        stderr.writeln('Error saving config: ConfigService not initialized');
+        return;
+      }
       try {
         final contents = JsonEncoder.withIndent('  ').convert(_config);
         await _configFile!.writeAsString(contents);

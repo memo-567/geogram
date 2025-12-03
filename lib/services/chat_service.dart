@@ -3,12 +3,21 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:path/path.dart' as path;
 import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
+
+/// Notification when chat files change
+class ChatFileChange {
+  final String channelId;
+  final DateTime timestamp;
+
+  ChatFileChange(this.channelId, this.timestamp);
+}
 
 /// Service for managing chat collections and messages
 class ChatService {
@@ -27,6 +36,16 @@ class ChatService {
 
   /// Security settings (moderators)
   ChatSecurity _security = ChatSecurity();
+
+  /// File system watcher subscriptions
+  final List<StreamSubscription<FileSystemEvent>> _watchSubscriptions = [];
+
+  /// Stream controller for file change notifications
+  final StreamController<ChatFileChange> _changeController =
+      StreamController<ChatFileChange>.broadcast();
+
+  /// Stream of file change notifications
+  Stream<ChatFileChange> get onFileChange => _changeController.stream;
 
   /// Initialize chat service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
@@ -53,6 +72,52 @@ class ChatService {
 
   /// Get security settings
   ChatSecurity get security => _security;
+
+  /// Start watching chat files for changes
+  void startWatching() {
+    stopWatching(); // Clear any existing watchers
+
+    if (_collectionPath == null) {
+      stderr.writeln('ChatService: Cannot start watching - no collection path');
+      return;
+    }
+
+    stderr.writeln('ChatService: Starting file watchers for ${_channels.length} channels at $_collectionPath');
+
+    // Watch main channel folder and subfolders
+    for (final channel in _channels) {
+      final channelDir = Directory(path.join(_collectionPath!, channel.folder));
+      stderr.writeln('ChatService: Checking channel ${channel.id} at ${channelDir.path}');
+      if (channelDir.existsSync()) {
+        try {
+          final subscription = channelDir
+              .watch(events: FileSystemEvent.modify | FileSystemEvent.create, recursive: true)
+              .listen((event) {
+            stderr.writeln('ChatService: File change detected: ${event.path}');
+            // Only notify for chat files
+            if (event.path.endsWith('_chat.txt') || event.path.endsWith('messages.txt')) {
+              stderr.writeln('ChatService: Notifying change for channel ${channel.id}');
+              _changeController.add(ChatFileChange(channel.id, DateTime.now()));
+            }
+          });
+          _watchSubscriptions.add(subscription);
+          stderr.writeln('ChatService: Started watching ${channelDir.path}');
+        } catch (e) {
+          stderr.writeln('ChatService: Failed to watch ${channelDir.path}: $e');
+        }
+      } else {
+        stderr.writeln('ChatService: Channel dir does not exist: ${channelDir.path}');
+      }
+    }
+  }
+
+  /// Stop watching chat files
+  void stopWatching() {
+    for (final sub in _watchSubscriptions) {
+      sub.cancel();
+    }
+    _watchSubscriptions.clear();
+  }
 
   /// Load channels from channels.json
   Future<void> _loadChannels() async {
@@ -488,6 +553,10 @@ class ChatService {
       // Append to daily file
       messageFile = await _getDailyMessageFile(channelDir, message.dateTime);
     } else {
+      // Ensure channel directory exists for non-main channels
+      if (!await channelDir.exists()) {
+        await channelDir.create(recursive: true);
+      }
       // Append to single messages.txt
       messageFile = File(path.join(channelDir.path, 'messages.txt'));
     }
@@ -530,9 +599,9 @@ class ChatService {
     final year = date.year.toString();
     final yearDir = Directory(path.join(channelDir.path, year));
 
-    // Create year directory if doesn't exist
+    // Create year directory if doesn't exist (recursive to handle missing channel dir)
     if (!await yearDir.exists()) {
-      await yearDir.create();
+      await yearDir.create(recursive: true);
       // Create files subfolder
       await Directory(path.join(yearDir.path, 'files')).create();
     }

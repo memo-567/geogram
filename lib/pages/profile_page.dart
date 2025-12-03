@@ -51,7 +51,8 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
-    _saveProfile(showSnackbar: false);
+    // Don't save in dispose - it triggers listeners during widget tree unmount
+    // which causes setState errors. Save is handled by PopScope instead.
     _nicknameController.dispose();
     _descriptionController.dispose();
     super.dispose();
@@ -202,11 +203,19 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_i18n.t('profile_settings')),
-      ),
-      body: _isLoading
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) {
+          // Save profile when page is popped (going back)
+          await _saveProfile(showSnackbar: false);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_i18n.t('profile_settings')),
+        ),
+        body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(24),
@@ -415,6 +424,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
+      ),
     );
   }
 

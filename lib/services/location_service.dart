@@ -7,6 +7,33 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
+
+/// Result of IP-based geolocation
+class GeoIpResult {
+  final double latitude;
+  final double longitude;
+  final String? city;
+  final String? country;
+
+  GeoIpResult({
+    required this.latitude,
+    required this.longitude,
+    this.city,
+    this.country,
+  });
+
+  String get locationName {
+    if (city != null && country != null) {
+      return '$city, $country';
+    } else if (city != null) {
+      return city!;
+    } else if (country != null) {
+      return country!;
+    }
+    return 'Unknown';
+  }
+}
 
 /// Model for a city entry from the worldcities database
 class CityEntry {
@@ -257,4 +284,30 @@ class LocationService {
 
   /// Get total number of cities in database
   int get cityCount => _cities?.length ?? 0;
+
+  /// Detect location via IP address using ip-api.com (free, no API key required)
+  /// Works on desktop, web, and CLI when connected to the internet
+  Future<GeoIpResult?> detectLocationViaIP() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          return GeoIpResult(
+            latitude: (data['lat'] as num).toDouble(),
+            longitude: (data['lon'] as num).toDouble(),
+            city: data['city'] as String?,
+            country: data['country'] as String?,
+          );
+        }
+      }
+      return null;
+    } catch (e) {
+      stderr.writeln('LocationService: Failed to detect location via IP: $e');
+      return null;
+    }
+  }
 }

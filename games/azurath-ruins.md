@@ -14,8 +14,8 @@
         [ | ]
 ```
 - Health: 100
-- Attack: 10
-- Defense: 5
+- Attack: 15
+- Defense: 8
 - Experience: 30
 - Gold: 50
 
@@ -208,14 +208,31 @@
 > You strike at your opponent with all your might!
 
 ```javascript
-var attackPower = A['Attack'] + (A['Experience'] / 10);
-var defendPower = B['Defense'];
-var damage = Math.max(1, Math.floor(attackPower - defendPower));
-B['Health'] = B['Health'] - damage;
+// Player attacks opponent
+var playerAttack = A['Attack'] + (A['Experience'] / 10);
+var opponentDef = B['Defense'];
+var playerDamage = Math.max(5, Math.floor(playerAttack * 1.5 - opponentDef));
+B['Health'] = B['Health'] - playerDamage;
+
+// Check if opponent is defeated
 if (B['Health'] <= 0) {
+  // Victory! Restore some health
+  A['Health'] = Math.min(A['Health'] + 20, 100);
+  A['Experience'] = A['Experience'] + 10;
   output = 'win';
 } else {
-  output = 'continue';
+  // Opponent counter-attacks!
+  var opponentAttack = B['Attack'];
+  var playerDef = A['Defense'];
+  var opponentDamage = Math.max(1, Math.floor(opponentAttack - playerDef));
+  A['Health'] = A['Health'] - opponentDamage;
+
+  // Check if player is defeated
+  if (A['Health'] <= 0) {
+    output = 'lose';
+  } else {
+    output = 'continue';
+  }
 }
 ```
 

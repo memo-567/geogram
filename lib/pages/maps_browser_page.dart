@@ -6,6 +6,7 @@
 import 'dart:math' as math;
 import 'dart:io' show Platform;
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
@@ -134,11 +135,14 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           _currentZoom = _getZoomForRadius(_radiusKm);
         });
       } else {
-        // Default to center of world map
+        // First time - set temporary default and auto-detect location
         setState(() {
           _centerPosition = const LatLng(20, 0);
           _currentZoom = 3.0;
         });
+
+        // Auto-detect location in background (GPS on Android, IP on Desktop/Web)
+        _autoDetectLocationSilently();
       }
     }
 
@@ -338,16 +342,19 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     });
   }
 
-  /// Auto-detect current location using GPS (Android) or IP (Desktop)
+  /// Auto-detect current location using GPS (Android) or IP (Desktop/Web)
   Future<void> _autoDetectLocation() async {
     setState(() => _isDetectingLocation = true);
 
     try {
-      // Check if we're on Android (use GPS) or Desktop (use IP)
-      if (Platform.isAndroid || Platform.isIOS) {
+      // Web always uses IP-based geolocation
+      if (kIsWeb) {
+        await _detectLocationViaIP();
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        // Mobile platforms use GPS
         await _detectLocationViaGPS();
       } else {
-        // Desktop: use IP-based geolocation
+        // Desktop (Linux/Windows/macOS): use IP-based geolocation
         await _detectLocationViaIP();
       }
     } catch (e) {
@@ -365,6 +372,67 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         setState(() => _isDetectingLocation = false);
       }
     }
+  }
+
+  /// Auto-detect location silently on first load (no error messages)
+  Future<void> _autoDetectLocationSilently() async {
+    LogService().log('MapsBrowserPage: Auto-detecting initial location...');
+    setState(() => _isDetectingLocation = true);
+
+    try {
+      // Web always uses IP-based geolocation
+      if (kIsWeb) {
+        await _detectLocationViaIP();
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        // Mobile platforms use GPS
+        await _detectLocationViaGPSSilently();
+      } else {
+        // Desktop (Linux/Windows/macOS): use IP-based geolocation
+        await _detectLocationViaIP();
+      }
+      LogService().log('MapsBrowserPage: Initial location detected successfully');
+    } catch (e) {
+      // Silently fail on first load - user can manually detect later
+      LogService().log('MapsBrowserPage: Silent location detection failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isDetectingLocation = false);
+      }
+    }
+  }
+
+  /// Detect location via GPS silently (no permission denied messages)
+  Future<void> _detectLocationViaGPSSilently() async {
+    // Check if location services are enabled
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      throw Exception('Location services disabled');
+    }
+
+    // Check permission - only proceed if already granted
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      // Try to request permission
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied');
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      throw Exception('Location permission permanently denied');
+    }
+
+    // Get current position
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.medium, // Use medium for faster detection
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+
+    _updateLocationAndReload(position.latitude, position.longitude, 'location_detected_gps');
   }
 
   /// Detect location via GPS (for Android/iOS)
