@@ -62,6 +62,21 @@ enum FileSystemEntityType {
   unixDomainSock,
 }
 
+/// Stub for FileSystemEvent
+class FileSystemEvent {
+  final String path;
+  final bool isDirectory;
+  final int type;
+
+  FileSystemEvent._(this.path, this.isDirectory, this.type);
+
+  static const int create = 1;
+  static const int modify = 2;
+  static const int delete = 4;
+  static const int move = 8;
+  static const int all = 15;
+}
+
 /// Stub for FileSystemEntity
 abstract class FileSystemEntity {
   String get path;
@@ -264,6 +279,11 @@ class Directory implements FileSystemEntity {
     return [];
   }
 
+  /// Watch for file system changes (returns empty stream on web)
+  Stream<FileSystemEvent> watch({int events = FileSystemEvent.all, bool recursive = false}) {
+    return const Stream.empty();
+  }
+
   @override
   Future<FileStat> stat() async => FileStat.stat(path);
 
@@ -335,6 +355,7 @@ class Platform {
   static Map<String, String> get environment => {};
   static String get localeName => 'en_US';
   static String? get executable => null;
+  static String get resolvedExecutable => '';
   static List<String> get executableArguments => [];
   static String? get packageConfig => null;
   static Uri get script => Uri.parse('web://');
