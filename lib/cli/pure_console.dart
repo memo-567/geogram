@@ -159,7 +159,7 @@ class PureConsole {
     'stop': 'stop - Stop the relay server',
     'restart': 'restart - Restart the relay server',
     'port': 'port [port] - Get or set relay port (1-65535)',
-    'callsign': 'callsign [callsign] - Get or set relay callsign',
+    'callsign': 'callsign - Show relay callsign (derived from key pair)',
     'cache': 'cache [clear] - Show cache stats or clear cache',
     // Devices commands
     'devices': 'devices <subcommand> - Manage devices (list|scan|ping)',
@@ -862,6 +862,11 @@ class PureConsole {
           return _completeCallsigns(partial);
         }
       }
+
+      // profile switch <callsign>
+      if (firstWord == 'profile' && subCmd == 'switch') {
+        return _completeProfileCallsigns(partial);
+      }
     }
 
     return [];
@@ -1015,6 +1020,21 @@ class PureConsole {
       final callsign = client.callsign ?? '';
       if (callsign.toUpperCase().startsWith(upperPartial)) {
         candidates.add(Candidate(callsign, group: 'device'));
+      }
+    }
+
+    return candidates;
+  }
+
+  /// Complete with profile callsigns
+  List<Candidate> _completeProfileCallsigns(String partial) {
+    final candidates = <Candidate>[];
+    final upperPartial = partial.toUpperCase();
+
+    for (final profile in _profileService.profiles) {
+      if (profile.callsign.toUpperCase().startsWith(upperPartial)) {
+        final label = profile.nickname.isNotEmpty ? '${profile.callsign} (${profile.nickname})' : profile.callsign;
+        candidates.add(Candidate(profile.callsign, display: label, group: profile.isRelay ? 'relay' : 'client'));
       }
     }
 
@@ -1801,20 +1821,12 @@ class PureConsole {
   }
 
   Future<void> _handleRelayCallsign(List<String> args) async {
-    if (args.isEmpty) {
-      stdout.writeln('Current callsign: ${_relay.settings.callsign}');
-      return;
+    // Callsign is derived from npub (X3 prefix for relays) - cannot be set manually
+    stdout.writeln('Relay callsign: ${_relay.settings.callsign}');
+    stdout.writeln('  (derived from npub: ${_relay.settings.npub.substring(0, 20)}...)');
+    if (args.isNotEmpty) {
+      _printError('Callsign cannot be set manually - it is derived from the relay key pair');
     }
-
-    final callsign = args[0].toUpperCase();
-    if (callsign.length < 3 || callsign.length > 10) {
-      _printError('Invalid callsign: must be 3-10 characters');
-      return;
-    }
-
-    final settings = _relay.settings.copyWith(callsign: callsign);
-    await _relay.updateSettings(settings);
-    stdout.writeln('\x1B[32mCallsign set to $callsign\x1B[0m');
   }
 
   void _handleRelayCache(List<String> args) {
@@ -2850,21 +2862,20 @@ class PureConsole {
     // Reinitialize chat service for the new profile
     await _chatService.initialize(profile.callsign, npub: profile.npub, nsec: profile.nsec);
 
-    // If switching to a relay, update relay settings
+    // If switching to a relay, update relay server settings
     if (profile.isRelay) {
       final newSettings = _relay.settings.copyWith(
-        callsign: profile.callsign,
-        relayRole: profile.relayRole,
-        parentRelayUrl: profile.parentRelayUrl,
-        networkId: profile.networkId,
         httpPort: profile.port,
         description: profile.description,
         location: profile.locationName,
         latitude: profile.latitude,
         longitude: profile.longitude,
-        enableAprs: profile.enableAprs,
         tileServerEnabled: profile.tileServerEnabled,
         osmFallbackEnabled: profile.osmFallbackEnabled,
+        enableAprs: profile.enableAprs,
+        relayRole: profile.relayRole,
+        networkId: profile.networkId,
+        parentRelayUrl: profile.parentRelayUrl,
         setupComplete: true,
       );
       await _relay.updateSettings(newSettings);
@@ -3138,18 +3149,17 @@ class PureConsole {
 
     // Also update relay server settings
     final newSettings = _relay.settings.copyWith(
-      callsign: callsign,
-      relayRole: isRoot ? 'root' : 'node',
-      parentRelayUrl: parentUrl,
-      networkId: networkId,
       httpPort: port,
       description: description,
       location: location.isNotEmpty ? location : null,
       latitude: latitude,
       longitude: longitude,
-      enableAprs: enableAprs,
       tileServerEnabled: enableTiles,
       osmFallbackEnabled: enableOsmFallback,
+      enableAprs: enableAprs,
+      relayRole: isRoot ? 'root' : 'node',
+      networkId: networkId,
+      parentRelayUrl: parentUrl,
       setupComplete: true,
     );
     await _relay.updateSettings(newSettings);

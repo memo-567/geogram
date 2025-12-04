@@ -82,7 +82,7 @@ class MapsService {
     if (types.contains(MapItemType.news)) {
       futures.add(_loadNews(centerLat, centerLon, radiusKm, languageCode, forceRefresh: forceRefresh));
     }
-    if (types.contains(MapItemType.report)) {
+    if (types.contains(MapItemType.alert)) {
       futures.add(_loadReports(centerLat, centerLon, radiusKm, languageCode, forceRefresh: forceRefresh));
     }
     if (types.contains(MapItemType.relay)) {
@@ -280,11 +280,11 @@ class MapsService {
     final items = <MapItem>[];
 
     try {
-      // Get all collections and filter for report type
+      // Get all collections and filter for alerts type
       final collections = await _getCollections(forceRefresh: forceRefresh);
-      final reportCollections = collections.where((c) => c.type == 'report').toList();
+      final reportCollections = collections.where((c) => c.type == 'alerts').toList();
 
-      LogService().log('MapsService: Found ${reportCollections.length} report collections');
+      LogService().log('MapsService: Found ${reportCollections.length} alerts collections');
 
       for (var collection in reportCollections) {
         if (collection.storagePath == null) continue;
@@ -306,7 +306,7 @@ class MapsService {
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            items.add(MapItem.fromReport(report, distanceKm: distance, languageCode: languageCode, collectionPath: collection.storagePath));
+            items.add(MapItem.fromAlert(report, distanceKm: distance, languageCode: languageCode, collectionPath: collection.storagePath));
           }
 
           LogService().log('MapsService: Loaded ${reports.length} reports from ${collection.title}');

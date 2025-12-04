@@ -674,7 +674,7 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
                 value: _collectionType,
                 decoration: InputDecoration(labelText: _i18n.t('collection_type')),
                 items: [
-                  'blog', 'forum', 'events', 'news', 'report',
+                  'blog', 'forum', 'events', 'news', 'alerts',
                   'postcards', 'contacts', 'places', 'market'
                 ].map((type) => DropdownMenuItem(
                   value: type,

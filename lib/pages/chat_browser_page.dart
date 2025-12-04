@@ -723,6 +723,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         setState(() {
           _relayMessages.add(newMessage);
         });
+
+        // Cache the updated message list to persist after app restart
+        if (_selectedRelayRoom!.relayName.isNotEmpty) {
+          await _cacheService.saveMessages(
+            _selectedRelayRoom!.relayName,
+            _selectedRelayRoom!.id,
+            _relayMessages,
+          );
+        }
       } else {
         _showError('Failed to send message to relay');
       }

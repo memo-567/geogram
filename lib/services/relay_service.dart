@@ -22,7 +22,14 @@ class RelayService {
   WebSocketService? _wsService;
 
   /// Default relays
-  static final List<Relay> _defaultRelays = [];
+  static final List<Relay> _defaultRelays = [
+    Relay(
+      url: 'https://p2p.radio',
+      name: 'P2P Radio',
+      description: 'Public relay for the geogram network',
+      status: 'preferred',
+    ),
+  ];
 
   /// Initialize relay service
   Future<void> initialize() async {

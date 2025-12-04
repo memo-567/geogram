@@ -311,7 +311,7 @@ class DevicesService {
     const knownTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
       'www', 'postcards', 'contacts', 'places',
-      'market', 'report', 'groups',
+      'market', 'alerts', 'groups',
     };
     return knownTypes.contains(name.toLowerCase());
   }

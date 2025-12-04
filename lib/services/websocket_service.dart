@@ -56,10 +56,11 @@ class WebSocketService {
       LogService().log('User callsign: ${profile.callsign}');
       LogService().log('User npub: ${profile.npub.substring(0, 20)}...');
 
-      // Create hello event
+      // Create hello event (include nickname for friendly URL support)
       final event = NostrEvent.createHello(
         npub: profile.npub,
         callsign: profile.callsign,
+        nickname: profile.nickname,
       );
       event.calculateId();
       event.signWithNsec(profile.nsec);
@@ -77,6 +78,9 @@ class WebSocketService {
       LogService().log('Message type: hello');
       LogService().log('Event ID: ${event.id?.substring(0, 16)}...');
       LogService().log('Callsign: ${profile.callsign}');
+      if (profile.nickname.isNotEmpty) {
+        LogService().log('Nickname: ${profile.nickname}');
+      }
       LogService().log('Content: ${event.content}');
       LogService().log('');
       LogService().log('Full message:');

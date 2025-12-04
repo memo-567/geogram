@@ -649,7 +649,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final name = collection.name;
     // Check if name matches a known collection type and translate it
     final knownTypes = ['chat', 'blog', 'forum', 'contacts', 'events', 'places',
-                        'news', 'www', 'postcards', 'market', 'report', 'groups',
+                        'news', 'www', 'postcards', 'market', 'alerts', 'groups',
                         'relay', 'documents', 'photos', 'files'];
     if (knownTypes.contains(name.toLowerCase())) {
       return _getCollectionTypeLabel(name.toLowerCase());
@@ -673,7 +673,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'www': return Icons.language;
       case 'documents': return Icons.description;
       case 'photos': return Icons.photo_library;
-      case 'report': return Icons.assignment;
+      case 'alerts': return Icons.notifications_active;
       case 'market': return Icons.store;
       case 'groups': return Icons.group;
       case 'postcards': return Icons.mail;

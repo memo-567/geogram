@@ -287,7 +287,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void _openItemDetail(MapItem item) {
     // Open detail page based on item type
     switch (item.type) {
-      case MapItemType.report:
+      case MapItemType.alert:
         if (item.collectionPath != null && item.sourceItem is Report) {
           Navigator.push(
             context,
@@ -545,7 +545,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         return Colors.green;
       case MapItemType.news:
         return Colors.orange;
-      case MapItemType.report:
+      case MapItemType.alert:
         return Colors.red;
       case MapItemType.relay:
         return Colors.purple;
@@ -562,8 +562,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         return Icons.place;
       case MapItemType.news:
         return Icons.newspaper;
-      case MapItemType.report:
-        return Icons.warning;
+      case MapItemType.alert:
+        return Icons.notifications_active;
       case MapItemType.relay:
         return Icons.cell_tower;
       case MapItemType.contact:

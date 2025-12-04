@@ -16,7 +16,7 @@ enum MapItemType {
   event,
   place,
   news,
-  report,
+  alert,
   relay,
   contact;
 
@@ -29,8 +29,8 @@ enum MapItemType {
         return 'Places';
       case MapItemType.news:
         return 'News';
-      case MapItemType.report:
-        return 'Reports';
+      case MapItemType.alert:
+        return 'Alerts';
       case MapItemType.relay:
         return 'Relays';
       case MapItemType.contact:
@@ -47,8 +47,8 @@ enum MapItemType {
         return 'Place';
       case MapItemType.news:
         return 'News';
-      case MapItemType.report:
-        return 'Report';
+      case MapItemType.alert:
+        return 'Alert';
       case MapItemType.relay:
         return 'Relay';
       case MapItemType.contact:
@@ -126,10 +126,10 @@ class MapItem {
     );
   }
 
-  /// Create MapItem from a Report
-  factory MapItem.fromReport(Report report, {double? distanceKm, String? languageCode, String? collectionPath}) {
+  /// Create MapItem from a Report (Alert)
+  factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? collectionPath}) {
     return MapItem(
-      type: MapItemType.report,
+      type: MapItemType.alert,
       id: report.folderName,
       title: report.getTitle(languageCode ?? 'EN'),
       subtitle: '${report.severity.name} - ${report.status.name}',

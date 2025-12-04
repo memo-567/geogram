@@ -6,9 +6,10 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import '../services/storage_config.dart';
+import '../util/nostr_key_generator.dart';
 
 /// App version constant
-const String cliAppVersion = '1.5.1';
+const String cliAppVersion = '1.5.2';
 
 /// Relay server settings
 class PureRelaySettings {
@@ -18,11 +19,16 @@ class PureRelaySettings {
   bool osmFallbackEnabled;
   int maxZoomLevel;
   int maxCacheSizeMB;
+  String? name;
   String? description;
   String? location;
   double? latitude;
   double? longitude;
-  String callsign;
+  // Relay identity (npub/nsec key pair)
+  String npub;
+  String nsec;
+  // Callsign is derived from npub (X3 prefix for relays)
+  String get callsign => NostrKeyGenerator.deriveRelayCallsign(npub);
   bool enableAprs;
   bool enableCors;
   int httpRequestTimeout;
@@ -52,11 +58,13 @@ class PureRelaySettings {
     this.osmFallbackEnabled = true,
     this.maxZoomLevel = 15,
     this.maxCacheSizeMB = 500,
+    this.name,
     this.description,
     this.location,
     this.latitude,
     this.longitude,
-    this.callsign = 'X3DESK',
+    String? npub,
+    String? nsec,
     this.enableAprs = false,
     this.enableCors = true,
     this.httpRequestTimeout = 30000,
@@ -72,7 +80,11 @@ class PureRelaySettings {
     this.sslCertPath,
     this.sslKeyPath,
     this.httpsPort = 8443,
-  });
+  }) : npub = npub ?? _defaultKeys.npub,
+       nsec = nsec ?? _defaultKeys.nsec;
+
+  // Generate default keys for relay (only created once per app run if no keys provided)
+  static final NostrKeys _defaultKeys = NostrKeys.forRelay();
 
   factory PureRelaySettings.fromJson(Map<String, dynamic> json) {
     return PureRelaySettings(
@@ -84,11 +96,14 @@ class PureRelaySettings {
       maxZoomLevel: json['maxZoomLevel'] as int? ?? 15,
       // Support both old 'maxCacheSize' and new 'maxCacheSizeMB' keys
       maxCacheSizeMB: json['maxCacheSizeMB'] as int? ?? json['maxCacheSize'] as int? ?? 500,
+      name: json['name'] as String?,
       description: json['description'] as String?,
       location: json['location'] as String?,
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
-      callsign: json['callsign'] as String? ?? 'X3DESK',
+      // Relay identity keys (callsign is derived from npub with X3 prefix)
+      npub: json['npub'] as String?,
+      nsec: json['nsec'] as String?,
       enableAprs: json['enableAprs'] as bool? ?? false,
       enableCors: json['enableCors'] as bool? ?? true,
       httpRequestTimeout: json['httpRequestTimeout'] as int? ?? 30000,
@@ -115,11 +130,15 @@ class PureRelaySettings {
         'osmFallbackEnabled': osmFallbackEnabled,
         'maxZoomLevel': maxZoomLevel,
         'maxCacheSizeMB': maxCacheSizeMB,
+        'name': name,
         'description': description,
         'location': location,
         'latitude': latitude,
         'longitude': longitude,
-        'callsign': callsign,
+        // Relay identity keys
+        'npub': npub,
+        'nsec': nsec,
+        'callsign': callsign, // Derived from npub (read-only)
         'enableAprs': enableAprs,
         'enableCors': enableCors,
         'httpRequestTimeout': httpRequestTimeout,
@@ -144,11 +163,13 @@ class PureRelaySettings {
     bool? osmFallbackEnabled,
     int? maxZoomLevel,
     int? maxCacheSizeMB,
+    String? name,
     String? description,
     String? location,
     double? latitude,
     double? longitude,
-    String? callsign,
+    String? npub,
+    String? nsec,
     bool? enableAprs,
     bool? enableCors,
     int? httpRequestTimeout,
@@ -172,11 +193,13 @@ class PureRelaySettings {
       osmFallbackEnabled: osmFallbackEnabled ?? this.osmFallbackEnabled,
       maxZoomLevel: maxZoomLevel ?? this.maxZoomLevel,
       maxCacheSizeMB: maxCacheSizeMB ?? this.maxCacheSizeMB,
+      name: name ?? this.name,
       description: description ?? this.description,
       location: location ?? this.location,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
-      callsign: callsign ?? this.callsign,
+      npub: npub ?? this.npub,
+      nsec: nsec ?? this.nsec,
       enableAprs: enableAprs ?? this.enableAprs,
       enableCors: enableCors ?? this.enableCors,
       httpRequestTimeout: httpRequestTimeout ?? this.httpRequestTimeout,
@@ -235,6 +258,23 @@ class ChatRoom {
   })  : createdAt = createdAt ?? DateTime.now(),
         lastActivity = createdAt ?? DateTime.now();
 
+  factory ChatRoom.fromJson(Map<String, dynamic> json) {
+    final room = ChatRoom(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? json['id'] as String,
+      description: json['description'] as String? ?? '',
+      creatorCallsign: json['creator'] as String? ?? 'Unknown',
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'] as String)
+          : null,
+      isPublic: json['is_public'] as bool? ?? true,
+    );
+    if (json['last_activity'] != null) {
+      room.lastActivity = DateTime.tryParse(json['last_activity'] as String) ?? DateTime.now();
+    }
+    return room;
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -244,6 +284,18 @@ class ChatRoom {
         'last_activity': lastActivity.toIso8601String(),
         'message_count': messages.length,
         'is_public': isPublic,
+      };
+
+  /// Full JSON including messages (for persistence)
+  Map<String, dynamic> toJsonWithMessages() => {
+        'id': id,
+        'name': name,
+        'description': description,
+        'creator': creatorCallsign,
+        'created_at': createdAt.toIso8601String(),
+        'last_activity': lastActivity.toIso8601String(),
+        'is_public': isPublic,
+        'messages': messages.map((m) => m.toJson()).toList(),
       };
 }
 
@@ -269,6 +321,21 @@ class ChatMessage {
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
+  factory ChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
+    return ChatMessage(
+      id: json['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      roomId: json['room_id'] as String? ?? roomId,
+      senderCallsign: json['sender'] as String? ?? json['callsign'] as String? ?? 'Unknown',
+      senderNpub: json['npub'] as String?,
+      senderPubkey: json['pubkey'] as String?,
+      signature: json['signature'] as String?,
+      content: json['content'] as String? ?? '',
+      timestamp: json['timestamp'] != null
+          ? DateTime.tryParse(json['timestamp'] as String) ?? DateTime.now()
+          : DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'room_id': roomId,
@@ -286,6 +353,7 @@ class PureConnectedClient {
   final WebSocket socket;
   final String id;
   String? callsign;
+  String? nickname;
   String? deviceType;
   String? version;
   String? address;
@@ -296,6 +364,7 @@ class PureConnectedClient {
     required this.socket,
     required this.id,
     this.callsign,
+    this.nickname,
     this.deviceType,
     this.version,
     this.address,
@@ -305,6 +374,7 @@ class PureConnectedClient {
   Map<String, dynamic> toJson() => {
         'id': id,
         'callsign': callsign ?? 'Unknown',
+        'nickname': nickname,
         'device_type': deviceType ?? 'Unknown',
         'version': version,
         'address': address,
@@ -462,13 +532,19 @@ class PureRelayServer {
 
     await _loadSettings();
 
-    // Create default chat room
-    _chatRooms['general'] = ChatRoom(
-      id: 'general',
-      name: 'General',
-      description: 'General discussion',
-      creatorCallsign: _settings.callsign,
-    );
+    // Load persisted chat data
+    await _loadChatData();
+
+    // Create default chat room if it doesn't exist
+    if (!_chatRooms.containsKey('general')) {
+      _chatRooms['general'] = ChatRoom(
+        id: 'general',
+        name: 'General',
+        description: 'General discussion',
+        creatorCallsign: _settings.callsign,
+      );
+      await _saveChatData();
+    }
 
     _log('INFO', 'Pure Relay Server initialized');
     _log('INFO', 'Data directory: $_dataDir');
@@ -499,6 +575,333 @@ class PureRelayServer {
     }
   }
 
+  /// Get chat data directory path: {devicesDir}/{callsign}/chat
+  /// This matches the Java implementation structure
+  String get _chatDataPath {
+    final storageConfig = StorageConfig();
+    return '${storageConfig.devicesDir}/${_settings.callsign}/chat';
+  }
+
+  /// Load chat rooms from disk ({callsign}/chat/{room_id}/config.json)
+  Future<void> _loadChatData() async {
+    try {
+      final chatDir = Directory(_chatDataPath);
+      if (!await chatDir.exists()) {
+        await chatDir.create(recursive: true);
+        _log('INFO', 'Created chat directory at ${chatDir.path}');
+        return;
+      }
+
+      // List room directories
+      final roomDirs = await chatDir.list().where((e) => e is Directory).toList();
+      if (roomDirs.isEmpty) {
+        _log('INFO', 'No chat rooms found in $_chatDataPath');
+        return;
+      }
+
+      int loadedCount = 0;
+      for (final entity in roomDirs) {
+        final roomDir = entity as Directory;
+        final roomId = roomDir.path.split('/').last;
+        final configFile = File('${roomDir.path}/config.json');
+
+        if (!await configFile.exists()) {
+          _log('WARN', 'Chat room directory $roomId has no config.json, skipping');
+          continue;
+        }
+
+        try {
+          final content = await configFile.readAsString();
+          final roomConfig = jsonDecode(content) as Map<String, dynamic>;
+
+          final room = ChatRoom(
+            id: roomConfig['id'] as String? ?? roomId,
+            name: roomConfig['name'] as String? ?? roomId,
+            description: roomConfig['description'] as String? ?? '',
+            creatorCallsign: _settings.callsign,
+          );
+          _chatRooms[room.id] = room;
+
+          // Load messages from text files
+          await _loadRoomMessages(room);
+          loadedCount++;
+        } catch (e) {
+          _log('ERROR', 'Failed to load chat room from ${configFile.path}: $e');
+        }
+      }
+
+      _log('INFO', 'Loaded $loadedCount chat rooms from $_chatDataPath');
+    } catch (e) {
+      _log('ERROR', 'Failed to load chat data: $e');
+    }
+  }
+
+  /// Load messages for a room from text files ({room_id}/{year}/{date}_chat.txt)
+  Future<void> _loadRoomMessages(ChatRoom room) async {
+    final roomDir = Directory('$_chatDataPath/${room.id}');
+    if (!await roomDir.exists()) return;
+
+    // Get all year directories
+    final yearDirs = await roomDir.list()
+        .where((e) => e is Directory && RegExp(r'^\d{4}$').hasMatch(e.path.split('/').last))
+        .toList();
+
+    if (yearDirs.isEmpty) return;
+
+    // Sort by year ascending
+    yearDirs.sort((a, b) => a.path.compareTo(b.path));
+
+    for (final yearEntity in yearDirs) {
+      final yearDir = yearEntity as Directory;
+      final chatFiles = await yearDir.list()
+          .where((e) => e is File && e.path.endsWith('_chat.txt'))
+          .toList();
+
+      if (chatFiles.isEmpty) continue;
+
+      // Sort files ascending (oldest first)
+      chatFiles.sort((a, b) => a.path.compareTo(b.path));
+
+      for (final fileEntity in chatFiles) {
+        final chatFile = fileEntity as File;
+        await _parseMessagesFromFile(room, chatFile);
+      }
+    }
+  }
+
+  /// Parse messages from a chat file (text format per specification)
+  Future<void> _parseMessagesFromFile(ChatRoom room, File chatFile) async {
+    try {
+      final lines = await chatFile.readAsLines();
+      String? currentTimestamp;
+      String? currentCallsign;
+      String? currentNpub;
+      String? currentPubkey;
+      String? currentSignature;
+      String? currentEventId;
+      final contentBuffer = StringBuffer();
+
+      for (final line in lines) {
+        // Message header: > YYYY-MM-DD HH:MM_ss -- CALLSIGN
+        if (line.startsWith('> ') && line.contains(' -- ')) {
+          // Save previous message
+          if (currentTimestamp != null && currentCallsign != null) {
+            final msg = ChatMessage(
+              id: currentEventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+              roomId: room.id,
+              senderCallsign: currentCallsign,
+              senderNpub: currentNpub,
+              senderPubkey: currentPubkey,
+              signature: currentSignature,
+              content: contentBuffer.toString().trim(),
+              timestamp: _parseTimestamp(currentTimestamp),
+            );
+            room.messages.add(msg);
+          }
+
+          // Parse new header
+          final separatorIdx = line.indexOf(' -- ');
+          if (separatorIdx > 2) {
+            currentTimestamp = line.substring(2, separatorIdx);
+            currentCallsign = line.substring(separatorIdx + 4).trim();
+            contentBuffer.clear();
+            currentNpub = null;
+            currentPubkey = null;
+            currentSignature = null;
+            currentEventId = null;
+          }
+        }
+        // Skip file header (# CALLSIGN: Title)
+        else if (line.startsWith('# ')) {
+          continue;
+        }
+        // Metadata line (--> key: value)
+        else if (line.startsWith('--> ')) {
+          final metadata = line.substring(4);
+          final colonIdx = metadata.indexOf(': ');
+          if (colonIdx > 0) {
+            final key = metadata.substring(0, colonIdx).trim();
+            final value = metadata.substring(colonIdx + 2).trim();
+            switch (key) {
+              case 'npub':
+                currentNpub = value;
+                break;
+              case 'pubkey':
+                currentPubkey = value;
+                break;
+              case 'signature':
+                currentSignature = value;
+                break;
+              case 'event_id':
+                currentEventId = value;
+                break;
+            }
+          }
+        }
+        // Content line
+        else if (currentTimestamp != null) {
+          if (contentBuffer.isNotEmpty) {
+            contentBuffer.write('\n');
+          }
+          contentBuffer.write(line);
+        }
+      }
+
+      // Save last message
+      if (currentTimestamp != null && currentCallsign != null) {
+        final msg = ChatMessage(
+          id: currentEventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          roomId: room.id,
+          senderCallsign: currentCallsign,
+          senderNpub: currentNpub,
+          senderPubkey: currentPubkey,
+          signature: currentSignature,
+          content: contentBuffer.toString().trim(),
+          timestamp: _parseTimestamp(currentTimestamp),
+        );
+        room.messages.add(msg);
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to parse chat file ${chatFile.path}: $e');
+    }
+  }
+
+  /// Parse timestamp from format YYYY-MM-DD HH:MM_ss
+  DateTime _parseTimestamp(String timestamp) {
+    try {
+      // Format: YYYY-MM-DD HH:MM_ss
+      final parts = timestamp.split(' ');
+      if (parts.length != 2) return DateTime.now();
+
+      final dateParts = parts[0].split('-');
+      final timeParts = parts[1].replaceAll('_', ':').split(':');
+
+      if (dateParts.length != 3 || timeParts.length != 3) return DateTime.now();
+
+      return DateTime(
+        int.parse(dateParts[0]),
+        int.parse(dateParts[1]),
+        int.parse(dateParts[2]),
+        int.parse(timeParts[0]),
+        int.parse(timeParts[1]),
+        int.parse(timeParts[2]),
+      );
+    } catch (e) {
+      return DateTime.now();
+    }
+  }
+
+  /// Save room config to {room_id}/config.json
+  Future<void> _saveRoomConfig(ChatRoom room) async {
+    final roomDir = Directory('$_chatDataPath/${room.id}');
+    if (!await roomDir.exists()) {
+      await roomDir.create(recursive: true);
+      _log('INFO', 'Created chat room directory: ${roomDir.path}');
+    }
+
+    final configFile = File('${roomDir.path}/config.json');
+    final config = {
+      'id': room.id,
+      'name': room.name,
+      'description': room.description,
+      'visibility': 'PUBLIC',
+      'readonly': false,
+      'file_upload': true,
+      'files_per_post': 3,
+      'max_file_size': 500,
+      'max_size_text': 500,
+      'moderators': <String>[],
+    };
+    await configFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(config),
+    );
+    _log('INFO', 'Saved chat room config to ${configFile.path}');
+  }
+
+  /// Save all chat rooms (configs only)
+  Future<void> _saveChatData() async {
+    for (final room in _chatRooms.values) {
+      await _saveRoomConfig(room);
+    }
+  }
+
+  /// Save a message to the chat file ({room_id}/{year}/{date}_chat.txt)
+  Future<void> _saveRoomMessages(String roomId) async {
+    final room = _chatRooms[roomId];
+    if (room == null) return;
+
+    // Ensure room config exists
+    await _saveRoomConfig(room);
+
+    // Group messages by date
+    final messagesByDate = <String, List<ChatMessage>>{};
+    for (final msg in room.messages) {
+      final dateStr = _formatDate(msg.timestamp);
+      messagesByDate.putIfAbsent(dateStr, () => []).add(msg);
+    }
+
+    // Write each date's messages to its file
+    for (final entry in messagesByDate.entries) {
+      final dateStr = entry.key;
+      final messages = entry.value;
+      final year = dateStr.substring(0, 4);
+
+      // Create year directory
+      final yearDir = Directory('$_chatDataPath/${room.id}/$year');
+      if (!await yearDir.exists()) {
+        await yearDir.create(recursive: true);
+        _log('INFO', 'Created year directory: ${yearDir.path}');
+      }
+
+      // Write chat file
+      final fileName = '${dateStr}_chat.txt';
+      final chatFile = File('${yearDir.path}/$fileName');
+
+      final buffer = StringBuffer();
+      buffer.writeln('# ${_settings.callsign}: Chat from $dateStr');
+      buffer.writeln();
+
+      for (final msg in messages) {
+        final timeStr = _formatTime(msg.timestamp);
+        final timestamp = '$dateStr $timeStr';
+
+        buffer.writeln('> $timestamp -- ${msg.senderCallsign}');
+        buffer.writeln(msg.content);
+
+        // Write NOSTR metadata if present
+        if (msg.senderNpub != null && msg.senderNpub!.isNotEmpty) {
+          buffer.writeln('--> npub: ${msg.senderNpub}');
+        }
+        if (msg.senderPubkey != null && msg.senderPubkey!.isNotEmpty) {
+          buffer.writeln('--> pubkey: ${msg.senderPubkey}');
+        }
+        if (msg.id.isNotEmpty && !msg.id.contains(RegExp(r'^\d+$'))) {
+          buffer.writeln('--> event_id: ${msg.id}');
+        }
+        if (msg.signature != null && msg.signature!.isNotEmpty) {
+          buffer.writeln('--> signature: ${msg.signature}');
+        }
+        buffer.writeln();
+      }
+
+      await chatFile.writeAsString(buffer.toString());
+    }
+  }
+
+  /// Format date as YYYY-MM-DD
+  String _formatDate(DateTime dt) {
+    return '${dt.year.toString().padLeft(4, '0')}-'
+        '${dt.month.toString().padLeft(2, '0')}-'
+        '${dt.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Format time as HH:MM_ss
+  String _formatTime(DateTime dt) {
+    return '${dt.hour.toString().padLeft(2, '0')}:'
+        '${dt.minute.toString().padLeft(2, '0')}_'
+        '${dt.second.toString().padLeft(2, '0')}';
+  }
+
   Future<void> reloadSettings() async {
     await _loadSettings();
     _log('INFO', 'Settings reloaded');
@@ -525,9 +928,7 @@ class PureRelayServer {
       case 'httpsPort':
         _settings = _settings.copyWith(httpsPort: value as int);
         break;
-      case 'callsign':
-        _settings = _settings.copyWith(callsign: value as String);
-        break;
+      // callsign is derived from npub and cannot be set directly
       case 'description':
         _settings = _settings.copyWith(description: value as String);
         break;
@@ -585,6 +986,38 @@ class PureRelayServer {
 
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
+        // Check if we need to request certificates first
+        final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
+        final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
+        final keyPath = sslDir != null ? '$sslDir/privkey.pem' : null;
+
+        bool certsExist = false;
+        if (fullchainPath != null && keyPath != null) {
+          certsExist = await File(fullchainPath).exists() && await File(keyPath).exists();
+        }
+
+        if (!certsExist && _settings.sslDomain != null && _settings.sslEmail != null) {
+          _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
+          try {
+            final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
+            sslManager.setRelayServer(this);
+            final success = await sslManager.requestCertificate(staging: false);
+            if (success) {
+              _log('INFO', 'SSL certificate obtained successfully');
+              // Update paths
+              _settings = _settings.copyWith(
+                sslCertPath: fullchainPath,
+                sslKeyPath: keyPath,
+              );
+              await saveSettings();
+            } else {
+              _log('ERROR', 'Failed to obtain SSL certificate');
+            }
+          } catch (e) {
+            _log('ERROR', 'Failed to request SSL certificate: $e');
+          }
+        }
+
         await _startHttpsServer();
       }
 
@@ -597,41 +1030,56 @@ class PureRelayServer {
 
   /// Start HTTPS server with SSL certificates
   Future<void> _startHttpsServer() async {
-    final certPath = _settings.sslCertPath;
-    final keyPath = _settings.sslKeyPath;
-
-    if (certPath == null || keyPath == null) {
-      _log('WARN', 'SSL enabled but certificate paths not configured');
-      return;
-    }
-
-    final certFile = File(certPath);
-    final keyFile = File(keyPath);
-
-    // Also check for fullchain.pem in ssl directory
+    // Check for certificates in ssl directory first (default location)
     final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
-    final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
-    final fullchainFile = fullchainPath != null ? File(fullchainPath) : null;
+    final defaultCertPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
+    // Check for both privkey.pem and domain.key (SslCertificateManager uses domain.key)
+    final defaultKeyPath = sslDir != null ? '$sslDir/domain.key' : null;
+    final altKeyPath = sslDir != null ? '$sslDir/privkey.pem' : null;
 
-    // Try fullchain first, then fall back to individual cert
+    // Determine which certificate and key to use
     String? certToUse;
-    if (fullchainFile != null && await fullchainFile.exists()) {
-      certToUse = fullchainPath;
-    } else if (await certFile.exists()) {
-      certToUse = certPath;
+    String? keyToUse;
+
+    // Priority 1: Check default ssl directory
+    if (defaultCertPath != null) {
+      final defaultCertFile = File(defaultCertPath);
+      if (await defaultCertFile.exists()) {
+        // Check for domain.key first, then privkey.pem
+        if (defaultKeyPath != null && await File(defaultKeyPath).exists()) {
+          certToUse = defaultCertPath;
+          keyToUse = defaultKeyPath;
+          _log('INFO', 'Using certificates from ssl directory (domain.key)');
+        } else if (altKeyPath != null && await File(altKeyPath).exists()) {
+          certToUse = defaultCertPath;
+          keyToUse = altKeyPath;
+          _log('INFO', 'Using certificates from ssl directory (privkey.pem)');
+        }
+      }
     }
 
-    if (certToUse == null || !await keyFile.exists()) {
-      _log('WARN', 'SSL certificate files not found:');
-      _log('WARN', '  Certificate: ${certToUse ?? certPath} (${certToUse != null ? "found" : "not found"})');
-      _log('WARN', '  Key: $keyPath (${await keyFile.exists() ? "found" : "not found"})');
+    // Priority 2: Check configured paths
+    if (certToUse == null && _settings.sslCertPath != null && _settings.sslKeyPath != null) {
+      final configCertFile = File(_settings.sslCertPath!);
+      final configKeyFile = File(_settings.sslKeyPath!);
+      if (await configCertFile.exists() && await configKeyFile.exists()) {
+        certToUse = _settings.sslCertPath;
+        keyToUse = _settings.sslKeyPath;
+        _log('INFO', 'Using certificates from configured paths');
+      }
+    }
+
+    if (certToUse == null || keyToUse == null) {
+      _log('WARN', 'SSL enabled but no certificates found');
+      _log('WARN', '  Checked: ${defaultCertPath ?? "N/A"}');
+      _log('WARN', '  Checked: ${_settings.sslCertPath ?? "N/A"}');
       return;
     }
 
     try {
       final context = SecurityContext()
         ..useCertificateChain(certToUse)
-        ..usePrivateKey(keyPath);
+        ..usePrivateKey(keyToUse);
 
       _httpsServer = await HttpServer.bindSecure(
         InternetAddress.anyIPv4,
@@ -648,7 +1096,7 @@ class PureRelayServer {
     } catch (e) {
       _log('ERROR', 'Failed to start HTTPS server: $e');
       _log('ERROR', 'Certificate: $certToUse');
-      _log('ERROR', 'Key: $keyPath');
+      _log('ERROR', 'Key: $keyToUse');
     }
   }
 
@@ -790,6 +1238,10 @@ class PureRelayServer {
     );
     _chatRooms[id] = room;
     _log('INFO', 'Chat room created: $name ($id)');
+
+    // Persist room config to disk
+    _saveRoomConfig(room);
+
     return room;
   }
 
@@ -810,7 +1262,7 @@ class PureRelayServer {
     return true;
   }
 
-  void postMessage(String roomId, String content) {
+  Future<void> postMessage(String roomId, String content) async {
     final room = _chatRooms[roomId];
     if (room == null) return;
 
@@ -824,6 +1276,9 @@ class PureRelayServer {
     room.lastActivity = DateTime.now();
     _stats.totalMessages++;
     _stats.lastMessage = DateTime.now();
+
+    // Persist to disk
+    await _saveRoomMessages(roomId);
 
     // Broadcast to connected clients
     final payload = jsonEncode({
@@ -912,8 +1367,8 @@ class PureRelayServer {
         await _handleCliCommand(request);
       } else if (path == '/') {
         await _handleRoot(request);
-      } else if (_isCallsignPath(path)) {
-        await _handleCallsignWww(request);
+      } else if (_isCallsignOrNicknamePath(path)) {
+        await _handleCallsignOrNicknameWww(request);
       } else {
         request.response.statusCode = 404;
         request.response.write('Not Found');
@@ -970,18 +1425,23 @@ class PureRelayServer {
           case 'hello':
             // Extract client info - support both direct fields and Nostr event format
             String? callsign = message['callsign'] as String?;
+            String? nickname = message['nickname'] as String?;
             String? deviceType = message['device_type'] as String?;
             String? version = message['version'] as String?;
 
             // Check for Nostr event format (used by desktop/mobile clients)
             final event = message['event'] as Map<String, dynamic>?;
             if (event != null) {
-              // Extract callsign from event tags: [['callsign', 'VALUE'], ...]
+              // Extract callsign and nickname from event tags: [['callsign', 'VALUE'], ['nickname', 'VALUE'], ...]
               final tags = event['tags'] as List<dynamic>?;
               if (tags != null) {
                 for (final tag in tags) {
-                  if (tag is List && tag.length >= 2 && tag[0] == 'callsign') {
-                    callsign = tag[1] as String?;
+                  if (tag is List && tag.length >= 2) {
+                    if (tag[0] == 'callsign') {
+                      callsign = tag[1] as String?;
+                    } else if (tag[0] == 'nickname') {
+                      nickname = tag[1] as String?;
+                    }
                   }
                 }
               }
@@ -997,6 +1457,7 @@ class PureRelayServer {
             }
 
             client.callsign = callsign;
+            client.nickname = nickname;
             client.deviceType = deviceType;
             client.version = version;
 
@@ -1007,7 +1468,8 @@ class PureRelayServer {
               'callsign': _settings.callsign,
             };
             client.socket.add(jsonEncode(response));
-            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"} (${client.deviceType ?? "unknown"})');
+            final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
+            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"})');
             break;
 
           case 'PING':
@@ -1120,6 +1582,9 @@ class PureRelayServer {
                 _stats.totalMessages++;
                 _stats.lastMessage = DateTime.now();
 
+                // Persist to disk
+                _saveRoomMessages(roomId);
+
                 // Broadcast to other clients
                 final payload = jsonEncode({
                   'type': 'chat_message',
@@ -1150,7 +1615,7 @@ class PureRelayServer {
 
     final status = {
       'service': 'Geogram Relay Server',
-      'name': 'Geogram Desktop Relay',
+      'name': _settings.name ?? 'Geogram Relay',
       'version': cliAppVersion,
       'callsign': _settings.callsign,
       'description': _settings.description ?? 'Geogram Desktop Relay Server',
@@ -1381,6 +1846,9 @@ class PureRelayServer {
       chatRoom.lastActivity = DateTime.now();
       _stats.totalMessages++;
 
+      // Persist to disk
+      await _saveRoomMessages(room);
+
       // Broadcast to connected clients
       final payload = jsonEncode({
         'type': 'chat_message',
@@ -1466,25 +1934,45 @@ class PureRelayServer {
     }
   }
 
-  /// Check if path looks like a callsign for WWW serving
-  bool _isCallsignPath(String path) {
+  /// Check if path looks like a callsign or nickname for WWW serving
+  /// Callsigns: X followed by numbers/letters (e.g., X1QVM3)
+  /// Nicknames: alphanumeric with - and _ (e.g., brito, my-site, user_123)
+  bool _isCallsignOrNicknamePath(String path) {
     if (path.length < 2) return false;
     final firstPart = path.substring(1).split('/').first;
-    // Callsigns are typically X followed by numbers/letters
-    return RegExp(r'^X[0-9][A-Z0-9]{3,}$', caseSensitive: false).hasMatch(firstPart);
+    if (firstPart.isEmpty) return false;
+
+    // Check if it's a callsign (X followed by alphanumeric)
+    final isCallsign = RegExp(r'^X[0-9][A-Z0-9]{3,}$', caseSensitive: false).hasMatch(firstPart);
+    if (isCallsign) return true;
+
+    // Check if it's a valid nickname (alphanumeric with - and _, 2+ chars)
+    // Must not conflict with reserved paths like /api, /ws, /tiles, /cli, /ssl, /acme
+    final reservedPaths = {'api', 'ws', 'tiles', 'cli', 'ssl', 'acme', '.well-known'};
+    if (reservedPaths.contains(firstPart.toLowerCase())) return false;
+
+    // Valid nickname: alphanumeric, -, _, at least 2 chars
+    return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
   }
 
-  /// GET /{callsign} or /{callsign}/* - Serve WWW collection from device
-  Future<void> _handleCallsignWww(HttpRequest request) async {
+  /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device
+  /// Supports both callsign (e.g., X1QVM3) and nickname (e.g., brito) lookups
+  Future<void> _handleCallsignOrNicknameWww(HttpRequest request) async {
     final path = request.uri.path;
     final parts = path.substring(1).split('/');
-    final callsign = parts.first;
+    final identifier = parts.first.toLowerCase();
     final filePath = parts.length > 1 ? parts.sublist(1).join('/') : 'index.html';
 
-    // Find the client by callsign
+    // Find the client by callsign or nickname (case-insensitive)
     PureConnectedClient? foundClient;
     for (final c in _clients.values) {
-      if (c.callsign?.toLowerCase() == callsign.toLowerCase()) {
+      // Check callsign first (primary identifier)
+      if (c.callsign?.toLowerCase() == identifier) {
+        foundClient = c;
+        break;
+      }
+      // Check nickname (friendly URL)
+      if (c.nickname != null && c.nickname!.toLowerCase() == identifier) {
         foundClient = c;
         break;
       }
@@ -1569,7 +2057,7 @@ class PureRelayServer {
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Geogram Desktop Relay</title>
+  <title>${_settings.name ?? 'Geogram Relay'}</title>
   <style>
     body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background: #1a1a2e; color: #eee; }
     h1 { color: #00d9ff; }
@@ -1582,7 +2070,7 @@ class PureRelayServer {
   </style>
 </head>
 <body>
-  <h1>Geogram Desktop Relay</h1>
+  <h1>${_settings.name ?? 'Geogram Relay'}</h1>
   <div class="info">
     <p><strong>Callsign:</strong> ${_settings.callsign}</p>
     <p><strong>Version:</strong> $cliAppVersion</p>
@@ -1713,6 +2201,9 @@ class PureRelayServer {
         room.lastActivity = DateTime.now();
         _stats.totalMessages++;
         _stats.lastMessage = DateTime.now();
+
+        // Persist to disk
+        await _saveRoomMessages(roomId);
 
         // Broadcast to connected WebSocket clients
         final payload = jsonEncode({

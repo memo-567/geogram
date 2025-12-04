@@ -41,6 +41,7 @@ import 'pages/maps_browser_page.dart';
 import 'pages/relay_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
 import 'pages/profile_management_page.dart';
+import 'pages/create_collection_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
@@ -390,7 +391,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'report', 'groups', 'relay'
+      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'relay'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -448,14 +449,17 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   Future<void> _createNewCollection() async {
-    await showDialog(
-      context: context,
-      builder: (context) => _CreateCollectionDialog(
-        onCreated: () {
-          _loadCollections();
-        },
+    final result = await Navigator.push<Collection>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const CreateCollectionPage(),
       ),
     );
+
+    if (result != null) {
+      // Collection was created, reload the list
+      _loadCollections();
+    }
   }
 
   void _toggleFavorite(Collection collection) {
@@ -651,7 +655,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                             collectionPath: collection.storagePath ?? '',
                                                                             collectionTitle: collection.title,
                                                                           )
-                                                                        : collection.type == 'report'
+                                                                        : collection.type == 'alerts'
                                                                             ? ReportBrowserPage(
                                                                                 collectionPath: collection.storagePath ?? '',
                                                                                 collectionTitle: collection.title,
@@ -751,7 +755,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                       collectionPath: collection.storagePath ?? '',
                                                                                       collectionTitle: collection.title,
                                                                                     )
-                                                                                  : collection.type == 'report'
+                                                                                  : collection.type == 'alerts'
                                                                                       ? ReportBrowserPage(
                                                                                           collectionPath: collection.storagePath ?? '',
                                                                                           collectionTitle: collection.title,
@@ -820,7 +824,7 @@ class _CollectionGridCard extends StatelessWidget {
   bool _isFixedCollectionType() {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'report', 'relay'
+      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'alerts', 'relay'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -869,8 +873,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.store;
       case 'groups':
         return Icons.groups;
-      case 'report':
-        return Icons.assignment;
+      case 'alerts':
+        return Icons.notifications_active;
       case 'relay':
         return Icons.cell_tower;
       default:
@@ -1187,464 +1191,6 @@ class _InfoChip extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-// Create Collection Dialog
-class _CreateCollectionDialog extends StatefulWidget {
-  final VoidCallback onCreated;
-
-  const _CreateCollectionDialog({required this.onCreated});
-
-  @override
-  State<_CreateCollectionDialog> createState() => _CreateCollectionDialogState();
-}
-
-class _CreateCollectionDialogState extends State<_CreateCollectionDialog> {
-  final I18nService _i18n = I18nService();
-  final _titleController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  bool _isCreating = false;
-  bool _useAutoFolder = true;
-  String? _selectedFolderPath;
-  String _collectionType = 'files';
-  Set<String> _existingTypes = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _checkExistingTypes();
-  }
-
-  Future<void> _checkExistingTypes() async {
-    try {
-      // Quick check for existing collection types by scanning folder names only
-      // This avoids expensive loadCollections() call which validates all collections
-      final collectionsService = CollectionService();
-      final collectionsDir = Directory('${collectionsService.getDefaultCollectionsPath()}');
-
-      if (await collectionsDir.exists()) {
-        final folders = await collectionsDir.list().toList();
-        final existingFolderNames = folders
-            .where((e) => e is Directory)
-            .map((e) => e.path.split('/').last)
-            .toSet();
-
-        // Known fixed collection types (non-files types use type name as folder name)
-        final fixedTypes = {
-          'forum', 'chat', 'blog', 'events', 'news', 'www',
-          'postcards', 'contacts', 'places', 'market', 'report', 'groups', 'relay'
-        };
-
-        setState(() {
-          _existingTypes = fixedTypes.intersection(existingFolderNames);
-        });
-      }
-    } catch (e) {
-      LogService().log('Error checking existing types: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickFolder() async {
-    try {
-      final result = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select root folder for collection',
-      );
-
-      if (result != null) {
-        setState(() {
-          _selectedFolderPath = result;
-        });
-        LogService().log('Selected folder: $result');
-      }
-    } catch (e) {
-      LogService().log('Error picking folder: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error selecting folder: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _create() async {
-    final title = _titleController.text.trim();
-
-    if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('title_required'))),
-      );
-      return;
-    }
-
-    // For non-files types, validate
-    if (_collectionType != 'files') {
-      if (_existingTypes.contains(_collectionType)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('A ${_collectionType} collection already exists')),
-        );
-        return;
-      }
-    } else {
-      // Only validate folder selection for files type
-      if (!_useAutoFolder && _selectedFolderPath == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select a root folder')),
-        );
-        return;
-      }
-    }
-
-    setState(() => _isCreating = true);
-
-    try {
-      LogService().log('Creating collection with title: $title');
-
-      final collection = await CollectionService().createCollection(
-        title: title,
-        description: _descriptionController.text.trim(),
-        type: _collectionType,
-        customRootPath: _collectionType == 'files'
-            ? (_useAutoFolder ? null : _selectedFolderPath)
-            : null,
-      );
-
-      LogService().log('Created collection: ${collection.title}');
-
-      if (mounted) {
-        Navigator.pop(context);
-        widget.onCreated();
-      }
-    } catch (e, stackTrace) {
-      LogService().log('ERROR creating collection: $e');
-      LogService().log('Stack trace: $stackTrace');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating collection: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isCreating = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(_i18n.t('create_collection_title')),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Type dropdown (moved to first position)
-            DropdownButtonFormField<String>(
-              value: _collectionType,
-              decoration: InputDecoration(
-                labelText: _i18n.t('type'),
-                border: const OutlineInputBorder(),
-              ),
-              items: [
-                DropdownMenuItem(
-                  value: 'files',
-                  child: Text(_i18n.t('collection_type_files')),
-                ),
-                DropdownMenuItem(
-                  value: 'forum',
-                  enabled: !_existingTypes.contains('forum'),
-                  child: Text(
-                    '${_i18n.t('collection_type_forum')}${_existingTypes.contains('forum') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('forum')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'chat',
-                  enabled: !_existingTypes.contains('chat'),
-                  child: Text(
-                    '${_i18n.t('collection_type_chat')}${_existingTypes.contains('chat') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('chat')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'blog',
-                  enabled: !_existingTypes.contains('blog'),
-                  child: Text(
-                    '${_i18n.t('collection_type_blog')}${_existingTypes.contains('blog') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('blog')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'events',
-                  enabled: !_existingTypes.contains('events'),
-                  child: Text(
-                    '${_i18n.t('collection_type_events')}${_existingTypes.contains('events') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('events')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'news',
-                  enabled: !_existingTypes.contains('news'),
-                  child: Text(
-                    '${_i18n.t('collection_type_news')}${_existingTypes.contains('news') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('news')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'www',
-                  enabled: !_existingTypes.contains('www'),
-                  child: Text(
-                    '${_i18n.t('collection_type_www')}${_existingTypes.contains('www') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('www')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'postcards',
-                  enabled: !_existingTypes.contains('postcards'),
-                  child: Text(
-                    '${_i18n.t('collection_type_postcards')}${_existingTypes.contains('postcards') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('postcards')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'contacts',
-                  enabled: !_existingTypes.contains('contacts'),
-                  child: Text(
-                    '${_i18n.t('collection_type_contacts')}${_existingTypes.contains('contacts') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('contacts')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'places',
-                  enabled: !_existingTypes.contains('places'),
-                  child: Text(
-                    '${_i18n.t('collection_type_places')}${_existingTypes.contains('places') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('places')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'market',
-                  enabled: !_existingTypes.contains('market'),
-                  child: Text(
-                    '${_i18n.t('collection_type_market')}${_existingTypes.contains('market') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('market')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'report',
-                  enabled: !_existingTypes.contains('report'),
-                  child: Text(
-                    '${_i18n.t('collection_type_report')}${_existingTypes.contains('report') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('report')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'groups',
-                  enabled: !_existingTypes.contains('groups'),
-                  child: Text(
-                    '${_i18n.t('collection_type_groups')}${_existingTypes.contains('groups') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('groups')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-                DropdownMenuItem(
-                  value: 'relay',
-                  enabled: !_existingTypes.contains('relay'),
-                  child: Text(
-                    '${_i18n.t('collection_type_relay')}${_existingTypes.contains('relay') ? ' ${_i18n.t('already_exists')}' : ''}',
-                    style: _existingTypes.contains('relay')
-                        ? TextStyle(color: Colors.grey)
-                        : null,
-                  ),
-                ),
-              ].where((item) {
-                // Hide disabled items (existing fixed types) instead of greying them out
-                if (item.value == 'files') return true; // Always show files
-                return item.enabled ?? true;
-              }).toList(),
-              onChanged: _isCreating ? null : (value) {
-                if (value != null) {
-                  setState(() {
-                    _collectionType = value;
-                    // Auto-set title for non-files types with translated name
-                    if (value != 'files') {
-                      _titleController.text = _i18n.t('collection_type_$value');
-                    } else {
-                      // Clear title when switching back to files type
-                      // Check against translated names
-                      final fixedTypeTranslations = [
-                        _i18n.t('collection_type_www'),
-                        _i18n.t('collection_type_forum'),
-                        _i18n.t('collection_type_chat'),
-                        _i18n.t('collection_type_blog'),
-                        _i18n.t('collection_type_events'),
-                        _i18n.t('collection_type_news'),
-                        _i18n.t('collection_type_postcards'),
-                        _i18n.t('collection_type_contacts'),
-                        _i18n.t('collection_type_places'),
-                        _i18n.t('collection_type_market'),
-                        _i18n.t('collection_type_report'),
-                        _i18n.t('collection_type_groups'),
-                        _i18n.t('collection_type_relay'),
-                      ];
-                      if (fixedTypeTranslations.contains(_titleController.text)) {
-                        _titleController.text = '';
-                      }
-                    }
-                  });
-                }
-              },
-            ),
-            // Only show title and description for 'files' type
-            if (_collectionType == 'files') ...[
-              const SizedBox(height: 16),
-              TextField(
-                controller: _titleController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('collection_title'),
-                  hintText: _i18n.t('collection_title_hint'),
-                  border: const OutlineInputBorder(),
-                ),
-                autofocus: true,
-                enabled: !_isCreating,
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _descriptionController,
-                decoration: InputDecoration(
-                  labelText: _i18n.t('collection_description'),
-                  hintText: _i18n.t('collection_description_hint'),
-                  border: const OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                enabled: !_isCreating,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) {
-                  if (!_isCreating) {
-                    _create();
-                  }
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
-            // Only show folder selection for 'files' type
-            if (_collectionType == 'files') ...[
-              const Divider(),
-              const SizedBox(height: 8),
-              // Auto folder checkbox
-              CheckboxListTile(
-                title: const Text('Use default folder'),
-                subtitle: Text(
-                  _useAutoFolder
-                      ? '~/Documents/geogram/devices/${CollectionService().currentCallsign ?? "..."}'
-                      : 'Choose custom location',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                value: _useAutoFolder,
-                enabled: !_isCreating,
-                onChanged: (value) {
-                  setState(() {
-                    _useAutoFolder = value ?? true;
-                    if (_useAutoFolder) {
-                      _selectedFolderPath = null;
-                    }
-                  });
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-              // Folder picker (shown when auto folder is disabled)
-              if (!_useAutoFolder) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _isCreating ? null : _pickFolder,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Choose Root Folder'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 48),
-                ),
-              ),
-              if (_selectedFolderPath != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.folder,
-                        size: 20,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _selectedFolderPath!,
-                          style: Theme.of(context).textTheme.bodySmall,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _isCreating ? null : () => Navigator.pop(context),
-          child: Text(_i18n.t('cancel')),
-        ),
-        FilledButton(
-          onPressed: _isCreating ? null : _create,
-          child: _isCreating
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Text(_i18n.t('create')),
-        ),
-      ],
     );
   }
 }

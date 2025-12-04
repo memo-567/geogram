@@ -470,7 +470,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isNew ? _i18n.t('new_report') : _i18n.t('report_details')),
+        title: Text(_isNew ? _i18n.t('new_alert') : _i18n.t('alert_details')),
         actions: [
           if (!_isNew && !_isEditing && canEdit)
             IconButton(
@@ -942,7 +942,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                           ElevatedButton.icon(
                             onPressed: _isLoading ? null : _verify,
                             icon: Icon(Icons.verified),
-                            label: Text(_i18n.t('confirm_report_accurate')),
+                            label: Text(_i18n.t('confirm_alert_accurate')),
                           ),
                       ],
                     ),

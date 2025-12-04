@@ -111,17 +111,23 @@ class NostrEvent {
   factory NostrEvent.createHello({
     required String npub,
     required String callsign,
+    String? nickname,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
+    final tags = <List<String>>[
+      ['t', 'hello'],
+      ['callsign', callsign],
+    ];
+    // Include nickname if provided and not empty (for friendly URL support)
+    if (nickname != null && nickname.isNotEmpty) {
+      tags.add(['nickname', nickname]);
+    }
     return NostrEvent(
       pubkey: pubkeyHex,
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       kind: NostrEventKind.textNote,
-      tags: [
-        ['t', 'hello'],
-        ['callsign', callsign],
-      ],
+      tags: tags,
       content: 'Hello from Geogram Desktop',
     );
   }

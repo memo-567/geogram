@@ -115,8 +115,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   String _getDisplayTitle() {
     // Translate known fixed type names
-    if (widget.collectionTitle.toLowerCase() == 'report') {
-      return _i18n.t('collection_type_report');
+    if (widget.collectionTitle.toLowerCase() == 'alerts') {
+      return _i18n.t('collection_type_alerts');
     }
     return widget.collectionTitle;
   }
@@ -281,7 +281,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   child: TextField(
                     controller: _searchController,
                     decoration: InputDecoration(
-                      hintText: _i18n.t('search_reports'),
+                      hintText: _i18n.t('search_alerts'),
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
@@ -337,13 +337,13 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                               Icon(Icons.report_outlined, size: 64, color: theme.colorScheme.primary),
                               const SizedBox(height: 16),
                               Text(
-                                _allReports.isEmpty ? _i18n.t('no_reports_yet') : _i18n.t('no_matching_reports'),
+                                _allReports.isEmpty ? _i18n.t('no_alerts_yet') : _i18n.t('no_matching_alerts'),
                                 style: theme.textTheme.titleLarge,
                               ),
                               const SizedBox(height: 8),
                               Text(
                                 _allReports.isEmpty
-                                    ? _i18n.t('create_first_report')
+                                    ? _i18n.t('create_first_alert')
                                     : _i18n.t('try_adjusting_filters'),
                                 style: theme.textTheme.bodyMedium,
                               ),
@@ -363,7 +363,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createReport,
         icon: const Icon(Icons.add),
-        label: Text(_i18n.t('new_report')),
+        label: Text(_i18n.t('new_alert')),
       ),
     );
   }

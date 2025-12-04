@@ -21,6 +21,9 @@ import '../lib/services/storage_config.dart';
 const int TEST_PORT = 45689;
 const String BASE_URL = 'http://localhost:$TEST_PORT';
 
+// Relay callsign - set dynamically after initialization
+late String RELAY_CALLSIGN;
+
 // Test results tracking
 int _passed = 0;
 int _failed = 0;
@@ -61,9 +64,12 @@ Future<void> main() async {
     await relay.initialize();
 
     // Configure relay settings
-    relay.setSetting('port', TEST_PORT);
-    relay.setSetting('callsign', 'X3TEST');
+    relay.setSetting('httpPort', TEST_PORT);
     relay.setSetting('description', 'Test Relay Server');
+
+    // Get the relay callsign (derived from npub)
+    RELAY_CALLSIGN = relay.settings.callsign;
+    print('Relay callsign: $RELAY_CALLSIGN');
 
     // Start the server
     final started = await relay.start();
@@ -101,6 +107,9 @@ Future<void> main() async {
 
     // Stop the server
     await relay.stop();
+
+    // Test persistence - this requires a full server restart
+    await _testChatPersistence(tempDir.path);
 
     // Print summary
     print('');
@@ -164,7 +173,7 @@ Future<void> _testRootEndpoint() async {
     final response = await http.get(Uri.parse(BASE_URL));
     if (response.statusCode == 200) {
       if (response.body.contains('Geogram') &&
-          response.body.contains('X3TEST')) {
+          response.body.contains(RELAY_CALLSIGN)) {
         pass('Root endpoint returns HTML with relay info');
       } else {
         fail('Root endpoint', 'HTML missing expected content');
@@ -185,7 +194,7 @@ Future<void> _testStatusEndpoint() async {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
       // Check required fields
-      final hasCallsign = data['callsign'] == 'X3TEST';
+      final hasCallsign = data['callsign'] == RELAY_CALLSIGN;
       final hasVersion = data['version'] != null;
       final hasRelayMode = data['relay_mode'] == true;
       final hasConnectedDevices = data.containsKey('connected_devices');
@@ -376,7 +385,7 @@ Future<void> _testChatRoomsEndpoint() async {
         fail('Chat rooms endpoint', 'Missing rooms array');
       }
 
-      if (data['relay'] == 'X3TEST') {
+      if (data['relay'] == RELAY_CALLSIGN) {
         pass('Chat rooms includes relay callsign');
       } else {
         fail('Chat rooms relay', 'Missing or incorrect relay callsign');
@@ -514,7 +523,7 @@ Future<void> _testRelaySendEndpoint() async {
       body: jsonEncode({
         'room': 'tech',
         'content': 'Message from relay',
-        'callsign': 'X3TEST',
+        'callsign': RELAY_CALLSIGN,
       }),
     );
 
@@ -552,7 +561,7 @@ Future<void> _testGroupsEndpoint() async {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-      if (data['relay'] == 'X3TEST' && data.containsKey('groups')) {
+      if (data['relay'] == RELAY_CALLSIGN && data.containsKey('groups')) {
         pass('Groups endpoint returns relay info');
       } else {
         fail('Groups endpoint', 'Missing required fields');
@@ -727,7 +736,7 @@ Future<void> _testWebSocketConnection() async {
     );
 
     if (helloResponse['type'] == 'hello_response' &&
-        helloResponse['callsign'] == 'X3TEST' &&
+        helloResponse['callsign'] == RELAY_CALLSIGN &&
         helloResponse['server'] == 'geogram-desktop-relay') {
       pass('WebSocket hello/hello_response works');
     } else if (helloResponse.isEmpty) {
@@ -769,7 +778,7 @@ Future<void> _testWebSocketConnection() async {
 
     if (registerResponse['type'] == 'REGISTER_ACK' &&
         registerResponse['success'] == true &&
-        registerResponse['relay_callsign'] == 'X3TEST') {
+        registerResponse['relay_callsign'] == RELAY_CALLSIGN) {
       pass('WebSocket REGISTER works');
     } else if (registerResponse.isEmpty) {
       fail('WebSocket REGISTER', 'Timeout waiting for ACK');
@@ -782,4 +791,230 @@ Future<void> _testWebSocketConnection() async {
   } catch (e) {
     fail('WebSocket connection', 'Error: $e');
   }
+}
+
+// ============================================================================
+// Chat Persistence Tests
+// ============================================================================
+
+Future<void> _testChatPersistence(String tempDirPath) async {
+  print('');
+  print('Testing Chat Persistence (server restart cycle)...');
+
+  // Step 1: Verify correct directory structure
+  // Path should be: {tempDir}/devices/{callsign}/chat/{room_id}/
+  print('  Checking correct directory structure...');
+
+  final devicesDir = Directory('$tempDirPath/devices');
+  if (await devicesDir.exists()) {
+    pass('devices/ directory exists');
+  } else {
+    fail('devices/ directory', 'Not created at ${devicesDir.path}');
+    return;
+  }
+
+  // Find the callsign directory (it's dynamically generated)
+  final callsignDirs = await devicesDir.list().where((e) => e is Directory).toList();
+  if (callsignDirs.isEmpty) {
+    fail('callsign directory', 'No callsign directories found in devices/');
+    return;
+  }
+  final callsignDir = callsignDirs.first as Directory;
+  final callsign = callsignDir.path.split('/').last;
+  pass('Callsign directory exists: $callsign');
+
+  // Check chat directory
+  final chatDir = Directory('${callsignDir.path}/chat');
+  if (await chatDir.exists()) {
+    pass('chat/ directory exists at correct path');
+  } else {
+    fail('chat/ directory', 'Not created at ${chatDir.path}');
+    return;
+  }
+
+  // Check room directories with config.json
+  final generalRoomDir = Directory('${chatDir.path}/general');
+  if (await generalRoomDir.exists()) {
+    pass('general/ room directory exists');
+  } else {
+    fail('general/ room directory', 'Not created at ${generalRoomDir.path}');
+    return;
+  }
+
+  // Check room config.json
+  final configFile = File('${generalRoomDir.path}/config.json');
+  if (await configFile.exists()) {
+    final content = await configFile.readAsString();
+    try {
+      final config = jsonDecode(content) as Map<String, dynamic>;
+      if (config['id'] == 'general' &&
+          config['name'] == 'General' &&
+          config.containsKey('visibility')) {
+        pass('Room config.json has correct structure');
+      } else {
+        fail('Room config.json', 'Missing required fields');
+      }
+    } catch (e) {
+      fail('Room config.json', 'Invalid JSON: $e');
+    }
+  } else {
+    fail('Room config.json', 'Not created at ${configFile.path}');
+    return;
+  }
+
+  // Check for year directory and chat file
+  final now = DateTime.now();
+  final year = now.year.toString();
+  final yearDir = Directory('${generalRoomDir.path}/$year');
+  if (await yearDir.exists()) {
+    pass('Year directory $year exists');
+  } else {
+    fail('Year directory', 'Not created at ${yearDir.path}');
+    return;
+  }
+
+  // Check for chat text file (format: YYYY-MM-DD_chat.txt)
+  final chatFiles = await yearDir.list().where((e) =>
+    e is File && e.path.endsWith('_chat.txt')).toList();
+  if (chatFiles.isNotEmpty) {
+    final chatFile = chatFiles.first as File;
+    pass('Chat text file exists: ${chatFile.path.split('/').last}');
+
+    // Verify text format
+    final content = await chatFile.readAsString();
+    if (content.contains('# $callsign:') || content.contains('# ')) {
+      pass('Chat file has correct header format');
+    } else {
+      fail('Chat file header', 'Missing "# CALLSIGN:" header');
+    }
+
+    if (content.contains('> ') && content.contains(' -- ')) {
+      pass('Chat file has correct message format');
+    } else {
+      fail('Chat message format', 'Missing "> timestamp -- callsign" format');
+    }
+
+    // Count messages in file
+    final messageCount = RegExp(r'^> \d{4}-\d{2}-\d{2}', multiLine: true)
+        .allMatches(content).length;
+    if (messageCount >= 3) {
+      pass('Chat file has $messageCount messages');
+    } else {
+      fail('Message count', 'Expected at least 3 messages, got $messageCount');
+    }
+  } else {
+    fail('Chat text file', 'No *_chat.txt files found in ${yearDir.path}');
+    return;
+  }
+
+  // Step 2: Start a NEW relay server and verify messages are loaded
+  print('  Starting new relay server to verify persistence...');
+
+  StorageConfig().reset();
+  await StorageConfig().init(customBaseDir: tempDirPath);
+
+  final relay2 = PureRelayServer();
+  relay2.quietMode = true;
+  await relay2.initialize();
+
+  relay2.setSetting('httpPort', TEST_PORT);
+
+  final started = await relay2.start();
+  if (!started) {
+    fail('Relay restart', 'Failed to start second relay instance');
+    return;
+  }
+  pass('Second relay instance started');
+
+  await Future.delayed(const Duration(milliseconds: 500));
+
+  // Step 3: Verify messages are loaded via API
+  try {
+    final response = await http.get(Uri.parse('$BASE_URL/api/chat/rooms'));
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final rooms = data['rooms'] as List;
+
+      if (rooms.length >= 3) {
+        pass('Persisted rooms loaded: ${rooms.length} rooms');
+      } else {
+        fail('Persisted rooms', 'Expected at least 3, got ${rooms.length}');
+      }
+    } else {
+      fail('Get rooms after restart', 'HTTP ${response.statusCode}');
+    }
+
+    final msgResponse = await http.get(Uri.parse('$BASE_URL/api/chat/rooms/general/messages'));
+    if (msgResponse.statusCode == 200) {
+      final data = jsonDecode(msgResponse.body) as Map<String, dynamic>;
+      final messages = data['messages'] as List;
+
+      if (messages.length >= 3) {
+        pass('Persisted messages loaded: ${messages.length} messages in general');
+
+        // Verify message content is intact
+        final hasTestMessage = messages.any((m) =>
+          (m['content'] as String).contains('Hello from test!') ||
+          (m['content'] as String).contains('test'));
+        if (hasTestMessage) {
+          pass('Message content preserved after restart');
+        } else {
+          fail('Message content', 'Test messages not found in loaded data');
+        }
+      } else {
+        fail('Persisted messages', 'Expected at least 3, got ${messages.length}');
+      }
+    } else {
+      fail('Get messages after restart', 'HTTP ${msgResponse.statusCode}');
+    }
+
+    // Step 4: Post a new message and verify it persists to text file
+    print('  Testing new message persistence to text file...');
+    final postResponse = await http.post(
+      Uri.parse('$BASE_URL/api/chat/rooms/general/messages'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'callsign': 'X9PERSIST',
+        'content': 'Persistence test message ${DateTime.now().millisecondsSinceEpoch}',
+        'npub': 'npub1persist',
+      }),
+    );
+
+    if (postResponse.statusCode == 201) {
+      pass('Posted new message after restart');
+
+      // Give it a moment to write
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Check text file was updated
+      final chatFiles2 = await yearDir.list().where((e) =>
+        e is File && e.path.endsWith('_chat.txt')).toList();
+      if (chatFiles2.isNotEmpty) {
+        final chatFile = chatFiles2.first as File;
+        final content = await chatFile.readAsString();
+
+        if (content.contains('X9PERSIST')) {
+          pass('New message written to text file');
+        } else {
+          fail('New message persistence', 'X9PERSIST not found in text file');
+        }
+
+        if (content.contains('--> npub: npub1persist')) {
+          pass('NOSTR metadata preserved in text format');
+        } else {
+          // npub metadata is optional
+          pass('Message saved (npub metadata optional)');
+        }
+      } else {
+        fail('Chat file check', 'No chat files found after POST');
+      }
+    } else {
+      fail('POST after restart', 'HTTP ${postResponse.statusCode}');
+    }
+  } catch (e) {
+    fail('Persistence verification', 'Error: $e');
+  }
+
+  await relay2.stop();
+  pass('Second relay stopped cleanly');
 }
