@@ -211,7 +211,6 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
   @override
   Widget build(BuildContext context) {
     final profile = _profileService.getProfile();
-    final profileCount = _profileService.profileCount;
 
     return InkWell(
       onTap: () => _showProfileMenu(context),
@@ -278,24 +277,6 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
               Icons.arrow_drop_down,
               color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
             ),
-            if (profileCount > 1) ...[
-              const SizedBox(width: 2),
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Text(
-                  '$profileCount',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),
