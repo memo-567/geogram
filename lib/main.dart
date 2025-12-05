@@ -406,9 +406,9 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           NavigationDrawerDestination(
-            icon: const Icon(Icons.folder_special_outlined),
-            selectedIcon: const Icon(Icons.folder_special),
-            label: Text(_i18n.t('collections')),
+            icon: const Icon(Icons.apps_outlined),
+            selectedIcon: const Icon(Icons.apps),
+            label: Text(_i18n.t('apps')),
           ),
           NavigationDrawerDestination(
             icon: const Icon(Icons.map_outlined),
@@ -443,9 +443,9 @@ class _HomePageState extends State<HomePage> {
         },
         destinations: [
           NavigationDestination(
-            icon: const Icon(Icons.folder_special_outlined),
-            selectedIcon: const Icon(Icons.folder_special),
-            label: _i18n.t('collections'),
+            icon: const Icon(Icons.apps_outlined),
+            selectedIcon: const Icon(Icons.apps),
+            label: _i18n.t('apps'),
           ),
           NavigationDestination(
             icon: const Icon(Icons.map_outlined),
@@ -481,13 +481,11 @@ class _CollectionsPageState extends State<CollectionsPage> {
   final CollectionService _collectionService = CollectionService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
-  final TextEditingController _searchController = TextEditingController();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   Map<String, int> _unreadCounts = {};
 
   List<Collection> _allCollections = [];
-  List<Collection> _filteredCollections = [];
   bool _isLoading = true;
 
   @override
@@ -531,7 +529,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
     _collectionService.collectionsNotifier.removeListener(_onCollectionsChanged);
-    _searchController.dispose();
     _unreadSubscription?.cancel();
     super.dispose();
   }
@@ -572,7 +569,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
 
       setState(() {
         _allCollections = sortedCollections;
-        _filteredCollections = sortedCollections;
         _isLoading = false;
       });
 
@@ -583,18 +579,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
     }
   }
 
-  void _filterCollections(String query) {
-    setState(() {
-      if (query.isEmpty) {
-        _filteredCollections = _allCollections;
-      } else {
-        _filteredCollections = _allCollections.where((collection) {
-          return collection.title.toLowerCase().contains(query.toLowerCase()) ||
-                 collection.description.toLowerCase().contains(query.toLowerCase());
-        }).toList();
-      }
-    });
-  }
 
   Future<void> _createNewCollection() async {
     final result = await Navigator.push<Collection>(
@@ -657,28 +641,11 @@ class _CollectionsPageState extends State<CollectionsPage> {
     return Scaffold(
       body: Column(
         children: [
-          // Search Bar
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: _i18n.t('search'),
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                filled: true,
-              ),
-              onChanged: _filterCollections,
-            ),
-          ),
-
           // Collections List
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _filteredCollections.isEmpty
+                : _allCollections.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -724,8 +691,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             : 8; // Extra large: 8 columns
 
                             // Separate fixed and file collections from filtered list
-                            final fixedCollections = _filteredCollections.where(_isFixedCollectionType).toList();
-                            final fileCollections = _filteredCollections.where((c) => !_isFixedCollectionType(c)).toList();
+                            final fixedCollections = _allCollections.where(_isFixedCollectionType).toList();
+                            final fileCollections = _allCollections.where((c) => !_isFixedCollectionType(c)).toList();
 
                             return CustomScrollView(
                               slivers: [
@@ -923,7 +890,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewCollection,
         icon: const Icon(Icons.add),
-        label: Text(_i18n.t('create_new_collection')),
+        label: Text(_i18n.t('add_new_collection')),
       ),
     );
   }
@@ -999,7 +966,7 @@ class _CollectionGridCard extends StatelessWidget {
       case 'groups':
         return Icons.groups;
       case 'alerts':
-        return Icons.notifications_active;
+        return Icons.campaign;
       case 'relay':
         return Icons.cell_tower;
       default:

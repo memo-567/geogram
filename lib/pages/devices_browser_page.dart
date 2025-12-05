@@ -384,16 +384,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (device.latency != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Text(
-                '${device.latency}ms',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
+          Builder(
+            builder: (context) {
+              final profile = _profileService.getProfile();
+              final distanceStr = device.getDistanceString(profile.latitude, profile.longitude);
+              if (distanceStr != null) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text(
+                    distanceStr,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
           IconButton(
             icon: Icon(
               Icons.delete_outline,
@@ -684,7 +692,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'www': return Icons.language;
       case 'documents': return Icons.description;
       case 'photos': return Icons.photo_library;
-      case 'alerts': return Icons.notifications_active;
+      case 'alerts': return Icons.campaign;
       case 'market': return Icons.store;
       case 'groups': return Icons.group;
       case 'postcards': return Icons.mail;

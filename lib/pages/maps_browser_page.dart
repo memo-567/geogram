@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io' show Platform;
 import 'dart:convert';
@@ -61,6 +62,10 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   bool _rotationEnabled = true;
   double _currentRotation = 0.0;
 
+  // Auto-refresh timer (every 5 minutes)
+  Timer? _autoRefreshTimer;
+  static const Duration _autoRefreshInterval = Duration(minutes: 5);
+
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
   static const double _maxRadius = 500.0;
@@ -83,12 +88,23 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _initialize();
+    _startAutoRefresh();
   }
 
   @override
   void dispose() {
+    _autoRefreshTimer?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  /// Start auto-refresh timer (every 5 minutes)
+  void _startAutoRefresh() {
+    _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) {
+      if (mounted) {
+        _loadItems(forceRefresh: true);
+      }
+    });
   }
 
   Future<void> _initialize() async {
@@ -170,7 +186,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   Future<void> _loadItems({bool forceRefresh = false}) async {
     if (_centerPosition == null) return;
 
-    setState(() => _isLoading = true);
+    // Only show loading indicator on first load, not auto-refresh
+    final isFirstLoad = _allItems.isEmpty;
+    if (isFirstLoad) {
+      setState(() => _isLoading = true);
+    }
 
     try {
       // Always load all item types - filtering happens at display time
@@ -182,21 +202,64 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         forceRefresh: forceRefresh,
       );
 
-      final grouped = _mapsService.groupByType(items);
-      final sortedTypes = _mapsService.getTypesSortedByCount(grouped);
+      // Check if items have actually changed before updating state
+      final hasChanges = _hasItemsChanged(items);
 
-      setState(() {
-        _allItems = items;
-        _groupedItems = grouped;
-        _sortedTypes = sortedTypes;
-        _isLoading = false;
-      });
+      if (hasChanges || isFirstLoad) {
+        final grouped = _mapsService.groupByType(items);
+        final sortedTypes = _mapsService.getTypesSortedByCount(grouped);
 
-      LogService().log('MapsBrowserPage: Loaded ${items.length} items');
+        setState(() {
+          _allItems = items;
+          _groupedItems = grouped;
+          _sortedTypes = sortedTypes;
+          _isLoading = false;
+        });
+
+        LogService().log('MapsBrowserPage: Loaded ${items.length} items (updated)');
+      } else {
+        if (isFirstLoad) {
+          setState(() => _isLoading = false);
+        }
+        LogService().log('MapsBrowserPage: Auto-refresh - no changes detected');
+      }
     } catch (e) {
       LogService().log('MapsBrowserPage: Error loading items: $e');
-      setState(() => _isLoading = false);
+      if (isFirstLoad) {
+        setState(() => _isLoading = false);
+      }
     }
+  }
+
+  /// Check if the new items differ from current items
+  bool _hasItemsChanged(List<MapItem> newItems) {
+    if (newItems.length != _allItems.length) return true;
+
+    // Create a set of item identifiers for quick comparison
+    final currentIds = _allItems.map((item) => '${item.type.name}:${item.id}').toSet();
+    final newIds = newItems.map((item) => '${item.type.name}:${item.id}').toSet();
+
+    // Check if the sets differ
+    if (!currentIds.containsAll(newIds) || !newIds.containsAll(currentIds)) {
+      return true;
+    }
+
+    // Check for changes in item properties (title, subtitle, coordinates)
+    final currentMap = {for (var item in _allItems) '${item.type.name}:${item.id}': item};
+    for (final newItem in newItems) {
+      final key = '${newItem.type.name}:${newItem.id}';
+      final currentItem = currentMap[key];
+      if (currentItem != null) {
+        if (currentItem.title != newItem.title ||
+            currentItem.subtitle != newItem.subtitle ||
+            currentItem.latitude != newItem.latitude ||
+            currentItem.longitude != newItem.longitude) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   void _toggleLayer(MapItemType type) {
@@ -566,7 +629,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       case MapItemType.news:
         return Icons.newspaper;
       case MapItemType.alert:
-        return Icons.notifications_active;
+        return Icons.campaign;
       case MapItemType.relay:
         return Icons.cell_tower;
       case MapItemType.contact:
@@ -610,167 +673,39 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         final isNarrow = constraints.maxWidth < 550;
 
         if (isNarrow) {
-          // Portrait/narrow mode: stack radius slider above tabs
+          // Portrait/narrow mode: just tabs
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
-              border: Border(
-                bottom: BorderSide(
-                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
-                ),
-              ),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Radius slider row
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Row(
-                    children: [
-                      Text(
-                        _i18n.t('radius'),
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Slider(
-                          value: _radiusToSlider(_radiusKm),
-                          min: 0.0,
-                          max: 1.0,
-                          divisions: 100,
-                          label: '${_radiusKm.round()} km',
-                          onChanged: (sliderValue) => _setRadius(_sliderToRadius(sliderValue)),
-                          onChangeEnd: (sliderValue) => _onRadiusChangeEnd(_sliderToRadius(sliderValue)),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 60,
-                        child: Text(
-                          '${_radiusKm.round()} km',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: _isDetectingLocation
-                            ? SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              )
-                            : const Icon(Icons.my_location),
-                        onPressed: _isDetectingLocation ? null : _autoDetectLocation,
-                        tooltip: _i18n.t('auto_detect_location'),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh),
-                        onPressed: () => _loadItems(forceRefresh: true),
-                        tooltip: _i18n.t('refresh'),
-                      ),
-                    ],
-                  ),
-                ),
-                // Tab bar row
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: TabBar(
-                    controller: _tabController,
-                    tabs: [
-                      Tab(text: _i18n.t('map_view')),
-                      Tab(text: _i18n.t('list_view')),
-                    ],
-                  ),
-                ),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: TabBar(
+                controller: _tabController,
+                tabs: [
+                  Tab(text: _i18n.t('map_view')),
+                  Tab(text: _i18n.t('list_view')),
+                ],
+              ),
             ),
           );
         }
 
-        // Wide mode: everything in one row
+        // Wide mode: just tabs
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
-              ),
-            ),
           ),
-          child: Row(
-            children: [
-              // Tab bar
-              SizedBox(
-                width: 200,
-                child: TabBar(
-                  controller: _tabController,
-                  tabs: [
-                    Tab(text: _i18n.t('map_view')),
-                    Tab(text: _i18n.t('list_view')),
-                  ],
-                ),
-              ),
-
-              const SizedBox(width: 16),
-
-              // Radius slider
-              Text(
-                _i18n.t('radius'),
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 200,
-                child: Slider(
-                  value: _radiusToSlider(_radiusKm),
-                  min: 0.0,
-                  max: 1.0,
-                  divisions: 100,
-                  label: '${_radiusKm.round()} km',
-                  onChanged: (sliderValue) => _setRadius(_sliderToRadius(sliderValue)),
-                  onChangeEnd: (sliderValue) => _onRadiusChangeEnd(_sliderToRadius(sliderValue)),
-                ),
-              ),
-              SizedBox(
-                width: 70,
-                child: Text(
-                  '${_radiusKm.round()} km',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 8),
-
-              // Auto-detect location button
-              IconButton(
-                icon: _isDetectingLocation
-                    ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      )
-                    : const Icon(Icons.my_location),
-                onPressed: _isDetectingLocation ? null : _autoDetectLocation,
-                tooltip: _i18n.t('auto_detect_location'),
-              ),
-
-              // Refresh button
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: () => _loadItems(forceRefresh: true),
-                tooltip: _i18n.t('refresh'),
-              ),
-            ],
+          child: SizedBox(
+            width: 200,
+            child: TabBar(
+              controller: _tabController,
+              tabs: [
+                Tab(text: _i18n.t('map_view')),
+                Tab(text: _i18n.t('list_view')),
+              ],
+            ),
           ),
         );
       },
@@ -1243,6 +1178,23 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                         : Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+              ),
+              const SizedBox(height: 8),
+              // Find my location button
+              FloatingActionButton.small(
+                heroTag: 'find_location',
+                onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                tooltip: _i18n.t('auto_detect_location'),
+                child: _isDetectingLocation
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        ),
+                      )
+                    : const Icon(Icons.my_location),
               ),
             ],
           ),

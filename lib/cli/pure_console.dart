@@ -3070,15 +3070,29 @@ class PureConsole {
       'Geogram Relay',
     );
 
-    final location = await _promptInputWithDefault('Location (optional)', '');
+    // Auto-detect location via IP
+    stdout.writeln('Detecting location via IP address...');
+    final locationService = CliLocationService();
+    final detectedLocation = await locationService.detectLocationViaIP();
 
+    String location;
     double? latitude;
     double? longitude;
-    if (location.isNotEmpty) {
-      final latStr = await _promptInputWithDefault('Latitude (optional)', '');
-      final lonStr = await _promptInputWithDefault('Longitude (optional)', '');
-      latitude = latStr.isNotEmpty ? double.tryParse(latStr) : null;
-      longitude = lonStr.isNotEmpty ? double.tryParse(lonStr) : null;
+
+    if (detectedLocation != null) {
+      stdout.writeln('\x1B[32mLocation detected: ${detectedLocation.locationName}\x1B[0m');
+      location = await _promptInputWithDefault('Location', detectedLocation.locationName ?? '');
+      latitude = detectedLocation.latitude;
+      longitude = detectedLocation.longitude;
+    } else {
+      stdout.writeln('\x1B[33mCould not auto-detect location\x1B[0m');
+      location = await _promptInputWithDefault('Location (optional)', '');
+      if (location.isNotEmpty) {
+        final latStr = await _promptInputWithDefault('Latitude (optional)', '');
+        final lonStr = await _promptInputWithDefault('Longitude (optional)', '');
+        latitude = latStr.isNotEmpty ? double.tryParse(latStr) : null;
+        longitude = lonStr.isNotEmpty ? double.tryParse(lonStr) : null;
+      }
     }
     stdout.writeln();
 

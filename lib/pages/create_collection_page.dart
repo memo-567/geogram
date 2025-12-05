@@ -41,7 +41,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('chat', Icons.chat),
     _CollectionTypeInfo('events', Icons.event),
     _CollectionTypeInfo('forum', Icons.forum),
-    _CollectionTypeInfo('alerts', Icons.notifications_active),
+    _CollectionTypeInfo('alerts', Icons.campaign),
     _CollectionTypeInfo('news', Icons.newspaper),
     _CollectionTypeInfo('www', Icons.language),
     _CollectionTypeInfo('files', Icons.folder),

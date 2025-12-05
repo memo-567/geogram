@@ -6,6 +6,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
 import '../models/relay.dart';
@@ -67,6 +68,8 @@ class DevicesService {
           lastSeen: cacheTime,
           hasCachedData: true,
           collections: [],
+          latitude: matchingRelay?.latitude,
+          longitude: matchingRelay?.longitude,
         );
       }
 
@@ -82,6 +85,8 @@ class DevicesService {
               lastSeen: relay.lastChecked,
               hasCachedData: false,
               collections: [],
+              latitude: relay.latitude,
+              longitude: relay.longitude,
             );
           }
         }
@@ -404,6 +409,8 @@ class RemoteDevice {
   DateTime? lastFetched;
   bool hasCachedData;
   List<RemoteCollection> collections;
+  double? latitude;
+  double? longitude;
 
   RemoteDevice({
     required this.callsign,
@@ -416,6 +423,8 @@ class RemoteDevice {
     this.lastFetched,
     this.hasCachedData = false,
     required this.collections,
+    this.latitude,
+    this.longitude,
   });
 
   /// Get status string
@@ -440,6 +449,45 @@ class RemoteDevice {
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${time.day}/${time.month}/${time.year}';
+  }
+
+  /// Calculate distance from given coordinates using Haversine formula
+  /// Returns distance in kilometers, or null if location is unavailable
+  double? calculateDistance(double? userLat, double? userLon) {
+    if (latitude == null || longitude == null || userLat == null || userLon == null) {
+      return null;
+    }
+
+    const double earthRadiusKm = 6371.0;
+
+    final dLat = _degreesToRadians(userLat - latitude!);
+    final dLon = _degreesToRadians(userLon - longitude!);
+
+    final lat1 = _degreesToRadians(latitude!);
+    final lat2 = _degreesToRadians(userLat);
+
+    final a = (sin(dLat / 2) * sin(dLat / 2)) +
+              (sin(dLon / 2) * sin(dLon / 2)) * cos(lat1) * cos(lat2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadiusKm * c;
+  }
+
+  static double _degreesToRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+
+  /// Get human-readable distance string
+  String? getDistanceString(double? userLat, double? userLon) {
+    final distance = calculateDistance(userLat, userLon);
+    if (distance == null) return null;
+
+    if (distance < 1) {
+      return '${(distance * 1000).round()} m away';
+    } else {
+      return '${distance.round()} km away';
+    }
   }
 }
 
