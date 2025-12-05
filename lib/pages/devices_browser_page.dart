@@ -3,12 +3,14 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/relay_cache_service.dart';
+import '../services/chat_notification_service.dart';
 import 'chat_browser_page.dart';
 
 /// Page for browsing remote devices and their collections
@@ -24,6 +26,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final RelayCacheService _cacheService = RelayCacheService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
+  final ChatNotificationService _chatNotificationService = ChatNotificationService();
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
@@ -32,11 +35,25 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   bool _isLoading = true;
   bool _isLoadingCollections = false;
   String? _error;
+  int _totalUnreadMessages = 0;
+  StreamSubscription<Map<String, int>>? _unreadSubscription;
 
   @override
   void initState() {
     super.initState();
     _initialize();
+    _subscribeToUnreadCounts();
+  }
+
+  void _subscribeToUnreadCounts() {
+    _totalUnreadMessages = _chatNotificationService.totalUnreadCount;
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+      if (mounted) {
+        setState(() {
+          _totalUnreadMessages = counts.values.fold(0, (sum, count) => sum + count);
+        });
+      }
+    });
   }
 
   Future<void> _initialize() async {
@@ -69,6 +86,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     if (mounted) {
       setState(() => _isLoading = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _unreadSubscription?.cancel();
+    super.dispose();
   }
 
   /// Filter out the current device from the list
@@ -605,8 +628,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Badge(
-                    isLabelVisible: collection.fileCount != null && collection.fileCount! > 0,
-                    label: Text('${collection.fileCount ?? 0}'),
+                    isLabelVisible: collection.type == 'chat'
+                        ? _totalUnreadMessages > 0
+                        : collection.fileCount != null && collection.fileCount! > 0,
+                    label: Text(collection.type == 'chat'
+                        ? '$_totalUnreadMessages'
+                        : '${collection.fileCount ?? 0}'),
                     child: Icon(
                       _getCollectionIcon(collection.type),
                       size: 26,

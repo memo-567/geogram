@@ -1772,10 +1772,13 @@ class PureRelayServer {
                   'room': roomId,
                   'message': msg.toJson(),
                 });
+                // Also send UPDATE notification for real-time refresh
+                final updateNotification = 'UPDATE:${_settings.callsign}:chat:$roomId';
                 for (final c in _clients.values) {
                   if (c.id != client.id) {
                     try {
                       c.socket.add(payload);
+                      c.socket.add(updateNotification);
                     } catch (_) {}
                   }
                 }
@@ -1887,10 +1890,13 @@ class PureRelayServer {
         'room': roomId,
         'message': msg.toJson(),
       });
+      // Also send UPDATE notification for real-time refresh
+      final updateNotification = 'UPDATE:${_settings.callsign}:chat:$roomId';
       for (final c in _clients.values) {
         if (c.id != client.id) {
           try {
             c.socket.add(payload);
+            c.socket.add(updateNotification);
           } catch (_) {}
         }
       }
