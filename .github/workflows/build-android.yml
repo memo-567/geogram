@@ -46,7 +46,7 @@ jobs:
         storePassword=$ANDROID_STORE_PASSWORD
         keyPassword=$ANDROID_KEY_PASSWORD
         keyAlias=$ANDROID_KEY_ALIAS
-        storeFile=app/keystore/release.jks
+        storeFile=keystore/release.jks
         EOF
           echo "Signing configured with release keystore"
         else
