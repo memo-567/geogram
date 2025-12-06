@@ -7,7 +7,6 @@ import 'dart:convert';
 import 'dart:io';
 import '../models/relay_chat_room.dart';
 import '../models/chat_message.dart';
-import '../services/chat_service.dart';
 import 'pure_storage_config.dart';
 
 /// Pure Dart service for caching relay device data locally (CLI version)
@@ -334,7 +333,7 @@ class CliRelayCacheService {
             if (yearEntity is File && yearEntity.path.endsWith('_chat.txt')) {
               // Parse messages from daily file
               final content = await yearEntity.readAsString();
-              final chatMessages = ChatService.parseMessageText(content);
+              final chatMessages = _parseMessageText(content);
               allMessages.addAll(
                 chatMessages.map((msg) => _chatMessageToRelayChat(msg, roomId)),
               );
@@ -357,6 +356,77 @@ class CliRelayCacheService {
   bool _isYearFolder(String folderPath) {
     final name = folderPath.split('/').last;
     return RegExp(r'^\d{4}$').hasMatch(name);
+  }
+
+  /// Parse message text content (pure Dart, no Flutter dependencies)
+  List<ChatMessage> _parseMessageText(String content) {
+    // Split by message start pattern: "> 2" (messages start with year 2xxx)
+    final sections = content.split('> 2');
+    List<ChatMessage> messages = [];
+
+    // Skip first section (header)
+    for (int i = 1; i < sections.length; i++) {
+      try {
+        final section = '2${sections[i]}'; // Restore the "2" prefix
+        final message = _parseMessageSection(section);
+        if (message != null) {
+          messages.add(message);
+        }
+      } catch (e) {
+        continue; // Skip malformed messages
+      }
+    }
+
+    return messages;
+  }
+
+  /// Parse a single message section
+  ChatMessage? _parseMessageSection(String section) {
+    final lines = section.split('\n');
+    if (lines.isEmpty) return null;
+
+    // Parse header: "2025-11-20 19:10_12 -- CR7BBQ"
+    final header = lines[0].trim();
+    if (header.length < 23) return null; // Min length check
+
+    final timestamp = header.substring(0, 19).trim(); // YYYY-MM-DD HH:MM_ss
+    final author = header.substring(23).trim(); // After " -- "
+
+    if (timestamp.isEmpty || author.isEmpty) return null;
+
+    // Parse content and metadata
+    StringBuffer contentBuffer = StringBuffer();
+    Map<String, String> metadata = {};
+    bool inContent = true;
+
+    for (int i = 1; i < lines.length; i++) {
+      final line = lines[i];
+
+      if (line.trim().startsWith('--> ')) {
+        inContent = false;
+        // Parse metadata: "--> key: value"
+        final metaLine = line.trim().substring(4); // Remove "--> "
+        final colonIndex = metaLine.indexOf(': ');
+        if (colonIndex > 0) {
+          final key = metaLine.substring(0, colonIndex);
+          final value = metaLine.substring(colonIndex + 2);
+          metadata[key] = value;
+        }
+      } else if (inContent && line.trim().isNotEmpty) {
+        // Content line
+        if (contentBuffer.isNotEmpty) {
+          contentBuffer.writeln();
+        }
+        contentBuffer.write(line);
+      }
+    }
+
+    return ChatMessage(
+      author: author,
+      timestamp: timestamp,
+      content: contentBuffer.toString().trim(),
+      metadata: metadata,
+    );
   }
 
   /// Convert RelayChatMessage to ChatMessage for export
