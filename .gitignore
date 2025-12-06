@@ -44,6 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Android signing (sensitive)
+android/key.properties
+android/app/keystore/
+
 # Development symlinks
 /data
 

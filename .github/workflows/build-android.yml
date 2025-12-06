@@ -32,6 +32,27 @@ jobs:
         channel: 'stable'
         cache: true
 
+    - name: Setup Android signing
+      env:
+        ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      run: |
+        if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+          mkdir -p android/app/keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/keystore/release.jks
+          cat > android/key.properties << EOF
+        storePassword=$ANDROID_STORE_PASSWORD
+        keyPassword=$ANDROID_KEY_PASSWORD
+        keyAlias=$ANDROID_KEY_ALIAS
+        storeFile=app/keystore/release.jks
+        EOF
+          echo "Signing configured with release keystore"
+        else
+          echo "No signing secrets found, using debug signing"
+        fi
+
     - name: Install dependencies
       run: flutter pub get
 
