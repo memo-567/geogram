@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'games_embedded.dart';
 
 /// Games directory configuration
 class GameConfig {
@@ -9,6 +10,7 @@ class GameConfig {
 
   /// Initialize the games directory
   /// Uses the project's games folder or a custom path
+  /// If no games are found, extracts embedded games
   Future<void> initialize(String baseDir) async {
     // First check if there's a games folder relative to the executable
     final execDir = File(Platform.resolvedExecutable).parent.path;
@@ -23,7 +25,7 @@ class GameConfig {
 
     for (final path in possiblePaths) {
       final dir = Directory(path);
-      if (await dir.exists()) {
+      if (await dir.exists() && await _hasGames(dir)) {
         gamesDirectory = path;
         _initialized = true;
         return;
@@ -37,7 +39,29 @@ class GameConfig {
       await dir.create(recursive: true);
     }
 
+    // Extract embedded games if directory is empty
+    if (!await _hasGames(dir)) {
+      await _extractEmbeddedGames(dir);
+    }
+
     _initialized = true;
+  }
+
+  /// Check if directory has any game files
+  Future<bool> _hasGames(Directory dir) async {
+    if (!await dir.exists()) return false;
+    final files = dir.listSync().where((e) => e.path.endsWith('.md'));
+    return files.isNotEmpty;
+  }
+
+  /// Extract embedded games to the games directory
+  Future<void> _extractEmbeddedGames(Directory dir) async {
+    for (final entry in GamesEmbedded.games.entries) {
+      final filename = entry.key;
+      final content = entry.value;
+      final file = File('${dir.path}/$filename');
+      await file.writeAsString(content);
+    }
   }
 
   /// Check if initialized

@@ -299,28 +299,63 @@ class GameScreen {
   }
 
   /// Display combat arena with characters facing each other
+  /// Both characters are aligned at the bottom (feet on ground)
   void _showCombatArena(List<String> playerArt, List<String> opponentArt) {
-    const artWidth = 15;
-    const middleGap = 8;
-    final maxLines = playerArt.length > opponentArt.length ? playerArt.length : opponentArt.length;
+    // Calculate the maximum width needed for each side
+    int playerWidth = 0;
+    int opponentWidth = 0;
+    for (final line in playerArt) {
+      if (line.length > playerWidth) playerWidth = line.length;
+    }
+    for (final line in opponentArt) {
+      if (line.length > opponentWidth) opponentWidth = line.length;
+    }
 
-    // VS marker in the middle
+    // Use at least minimum widths for consistent display
+    const minWidth = 15;
+    final leftWidth = playerWidth > minWidth ? playerWidth : minWidth;
+    final rightWidth = opponentWidth > minWidth ? opponentWidth : minWidth;
+    const middleGap = 6;
+
+    // Calculate heights and offsets to align both at the bottom
+    final playerHeight = playerArt.length;
+    final opponentHeight = opponentArt.length;
+    final maxLines = playerHeight > opponentHeight ? playerHeight : opponentHeight;
+
+    // Calculate top padding for each character to align at bottom
+    final playerTopPad = maxLines - playerHeight;
+    final opponentTopPad = maxLines - opponentHeight;
+
+    // VS marker in the middle (at the center of the tallest character)
     final vsLine = maxLines ~/ 2;
 
     for (var i = 0; i < maxLines; i++) {
-      final leftArt = i < playerArt.length ? playerArt[i] : '';
-      final rightArt = i < opponentArt.length ? opponentArt[i] : '';
+      // Get player art line (with top padding for alignment)
+      String leftArt;
+      final playerLineIndex = i - playerTopPad;
+      if (playerLineIndex >= 0 && playerLineIndex < playerArt.length) {
+        leftArt = playerArt[playerLineIndex];
+      } else {
+        leftArt = '';
+      }
+
+      // Get opponent art line (with top padding for alignment)
+      String rightArt;
+      final opponentLineIndex = i - opponentTopPad;
+      if (opponentLineIndex >= 0 && opponentLineIndex < opponentArt.length) {
+        rightArt = opponentArt[opponentLineIndex];
+      } else {
+        rightArt = '';
+      }
 
       // Pad art to consistent width
-      final leftPadded = leftArt.padRight(artWidth);
-      final rightPadded = rightArt.padLeft(artWidth);
+      final leftPadded = leftArt.padRight(leftWidth);
+      final rightPadded = rightArt.padLeft(rightWidth);
 
       // Middle section with VS
       String middle;
       if (i == vsLine) {
-        middle = '\x1B[1;31m  VS  \x1B[0m'.padLeft(middleGap + 10).padRight(middleGap + 10);
-      } else if (i == vsLine - 1 || i == vsLine + 1) {
-        middle = ' ' * middleGap;
+        middle = '\x1B[1;31m  VS  \x1B[0m'.padLeft(middleGap + 6).padRight(middleGap + 6);
       } else {
         middle = ' ' * middleGap;
       }
