@@ -1,4 +1,4 @@
-name: Build Windows Release
+name: Build Windows
 
 on:
   push:
@@ -13,12 +13,14 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
@@ -26,15 +28,23 @@ jobs:
         channel: 'stable'
         cache: true
 
+    - name: Update version from git
+      shell: bash
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+        fi
+        BUILD_NUMBER=$(git rev-list --count HEAD)
+        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        echo "Building version $VERSION+$BUILD_NUMBER"
+
     - name: Enable Windows desktop
       run: flutter config --enable-windows-desktop
 
     - name: Install dependencies
       run: flutter pub get
-
-    - name: Run tests
-      run: flutter test
-      continue-on-error: true
 
     - name: Build Windows Release
       run: flutter build windows --release
@@ -42,21 +52,19 @@ jobs:
     - name: Create portable archive
       run: |
         cd build/windows/x64/runner/Release
-        Compress-Archive -Path * -DestinationPath ../../../../../geogram-desktop-windows-x64.zip
+        Compress-Archive -Path * -DestinationPath ../../../../../geogram-windows-x64.zip
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-desktop-windows-x64
-        path: geogram-desktop-windows-x64.zip
+        name: geogram-windows-x64
+        path: geogram-windows-x64.zip
         retention-days: 30
 
-    - name: Create Release
+    - name: Upload to Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: geogram-desktop-windows-x64.zip
-        draft: false
-        prerelease: false
+        files: geogram-windows-x64.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

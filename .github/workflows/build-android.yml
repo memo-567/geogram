@@ -19,6 +19,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for git commit count
 
     - name: Setup Java
       uses: actions/setup-java@v4
@@ -53,6 +55,26 @@ jobs:
           echo "No signing secrets found, using debug signing"
         fi
 
+    - name: Update version from git
+      run: |
+        # Get version from tag or pubspec
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+        fi
+
+        # Use git commit count as build number (always increases)
+        BUILD_NUMBER=$(git rev-list --count HEAD)
+
+        echo "Version: $VERSION, Build: $BUILD_NUMBER"
+
+        # Update pubspec.yaml with correct version
+        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
+
     - name: Install dependencies
       run: flutter pub get
 
@@ -62,17 +84,21 @@ jobs:
     - name: Build Android App Bundle
       run: flutter build appbundle --release
 
+    - name: Rename APK
+      run: |
+        cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/geogram.apk
+
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-desktop-android-apk
-        path: build/app/outputs/flutter-apk/app-release.apk
+        name: geogram-android-apk
+        path: build/app/outputs/flutter-apk/geogram.apk
         retention-days: 30
 
     - name: Upload App Bundle artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-desktop-android-aab
+        name: geogram-android-aab
         path: build/app/outputs/bundle/release/app-release.aab
         retention-days: 30
 
@@ -80,7 +106,7 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: build/app/outputs/flutter-apk/app-release.apk
+        files: build/app/outputs/flutter-apk/geogram.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -19,12 +19,25 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
         channel: 'stable'
         cache: true
+
+    - name: Update version from git
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+        fi
+        BUILD_NUMBER=$(git rev-list --count HEAD)
+        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        echo "Building version $VERSION+$BUILD_NUMBER"
 
     - name: Install dependencies
       run: flutter pub get

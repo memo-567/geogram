@@ -19,12 +19,25 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
         channel: 'stable'
         cache: true
+
+    - name: Update version from git
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+        fi
+        BUILD_NUMBER=$(git rev-list --count HEAD)
+        sed -i '' "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        echo "Building version $VERSION+$BUILD_NUMBER"
 
     - name: Install dependencies
       run: flutter pub get
@@ -37,19 +50,19 @@ jobs:
         cd build/ios/iphoneos
         mkdir Payload
         cp -r Runner.app Payload/
-        zip -r ../../../geogram-desktop-ios-unsigned.ipa Payload/
+        zip -r ../../../geogram-ios-unsigned.ipa Payload/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-desktop-ios-unsigned
-        path: geogram-desktop-ios-unsigned.ipa
+        name: geogram-ios-unsigned
+        path: geogram-ios-unsigned.ipa
         retention-days: 30
 
     - name: Upload to Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: geogram-desktop-ios-unsigned.ipa
+        files: geogram-ios-unsigned.ipa
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

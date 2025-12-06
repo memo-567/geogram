@@ -19,12 +19,25 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
         channel: 'stable'
         cache: true
+
+    - name: Update version from git
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+        fi
+        BUILD_NUMBER=$(git rev-list --count HEAD)
+        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        echo "Building version $VERSION+$BUILD_NUMBER"
 
     - name: Install dependencies
       run: flutter pub get
@@ -35,19 +48,19 @@ jobs:
     - name: Create portable archive
       run: |
         cd build
-        tar -czf ../geogram-desktop-web.tar.gz web/
+        tar -czf ../geogram-web.tar.gz web/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: geogram-desktop-web
-        path: geogram-desktop-web.tar.gz
+        name: geogram-web
+        path: geogram-web.tar.gz
         retention-days: 30
 
     - name: Upload to Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: geogram-desktop-web.tar.gz
+        files: geogram-web.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
