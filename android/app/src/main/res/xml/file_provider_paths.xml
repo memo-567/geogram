@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Cache directory for APK updates -->
+    <cache-path name="cache" path="." />
+    <!-- External cache directory -->
+    <external-cache-path name="external_cache" path="." />
+    <!-- Files directory (for path_provider getTemporaryDirectory) -->
+    <files-path name="files" path="." />
+    <!-- External files directory -->
+    <external-files-path name="external_files" path="." />
+</paths>

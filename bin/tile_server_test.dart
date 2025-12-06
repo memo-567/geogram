@@ -19,7 +19,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../lib/cli/pure_relay.dart';
-import '../lib/services/storage_config.dart';
+import '../lib/cli/pure_storage_config.dart';
 
 const int TEST_PORT = 45690;
 const String BASE_URL = 'http://localhost:$TEST_PORT';
@@ -69,8 +69,8 @@ Future<void> main() async {
 
   try {
     // Initialize storage config
-    StorageConfig().reset();
-    await StorageConfig().init(customBaseDir: tempDir.path);
+    PureStorageConfig().reset();
+    await PureStorageConfig().init(customBaseDir: tempDir.path);
 
     // Ensure tiles directory exists and is clean
     final tilesDir = Directory('${tempDir.path}/tiles');
@@ -88,13 +88,10 @@ Future<void> main() async {
     await relay.initialize();
 
     // Configure relay settings - enable tile server
-    relay.setSetting('port', TEST_PORT);
-    relay.setSetting('callsign', 'X3TILE');
+    relay.setSetting('httpPort', TEST_PORT);
     relay.setSetting('description', 'Tile Test Relay');
     relay.setSetting('tileServerEnabled', true);
     relay.setSetting('osmFallbackEnabled', true);
-    relay.setSetting('maxZoomLevel', 18);
-    relay.setSetting('maxCacheSize', 100); // 100MB for testing
 
     // Start the server
     final started = await relay.start();

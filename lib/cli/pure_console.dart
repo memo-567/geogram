@@ -7,6 +7,7 @@ import 'package:dart_console/dart_console.dart';
 import 'pure_relay.dart';
 import 'cli_profile_service.dart';
 import 'cli_location_service.dart';
+import 'cli_relay_cache_service.dart';
 import '../models/profile.dart';
 import '../models/chat_message.dart' as chat;
 import '../util/event_bus.dart';
@@ -300,6 +301,9 @@ class PureConsole {
   /// CLI Profile service
   final CliProfileService _profileService = CliProfileService();
 
+  /// CLI Relay cache service
+  final CliRelayCacheService _cacheService = CliRelayCacheService();
+
   /// SSL certificate manager
   SslCertificateManager? _sslManager;
 
@@ -358,6 +362,9 @@ class PureConsole {
 
       // Initialize game engine
       await _gameConfig.initialize(_relay.dataDir!);
+
+      // Initialize cache service
+      await _cacheService.initialize();
 
       // Load command history
       await _loadHistory();

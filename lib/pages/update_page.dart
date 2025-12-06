@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -80,6 +82,41 @@ class _UpdatePageState extends State<UpdatePage> {
   Future<void> _downloadAndInstall() async {
     if (_latestRelease == null) return;
 
+    // On Android, check install permission first
+    if (!kIsWeb && Platform.isAndroid) {
+      final canInstall = await _updateService.canInstallPackages();
+      if (!canInstall) {
+        // Show dialog explaining the permission is needed
+        if (mounted) {
+          final shouldOpenSettings = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Permission Required'),
+              content: const Text(
+                'To install updates, Geogram needs permission to install apps from unknown sources.\n\n'
+                'Tap "Open Settings" to enable this permission, then return here to try again.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpenSettings == true) {
+            await _updateService.openInstallPermissionSettings();
+          }
+        }
+        return;
+      }
+    }
+
     setState(() {
       _isLoading = true;
       _statusMessage = 'Downloading update...';
@@ -108,7 +145,12 @@ class _UpdatePageState extends State<UpdatePage> {
             _backups = await _updateService.listBackups();
           }
         } else {
-          _error = 'Failed to apply update';
+          // On Android, this might mean the permission was revoked during download
+          if (!kIsWeb && Platform.isAndroid) {
+            _error = 'Could not install update. Please check that "Install unknown apps" is enabled for Geogram in Settings.';
+          } else {
+            _error = 'Failed to apply update';
+          }
           _statusMessage = null;
         }
       } else {

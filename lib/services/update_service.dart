@@ -661,6 +661,30 @@ class UpdateService {
   /// Get current download progress (0.0 to 1.0)
   double get currentDownloadProgress => _downloadProgress;
 
+  /// Check if app can install packages (Android 8.0+ permission)
+  Future<bool> canInstallPackages() async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+
+    try {
+      final result = await _updateChannel.invokeMethod<bool>('canInstallPackages');
+      return result ?? false;
+    } catch (e) {
+      LogService().log('Error checking install permission: $e');
+      return false;
+    }
+  }
+
+  /// Open system settings to enable installing unknown apps (Android 8.0+)
+  Future<void> openInstallPermissionSettings() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+
+    try {
+      await _updateChannel.invokeMethod('openInstallPermissionSettings');
+    } catch (e) {
+      LogService().log('Error opening install permission settings: $e');
+    }
+  }
+
   /// Apply downloaded update (platform-specific)
   Future<bool> applyUpdate(String updateFilePath) async {
     if (kIsWeb) return false;
@@ -669,6 +693,14 @@ class UpdateService {
       final platform = detectPlatform();
 
       if (platform == UpdatePlatform.android) {
+        // On Android 8.0+, check if we have permission to install packages
+        final canInstall = await canInstallPackages();
+        if (!canInstall) {
+          LogService().log('Install permission not granted, opening settings...');
+          await openInstallPermissionSettings();
+          return false;
+        }
+
         // On Android, launch the APK installer via method channel
         LogService().log('Launching APK installer for: $updateFilePath');
         try {
