@@ -1,0 +1,55 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build iOS (no codesign)
+      run: flutter build ios --release --no-codesign
+
+    - name: Create IPA archive
+      run: |
+        cd build/ios/iphoneos
+        mkdir Payload
+        cp -r Runner.app Payload/
+        zip -r ../../../geogram-desktop-ios-unsigned.ipa Payload/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-desktop-ios-unsigned
+        path: geogram-desktop-ios-unsigned.ipa
+        retention-days: 30
+
+    - name: Upload to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: geogram-desktop-ios-unsigned.ipa
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

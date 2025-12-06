@@ -1,0 +1,60 @@
+name: Build CLI
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Generate embedded games
+      run: dart run bin/generate_embedded_games.dart
+
+    - name: Compile CLI binary
+      run: |
+        mkdir -p build
+        dart compile exe bin/cli.dart -o build/geogram-cli
+
+    - name: Create archive with games
+      run: |
+        mkdir -p dist/geogram-cli
+        cp build/geogram-cli dist/geogram-cli/
+        cp -r games dist/geogram-cli/
+        cd dist && tar -czf ../geogram-cli-linux-x64.tar.gz geogram-cli/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-cli-linux-x64
+        path: geogram-cli-linux-x64.tar.gz
+        retention-days: 30
+
+    - name: Upload to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: geogram-cli-linux-x64.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
