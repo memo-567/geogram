@@ -503,7 +503,7 @@ class PureConsole {
 
     final activeProfile = _profileService.activeProfile;
     if (activeProfile != null) {
-      final typeStr = activeProfile.isStation ? ' [station]' : '';
+      final typeStr = activeProfile.isRelay ? ' [station]' : '';
       stdout.writeln('\x1B[36m  Active Profile: ${activeProfile.callsign} ($typeStr)\x1B[0m');
     } else {
       stdout.writeln('\x1B[33m  No profile configured\x1B[0m');
@@ -1206,7 +1206,7 @@ class PureConsole {
     for (final profile in _profileService.profiles) {
       if (profile.callsign.toUpperCase().startsWith(upperPartial)) {
         final label = profile.nickname.isNotEmpty ? '${profile.callsign} (${profile.nickname})' : profile.callsign;
-        candidates.add(Candidate(profile.callsign, display: label, group: profile.isStation ? ' [station]' : '';
+        candidates.add(Candidate(profile.callsign, display: label, group: profile.isRelay ? 'station' : 'client'));
       }
     }
 
@@ -2967,7 +2967,7 @@ class PureConsole {
       return;
     }
 
-    final typeStr = profile.isStation ? ' [station]' : '';
+    final typeStr = profile.isRelay ? 'station' : 'client';
     stdout.writeln();
     stdout.writeln('\x1B[1mActive Profile:\x1B[0m');
     stdout.writeln('  Type:        \x1B[36m$typeStr\x1B[0m');
@@ -3005,7 +3005,7 @@ class PureConsole {
 
     for (final profile in profiles) {
       final isActive = profile.id == _profileService.activeProfile?.id;
-      final typeStr = profile.isStation ? ' [station]' : '';
+      final typeStr = profile.isRelay ? 'station' : 'client';
       final activeStr = isActive ? '\x1B[32m*\x1B[0m ' : '  ';
       final displayName = profile.nickname.isNotEmpty
           ? '${profile.callsign} (${profile.nickname})'

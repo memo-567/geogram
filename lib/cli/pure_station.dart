@@ -1230,7 +1230,7 @@ class PureStationServer {
           _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
           try {
             final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
-            sslManager.setRelayServer(this);
+            sslManager.setStationServer(this);
             final success = await sslManager.requestCertificate(staging: false);
             if (success) {
               _log('INFO', 'SSL certificate obtained successfully');
@@ -4183,7 +4183,7 @@ class SslCertificateManager {
   PureStationServer? _stationServer;
 
   /// Set station server reference for ACME challenge handling
-  void setRelayServer(PureStationServer server) {
+  void setStationServer(PureStationServer server) {
     _stationServer = server;
   }
 
