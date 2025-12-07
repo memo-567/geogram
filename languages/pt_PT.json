@@ -1182,6 +1182,7 @@
   "station": "Estação",
   "client_description": "Dispositivo de utilizador regular",
   "station_description": "Servidor de estação de rede",
+  "station_already_exists": "Apenas uma estação por dispositivo",
   "nickname_optional": "Alcunha (opcional)",
   "enter_nickname": "Introduza uma alcunha",
   "create": "Criar",
@@ -1242,5 +1243,20 @@
   "location_from_gps": "Localização via GPS",
   "location_from_ip": "Localização via endereço IP",
   "location_from_browser": "Localização via navegador",
-  "location_detected": "Localização detectada"
+  "location_detected": "Localização detectada",
+
+  "import_export_profiles": "Importar/Exportar Perfis",
+  "import_export_info": "Exporte os seus perfis para guardar fora da pasta da aplicação. Importe-os mais tarde para restaurar após reinstalar.",
+  "import": "Importar",
+  "export": "Exportar",
+  "import_from_file": "Importar de Ficheiro",
+  "export_all_profiles": "Exportar Todos os Perfis ({0})",
+  "or_export_individual": "Ou exporte perfis individuais:",
+  "export_profile": "Exportar Perfil",
+  "profiles_exported": "Perfis exportados com sucesso",
+  "profile_exported": "Perfil {0} exportado com sucesso",
+  "profiles_imported": "{0} perfil(s) importado(s) com sucesso",
+  "profiles_imported_with_skipped": "{0} perfil(s) importado(s), {1} ignorado(s) (duplicados)",
+  "no_new_profiles_imported": "Nenhum perfil novo importado (todos duplicados)",
+  "import_failed": "Falha ao importar perfis"
 }

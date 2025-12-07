@@ -118,8 +118,14 @@ class StorageConfig {
         final appDir = await getApplicationDocumentsDirectory();
         _baseDir = path.join(appDir.path, 'geogram');
       } else {
-        // Default to current working directory (desktop)
-        _baseDir = Directory.current.path;
+        // On desktop, use ~/.local/share/geogram-desktop for consistent location
+        final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+        if (home != null) {
+          _baseDir = path.join(home, '.local', 'share', 'geogram-desktop');
+        } else {
+          // Fallback to current working directory if HOME not set
+          _baseDir = Directory.current.path;
+        }
       }
     }
 

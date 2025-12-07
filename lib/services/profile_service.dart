@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:file_picker/file_picker.dart';
 import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
@@ -519,5 +521,238 @@ class ProfileService {
 
     final file = File(profile.profileImagePath!);
     return await file.exists();
+  }
+
+  // ========== Profile Import/Export Methods ==========
+
+  /// Export version for compatibility checking
+  static const int _exportVersion = 1;
+
+  /// Export a single profile to JSON map (for backup)
+  Map<String, dynamic> exportProfile(Profile profile) {
+    return {
+      'version': _exportVersion,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'profile': profile.toJson(),
+    };
+  }
+
+  /// Export all profiles to JSON map
+  Map<String, dynamic> exportAllProfiles() {
+    return {
+      'version': _exportVersion,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'profiles': _profiles.map((p) => p.toJson()).toList(),
+      'activeProfileId': _activeProfileId,
+    };
+  }
+
+  /// Export profiles to a file (opens save dialog)
+  /// Returns the saved file path or null if cancelled/failed
+  Future<String?> exportProfilesToFile({Profile? singleProfile}) async {
+    if (kIsWeb) {
+      LogService().log('Profile export to file not supported on web');
+      return null;
+    }
+
+    try {
+      final Map<String, dynamic> exportData;
+      final String defaultFileName;
+
+      if (singleProfile != null) {
+        exportData = exportProfile(singleProfile);
+        defaultFileName = 'geogram_profile_${singleProfile.callsign}.json';
+      } else {
+        exportData = exportAllProfiles();
+        defaultFileName = 'geogram_profiles_backup.json';
+      }
+
+      final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);
+
+      // Open save dialog - allows user to choose location outside app folder
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: 'Export Profiles',
+        fileName: defaultFileName,
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (result == null) {
+        LogService().log('Profile export cancelled by user');
+        return null;
+      }
+
+      // Write the file
+      final file = File(result);
+      await file.writeAsString(jsonString);
+
+      LogService().log('Profiles exported to: $result');
+      return result;
+    } catch (e) {
+      LogService().log('Error exporting profiles: $e');
+      return null;
+    }
+  }
+
+  /// Import profiles from a file (opens file picker)
+  /// Returns a map with 'success', 'imported' count, and optional 'error' message
+  Future<Map<String, dynamic>> importProfilesFromFile() async {
+    if (kIsWeb) {
+      return {
+        'success': false,
+        'error': 'Profile import not supported on web',
+        'imported': 0,
+      };
+    }
+
+    try {
+      // Open file picker
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Import Profiles',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        allowMultiple: false,
+      );
+
+      if (result == null || result.files.isEmpty) {
+        return {
+          'success': false,
+          'error': 'cancelled',
+          'imported': 0,
+        };
+      }
+
+      final filePath = result.files.first.path;
+      if (filePath == null) {
+        return {
+          'success': false,
+          'error': 'Could not access file',
+          'imported': 0,
+        };
+      }
+
+      final file = File(filePath);
+      final jsonString = await file.readAsString();
+
+      return await importProfilesFromJson(jsonString);
+    } catch (e) {
+      LogService().log('Error importing profiles: $e');
+      return {
+        'success': false,
+        'error': 'Error reading file: $e',
+        'imported': 0,
+      };
+    }
+  }
+
+  /// Import profiles from JSON string
+  Future<Map<String, dynamic>> importProfilesFromJson(String jsonString) async {
+    try {
+      final data = json.decode(jsonString) as Map<String, dynamic>;
+
+      // Check version
+      final version = data['version'] as int? ?? 0;
+      if (version > _exportVersion) {
+        return {
+          'success': false,
+          'error': 'Export file is from a newer version. Please update the app.',
+          'imported': 0,
+        };
+      }
+
+      final List<Profile> profilesToImport = [];
+
+      // Handle single profile export
+      if (data.containsKey('profile')) {
+        final profileData = data['profile'] as Map<String, dynamic>;
+        profilesToImport.add(Profile.fromJson(profileData));
+      }
+      // Handle multiple profiles export
+      else if (data.containsKey('profiles')) {
+        final profilesList = data['profiles'] as List;
+        for (final profileData in profilesList) {
+          profilesToImport.add(Profile.fromJson(profileData as Map<String, dynamic>));
+        }
+      } else {
+        return {
+          'success': false,
+          'error': 'Invalid export file format',
+          'imported': 0,
+        };
+      }
+
+      if (profilesToImport.isEmpty) {
+        return {
+          'success': false,
+          'error': 'No profiles found in file',
+          'imported': 0,
+        };
+      }
+
+      // Import profiles, checking for duplicates
+      int importedCount = 0;
+      int skippedCount = 0;
+      final List<String> importedCallsigns = [];
+
+      for (final importedProfile in profilesToImport) {
+        // Check if profile with same callsign already exists
+        final existingByCallsign = getProfileByCallsign(importedProfile.callsign);
+        // Check if profile with same npub already exists
+        final existingByNpub = _profiles.where((p) => p.npub == importedProfile.npub).firstOrNull;
+
+        if (existingByCallsign != null || existingByNpub != null) {
+          LogService().log('Skipping duplicate profile: ${importedProfile.callsign}');
+          skippedCount++;
+          continue;
+        }
+
+        // Generate a new ID to avoid conflicts
+        final newProfile = Profile(
+          type: importedProfile.type,
+          callsign: importedProfile.callsign,
+          nickname: importedProfile.nickname,
+          description: importedProfile.description,
+          npub: importedProfile.npub,
+          nsec: importedProfile.nsec,
+          useExtension: importedProfile.useExtension,
+          preferredColor: importedProfile.preferredColor,
+          latitude: importedProfile.latitude,
+          longitude: importedProfile.longitude,
+          locationName: importedProfile.locationName,
+          createdAt: importedProfile.createdAt,
+          isActive: false, // Start as inactive
+          port: importedProfile.port,
+          stationRole: importedProfile.stationRole,
+          parentStationUrl: importedProfile.parentStationUrl,
+          networkId: importedProfile.networkId,
+          tileServerEnabled: importedProfile.tileServerEnabled,
+          osmFallbackEnabled: importedProfile.osmFallbackEnabled,
+          enableAprs: importedProfile.enableAprs,
+        );
+
+        _profiles.add(newProfile);
+        importedCount++;
+        importedCallsigns.add(newProfile.callsign);
+        LogService().log('Imported profile: ${newProfile.callsign}');
+      }
+
+      if (importedCount > 0) {
+        _saveAllProfiles();
+      }
+
+      return {
+        'success': true,
+        'imported': importedCount,
+        'skipped': skippedCount,
+        'callsigns': importedCallsigns,
+      };
+    } catch (e) {
+      LogService().log('Error parsing import data: $e');
+      return {
+        'success': false,
+        'error': 'Error parsing file: $e',
+        'imported': 0,
+      };
+    }
   }
 }

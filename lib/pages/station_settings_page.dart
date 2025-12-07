@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/station_node.dart';
 import '../services/station_node_service.dart';
 import '../services/log_service.dart';
+import '../cli/pure_station.dart';
 
 /// Settings page for station configuration
 class StationSettingsPage extends StatefulWidget {
@@ -41,10 +42,68 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
   double? _longitude;
   late double _radiusKm;
 
+  // Network settings (from PureStationServer)
+  late int _httpPort;
+  late int _httpsPort;
+  late bool _enableSsl;
+  String _sslDomain = '';
+  String _sslEmail = '';
+  late bool _sslAutoRenew;
+  bool _isRequestingCert = false;
+  String? _sslStatus;
+
+  // Text controllers for proper input handling
+  late TextEditingController _httpPortController;
+  late TextEditingController _httpsPortController;
+  late TextEditingController _sslDomainController;
+  late TextEditingController _sslEmailController;
+  late TextEditingController _maxConnectionsController;
+  late TextEditingController _thumbnailMaxKbController;
+  late TextEditingController _retentionDaysController;
+  late TextEditingController _chatRetentionDaysController;
+
   @override
   void initState() {
     super.initState();
     _loadConfig();
+    _initControllers();
+  }
+
+  void _initControllers() {
+    // Initialize controllers after _loadConfig has set the values
+    _httpPortController = TextEditingController(text: _httpPort.toString());
+    _httpsPortController = TextEditingController(text: _httpsPort.toString());
+    _sslDomainController = TextEditingController(text: _sslDomain);
+    _sslEmailController = TextEditingController(text: _sslEmail);
+    _maxConnectionsController = TextEditingController(text: _maxConnections.toString());
+    _thumbnailMaxKbController = TextEditingController(text: _thumbnailMaxKb.toString());
+    _retentionDaysController = TextEditingController(text: _retentionDays.toString());
+    _chatRetentionDaysController = TextEditingController(text: _chatRetentionDays.toString());
+  }
+
+  void _updateControllersFromConfig() {
+    // Update controller text without recreating controllers
+    _httpPortController.text = _httpPort.toString();
+    _httpsPortController.text = _httpsPort.toString();
+    _sslDomainController.text = _sslDomain;
+    _sslEmailController.text = _sslEmail;
+    _maxConnectionsController.text = _maxConnections.toString();
+    _thumbnailMaxKbController.text = _thumbnailMaxKb.toString();
+    _retentionDaysController.text = _retentionDays.toString();
+    _chatRetentionDaysController.text = _chatRetentionDays.toString();
+  }
+
+  @override
+  void dispose() {
+    _httpPortController.dispose();
+    _httpsPortController.dispose();
+    _sslDomainController.dispose();
+    _sslEmailController.dispose();
+    _maxConnectionsController.dispose();
+    _thumbnailMaxKbController.dispose();
+    _retentionDaysController.dispose();
+    _chatRetentionDaysController.dispose();
+    super.dispose();
   }
 
   void _loadConfig() {
@@ -72,6 +131,37 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
     _latitude = _config.coverage?.latitude;
     _longitude = _config.coverage?.longitude;
     _radiusKm = _config.coverage?.radiusKm ?? 50.0;
+
+    // Default network settings (will be overridden by async load)
+    _httpPort = 8080;
+    _httpsPort = 8443;
+    _enableSsl = false;
+    _sslAutoRenew = true;
+
+    // Load network settings from file (async)
+    _loadNetworkSettings();
+  }
+
+  Future<void> _loadNetworkSettings() async {
+    final settings = await _stationNodeService.loadNetworkSettings();
+    if (mounted) {
+      setState(() {
+        _httpPort = settings['httpPort'] as int;
+        _httpsPort = settings['httpsPort'] as int;
+        _enableSsl = settings['enableSsl'] as bool;
+        _sslDomain = (settings['sslDomain'] as String?) ?? '';
+        _sslEmail = (settings['sslEmail'] as String?) ?? '';
+        _sslAutoRenew = settings['sslAutoRenew'] as bool;
+        _maxConnections = settings['maxConnectedDevices'] as int;
+
+        // Update controllers with loaded values
+        _httpPortController.text = _httpPort.toString();
+        _httpsPortController.text = _httpsPort.toString();
+        _sslDomainController.text = _sslDomain;
+        _sslEmailController.text = _sslEmail;
+        _maxConnectionsController.text = _maxConnections.toString();
+      });
+    }
   }
 
   @override
@@ -107,6 +197,8 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildInfoCard(node),
+            SizedBox(height: 16),
+            _buildNetworkSection(),
             SizedBox(height: 16),
             _buildStorageSection(),
             SizedBox(height: 16),
@@ -172,6 +264,266 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
       return '${npub.substring(0, 10)}...${npub.substring(npub.length - 8)}';
     }
     return npub;
+  }
+
+  Widget _buildNetworkSection() {
+    return Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('NETWORK', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+
+            // HTTP Port
+            Row(
+              children: [
+                Expanded(child: Text('HTTP Port:')),
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    ),
+                    controller: _httpPortController,
+                    onChanged: (v) {
+                      _httpPort = int.tryParse(v) ?? 8080;
+                      _hasChanges = true;
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+
+            // SSL Section
+            Text('SSL/HTTPS', style: TextStyle(fontWeight: FontWeight.w500)),
+            SizedBox(height: 8),
+            SwitchListTile(
+              title: Text('Enable HTTPS'),
+              subtitle: Text('Serve content over secure connection'),
+              value: _enableSsl,
+              onChanged: (value) {
+                setState(() {
+                  _enableSsl = value;
+                  _hasChanges = true;
+                });
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+
+            if (_enableSsl) ...[
+              SizedBox(height: 8),
+
+              // HTTPS Port
+              Row(
+                children: [
+                  Expanded(child: Text('HTTPS Port:')),
+                  SizedBox(
+                    width: 100,
+                    child: TextField(
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      ),
+                      controller: _httpsPortController,
+                      onChanged: (v) {
+                        _httpsPort = int.tryParse(v) ?? 8443;
+                        _hasChanges = true;
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+
+              // Domain
+              TextField(
+                decoration: InputDecoration(
+                  labelText: 'Domain',
+                  hintText: 'e.g., station.example.com',
+                  border: OutlineInputBorder(),
+                ),
+                controller: _sslDomainController,
+                onChanged: (v) {
+                  _sslDomain = v;
+                  _hasChanges = true;
+                  setState(() {});
+                },
+              ),
+              SizedBox(height: 12),
+
+              // Email
+              TextField(
+                decoration: InputDecoration(
+                  labelText: 'Email (for Let\'s Encrypt)',
+                  hintText: 'your@email.com',
+                  border: OutlineInputBorder(),
+                ),
+                controller: _sslEmailController,
+                onChanged: (v) {
+                  _sslEmail = v;
+                  _hasChanges = true;
+                  setState(() {});
+                },
+              ),
+              SizedBox(height: 12),
+
+              // Auto-renew
+              SwitchListTile(
+                title: Text('Auto-renew certificate'),
+                subtitle: Text('Automatically renew before expiry'),
+                value: _sslAutoRenew,
+                onChanged: (value) {
+                  setState(() {
+                    _sslAutoRenew = value;
+                    _hasChanges = true;
+                  });
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+              SizedBox(height: 12),
+
+              // Certificate status and request button
+              if (_sslStatus != null)
+                Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    _sslStatus!,
+                    style: TextStyle(
+                      color: _sslStatus!.contains('Error') ? Colors.red : Colors.green,
+                    ),
+                  ),
+                ),
+
+              Row(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _isRequestingCert ? null : _requestCertificate,
+                    icon: _isRequestingCert
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(Icons.security),
+                    label: Text('Request Certificate'),
+                  ),
+                  SizedBox(width: 12),
+                  OutlinedButton(
+                    onPressed: _checkCertificateStatus,
+                    child: Text('Check Status'),
+                  ),
+                ],
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Domain must be pointed to this server\'s IP address before requesting certificate',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _requestCertificate() async {
+    if (_sslDomain.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enter a domain first')),
+      );
+      return;
+    }
+    if (_sslEmail.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enter an email for Let\'s Encrypt')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isRequestingCert = true;
+      _sslStatus = 'Requesting certificate...';
+    });
+
+    try {
+      final server = _stationNodeService.stationServer;
+      if (server == null) {
+        throw Exception('Station server not running. Start the station first.');
+      }
+
+      // Update server settings before requesting
+      server.settings.sslDomain = _sslDomain;
+      server.settings.sslEmail = _sslEmail;
+      server.settings.sslAutoRenew = _sslAutoRenew;
+      await server.saveSettings();
+
+      // Create SSL manager and request certificate
+      final sslManager = SslCertificateManager(server.settings, server.dataDir ?? '.');
+      sslManager.setStationServer(server);
+      await sslManager.initialize();
+
+      final success = await sslManager.requestCertificate(staging: false);
+
+      setState(() {
+        _sslStatus = success
+            ? 'Certificate obtained successfully!'
+            : 'Certificate request failed. Check logs for details.';
+      });
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('SSL Certificate obtained! Restart station to apply.')),
+        );
+      }
+    } catch (e) {
+      LogService().log('Error requesting certificate: $e');
+      setState(() {
+        _sslStatus = 'Error: $e';
+      });
+    } finally {
+      setState(() {
+        _isRequestingCert = false;
+      });
+    }
+  }
+
+  Future<void> _checkCertificateStatus() async {
+    try {
+      final server = _stationNodeService.stationServer;
+      if (server == null) {
+        setState(() {
+          _sslStatus = 'Station server not running';
+        });
+        return;
+      }
+
+      final sslManager = SslCertificateManager(server.settings, server.dataDir ?? '.');
+      final status = await sslManager.getStatus();
+
+      String statusText = 'SSL Status:\n';
+      statusText += '  Domain: ${status['domain']}\n';
+      statusText += '  Email: ${status['email']}\n';
+      statusText += '  Has Certificate: ${status['hasCertificate']}\n';
+      if (status['daysUntilExpiry'] != null) {
+        statusText += '  Days until expiry: ${status['daysUntilExpiry']}';
+      }
+
+      setState(() {
+        _sslStatus = statusText;
+      });
+    } catch (e) {
+      setState(() {
+        _sslStatus = 'Error checking status: $e';
+      });
+    }
   }
 
   Widget _buildStorageSection() {
@@ -248,10 +600,11 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                         border: OutlineInputBorder(),
                         contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                       ),
-                      controller: TextEditingController(text: _thumbnailMaxKb.toString()),
+                      controller: _thumbnailMaxKbController,
                       onChanged: (v) {
                         _thumbnailMaxKb = int.tryParse(v) ?? 10;
                         _hasChanges = true;
+                        setState(() {});
                       },
                     ),
                   ),
@@ -306,10 +659,11 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         ),
-                        controller: TextEditingController(text: _retentionDays.toString()),
+                        controller: _retentionDaysController,
                         onChanged: (v) {
                           _retentionDays = int.tryParse(v) ?? 365;
                           _hasChanges = true;
+                          setState(() {});
                         },
                       ),
                     ),
@@ -362,10 +716,11 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         ),
-                        controller: TextEditingController(text: _chatRetentionDays.toString()),
+                        controller: _chatRetentionDaysController,
                         onChanged: (v) {
                           _chatRetentionDays = int.tryParse(v) ?? 90;
                           _hasChanges = true;
+                          setState(() {});
                         },
                       ),
                     ),
@@ -425,10 +780,11 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                       border: OutlineInputBorder(),
                       contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                     ),
-                    controller: TextEditingController(text: _maxConnections.toString()),
+                    controller: _maxConnectionsController,
                     onChanged: (v) {
                       _maxConnections = int.tryParse(v) ?? 50;
                       _hasChanges = true;
+                      setState(() {});
                     },
                   ),
                 ),
@@ -621,6 +977,17 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
 
       await _stationNodeService.updateConfig(newConfig);
 
+      // Save network settings directly to file (works even when server is not running)
+      await _stationNodeService.updateNetworkSettings(
+        httpPort: _httpPort,
+        httpsPort: _httpsPort,
+        enableSsl: _enableSsl,
+        sslDomain: _sslDomain.isNotEmpty ? _sslDomain : null,
+        sslEmail: _sslEmail.isNotEmpty ? _sslEmail : null,
+        sslAutoRenew: _sslAutoRenew,
+        maxConnections: _maxConnections,
+      );
+
       setState(() {
         _config = newConfig;
         _hasChanges = false;
@@ -630,6 +997,8 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Settings saved')),
         );
+        // Close the settings page after successful save
+        Navigator.of(context).pop();
       }
     } catch (e) {
       LogService().log('Error saving station settings: $e');

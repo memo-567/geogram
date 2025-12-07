@@ -85,8 +85,14 @@ class PureStorageConfig {
       if (envDir != null && envDir.isNotEmpty) {
         _baseDir = _normalizePath(envDir);
       } else {
-        // Default to current working directory (CLI is always desktop)
-        _baseDir = Directory.current.path;
+        // Default to ~/.local/share/geogram-desktop for consistent location
+        final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+        if (home != null) {
+          _baseDir = path.join(home, '.local', 'share', 'geogram-desktop');
+        } else {
+          // Fallback to current working directory if HOME not set
+          _baseDir = Directory.current.path;
+        }
       }
     }
 

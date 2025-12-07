@@ -18,6 +18,7 @@ import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/update_service.dart';
 import 'services/storage_config.dart';
+import 'cli/pure_storage_config.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -112,6 +113,11 @@ void main() async {
     // Initialize storage configuration first (all other services depend on it)
     await StorageConfig().init();
     LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
+
+    // Also initialize PureStorageConfig with same base directory
+    // This enables CLI components (like PureStationServer) to be used in GUI mode
+    await PureStorageConfig().init(customBaseDir: StorageConfig().baseDir);
+    LogService().log('PureStorageConfig initialized (shared with CLI)');
 
     // Initialize config and i18n in parallel (both are independent)
     await Future.wait([

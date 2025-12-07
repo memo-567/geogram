@@ -1188,6 +1188,7 @@
   "station": "Station",
   "client_description": "Regular user device",
   "station_description": "Network station server",
+  "station_already_exists": "Only one station per device",
   "nickname_optional": "Nickname (optional)",
   "enter_nickname": "Enter a nickname",
   "create": "Create",
@@ -1248,5 +1249,20 @@
   "location_from_gps": "Location from GPS",
   "location_from_ip": "Location from IP address",
   "location_from_browser": "Location from browser",
-  "location_detected": "Location detected"
+  "location_detected": "Location detected",
+
+  "import_export_profiles": "Import/Export Profiles",
+  "import_export_info": "Export your profiles to save them outside the app folder. Import them later to restore after reinstalling.",
+  "import": "Import",
+  "export": "Export",
+  "import_from_file": "Import from File",
+  "export_all_profiles": "Export All Profiles ({0})",
+  "or_export_individual": "Or export individual profiles:",
+  "export_profile": "Export Profile",
+  "profiles_exported": "Profiles exported successfully",
+  "profile_exported": "Profile {0} exported successfully",
+  "profiles_imported": "{0} profile(s) imported successfully",
+  "profiles_imported_with_skipped": "{0} profile(s) imported, {1} skipped (duplicates)",
+  "no_new_profiles_imported": "No new profiles imported (all duplicates)",
+  "import_failed": "Failed to import profiles"
 }

@@ -10,6 +10,7 @@ import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../dialogs/import_export_profiles_dialog.dart';
 import 'profile_page.dart';
 import 'station_dashboard_page.dart';
 
@@ -232,12 +233,92 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
     });
   }
 
+  Future<void> _exportAllProfiles() async {
+    final result = await _profileService.exportProfilesToFile();
+    if (result != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('profiles_exported')),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportSingleProfile(Profile profile) async {
+    final result = await _profileService.exportProfilesToFile(singleProfile: profile);
+    if (result != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('profile_exported', params: [profile.callsign])),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _importProfiles() async {
+    final result = await _profileService.importProfilesFromFile();
+
+    if (!mounted) return;
+
+    if (result['error'] == 'cancelled') {
+      return;
+    }
+
+    if (result['success'] == true) {
+      final imported = result['imported'] as int;
+      final skipped = result['skipped'] as int? ?? 0;
+
+      String message;
+      if (imported > 0 && skipped > 0) {
+        message = _i18n.t('profiles_imported_with_skipped', params: ['$imported', '$skipped']);
+      } else if (imported > 0) {
+        message = _i18n.t('profiles_imported', params: ['$imported']);
+      } else {
+        message = _i18n.t('no_new_profiles_imported');
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: imported > 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] as String? ?? _i18n.t('import_failed')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _showImportExportDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => ImportExportProfilesDialog(
+        profiles: _profiles,
+        onExportAll: _exportAllProfiles,
+        onExportSingle: _exportSingleProfile,
+        onImport: _importProfiles,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('manage_profiles')),
         actions: [
+          if (!kIsWeb)
+            IconButton(
+              icon: const Icon(Icons.import_export),
+              onPressed: _showImportExportDialog,
+              tooltip: _i18n.t('import_export_profiles'),
+            ),
           IconButton(
             icon: const Icon(Icons.add),
             onPressed: _createNewProfile,
@@ -438,6 +519,9 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                             case 'copy':
                               _copyCallsign(profile);
                               break;
+                            case 'export':
+                              _exportSingleProfile(profile);
+                              break;
                             case 'delete':
                               _deleteProfile(profile);
                               break;
@@ -510,6 +594,17 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                               ],
                             ),
                           ),
+                          if (!kIsWeb)
+                            PopupMenuItem(
+                              value: 'export',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.file_download_outlined),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('export_profile')),
+                                ],
+                              ),
+                            ),
                           if (_profiles.length > 1) ...[
                             const PopupMenuDivider(),
                             PopupMenuItem(
@@ -636,11 +731,19 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   bool _useExtension = false;
   bool _extensionAvailable = false;
   bool _checkingExtension = true;
+  bool _hasExistingStation = false;
 
   @override
   void initState() {
     super.initState();
     _checkExtensionAvailability();
+    _checkExistingStation();
+  }
+
+  void _checkExistingStation() {
+    // Check if there's already a station profile - only one allowed per machine
+    final profiles = _profileService.getAllProfiles();
+    _hasExistingStation = profiles.any((p) => p.isRelay);
   }
 
   Future<void> _checkExtensionAvailability() async {
@@ -874,9 +977,11 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
     required Color color,
   }) {
     final isSelected = _selectedType == type && !_useExtension;
+    // Disable station option if one already exists
+    final isDisabled = _useExtension || (type == ProfileType.station && _hasExistingStation);
 
     return InkWell(
-      onTap: _useExtension
+      onTap: isDisabled
           ? null
           : () => setState(() => _selectedType = type),
       borderRadius: BorderRadius.circular(12),
@@ -886,7 +991,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           border: Border.all(
             color: isSelected
                 ? color
-                : _useExtension
+                : isDisabled
                     ? Colors.grey[200]!
                     : Colors.grey[300]!,
             width: isSelected ? 2 : 1,
@@ -894,7 +999,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           borderRadius: BorderRadius.circular(12),
           color: isSelected
               ? color.withOpacity(0.1)
-              : _useExtension
+              : isDisabled
                   ? Colors.grey[100]
                   : null,
         ),
@@ -903,7 +1008,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
             Icon(
               icon,
               size: 32,
-              color: _useExtension
+              color: isDisabled
                   ? Colors.grey[400]
                   : (isSelected ? color : Colors.grey[600]),
             ),
@@ -912,16 +1017,18 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
               title,
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: _useExtension ? Colors.grey[400] : (isSelected ? color : null),
+                color: isDisabled ? Colors.grey[400] : (isSelected ? color : null),
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              description,
+              type == ProfileType.station && _hasExistingStation
+                  ? _i18n.t('station_already_exists')
+                  : description,
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
-                color: _useExtension ? Colors.grey[400] : Colors.grey[600],
+                color: isDisabled ? Colors.grey[400] : Colors.grey[600],
               ),
             ),
           ],

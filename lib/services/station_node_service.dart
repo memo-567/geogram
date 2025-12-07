@@ -11,6 +11,8 @@ import 'package:path/path.dart' as path;
 import '../models/station_node.dart';
 import '../models/station_network.dart';
 import '../util/nostr_key_generator.dart';
+import '../cli/pure_station.dart';
+import '../cli/pure_storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
@@ -25,11 +27,17 @@ class StationNodeService {
   final ConfigService _configService = ConfigService();
   final ProfileService _profileService = ProfileService();
 
+  /// The actual station server (shared with CLI)
+  PureStationServer? _stationServer;
+
   StationNode? _stationNode;
   StationNetwork? _network;
   bool _initialized = false;
   DateTime? _startedAt;
   Timer? _statsTimer;
+
+  /// Get the underlying station server
+  PureStationServer? get stationServer => _stationServer;
 
   // Stream controllers for state changes
   final _stateController = StreamController<StationNode?>.broadcast();
@@ -71,6 +79,18 @@ class StationNodeService {
     final stationData = _configService.get('stationNode');
     if (stationData != null) {
       _stationNode = StationNode.fromJson(stationData as Map<String, dynamic>);
+
+      // Always reset status to stopped on load - server can't persist across restarts
+      if (_stationNode!.status == StationNodeStatus.running ||
+          _stationNode!.status == StationNodeStatus.starting) {
+        _stationNode = _stationNode!.copyWith(
+          status: StationNodeStatus.stopped,
+          errorMessage: null,
+        );
+        _saveRelayConfig();
+        LogService().log('Reset station status to stopped (server cannot persist across restarts)');
+      }
+
       LogService().log('Loaded station node: ${_stationNode!.name} (${_stationNode!.typeDisplay})');
     }
 
@@ -287,13 +307,79 @@ class StationNodeService {
     _stateController.add(_stationNode);
 
     try {
-      // TODO: Implement actual station server startup
-      // - Start WebSocket server for incoming connections
-      // - Start mDNS advertisement
-      // - Initialize collection caching
-      // - Connect to root (if node)
+      // Initialize PureStorageConfig if not already done
+      final pureStorageConfig = PureStorageConfig();
+      final guiStorageConfig = StorageConfig();
 
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate startup
+      LogService().log('GUI StorageConfig path: ${guiStorageConfig.stationConfigPath}');
+
+      if (!pureStorageConfig.isInitialized) {
+        // Use same base directory as GUI StorageConfig
+        await pureStorageConfig.init(customBaseDir: guiStorageConfig.baseDir);
+        LogService().log('PureStorageConfig initialized with GUI baseDir');
+      }
+
+      LogService().log('PureStorageConfig path: ${pureStorageConfig.stationConfigPath}');
+
+      // Load network settings from the file to get the correct port
+      final networkSettings = await loadNetworkSettings();
+      final savedHttpPort = networkSettings['httpPort'] as int;
+      LogService().log('Loaded httpPort from file: $savedHttpPort');
+
+      // Create and initialize the station server
+      _stationServer = PureStationServer();
+      await _stationServer!.initialize();
+
+      LogService().log('After initialize, server httpPort: ${_stationServer!.settings.httpPort}');
+
+      // IMPORTANT: Apply the saved network settings to ensure correct port is used
+      _stationServer!.settings.httpPort = savedHttpPort;
+      _stationServer!.settings.httpsPort = networkSettings['httpsPort'] as int;
+      _stationServer!.settings.enableSsl = networkSettings['enableSsl'] as bool;
+      _stationServer!.settings.maxConnectedDevices = networkSettings['maxConnectedDevices'] as int;
+      final sslDomain = networkSettings['sslDomain'];
+      if (sslDomain != null && sslDomain.toString().isNotEmpty) {
+        _stationServer!.settings.sslDomain = sslDomain.toString();
+      }
+      final sslEmail = networkSettings['sslEmail'];
+      if (sslEmail != null && sslEmail.toString().isNotEmpty) {
+        _stationServer!.settings.sslEmail = sslEmail.toString();
+      }
+      _stationServer!.settings.sslAutoRenew = networkSettings['sslAutoRenew'] as bool;
+
+      // Configure server settings from station node config
+      _stationServer!.settings.npub = _stationNode!.stationNpub;
+      _stationServer!.settings.nsec = _stationNode!.stationNsec ?? '';
+      _stationServer!.settings.name = _stationNode!.name;
+      _stationServer!.settings.description = _stationNode!.networkName;
+      _stationServer!.settings.stationRole = _stationNode!.isRoot ? 'root' : 'node';
+      _stationServer!.settings.networkId = _stationNode!.networkId;
+      if (_stationNode!.config.coverage != null) {
+        _stationServer!.settings.latitude = _stationNode!.config.coverage!.latitude;
+        _stationServer!.settings.longitude = _stationNode!.config.coverage!.longitude;
+      }
+      _stationServer!.settings.maxCacheSizeMB = _stationNode!.config.storage?.allocatedMb ?? 500;
+
+      // Save settings and start server
+      await _stationServer!.saveSettings();
+
+      // Final verification before starting
+      final portToUse = _stationServer!.settings.httpPort;
+      LogService().log('FINAL PORT CHECK: Server will start on port $portToUse');
+
+      final success = await _stationServer!.start();
+
+      LogService().log('Server start result: $success, port was: $portToUse');
+
+      if (!success) {
+        final port = _stationServer!.settings.httpPort;
+        throw Exception('Failed to start station server on port $port. The port may already be in use.');
+      }
+
+      // Double-check server is actually running
+      if (!_stationServer!.isRunning) {
+        throw Exception('Server started but is not running. Check logs for details.');
+      }
 
       _startedAt = DateTime.now();
       _stationNode = _stationNode!.copyWith(
@@ -310,8 +396,9 @@ class StationNodeService {
       _saveRelayConfig();
       _stateController.add(_stationNode);
 
-      LogService().log('Station started successfully');
+      LogService().log('Station started successfully on port ${_stationServer!.settings.httpPort}');
     } catch (e) {
+      _stationServer = null;
       _stationNode = _stationNode!.copyWith(
         status: StationNodeStatus.error,
         errorMessage: e.toString(),
@@ -338,15 +425,14 @@ class StationNodeService {
     _stateController.add(_stationNode);
 
     try {
-      // TODO: Implement actual station server shutdown
-      // - Close all connections
-      // - Stop WebSocket server
-      // - Stop mDNS advertisement
+      // Stop the actual station server
+      if (_stationServer != null) {
+        await _stationServer!.stop();
+        _stationServer = null;
+      }
 
       _statsTimer?.cancel();
       _statsTimer = null;
-
-      await Future.delayed(const Duration(milliseconds: 300)); // Simulate shutdown
 
       _stationNode = _stationNode!.copyWith(
         status: StationNodeStatus.stopped,
@@ -384,6 +470,105 @@ class StationNodeService {
     _stateController.add(_stationNode);
 
     LogService().log('Station config updated');
+  }
+
+  /// Update network settings (port, SSL, etc.) and save directly to file
+  /// This works even when the server is not running
+  Future<void> updateNetworkSettings({
+    int? httpPort,
+    int? httpsPort,
+    bool? enableSsl,
+    String? sslDomain,
+    String? sslEmail,
+    bool? sslAutoRenew,
+    int? maxConnections,
+  }) async {
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      throw Exception('Storage not initialized');
+    }
+
+    final configFile = File(storageConfig.stationConfigPath);
+    Map<String, dynamic> settings = {};
+
+    // Load existing settings if file exists
+    if (await configFile.exists()) {
+      try {
+        final content = await configFile.readAsString();
+        settings = jsonDecode(content) as Map<String, dynamic>;
+      } catch (e) {
+        LogService().log('Error loading existing settings: $e');
+      }
+    }
+
+    // Update only the provided values
+    if (httpPort != null) settings['httpPort'] = httpPort;
+    if (httpsPort != null) settings['httpsPort'] = httpsPort;
+    if (enableSsl != null) settings['enableSsl'] = enableSsl;
+    if (sslDomain != null) settings['sslDomain'] = sslDomain;
+    if (sslEmail != null) settings['sslEmail'] = sslEmail;
+    if (sslAutoRenew != null) settings['sslAutoRenew'] = sslAutoRenew;
+    if (maxConnections != null) settings['maxConnectedDevices'] = maxConnections;
+
+    // Save to file
+    await configFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(settings),
+    );
+
+    LogService().log('Network settings saved to file (httpPort: ${settings['httpPort']})');
+
+    // Also update server settings if server is running
+    if (_stationServer != null) {
+      if (httpPort != null) _stationServer!.settings.httpPort = httpPort;
+      if (httpsPort != null) _stationServer!.settings.httpsPort = httpsPort;
+      if (enableSsl != null) _stationServer!.settings.enableSsl = enableSsl;
+      if (sslDomain != null) _stationServer!.settings.sslDomain = sslDomain;
+      if (sslEmail != null) _stationServer!.settings.sslEmail = sslEmail;
+      if (sslAutoRenew != null) _stationServer!.settings.sslAutoRenew = sslAutoRenew;
+      if (maxConnections != null) _stationServer!.settings.maxConnectedDevices = maxConnections;
+    }
+  }
+
+  /// Load network settings from file (for displaying in UI)
+  Future<Map<String, dynamic>> loadNetworkSettings() async {
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      return _defaultNetworkSettings();
+    }
+
+    final configFile = File(storageConfig.stationConfigPath);
+    if (!await configFile.exists()) {
+      return _defaultNetworkSettings();
+    }
+
+    try {
+      final content = await configFile.readAsString();
+      final settings = jsonDecode(content) as Map<String, dynamic>;
+      return {
+        'httpPort': settings['httpPort'] ?? 8080,
+        'httpsPort': settings['httpsPort'] ?? 8443,
+        'enableSsl': settings['enableSsl'] ?? false,
+        'sslDomain': settings['sslDomain'] ?? '',
+        'sslEmail': settings['sslEmail'] ?? '',
+        'sslAutoRenew': settings['sslAutoRenew'] ?? true,
+        'maxConnectedDevices': settings['maxConnectedDevices'] ?? 100,
+      };
+    } catch (e) {
+      LogService().log('Error loading network settings: $e');
+      return _defaultNetworkSettings();
+    }
+  }
+
+  Map<String, dynamic> _defaultNetworkSettings() {
+    return {
+      'httpPort': 8080,
+      'httpsPort': 8443,
+      'enableSsl': false,
+      'sslDomain': '',
+      'sslEmail': '',
+      'sslAutoRenew': true,
+      'maxConnectedDevices': 100,
+    };
   }
 
   /// Delete station configuration and leave network
@@ -514,12 +699,13 @@ The station (${_stationNode!.stationCallsign}) is managed by operator ${_station
         ? DateTime.now().difference(_startedAt!)
         : Duration.zero;
 
-    // TODO: Get actual stats from station server
+    // Get actual stats from the station server
+    final serverStats = _stationServer?.stats;
     final stats = StationNodeStats(
-      connectedDevices: 0, // TODO: Get from server
-      messagesRelayed: 0, // TODO: Get from server
-      collectionsServed: 0, // TODO: Get from server
-      storageUsedMb: 0, // TODO: Calculate from disk
+      connectedDevices: _stationServer?.connectedDevices ?? 0,
+      messagesRelayed: serverStats?.totalMessages ?? 0,
+      collectionsServed: serverStats?.totalApiRequests ?? 0,
+      storageUsedMb: _stationNode!.config.storage?.allocatedMb ?? 0,
       lastActivity: DateTime.now(),
       uptime: uptime,
     );
@@ -539,8 +725,13 @@ The station (${_stationNode!.stationCallsign}) is managed by operator ${_station
   }
 
   /// Dispose resources
-  void dispose() {
+  Future<void> dispose() async {
     _statsTimer?.cancel();
+    // Stop the station server if running
+    if (_stationServer != null && _stationServer!.isRunning) {
+      await _stationServer!.stop();
+      _stationServer = null;
+    }
     _stateController.close();
   }
 }

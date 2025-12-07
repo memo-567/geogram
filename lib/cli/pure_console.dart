@@ -16,6 +16,7 @@ import 'game/game_parser.dart';
 import 'game/game_engine.dart';
 import 'game/game_screen.dart';
 import 'pure_storage_config.dart';
+import '../util/nostr_key_generator.dart';
 
 /// Completion candidate
 class Candidate {
@@ -3107,11 +3108,52 @@ class PureConsole {
     stdout.writeln('Creating \x1B[32mClient Profile\x1B[0m...');
     stdout.writeln();
 
-    // Generate keys and callsign
+    // Step 2: Identity - generate or import
     _printSection('STEP 2: CLIENT IDENTITY');
-    final keys = CliProfileService.generateKeys();
-    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.client);
-    stdout.writeln('Generated client callsign: \x1B[32m$callsign\x1B[0m');
+    stdout.writeln('How would you like to set up your identity?');
+    stdout.writeln('  \x1B[33m1)\x1B[0m Generate new keys (recommended for new users)');
+    stdout.writeln('  \x1B[33m2)\x1B[0m Import existing NSEC (for restoring an identity)');
+    stdout.writeln();
+
+    final identityChoice = await _promptChoice('Enter choice (1 or 2)', ['1', '2']);
+
+    late Map<String, String> keys;
+    late String callsign;
+
+    if (identityChoice == '2') {
+      // Import existing NSEC
+      stdout.writeln();
+      stdout.writeln('Enter your NSEC (starts with nsec1):');
+      while (true) {
+        final nsec = await _promptInput('NSEC: ');
+        if (nsec == null || nsec.isEmpty) {
+          stdout.writeln('\x1B[31mNSEC cannot be empty\x1B[0m');
+          continue;
+        }
+        if (!nsec.startsWith('nsec1')) {
+          stdout.writeln('\x1B[31mInvalid NSEC format. Must start with "nsec1"\x1B[0m');
+          continue;
+        }
+        // Validate and derive npub
+        final npub = NostrKeyGenerator.derivePublicKey(nsec);
+        if (npub == null) {
+          stdout.writeln('\x1B[31mInvalid NSEC. Could not derive public key.\x1B[0m');
+          continue;
+        }
+        keys = {'nsec': nsec, 'npub': npub};
+        callsign = CliProfileService.generateCallsign(npub, ProfileType.client);
+        stdout.writeln();
+        stdout.writeln('Imported identity:');
+        stdout.writeln('  npub: \x1B[90m$npub\x1B[0m');
+        stdout.writeln('  Callsign: \x1B[32m$callsign\x1B[0m');
+        break;
+      }
+    } else {
+      // Generate new keys
+      keys = CliProfileService.generateKeys();
+      callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.client);
+      stdout.writeln('Generated client callsign: \x1B[32m$callsign\x1B[0m');
+    }
     stdout.writeln();
 
     // Step 3: Client Info
@@ -3180,18 +3222,59 @@ class PureConsole {
   /// Setup wizard for station profile
   Future<void> _handleRelaySetup() async {
     stdout.writeln();
-    stdout.writeln('Creating \x1B[32mRelay Profile\x1B[0m...');
+    stdout.writeln('Creating \x1B[32mStation Profile\x1B[0m...');
     stdout.writeln();
 
-    // Generate keys and callsign
-    _printSection('STEP 2: RELAY IDENTITY');
-    final keys = CliProfileService.generateKeys();
-    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.station);
-    stdout.writeln('Generated station callsign: \x1B[32m$callsign\x1B[0m');
+    // Step 2: Identity - generate or import
+    _printSection('STEP 2: STATION IDENTITY');
+    stdout.writeln('How would you like to set up your station identity?');
+    stdout.writeln('  \x1B[33m1)\x1B[0m Generate new keys (recommended for new stations)');
+    stdout.writeln('  \x1B[33m2)\x1B[0m Import existing NSEC (for restoring a station)');
+    stdout.writeln();
+
+    final identityChoice = await _promptChoice('Enter choice (1 or 2)', ['1', '2']);
+
+    late Map<String, String> keys;
+    late String callsign;
+
+    if (identityChoice == '2') {
+      // Import existing NSEC
+      stdout.writeln();
+      stdout.writeln('Enter your NSEC (starts with nsec1):');
+      while (true) {
+        final nsec = await _promptInput('NSEC: ');
+        if (nsec == null || nsec.isEmpty) {
+          stdout.writeln('\x1B[31mNSEC cannot be empty\x1B[0m');
+          continue;
+        }
+        if (!nsec.startsWith('nsec1')) {
+          stdout.writeln('\x1B[31mInvalid NSEC format. Must start with "nsec1"\x1B[0m');
+          continue;
+        }
+        // Validate and derive npub
+        final npub = NostrKeyGenerator.derivePublicKey(nsec);
+        if (npub == null) {
+          stdout.writeln('\x1B[31mInvalid NSEC. Could not derive public key.\x1B[0m');
+          continue;
+        }
+        keys = {'nsec': nsec, 'npub': npub};
+        callsign = CliProfileService.generateCallsign(npub, ProfileType.station);
+        stdout.writeln();
+        stdout.writeln('Imported identity:');
+        stdout.writeln('  npub: \x1B[90m$npub\x1B[0m');
+        stdout.writeln('  Station Callsign: \x1B[32m$callsign\x1B[0m');
+        break;
+      }
+    } else {
+      // Generate new keys
+      keys = CliProfileService.generateKeys();
+      callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.station);
+      stdout.writeln('Generated station callsign: \x1B[32m$callsign\x1B[0m');
+    }
     stdout.writeln();
 
     // Step 3: Station Role
-    _printSection('STEP 3: RELAY NETWORK ROLE');
+    _printSection('STEP 3: STATION NETWORK ROLE');
     stdout.writeln('Select station role:');
     stdout.writeln('  \x1B[33m1)\x1B[0m Root Station - Primary station (accepts node connections)');
     stdout.writeln('  \x1B[33m2)\x1B[0m Node Station - Connects to an existing root station');

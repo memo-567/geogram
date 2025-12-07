@@ -4,7 +4,10 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/station_node.dart';
 import '../services/station_node_service.dart';
 import '../services/i18n_service.dart';
@@ -180,6 +183,11 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
           children: [
             _buildStatusCard(),
             SizedBox(height: 16),
+            // Show URLs card only when server is actually running
+            if (_stationNodeService.stationServer?.isRunning == true) ...[
+              _buildUrlsCard(),
+              SizedBox(height: 16),
+            ],
             Row(
               children: [
                 Expanded(child: _buildStatCard('Connected Devices', '${_stationNode!.stats.connectedDevices}', Icons.devices)),
@@ -200,8 +208,20 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
   }
 
   Widget _buildStatusCard() {
-    final isRunning = _stationNode!.isRunning;
+    // Check actual server state, not just node status
+    final server = _stationNodeService.stationServer;
+    final isActuallyRunning = server != null && server.isRunning;
+    final nodeThinkRunning = _stationNode!.isRunning;
+
+    // Use actual server state for display
+    final isRunning = isActuallyRunning;
     final statusColor = isRunning ? Colors.green : Colors.grey;
+
+    // If there's a mismatch, update the node status
+    if (nodeThinkRunning && !isActuallyRunning) {
+      // Node thinks it's running but server isn't - this is the bug
+      LogService().log('Station status mismatch: node thinks running but server is not');
+    }
 
     return Card(
       child: Padding(
@@ -221,7 +241,7 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
                 ),
                 SizedBox(width: 8),
                 Text(
-                  'RELAY STATUS: ${_stationNode!.statusDisplay.toUpperCase()}',
+                  'STATION STATUS: ${isRunning ? "RUNNING" : "STOPPED"}',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Spacer(),
@@ -234,7 +254,9 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
             SizedBox(height: 12),
             Text('Type: ${_stationNode!.typeDisplay}'),
             Text('Network: ${_stationNode!.networkName ?? "N/A"}'),
-            if (_stationNode!.isRunning)
+            if (isRunning && server != null)
+              Text('Port: ${server.settings.httpPort}'),
+            if (isRunning)
               Text('Uptime: ${_formatUptime(_stationNode!.stats.uptime)}'),
             if (_stationNode!.errorMessage != null)
               Padding(
@@ -246,6 +268,181 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildUrlsCard() {
+    final server = _stationNodeService.stationServer;
+    if (server == null) return SizedBox.shrink();
+
+    final httpPort = server.settings.httpPort;
+    final httpsPort = server.settings.httpsPort;
+    final enableSsl = server.settings.enableSsl;
+    final sslDomain = server.settings.sslDomain;
+
+    // Build list of available URLs
+    final urls = <Map<String, String>>[];
+
+    // Always add localhost HTTP
+    urls.add({
+      'label': 'Local (HTTP)',
+      'url': 'http://localhost:$httpPort',
+      'icon': 'local',
+    });
+
+    // Add local network IPs
+    _getLocalIpAddresses().then((ips) {
+      if (mounted && ips.isNotEmpty) {
+        setState(() {}); // Trigger rebuild with IPs
+      }
+    });
+
+    // If SSL is enabled and domain is configured
+    if (enableSsl && sslDomain != null && sslDomain.isNotEmpty) {
+      urls.add({
+        'label': 'Public (HTTPS)',
+        'url': 'https://$sslDomain:$httpsPort',
+        'icon': 'secure',
+      });
+    }
+
+    return Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.link, size: 20),
+                SizedBox(width: 8),
+                Text('STATION URLs', style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            SizedBox(height: 12),
+            ...urls.map((urlInfo) => _buildUrlRow(
+              urlInfo['label']!,
+              urlInfo['url']!,
+              urlInfo['icon'] == 'secure' ? Icons.lock : Icons.computer,
+            )),
+            // Show LAN IPs
+            FutureBuilder<List<String>>(
+              future: _getLocalIpAddresses(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return SizedBox.shrink();
+                }
+                return Column(
+                  children: snapshot.data!.map((ip) => _buildUrlRow(
+                    'LAN ($ip)',
+                    'http://$ip:$httpPort',
+                    Icons.wifi,
+                  )).toList(),
+                );
+              },
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Click to open in browser, or copy to share',
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUrlRow(String label, String url, IconData icon) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: Colors.grey[600]),
+          SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                InkWell(
+                  onTap: () => _openUrl(url),
+                  child: Text(
+                    url,
+                    style: TextStyle(
+                      color: Colors.blue,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.copy, size: 18),
+            onPressed: () => _copyToClipboard(url),
+            tooltip: 'Copy URL',
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+          IconButton(
+            icon: Icon(Icons.open_in_new, size: 18),
+            onPressed: () => _openUrl(url),
+            tooltip: 'Open in browser',
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<List<String>> _getLocalIpAddresses() async {
+    final ips = <String>[];
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (!addr.isLoopback && addr.address.startsWith('192.') ||
+              addr.address.startsWith('10.') ||
+              addr.address.startsWith('172.')) {
+            ips.add(addr.address);
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('Error getting local IPs: $e');
+    }
+    return ips;
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open URL')),
+        );
+      }
+    } catch (e) {
+      LogService().log('Error opening URL: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error opening URL: $e')),
+      );
+    }
+  }
+
+  void _copyToClipboard(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Copied to clipboard'),
+        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -467,17 +664,75 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
   }
 
   void _toggleRelay(bool enabled) async {
+    // Show loading indicator
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            ),
+            SizedBox(width: 12),
+            Text(enabled ? 'Starting station...' : 'Stopping station...'),
+          ],
+        ),
+        duration: Duration(seconds: 10),
+      ),
+    );
+
     try {
       if (enabled) {
         await _stationNodeService.start();
+
+        // Verify it actually started
+        final server = _stationNodeService.stationServer;
+        if (server == null || !server.isRunning) {
+          final networkSettings = await _stationNodeService.loadNetworkSettings();
+          final port = networkSettings['httpPort'] ?? 'unknown';
+          throw Exception('Server failed to start. Check if port $port is already in use.');
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Station started on port ${server.settings.httpPort}'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
       } else {
         await _stationNodeService.stop();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Station stopped'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+
+      // Force UI refresh
+      if (mounted) {
+        setState(() {});
       }
     } catch (e) {
       LogService().log('Error toggling station: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
 
