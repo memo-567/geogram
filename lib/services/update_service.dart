@@ -530,7 +530,7 @@ class UpdateService {
         // Rename partial file to final name
         await partialFile.rename(tempFilePath);
 
-        // Verify file size on Android to ensure complete download
+        // Verify file integrity on Android
         if (!kIsWeb && Platform.isAndroid) {
           final downloadedFile = File(tempFilePath);
           final actualSize = await downloadedFile.length();
@@ -542,6 +542,15 @@ class UpdateService {
             await downloadedFile.delete();
             throw Exception('Download incomplete: got $actualSize bytes, expected $totalSize');
           }
+
+          // Verify APK is a valid ZIP file (APKs are ZIP archives)
+          final isValidApk = await _verifyApkIntegrity(tempFilePath);
+          if (!isValidApk) {
+            LogService().log('WARNING: APK integrity check failed - file may be corrupted');
+            await downloadedFile.delete();
+            throw Exception('Downloaded APK is corrupted. Please try again.');
+          }
+          LogService().log('APK integrity verified successfully');
         }
 
         // Final progress update
@@ -603,6 +612,92 @@ class UpdateService {
     _isDownloading = false;
     _downloadProgress = 0.0;
     downloadProgress.value = 0.0;
+  }
+
+  /// Verify APK file integrity by checking ZIP structure
+  /// APK files are ZIP archives that must contain AndroidManifest.xml
+  Future<bool> _verifyApkIntegrity(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) return false;
+
+      // Read first 4 bytes to check ZIP magic number (PK\x03\x04)
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        final header = await raf.read(4);
+        if (header.length < 4) return false;
+
+        // Check ZIP magic number: 0x50 0x4B 0x03 0x04 (PK..)
+        if (header[0] != 0x50 || header[1] != 0x4B ||
+            header[2] != 0x03 || header[3] != 0x04) {
+          LogService().log('APK verification failed: Invalid ZIP header');
+          return false;
+        }
+
+        // Check end of central directory signature at the end of file
+        // This ensures the ZIP file is complete
+        final fileSize = await file.length();
+        if (fileSize < 22) return false; // Minimum ZIP size
+
+        // Read last 22 bytes (minimum end of central directory size)
+        await raf.setPosition(fileSize - 22);
+        final eocd = await raf.read(22);
+
+        // Check for end of central directory signature: 0x50 0x4B 0x05 0x06
+        if (eocd[0] != 0x50 || eocd[1] != 0x4B ||
+            eocd[2] != 0x05 || eocd[3] != 0x06) {
+          LogService().log('APK verification failed: Missing end of central directory');
+          return false;
+        }
+
+        LogService().log('APK ZIP structure verified');
+        return true;
+      } finally {
+        await raf.close();
+      }
+    } catch (e) {
+      LogService().log('APK verification error: $e');
+      return false;
+    }
+  }
+
+  /// Clear all downloads (partial and complete) for a fresh retry
+  Future<void> clearAllDownloads() async {
+    if (kIsWeb) return;
+
+    try {
+      // Clear from temp directory
+      final tempDir = await getTemporaryDirectory();
+      await _clearDownloadsInDir(tempDir);
+
+      // Also clear from external cache on Android
+      if (Platform.isAndroid) {
+        final externalCacheDirs = await getExternalCacheDirectories();
+        if (externalCacheDirs != null) {
+          for (final dir in externalCacheDirs) {
+            await _clearDownloadsInDir(dir);
+          }
+        }
+      }
+
+      LogService().log('All downloads cleared');
+    } catch (e) {
+      LogService().log('Error clearing downloads: $e');
+    }
+  }
+
+  Future<void> _clearDownloadsInDir(Directory dir) async {
+    await for (final entity in dir.list()) {
+      if (entity is File) {
+        final path = entity.path;
+        if (path.contains('geogram-update') &&
+            (path.endsWith('.apk') || path.endsWith('.partial') ||
+             path.endsWith('.exe'))) {
+          LogService().log('Deleting: $path');
+          await entity.delete();
+        }
+      }
+    }
   }
 
   /// Clear partial downloads

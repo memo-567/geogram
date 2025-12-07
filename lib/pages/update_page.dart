@@ -278,6 +278,39 @@ class _UpdatePageState extends State<UpdatePage> {
     }
   }
 
+  /// Clear download cache and retry the download
+  Future<void> _clearAndRetry() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+      _statusMessage = 'Clearing download cache...';
+    });
+
+    try {
+      await _updateService.clearAllDownloads();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Download cache cleared')),
+        );
+      }
+
+      // Now retry the download
+      if (_latestRelease != null) {
+        await _downloadAndInstall();
+      }
+    } catch (e) {
+      _error = e.toString();
+      _statusMessage = null;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final platform = _updateService.detectPlatform();
@@ -387,20 +420,36 @@ class _UpdatePageState extends State<UpdatePage> {
                   color: Theme.of(context).colorScheme.errorContainer,
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          Icons.error_outline,
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _error!,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onErrorContainer,
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              color: Theme.of(context).colorScheme.error,
                             ),
-                          ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _error!,
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.onErrorContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton.icon(
+                              onPressed: _isLoading ? null : _clearAndRetry,
+                              icon: const Icon(Icons.refresh, size: 18),
+                              label: const Text('Clear Cache & Retry'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
