@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# Pre-commit hook for geogram-desktop
+# Ensures lib/version.dart is in sync with pubspec.yaml
+#
+# To enable this hook, run:
+#   git config core.hooksPath .githooks
+#
+
+# Get the root of the git repository
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# Find dart executable (try flutter's dart first, then system dart)
+if [ -x "$HOME/flutter/bin/dart" ]; then
+    DART="$HOME/flutter/bin/dart"
+elif command -v dart &> /dev/null; then
+    DART="dart"
+else
+    echo "Error: dart not found. Please install Flutter or Dart SDK."
+    exit 1
+fi
+
+# Run the version sync script
+echo "Syncing version from pubspec.yaml..."
+"$DART" run "$REPO_ROOT/tool/update_version.dart"
+
+if [ $? -ne 0 ]; then
+    echo "Error: Version sync failed"
+    exit 1
+fi
+
+# Check if version.dart was modified
+if ! git diff --quiet "$REPO_ROOT/lib/version.dart" 2>/dev/null; then
+    echo "Adding updated lib/version.dart to commit..."
+    git add "$REPO_ROOT/lib/version.dart"
+fi
+
+exit 0
