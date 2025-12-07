@@ -1239,5 +1239,8 @@
   "not_sent_to_relay": "Not yet sent to relay",
   "alerts_uploaded": "{0} alert(s) uploaded successfully",
   "upload_failed": "Upload failed",
-  "failed": "failed"
+  "failed": "failed",
+  "my_alerts": "My Alerts",
+  "relay_alerts": "Nearby Alerts",
+  "no_relay_alerts": "No nearby alerts from relay"
 }

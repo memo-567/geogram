@@ -9,6 +9,7 @@ import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_sharing_service.dart';
+import '../services/relay_alert_service.dart';
 import '../services/log_service.dart';
 import 'report_detail_page.dart';
 import 'report_settings_page.dart';
@@ -31,16 +32,21 @@ class ReportBrowserPage extends StatefulWidget {
 class _ReportBrowserPageState extends State<ReportBrowserPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
+  final RelayAlertService _relayAlertService = RelayAlertService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Report> _allReports = [];
   List<Report> _filteredReports = [];
+  List<Report> _relayAlerts = []; // Alerts fetched from relay
   ReportSeverity? _filterSeverity;
   ReportStatus? _filterStatus;
   bool _isLoading = true;
   bool _isUploading = false;
+  bool _isLoadingRelayAlerts = false;
   int _sortMode = 0; // 0: date desc, 1: severity, 2: distance
+  double _radiusKm = 50.0; // Default 50km radius
+  String _lastFetchTime = 'Never';
 
   @override
   void initState() {
@@ -58,6 +64,15 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   Future<void> _initialize() async {
     await _reportService.initializeCollection(widget.collectionPath);
     await _loadReports();
+
+    // Load cached relay alerts and start polling
+    await _relayAlertService.loadCachedAlerts();
+    _relayAlerts = _relayAlertService.cachedAlerts;
+    _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
+    _relayAlertService.startPolling();
+
+    // Initial fetch of relay alerts
+    _loadRelayAlerts();
   }
 
   Future<void> _loadReports() async {
@@ -297,23 +312,28 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Search bar
+                // Radius slider - compact for mobile
+                _buildRadiusSlider(theme),
+
+                // Search bar - compact
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: TextField(
                     controller: _searchController,
                     decoration: InputDecoration(
                       hintText: _i18n.t('search_alerts'),
-                      prefixIcon: const Icon(Icons.search),
+                      prefixIcon: const Icon(Icons.search, size: 20),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
-                              icon: const Icon(Icons.clear),
+                              icon: const Icon(Icons.clear, size: 20),
                               onPressed: () {
                                 _searchController.clear();
                               },
                             )
                           : null,
                       border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      isDense: true,
                     ),
                   ),
                 ),
@@ -321,64 +341,39 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                 // Active filters display
                 if (_filterSeverity != null || _filterStatus != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     child: Wrap(
                       spacing: 8,
                       children: [
                         if (_filterSeverity != null)
                           Chip(
-                            label: Text(_filterSeverity!.name),
+                            label: Text(_filterSeverity!.name, style: const TextStyle(fontSize: 12)),
                             onDeleted: () {
                               setState(() {
                                 _filterSeverity = null;
                                 _filterReports();
                               });
                             },
+                            visualDensity: VisualDensity.compact,
                           ),
                         if (_filterStatus != null)
                           Chip(
-                            label: Text(_filterStatus!.name),
+                            label: Text(_filterStatus!.name, style: const TextStyle(fontSize: 12)),
                             onDeleted: () {
                               setState(() {
                                 _filterStatus = null;
                                 _filterReports();
                               });
                             },
+                            visualDensity: VisualDensity.compact,
                           ),
                       ],
                     ),
                   ),
 
-                // Reports list
+                // Alerts list with sections
                 Expanded(
-                  child: _filteredReports.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.report_outlined, size: 64, color: theme.colorScheme.primary),
-                              const SizedBox(height: 16),
-                              Text(
-                                _allReports.isEmpty ? _i18n.t('no_alerts_yet') : _i18n.t('no_matching_alerts'),
-                                style: theme.textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _allReports.isEmpty
-                                    ? _i18n.t('create_first_alert')
-                                    : _i18n.t('try_adjusting_filters'),
-                                style: theme.textTheme.bodyMedium,
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _filteredReports.length,
-                          itemBuilder: (context, index) {
-                            final report = _filteredReports[index];
-                            return _buildReportCard(report, theme);
-                          },
-                        ),
+                  child: _buildAlertsList(theme),
                 ),
               ],
             ),
@@ -390,82 +385,371 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     );
   }
 
-  Widget _buildReportCard(Report report, ThemeData theme) {
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: InkWell(
-        onTap: () => _openReport(report),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+  /// Build the radius slider widget
+  Widget _buildRadiusSlider(ThemeData theme) {
+    // Format radius display
+    String radiusText;
+    if (_radiusKm >= 500) {
+      radiusText = _i18n.t('radius_unlimited');
+    } else if (_radiusKm >= 100) {
+      radiusText = '${_radiusKm.round()} km';
+    } else if (_radiusKm >= 10) {
+      radiusText = '${_radiusKm.round()} km';
+    } else {
+      radiusText = '${_radiusKm.toStringAsFixed(1)} km';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+        border: Border(
+          bottom: BorderSide(color: theme.dividerColor, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.radar, size: 18, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Text(
+            _i18n.t('radius'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+              ),
+              child: Slider(
+                value: _radiusKm,
+                min: 1,
+                max: 500,
+                divisions: 49, // 1, 10, 20, ..., 500
+                onChanged: (value) {
+                  setState(() {
+                    // Snap to nice values
+                    if (value <= 10) {
+                      _radiusKm = value.roundToDouble();
+                    } else if (value <= 50) {
+                      _radiusKm = (value / 5).round() * 5.0;
+                    } else if (value <= 100) {
+                      _radiusKm = (value / 10).round() * 10.0;
+                    } else {
+                      _radiusKm = (value / 25).round() * 25.0;
+                    }
+                  });
+                },
+                onChangeEnd: (value) {
+                  // Could trigger filter update here
+                  _filterReports();
+                },
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 70,
+            child: Text(
+              radiusText,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
+              textAlign: TextAlign.end,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build the alerts list with sections
+  Widget _buildAlertsList(ThemeData theme) {
+    // Separate my alerts and relay alerts
+    final myAlerts = _filteredReports;
+    final relayAlerts = _relayAlerts;
+
+    if (myAlerts.isEmpty && relayAlerts.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.report_outlined, size: 64, color: theme.colorScheme.primary),
+            const SizedBox(height: 16),
+            Text(
+              _allReports.isEmpty ? _i18n.t('no_alerts_yet') : _i18n.t('no_matching_alerts'),
+              style: theme.textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _allReports.isEmpty
+                  ? _i18n.t('create_first_alert')
+                  : _i18n.t('try_adjusting_filters'),
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 80), // Space for FAB
+      children: [
+        // My Alerts section
+        if (myAlerts.isNotEmpty) ...[
+          _buildSectionHeader(
+            theme,
+            icon: Icons.person,
+            title: _i18n.t('my_alerts'),
+            count: myAlerts.length,
+          ),
+          ...myAlerts.map((report) => _buildReportCard(report, theme, isMyAlert: true)),
+        ],
+
+        // Relay Alerts section
+        _buildSectionHeader(
+          theme,
+          icon: Icons.cloud,
+          title: _i18n.t('relay_alerts'),
+          count: relayAlerts.length,
+          isLoading: _isLoadingRelayAlerts,
+          onRefresh: _loadRelayAlerts,
+          subtitle: _lastFetchTime,
+        ),
+        if (relayAlerts.isNotEmpty)
+          ...relayAlerts.map((report) => _buildReportCard(report, theme, isMyAlert: false))
+        else if (!_isLoadingRelayAlerts)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: Column(
                 children: [
-                  _buildSeverityBadge(report.severity),
-                  const SizedBox(width: 8),
-                  _buildStatusBadge(report.status),
-                  const SizedBox(width: 8),
-                  _buildRelayStatusBadge(report),
-                  const Spacer(),
+                  Icon(Icons.cloud_off, size: 32, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(height: 8),
                   Text(
-                    _formatDate(report.dateTime),
-                    style: theme.textTheme.bodySmall,
+                    _i18n.t('no_relay_alerts'),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Build section header
+  Widget _buildSectionHeader(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    required int count,
+    bool isLoading = false,
+    VoidCallback? onRefresh,
+    String? subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (subtitle != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 10,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const Spacer(),
+          if (isLoading)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else if (onRefresh != null)
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              onPressed: onRefresh,
+              visualDensity: VisualDensity.compact,
+              tooltip: _i18n.t('refresh'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Load alerts from relay
+  Future<void> _loadRelayAlerts() async {
+    if (_isLoadingRelayAlerts) return;
+
+    setState(() => _isLoadingRelayAlerts = true);
+
+    try {
+      // Get user's location for distance filtering
+      final profile = _profileService.getProfile();
+      final lat = profile.latitude;
+      final lon = profile.longitude;
+
+      // Fetch from relay with radius filter
+      final result = await _relayAlertService.fetchAlerts(
+        lat: lat != 0 ? lat : null,
+        lon: lon != 0 ? lon : null,
+        radiusKm: _radiusKm < 500 ? _radiusKm : null,
+      );
+
+      if (mounted) {
+        setState(() {
+          _relayAlerts = result.alerts;
+          _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
+        });
+      }
+    } catch (e) {
+      LogService().log('Error loading relay alerts: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingRelayAlerts = false);
+      }
+    }
+  }
+
+  Widget _buildReportCard(Report report, ThemeData theme, {bool isMyAlert = true}) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: InkWell(
+        onTap: () => _openReport(report),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // First row: badges and date
+              Row(
+                children: [
+                  _buildSeverityBadge(report.severity),
+                  const SizedBox(width: 6),
+                  _buildStatusBadge(report.status),
+                  if (isMyAlert) ...[
+                    const SizedBox(width: 6),
+                    _buildRelayStatusBadge(report),
+                  ],
+                  const Spacer(),
+                  Text(
+                    _formatDate(report.dateTime),
+                    style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // Title
               Text(
                 report.getTitle('EN'),
-                style: theme.textTheme.titleMedium?.copyWith(
+                style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
+              // Type tag
               Text(
                 report.type,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.primary,
+                  fontSize: 11,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
+              // Description (shorter for mobile)
               Text(
                 report.getDescription('EN'),
-                style: theme.textTheme.bodyMedium,
-                maxLines: 3,
+                style: theme.textTheme.bodySmall,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
+              // Location and stats row
               Row(
                 children: [
-                  Icon(Icons.location_on, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  Icon(Icons.location_on, size: 14, color: theme.colorScheme.onSurfaceVariant),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      report.address ?? '${report.latitude.toStringAsFixed(4)}, ${report.longitude.toStringAsFixed(4)}',
-                      style: theme.textTheme.bodySmall,
+                      report.address ?? '${report.latitude.toStringAsFixed(3)}, ${report.longitude.toStringAsFixed(3)}',
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   if (report.verificationCount > 0) ...[
-                    const SizedBox(width: 16),
-                    Icon(Icons.verified, size: 16, color: Colors.green),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 8),
+                    Icon(Icons.verified, size: 14, color: Colors.green),
+                    const SizedBox(width: 2),
                     Text(
                       '${report.verificationCount}',
-                      style: theme.textTheme.bodySmall,
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
                     ),
                   ],
                   if (report.subscriberCount > 0) ...[
-                    const SizedBox(width: 16),
-                    Icon(Icons.people, size: 16, color: theme.colorScheme.onSurfaceVariant),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 8),
+                    Icon(Icons.people, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 2),
                     Text(
                       '${report.subscriberCount}',
-                      style: theme.textTheme.bodySmall,
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                    ),
+                  ],
+                  // Show author for relay alerts
+                  if (!isMyAlert && report.author.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Icon(Icons.person, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 2),
+                    Text(
+                      report.author,
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
                     ),
                   ],
                 ],

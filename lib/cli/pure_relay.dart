@@ -1682,8 +1682,10 @@ class PureRelayServer {
         await _handleTileRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
-      } else if (path == '/alerts' || path == '/api/alerts') {
+      } else if (path == '/alerts') {
         await _handleAlertsPage(request);
+      } else if (path == '/api/alerts' || path == '/api/alerts/list') {
+        await _handleAlertsApi(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else if (_isBlogPath(path)) {
@@ -2207,8 +2209,178 @@ class PureRelayServer {
     }
   }
 
+  /// Handle GET /api/alerts - JSON API for fetching alerts
+  /// Query parameters:
+  ///   - since: Unix timestamp (seconds) - only return alerts updated after this time
+  ///   - lat: latitude for distance filtering
+  ///   - lon: longitude for distance filtering
+  ///   - radius: radius in km for distance filtering (default: unlimited)
+  ///   - status: filter by status (open, in-progress, resolved, closed)
+  Future<void> _handleAlertsApi(HttpRequest request) async {
+    try {
+      final params = request.uri.queryParameters;
+
+      // Parse query parameters
+      final sinceTimestamp = params['since'] != null
+          ? int.tryParse(params['since']!)
+          : null;
+      final lat = params['lat'] != null
+          ? double.tryParse(params['lat']!)
+          : null;
+      final lon = params['lon'] != null
+          ? double.tryParse(params['lon']!)
+          : null;
+      final radiusKm = params['radius'] != null
+          ? double.tryParse(params['radius']!)
+          : null;
+      final statusFilter = params['status'];
+
+      // Load all alerts
+      var alerts = await _loadAllAlerts(includeAllStatuses: statusFilter != null);
+
+      // Filter by status if specified
+      if (statusFilter != null) {
+        alerts = alerts.where((a) => a['status'] == statusFilter).toList();
+      }
+
+      // Filter by since timestamp (compare with created time)
+      if (sinceTimestamp != null) {
+        final sinceDate = DateTime.fromMillisecondsSinceEpoch(sinceTimestamp * 1000);
+        alerts = alerts.where((alert) {
+          final createdStr = alert['created'] as String?;
+          if (createdStr == null || createdStr.isEmpty) return true;
+          try {
+            // Parse format: YYYY-MM-DD HH:MM_ss
+            final created = _parseAlertDateTime(createdStr);
+            return created.isAfter(sinceDate);
+          } catch (_) {
+            return true; // Include if can't parse date
+          }
+        }).toList();
+      }
+
+      // Filter by distance if location provided
+      if (lat != null && lon != null && radiusKm != null && radiusKm > 0) {
+        alerts = alerts.where((alert) {
+          final alertLat = alert['latitude'] as double?;
+          final alertLon = alert['longitude'] as double?;
+          if (alertLat == null || alertLon == null) return false;
+          if (alertLat == 0.0 && alertLon == 0.0) return false;
+
+          final distance = _calculateDistanceKm(lat, lon, alertLat, alertLon);
+          return distance <= radiusKm;
+        }).toList();
+      }
+
+      // Build response
+      final response = {
+        'success': true,
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'relay': {
+          'name': _settings.name ?? 'Geogram Relay',
+          'callsign': _settings.callsign,
+          'npub': _settings.npub,
+        },
+        'filters': {
+          if (sinceTimestamp != null) 'since': sinceTimestamp,
+          if (lat != null) 'lat': lat,
+          if (lon != null) 'lon': lon,
+          if (radiusKm != null) 'radius_km': radiusKm,
+          if (statusFilter != null) 'status': statusFilter,
+        },
+        'count': alerts.length,
+        'alerts': alerts,
+      };
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(response));
+    } catch (e) {
+      _log('ERROR', 'Error in alerts API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }));
+    }
+  }
+
+  /// Parse alert datetime from format "YYYY-MM-DD HH:MM_ss"
+  DateTime _parseAlertDateTime(String dateStr) {
+    // Format: "2025-12-07 10:30_45" -> DateTime
+    final parts = dateStr.split(' ');
+    if (parts.length < 2) {
+      return DateTime.parse(parts[0]); // Just date
+    }
+
+    final datePart = parts[0];
+    final timePart = parts[1].replaceAll('_', ':'); // Convert HH:MM_ss to HH:MM:ss
+
+    return DateTime.parse('${datePart}T$timePart');
+  }
+
+  /// Calculate distance between two coordinates in km (Haversine formula)
+  double _calculateDistanceKm(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadiusKm = 6371.0;
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a = _sin(dLat / 2) * _sin(dLat / 2) +
+        _cos(_toRadians(lat1)) * _cos(_toRadians(lat2)) *
+        _sin(dLon / 2) * _sin(dLon / 2);
+
+    final c = 2 * _atan2(_sqrt(a), _sqrt(1 - a));
+    return earthRadiusKm * c;
+  }
+
+  double _toRadians(double degrees) => degrees * 3.141592653589793 / 180.0;
+  double _sin(double x) => _taylor_sin(x);
+  double _cos(double x) => _taylor_sin(x + 1.5707963267948966);
+  double _sqrt(double x) {
+    if (x <= 0) return 0;
+    double guess = x / 2;
+    for (int i = 0; i < 20; i++) {
+      guess = (guess + x / guess) / 2;
+    }
+    return guess;
+  }
+  double _atan2(double y, double x) {
+    if (x > 0) return _atan(y / x);
+    if (x < 0 && y >= 0) return _atan(y / x) + 3.141592653589793;
+    if (x < 0 && y < 0) return _atan(y / x) - 3.141592653589793;
+    if (x == 0 && y > 0) return 1.5707963267948966;
+    if (x == 0 && y < 0) return -1.5707963267948966;
+    return 0;
+  }
+  double _atan(double x) {
+    if (x.abs() > 1) {
+      return (x > 0 ? 1 : -1) * 1.5707963267948966 - _atan(1 / x);
+    }
+    double result = 0;
+    double term = x;
+    for (int n = 0; n < 50; n++) {
+      result += term / (2 * n + 1);
+      term *= -x * x;
+    }
+    return result;
+  }
+  double _taylor_sin(double x) {
+    // Normalize to [-pi, pi]
+    while (x > 3.141592653589793) x -= 6.283185307179586;
+    while (x < -3.141592653589793) x += 6.283185307179586;
+    double result = 0;
+    double term = x;
+    for (int n = 0; n < 20; n++) {
+      result += term;
+      term *= -x * x / ((2 * n + 2) * (2 * n + 3));
+    }
+    return result;
+  }
+
   /// Load all alerts from all devices
-  Future<List<Map<String, dynamic>>> _loadAllAlerts() async {
+  /// If includeAllStatuses is true, returns all alerts regardless of status
+  Future<List<Map<String, dynamic>>> _loadAllAlerts({bool includeAllStatuses = false}) async {
     final alerts = <Map<String, dynamic>>[];
     final devicesDir = Directory(PureStorageConfig().devicesDir);
 
@@ -2236,8 +2408,10 @@ class PureRelayServer {
           final content = await reportFile.readAsString();
           final alert = _parseAlertContent(content, callsign, alertEntity.path.split('/').last);
 
-          // Only include open/in-progress alerts
-          if (alert['status'] == 'open' || alert['status'] == 'in-progress') {
+          // Include based on status filter
+          if (includeAllStatuses ||
+              alert['status'] == 'open' ||
+              alert['status'] == 'in-progress') {
             alerts.add(alert);
           }
         } catch (e) {

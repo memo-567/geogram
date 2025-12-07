@@ -1233,5 +1233,8 @@
   "not_sent_to_relay": "Ainda não enviado para o relay",
   "alerts_uploaded": "{0} alerta(s) enviado(s) com sucesso",
   "upload_failed": "Falha no envio",
-  "failed": "falhou"
+  "failed": "falhou",
+  "my_alerts": "Meus Alertas",
+  "relay_alerts": "Alertas Próximos",
+  "no_relay_alerts": "Sem alertas próximos do relay"
 }

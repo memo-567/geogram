@@ -74,6 +74,22 @@ run_alert_tests() {
     $DART bin/alert_sharing_test.dart
 }
 
+run_alert_api_tests() {
+    echo "========================================"
+    echo "Running Alert API Filter Tests"
+    echo "========================================"
+    echo "This test will:"
+    echo "  - Start a relay server on port 45692"
+    echo "  - Create alerts at different locations (Lisbon, Sintra, Porto)"
+    echo "  - Test radius-based filtering (20km, 50km, 500km)"
+    echo "  - Test timestamp-based filtering (since parameter)"
+    echo "  - Test status filtering (open, resolved)"
+    echo "  - Verify distance calculation accuracy"
+    echo "  - Test combined filters"
+    echo ""
+    $DART bin/alert_api_test.dart
+}
+
 run_flutter_tests() {
     echo "========================================"
     echo "Running Flutter Widget Tests"
@@ -104,6 +120,9 @@ case "${1:-relay}" in
     alerts)
         run_alert_tests
         ;;
+    alert-api|alertapi)
+        run_alert_api_tests
+        ;;
     flutter|widget)
         run_flutter_tests
         ;;
@@ -113,17 +132,20 @@ case "${1:-relay}" in
         run_tile_tests
         echo ""
         run_alert_tests
+        echo ""
+        run_alert_api_tests
         ;;
     help|--help|-h)
         echo "Usage: $0 [command]"
         echo ""
         echo "Commands:"
-        echo "  relay    Run relay API tests (standalone) [default]"
-        echo "  tiles    Run tile server tests (standalone, tests caching)"
-        echo "  alerts   Run alert sharing tests (NOSTR events, storage)"
-        echo "  flutter  Run Flutter widget tests (placeholder)"
-        echo "  all      Run relay + tile + alert tests"
-        echo "  help     Show this help message"
+        echo "  relay      Run relay API tests (standalone) [default]"
+        echo "  tiles      Run tile server tests (standalone, tests caching)"
+        echo "  alerts     Run alert sharing tests (NOSTR events, storage)"
+        echo "  alert-api  Run alert API filter tests (radius, timestamp, status)"
+        echo "  flutter    Run Flutter widget tests (placeholder)"
+        echo "  all        Run relay + tile + alert + alert-api tests"
+        echo "  help       Show this help message"
         echo ""
         echo "Alert tests verify:"
         echo "  - NOSTR event creation and signing"
@@ -131,6 +153,13 @@ case "${1:-relay}" in
         echo "  - Alert event verification (BIP-340 Schnorr)"
         echo "  - Alert storage on relay disk"
         echo "  - EventBus notification to subscribers"
+        echo ""
+        echo "Alert API tests verify:"
+        echo "  - /api/alerts endpoint functionality"
+        echo "  - Radius-based filtering (distance calculation)"
+        echo "  - Timestamp filtering (since parameter)"
+        echo "  - Status filtering (open, resolved, etc.)"
+        echo "  - Combined filter support"
         echo ""
         ;;
     *)

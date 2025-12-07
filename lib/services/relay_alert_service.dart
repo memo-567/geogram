@@ -1,0 +1,435 @@
+/*
+ * Copyright (c) geogram
+ * License: Apache-2.0
+ *
+ * Service for fetching alerts from relay and caching them locally.
+ * Polls every 5 minutes and stores alerts in ./devices/{callsign}/alerts/
+ */
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+import '../models/report.dart';
+import 'log_service.dart';
+import 'relay_service.dart';
+import 'config_service.dart';
+import 'storage_config.dart';
+
+/// Result of fetching alerts from relay
+class RelayAlertFetchResult {
+  final bool success;
+  final List<Report> alerts;
+  final int timestamp;
+  final String? error;
+  final String? relayName;
+  final String? relayCallsign;
+
+  RelayAlertFetchResult({
+    required this.success,
+    required this.alerts,
+    required this.timestamp,
+    this.error,
+    this.relayName,
+    this.relayCallsign,
+  });
+}
+
+/// Service for fetching and caching alerts from relay
+class RelayAlertService {
+  static final RelayAlertService _instance = RelayAlertService._internal();
+  factory RelayAlertService() => _instance;
+  RelayAlertService._internal();
+
+  final RelayService _relayService = RelayService();
+  final ConfigService _configService = ConfigService();
+
+  Timer? _pollTimer;
+  int _lastFetchTimestamp = 0;
+  List<Report> _cachedAlerts = [];
+  bool _isPolling = false;
+
+  /// Duration between polls (5 minutes)
+  static const Duration pollInterval = Duration(minutes: 5);
+
+  /// Get the last fetch timestamp
+  int get lastFetchTimestamp => _lastFetchTimestamp;
+
+  /// Get cached alerts
+  List<Report> get cachedAlerts => List.unmodifiable(_cachedAlerts);
+
+  /// Start polling for alerts
+  void startPolling() {
+    if (_isPolling) return;
+    _isPolling = true;
+
+    LogService().log('RelayAlertService: Starting polling every ${pollInterval.inMinutes} minutes');
+
+    // Fetch immediately, then poll
+    fetchAlerts();
+
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(pollInterval, (_) {
+      fetchAlerts();
+    });
+  }
+
+  /// Stop polling
+  void stopPolling() {
+    _isPolling = false;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    LogService().log('RelayAlertService: Stopped polling');
+  }
+
+  /// Fetch alerts from the relay
+  ///
+  /// Parameters:
+  /// - lat: User's latitude for distance filtering
+  /// - lon: User's longitude for distance filtering
+  /// - radiusKm: Maximum distance in km (null for unlimited)
+  /// - useSince: If true, only fetch alerts newer than last fetch
+  Future<RelayAlertFetchResult> fetchAlerts({
+    double? lat,
+    double? lon,
+    double? radiusKm,
+    bool useSince = true,
+  }) async {
+    try {
+      final relay = _relayService.getPreferredRelay();
+      if (relay == null || relay.url.isEmpty) {
+        LogService().log('RelayAlertService: No preferred relay configured');
+        return RelayAlertFetchResult(
+          success: false,
+          alerts: [],
+          timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          error: 'No relay configured',
+        );
+      }
+
+      // Build URL - convert wss:// to https://
+      var baseUrl = relay.url;
+      if (baseUrl.startsWith('wss://')) {
+        baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+      } else if (baseUrl.startsWith('ws://')) {
+        baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+      }
+
+      // Build query parameters
+      final queryParams = <String, String>{};
+
+      if (useSince && _lastFetchTimestamp > 0) {
+        queryParams['since'] = _lastFetchTimestamp.toString();
+      }
+
+      if (lat != null) queryParams['lat'] = lat.toString();
+      if (lon != null) queryParams['lon'] = lon.toString();
+      if (radiusKm != null && radiusKm < 500) {
+        queryParams['radius'] = radiusKm.toString();
+      }
+
+      final uri = Uri.parse('$baseUrl/api/alerts').replace(queryParameters: queryParams);
+
+      LogService().log('RelayAlertService: Fetching from $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        LogService().log('RelayAlertService: HTTP ${response.statusCode}');
+        return RelayAlertFetchResult(
+          success: false,
+          alerts: _cachedAlerts,
+          timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          error: 'HTTP ${response.statusCode}',
+        );
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (json['success'] != true) {
+        final error = json['error'] as String? ?? 'Unknown error';
+        LogService().log('RelayAlertService: API error: $error');
+        return RelayAlertFetchResult(
+          success: false,
+          alerts: _cachedAlerts,
+          timestamp: json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          error: error,
+        );
+      }
+
+      // Parse alerts
+      final alertsJson = json['alerts'] as List<dynamic>? ?? [];
+      final newAlerts = <Report>[];
+
+      for (final alertData in alertsJson) {
+        try {
+          final report = _parseAlertFromJson(alertData as Map<String, dynamic>);
+          if (report != null) {
+            newAlerts.add(report);
+          }
+        } catch (e) {
+          LogService().log('RelayAlertService: Error parsing alert: $e');
+        }
+      }
+
+      // Update cache
+      final serverTimestamp = json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      _lastFetchTimestamp = serverTimestamp;
+
+      // Merge new alerts with existing cache (avoid duplicates)
+      _mergeAlerts(newAlerts);
+
+      // Store alerts locally
+      await _storeAlertsLocally(newAlerts);
+
+      // Save last fetch timestamp
+      _saveLastFetchTimestamp();
+
+      final relayInfo = json['relay'] as Map<String, dynamic>?;
+
+      LogService().log('RelayAlertService: Fetched ${newAlerts.length} alerts, cache now has ${_cachedAlerts.length}');
+
+      return RelayAlertFetchResult(
+        success: true,
+        alerts: _cachedAlerts,
+        timestamp: serverTimestamp,
+        relayName: relayInfo?['name'] as String?,
+        relayCallsign: relayInfo?['callsign'] as String?,
+      );
+    } catch (e) {
+      LogService().log('RelayAlertService: Fetch error: $e');
+      return RelayAlertFetchResult(
+        success: false,
+        alerts: _cachedAlerts,
+        timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        error: e.toString(),
+      );
+    }
+  }
+
+  /// Parse a single alert from JSON
+  Report? _parseAlertFromJson(Map<String, dynamic> json) {
+    try {
+      final folderName = json['folderName'] as String? ?? '';
+      final callsign = json['callsign'] as String? ?? '';
+
+      if (folderName.isEmpty) return null;
+
+      // Parse severity
+      ReportSeverity severity;
+      switch ((json['severity'] as String? ?? 'info').toLowerCase()) {
+        case 'emergency':
+          severity = ReportSeverity.emergency;
+          break;
+        case 'urgent':
+          severity = ReportSeverity.urgent;
+          break;
+        case 'attention':
+          severity = ReportSeverity.attention;
+          break;
+        default:
+          severity = ReportSeverity.info;
+      }
+
+      // Parse status
+      ReportStatus status;
+      switch ((json['status'] as String? ?? 'open').toLowerCase()) {
+        case 'in-progress':
+          status = ReportStatus.inProgress;
+          break;
+        case 'resolved':
+          status = ReportStatus.resolved;
+          break;
+        case 'closed':
+          status = ReportStatus.closed;
+          break;
+        default:
+          status = ReportStatus.open;
+      }
+
+      // Parse created string - format: "YYYY-MM-DD HH:MM_ss"
+      String created;
+      final createdStr = json['created'] as String? ?? '';
+      if (createdStr.isNotEmpty) {
+        created = createdStr;
+      } else {
+        // Generate created timestamp in expected format
+        final now = DateTime.now();
+        final seconds = now.second.toString().padLeft(2, '0');
+        created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_$seconds';
+      }
+
+      return Report(
+        folderName: folderName,
+        titles: {'EN': json['title'] as String? ?? folderName},
+        descriptions: {'EN': json['description'] as String? ?? ''},
+        latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
+        longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+        type: json['type'] as String? ?? 'other',
+        severity: severity,
+        status: status,
+        created: created,
+        author: json['author'] as String? ?? callsign,
+        address: json['address'] as String?,
+        metadata: {
+          'relay_callsign': callsign,
+          'from_relay': 'true',
+        },
+      );
+    } catch (e) {
+      LogService().log('RelayAlertService: Parse error: $e');
+      return null;
+    }
+  }
+
+  /// Merge new alerts into cache, avoiding duplicates
+  void _mergeAlerts(List<Report> newAlerts) {
+    final existingFolders = _cachedAlerts.map((a) => a.folderName).toSet();
+
+    for (final alert in newAlerts) {
+      if (!existingFolders.contains(alert.folderName)) {
+        _cachedAlerts.add(alert);
+        existingFolders.add(alert.folderName);
+      } else {
+        // Update existing alert
+        final index = _cachedAlerts.indexWhere((a) => a.folderName == alert.folderName);
+        if (index >= 0) {
+          _cachedAlerts[index] = alert;
+        }
+      }
+    }
+
+    // Sort by date (newest first)
+    _cachedAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+  }
+
+  /// Store alerts locally in devices/{callsign}/alerts/
+  Future<void> _storeAlertsLocally(List<Report> alerts) async {
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) return;
+
+    final devicesDir = storageConfig.devicesDir;
+
+    for (final alert in alerts) {
+      try {
+        final callsign = alert.metadata['relay_callsign'] ?? 'unknown';
+        final alertDir = Directory('$devicesDir/$callsign/alerts/${alert.folderName}');
+
+        if (!await alertDir.exists()) {
+          await alertDir.create(recursive: true);
+        }
+
+        // Write report.txt
+        final reportFile = File('${alertDir.path}/report.txt');
+        await reportFile.writeAsString(alert.exportAsText());
+
+        LogService().log('RelayAlertService: Stored alert ${alert.folderName}');
+      } catch (e) {
+        LogService().log('RelayAlertService: Error storing alert ${alert.folderName}: $e');
+      }
+    }
+  }
+
+  /// Load cached alerts from disk
+  Future<void> loadCachedAlerts() async {
+    try {
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) return;
+
+      final devicesDir = Directory(storageConfig.devicesDir);
+
+      if (!await devicesDir.exists()) return;
+
+      _cachedAlerts.clear();
+
+      await for (final deviceEntity in devicesDir.list()) {
+        if (deviceEntity is! Directory) continue;
+
+        final callsign = deviceEntity.path.split('/').last;
+        // Skip our own callsign
+        // TODO: Get current user's callsign and skip it
+
+        final alertsDir = Directory('${deviceEntity.path}/alerts');
+        if (!await alertsDir.exists()) continue;
+
+        await for (final alertEntity in alertsDir.list()) {
+          if (alertEntity is! Directory) continue;
+
+          final reportFile = File('${alertEntity.path}/report.txt');
+          if (!await reportFile.exists()) continue;
+
+          try {
+            final content = await reportFile.readAsString();
+            final report = Report.fromText(content, alertEntity.path.split('/').last);
+
+            // Mark as from relay
+            final metadata = Map<String, String>.from(report.metadata);
+            metadata['relay_callsign'] = callsign;
+            metadata['from_relay'] = 'true';
+
+            _cachedAlerts.add(report.copyWith(metadata: metadata));
+          } catch (e) {
+            LogService().log('RelayAlertService: Error loading alert: $e');
+          }
+        }
+      }
+
+      // Sort by date (newest first)
+      _cachedAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+      // Load last fetch timestamp
+      _loadLastFetchTimestamp();
+
+      LogService().log('RelayAlertService: Loaded ${_cachedAlerts.length} cached alerts');
+    } catch (e) {
+      LogService().log('RelayAlertService: Error loading cached alerts: $e');
+    }
+  }
+
+  /// Save last fetch timestamp to config
+  void _saveLastFetchTimestamp() {
+    try {
+      _configService.set('relay_alerts_last_fetch', _lastFetchTimestamp.toString());
+    } catch (e) {
+      LogService().log('RelayAlertService: Error saving timestamp: $e');
+    }
+  }
+
+  /// Load last fetch timestamp from config
+  void _loadLastFetchTimestamp() {
+    try {
+      final value = _configService.get('relay_alerts_last_fetch');
+      if (value != null && value is String) {
+        _lastFetchTimestamp = int.tryParse(value) ?? 0;
+      }
+    } catch (e) {
+      LogService().log('RelayAlertService: Error loading timestamp: $e');
+    }
+  }
+
+  /// Clear cached alerts
+  void clearCache() {
+    _cachedAlerts.clear();
+    _lastFetchTimestamp = 0;
+    _saveLastFetchTimestamp();
+    LogService().log('RelayAlertService: Cache cleared');
+  }
+
+  /// Get time since last fetch as human-readable string
+  String getTimeSinceLastFetch() {
+    if (_lastFetchTimestamp == 0) return 'Never';
+
+    final lastFetch = DateTime.fromMillisecondsSinceEpoch(_lastFetchTimestamp * 1000);
+    final diff = DateTime.now().difference(lastFetch);
+
+    if (diff.inSeconds < 60) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+}
