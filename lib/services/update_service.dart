@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -404,7 +403,19 @@ class UpdateService {
     try {
       LogService().log('Downloading update from: $downloadUrl');
 
-      final tempDir = await getTemporaryDirectory();
+      // On Android, use external cache directory for better FileProvider compatibility
+      final Directory tempDir;
+      if (!kIsWeb && Platform.isAndroid) {
+        final externalCacheDirs = await getExternalCacheDirectories();
+        if (externalCacheDirs != null && externalCacheDirs.isNotEmpty) {
+          tempDir = externalCacheDirs.first;
+        } else {
+          tempDir = await getTemporaryDirectory();
+        }
+      } else {
+        tempDir = await getTemporaryDirectory();
+      }
+      LogService().log('Download directory: ${tempDir.path}');
       final platform = detectPlatform();
       final extension = platform == UpdatePlatform.windows
           ? '.exe'
@@ -414,7 +425,6 @@ class UpdateService {
       final tempFilePath =
           '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
       final partialFilePath = '$tempFilePath.partial';
-      final tempFile = File(tempFilePath);
       final partialFile = File(partialFilePath);
 
       // Check for existing partial download
@@ -519,6 +529,20 @@ class UpdateService {
 
         // Rename partial file to final name
         await partialFile.rename(tempFilePath);
+
+        // Verify file size on Android to ensure complete download
+        if (!kIsWeb && Platform.isAndroid) {
+          final downloadedFile = File(tempFilePath);
+          final actualSize = await downloadedFile.length();
+          LogService().log('APK file size: $actualSize bytes (expected: $totalSize)');
+
+          if (totalSize > 0 && actualSize < totalSize * 0.95) {
+            // File is more than 5% smaller than expected - likely corrupted
+            LogService().log('WARNING: Downloaded file appears incomplete!');
+            await downloadedFile.delete();
+            throw Exception('Download incomplete: got $actualSize bytes, expected $totalSize');
+          }
+        }
 
         // Final progress update
         _downloadProgress = 1.0;

@@ -6,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/update_settings.dart';
 import '../services/update_service.dart';
-import '../version.dart';
 
 class UpdatePage extends StatefulWidget {
   const UpdatePage({super.key});
@@ -139,7 +138,9 @@ class _UpdatePageState extends State<UpdatePage> {
         if (success) {
           final platform = _updateService.detectPlatform();
           if (platform == UpdatePlatform.android) {
-            _statusMessage = 'APK installer launched. Follow the prompts to complete installation.';
+            _statusMessage = 'APK installer launched. Follow the prompts to complete installation.\n\n'
+                'Note: If you see "Problem parsing the package", you may need to uninstall the current app first '
+                '(this happens when switching from debug to release builds due to different signing keys).';
           } else {
             _statusMessage = 'Update installed! Please restart the application.';
             _backups = await _updateService.listBackups();
@@ -147,7 +148,9 @@ class _UpdatePageState extends State<UpdatePage> {
         } else {
           // On Android, this might mean the permission was revoked during download
           if (!kIsWeb && Platform.isAndroid) {
-            _error = 'Could not install update. Please check that "Install unknown apps" is enabled for Geogram in Settings.';
+            _error = 'Could not install update. Please check that "Install unknown apps" is enabled for Geogram in Settings.\n\n'
+                'If installation fails with "Problem parsing the package", try uninstalling the app first '
+                '(required when switching from debug to release builds).';
           } else {
             _error = 'Failed to apply update';
           }

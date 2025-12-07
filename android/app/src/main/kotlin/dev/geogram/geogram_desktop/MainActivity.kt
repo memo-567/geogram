@@ -65,14 +65,23 @@ class MainActivity : FlutterActivity() {
     private fun installApk(filePath: String): Boolean {
         return try {
             val file = File(filePath)
+            android.util.Log.d("GeogramUpdate", "Attempting to install APK: $filePath")
+            android.util.Log.d("GeogramUpdate", "File exists: ${file.exists()}, size: ${file.length()} bytes")
+
             if (!file.exists()) {
+                android.util.Log.e("GeogramUpdate", "APK file does not exist: $filePath")
+                return false
+            }
+
+            if (file.length() < 1000) {
+                android.util.Log.e("GeogramUpdate", "APK file too small (${file.length()} bytes), likely corrupted")
                 return false
             }
 
             // Check permission first on Android 8.0+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!packageManager.canRequestPackageInstalls()) {
-                    // Permission not granted - open settings
+                    android.util.Log.w("GeogramUpdate", "Install permission not granted, opening settings")
                     openInstallPermissionSettings()
                     return false
                 }
@@ -83,24 +92,35 @@ class MainActivity : FlutterActivity() {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 // Android 7.0+ requires FileProvider
-                val uri = FileProvider.getUriForFile(
-                    this,
-                    "${applicationContext.packageName}.fileprovider",
-                    file
-                )
+                android.util.Log.d("GeogramUpdate", "Using FileProvider for Android 7.0+")
+                val authority = "${applicationContext.packageName}.fileprovider"
+                android.util.Log.d("GeogramUpdate", "FileProvider authority: $authority")
+
+                val uri = FileProvider.getUriForFile(this, authority, file)
+                android.util.Log.d("GeogramUpdate", "FileProvider URI: $uri")
+
                 intent.setDataAndType(uri, "application/vnd.android.package-archive")
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } else {
                 // Older Android versions can use file:// URI
+                android.util.Log.d("GeogramUpdate", "Using file:// URI for older Android")
                 intent.setDataAndType(
                     android.net.Uri.fromFile(file),
                     "application/vnd.android.package-archive"
                 )
             }
 
+            android.util.Log.d("GeogramUpdate", "Starting APK installer intent")
             startActivity(intent)
+            android.util.Log.d("GeogramUpdate", "APK installer started successfully")
             true
+        } catch (e: IllegalArgumentException) {
+            // FileProvider couldn't find the file path in its configuration
+            android.util.Log.e("GeogramUpdate", "FileProvider error - path not configured: ${e.message}")
+            e.printStackTrace()
+            false
         } catch (e: Exception) {
+            android.util.Log.e("GeogramUpdate", "Error installing APK: ${e.message}")
             e.printStackTrace()
             false
         }
