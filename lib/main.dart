@@ -25,7 +25,7 @@ import 'pages/about_page.dart';
 import 'pages/update_page.dart';
 import 'pages/relays_page.dart';
 import 'pages/location_page.dart';
-import 'pages/notifications_page.dart';
+// import 'pages/notifications_page.dart'; // TODO: Not yet implemented
 import 'pages/chat_browser_page.dart';
 import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
@@ -1764,19 +1764,20 @@ class _SettingsPageState extends State<SettingsPage> {
               );
             },
           ),
-        ListTile(
-          leading: const Icon(Icons.notifications_outlined),
-          title: Text(_i18n.t('notifications')),
-          subtitle: Text(_i18n.t('configure_notifications')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const NotificationsPage()),
-            );
-          },
-        ),
-        const Divider(),
+        // TODO: Notifications settings - not yet implemented
+        // ListTile(
+        //   leading: const Icon(Icons.notifications_outlined),
+        //   title: Text(_i18n.t('notifications')),
+        //   subtitle: Text(_i18n.t('configure_notifications')),
+        //   trailing: const Icon(Icons.chevron_right),
+        //   onTap: () {
+        //     Navigator.push(
+        //       context,
+        //       MaterialPageRoute(builder: (context) => const NotificationsPage()),
+        //     );
+        //   },
+        // ),
+        // const Divider(),
         ListTile(
           leading: const Icon(Icons.language),
           title: Text(_i18n.t('language')),
