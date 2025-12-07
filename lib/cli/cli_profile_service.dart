@@ -271,7 +271,7 @@ class CliProfileService {
   List<Map<String, dynamic>> getAllDevicesSorted() {
     final result = <Map<String, dynamic>>[];
 
-    // Owned devices first (sorted: relays first, then clients)
+    // Owned devices first (sorted: stations first, then clients)
     final ownedRelays = _profiles.where((p) => p.isRelay).toList();
     final ownedClients = _profiles.where((p) => p.isClient).toList();
 

@@ -63,9 +63,9 @@ for arg in "$@"; do
             echo ""
             echo "CLI Commands (once launched):"
             echo "  help           Show available commands"
-            echo "  status         Show app and relay status"
-            echo "  relay start    Start the relay server"
-            echo "  relay stop     Stop the relay server"
+            echo "  status         Show app and station status"
+            echo "  station start    Start the station server"
+            echo "  station stop     Stop the station server"
             echo "  profile list   List all profiles"
             echo "  quit           Exit the CLI"
             exit 0

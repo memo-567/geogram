@@ -1,5 +1,5 @@
 // Test script to verify tile fetching from station
-// Run with: dart test/tile_relay_test.dart
+// Run with: dart test/tile_station_test.dart
 
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -10,7 +10,7 @@ const String userCallsign = 'X1NZG9';
 Future<void> main() async {
   print('=== Tile Relay Test ===\n');
 
-  // Step 1: Check if relay is running
+  // Step 1: Check if station is running
   print('1. Checking station status...');
   try {
     final statusResponse = await http.get(Uri.parse('$stationUrl/api/status'));

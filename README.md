@@ -253,7 +253,7 @@ flutter test
 - ✅ File attachments and management
 - ✅ NOSTR key integration
 - ✅ User profiles with callsigns
-- ✅ Device connectivity (BLE and relay)
+- ✅ Device connectivity (BLE and station)
 - ✅ Admin/moderator controls
 
 ### In Progress

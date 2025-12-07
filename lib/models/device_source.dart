@@ -18,7 +18,7 @@ class DeviceSource {
   /// Type of device source
   final DeviceSourceType type;
 
-  /// Connection URL (for relays and direct connections)
+  /// Connection URL (for stations and direct connections)
   final String? url;
 
   /// Whether the device is currently reachable

@@ -79,7 +79,7 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
     echo "No existing configuration found. Running setup wizard..."
     echo ""
 
-    # Ask for relay name/description
+    # Ask for station name/description
     echo -e "${YELLOW}--- RELAY IDENTITY ---${NC}"
     printf "Relay name [${CYAN}p2p.radio${NC}]: "
     read RELAY_NAME
@@ -119,9 +119,9 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
 
     # Ask for network role
     echo -e "${YELLOW}--- NETWORK ROLE ---${NC}"
-    echo "Select relay role:"
-    echo "  1) Root Relay - Primary relay (accepts node connections)"
-    echo "  2) Node Relay - Connects to an existing root relay"
+    echo "Select station role:"
+    echo "  1) Root Station - Primary station (accepts node connections)"
+    echo "  2) Node Station - Connects to an existing root station"
     printf "Enter choice (1 or 2) [${CYAN}1${NC}]: "
     read ROLE_CHOICE
     ROLE_CHOICE=${ROLE_CHOICE:-1}
@@ -130,7 +130,7 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
     PARENT_URL=""
     if [ "$ROLE_CHOICE" = "2" ]; then
         RELAY_ROLE="node"
-        printf "Parent relay URL (e.g., wss://relay.example.com): "
+        printf "Parent station URL (e.g., wss://station.example.com): "
         read PARENT_URL
     fi
     echo ""
@@ -195,8 +195,8 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
     [ -n "$SSL_EMAIL" ] && SSL_EMAIL_JSON="\"$SSL_EMAIL\""
     CREATED_DATE=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 
-    # Create relay_config.json
-    ssh "$REMOTE_HOST" "cat > $REMOTE_DIR/relay_config.json" << RELAY_EOF
+    # Create station_config.json
+    ssh "$REMOTE_HOST" "cat > $REMOTE_DIR/station_config.json" << RELAY_EOF
 {
   "httpPort": $PORT,
   "enabled": true,
@@ -215,7 +215,7 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
   "enableCors": true,
   "httpRequestTimeout": 30000,
   "maxConnectedDevices": 100,
-  "relayRole": "$RELAY_ROLE",
+  "stationRole": "$RELAY_ROLE",
   "parentRelayUrl": $PARENT_JSON,
   "setupComplete": true,
   "enableSsl": $ENABLE_SSL,
@@ -226,24 +226,24 @@ if [ "$NEEDS_SETUP" = "yes" ]; then
 }
 RELAY_EOF
 
-    # Create config.json with relay profile
+    # Create config.json with station profile
     ssh "$REMOTE_HOST" "cat > $REMOTE_DIR/config.json" << CONFIG_EOF
 {
-  "activeProfileId": "relay-profile",
+  "activeProfileId": "station-profile",
   "profiles": [
     {
-      "id": "relay-profile",
+      "id": "station-profile",
       "name": "$RELAY_NAME",
       "callsign": "$CALLSIGN",
       "description": "$RELAY_DESC",
-      "type": "relay",
+      "type": "station",
       "npub": "$NPUB",
       "nsec": "$NSEC",
       "locationName": $LOCATION_JSON,
       "latitude": $LAT_JSON,
       "longitude": $LON_JSON,
       "port": $PORT,
-      "relayRole": "$RELAY_ROLE",
+      "stationRole": "$RELAY_ROLE",
       "parentRelayUrl": $PARENT_JSON,
       "tileServerEnabled": true,
       "osmFallbackEnabled": true,
@@ -263,7 +263,7 @@ CONFIG_EOF
     if [ "$ENABLE_SSL" = "true" ]; then
         echo ""
         echo -e "${YELLOW}Setting up SSL certificates...${NC}"
-        echo "The relay will automatically request SSL certificates from Let's Encrypt"
+        echo "The station will automatically request SSL certificates from Let's Encrypt"
         echo "when it starts. Make sure port 80 is open for the ACME challenge."
         echo ""
     fi
@@ -278,9 +278,9 @@ echo -e "${YELLOW}[5/6] Starting geogram-cli on port $PORT...${NC}"
 # Start in screen
 ssh "$REMOTE_HOST" "cd $REMOTE_DIR && screen -dmS $SCREEN_NAME ./geogram-cli --data-dir=$REMOTE_DIR"
 
-# Wait for startup and send relay start command
+# Wait for startup and send station start command
 sleep 2
-ssh "$REMOTE_HOST" "screen -S $SCREEN_NAME -p 0 -X stuff 'relay start\n'" || true
+ssh "$REMOTE_HOST" "screen -S $SCREEN_NAME -p 0 -X stuff 'station start\n'" || true
 
 echo -e "${GREEN}Started in screen session '$SCREEN_NAME'.${NC}"
 echo ""

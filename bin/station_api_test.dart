@@ -7,7 +7,7 @@
 /// - Tests all HTTP API endpoints
 /// - Tests WebSocket connectivity and messages
 ///
-/// Run with: dart bin/relay_api_test.dart
+/// Run with: dart bin/station_api_test.dart
 
 import 'dart:async';
 import 'dart:convert';

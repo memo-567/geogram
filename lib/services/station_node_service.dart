@@ -80,13 +80,13 @@ class StationNodeService {
       LogService().log('Loaded network: ${_network!.name}');
     }
 
-    // If no station config found, check CLI's relay_config.json
+    // If no station config found, check CLI's station_config.json
     if (_stationNode == null) {
       await _loadFromCliConfig();
     }
   }
 
-  /// Load station configuration from CLI's relay_config.json
+  /// Load station configuration from CLI's station_config.json
   Future<void> _loadFromCliConfig() async {
     try {
       final storageConfig = StorageConfig();

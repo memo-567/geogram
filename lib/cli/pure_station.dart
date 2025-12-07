@@ -35,7 +35,7 @@ class PureRelaySettings {
   // Station identity (npub/nsec key pair)
   String npub;
   String nsec;
-  // Callsign is derived from npub (X3 prefix for relays)
+  // Callsign is derived from npub (X3 prefix for stations)
   String get callsign => NostrKeyGenerator.deriveStationCallsign(npub);
   bool enableAprs;
   bool enableCors;
@@ -45,7 +45,7 @@ class PureRelaySettings {
   // Station role configuration
   String stationRole; // 'root' or 'node'
   String? networkId;
-  String? parentRelayUrl; // For node relays
+  String? parentStationUrl; // For node stations
 
   // Setup flag
   bool setupComplete;
@@ -79,7 +79,7 @@ class PureRelaySettings {
     this.maxConnectedDevices = 100,
     this.stationRole = '',
     this.networkId,
-    this.parentRelayUrl,
+    this.parentStationUrl,
     this.setupComplete = false,
     this.enableSsl = false,
     this.sslDomain,
@@ -119,7 +119,7 @@ class PureRelaySettings {
       maxConnectedDevices: json['maxConnectedDevices'] as int? ?? 100,
       stationRole: json['stationRole'] as String? ?? '',
       networkId: json['networkId'] as String?,
-      parentRelayUrl: json['parentRelayUrl'] as String?,
+      parentStationUrl: json['parentStationUrl'] as String?,
       setupComplete: json['setupComplete'] as bool? ?? false,
       enableSsl: json['enableSsl'] as bool? ?? false,
       sslDomain: json['sslDomain'] as String?,
@@ -154,7 +154,7 @@ class PureRelaySettings {
         'maxConnectedDevices': maxConnectedDevices,
         'stationRole': stationRole,
         'networkId': networkId,
-        'parentRelayUrl': parentRelayUrl,
+        'parentStationUrl': parentStationUrl,
         'setupComplete': setupComplete,
         'enableSsl': enableSsl,
         'sslDomain': sslDomain,
@@ -185,7 +185,7 @@ class PureRelaySettings {
     int? maxConnectedDevices,
     String? stationRole,
     String? networkId,
-    String? parentRelayUrl,
+    String? parentStationUrl,
     bool? setupComplete,
     bool? enableSsl,
     String? sslDomain,
@@ -215,7 +215,7 @@ class PureRelaySettings {
       maxConnectedDevices: maxConnectedDevices ?? this.maxConnectedDevices,
       stationRole: stationRole ?? this.stationRole,
       networkId: networkId ?? this.networkId,
-      parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
+      parentStationUrl: parentStationUrl ?? this.parentStationUrl,
       setupComplete: setupComplete ?? this.setupComplete,
       enableSsl: enableSsl ?? this.enableSsl,
       sslDomain: sslDomain ?? this.sslDomain,
@@ -2726,7 +2726,7 @@ class PureStationServer {
     request.response.write(jsonEncode({'devices': devices}));
   }
 
-  /// GET /station/status - List connected devices and relays
+  /// GET /station/status - List connected devices and stations
   Future<void> _handleRelayStatus(HttpRequest request) async {
     final devices = _clients.values
         .where((c) => c.deviceType != 'station')
@@ -3130,7 +3130,7 @@ class PureStationServer {
       }
 
       // Fallback: Try to find the blog locally on the station server
-      // (for relays that also host their own content)
+      // (for stations that also host their own content)
       final callsign = await _findCallsignByIdentifier(identifier);
       if (callsign == null) {
         request.response.statusCode = 404;

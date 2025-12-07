@@ -286,7 +286,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
   Widget _buildProfileList() {
     final activeProfile = _profileService.getProfile();
 
-    // Sort profiles: active first, then relays, then clients
+    // Sort profiles: active first, then stations, then clients
     final sortedProfiles = List<Profile>.from(_profiles)
       ..sort((a, b) {
         if (a.id == activeProfile.id) return -1;

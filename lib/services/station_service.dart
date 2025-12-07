@@ -13,7 +13,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 
-/// Service for managing internet relays
+/// Service for managing internet stations
 class StationService {
   static final StationService _instance = StationService._internal();
   factory StationService() => _instance;
@@ -23,7 +23,7 @@ class StationService {
   bool _initialized = false;
   final WebSocketService _wsService = WebSocketService();
 
-  /// Default relays
+  /// Default stations
   static final List<Station> _defaultRelays = [
     Station(
       url: 'wss://p2p.radio',
@@ -69,7 +69,7 @@ class StationService {
         }
       }
 
-      // Deduplicate relays with same callsign (e.g., 127.0.0.1 vs LAN IP)
+      // Deduplicate stations with same callsign (e.g., 127.0.0.1 vs LAN IP)
       final beforeCount = _stations.length;
       _stations = _deduplicateStations(_stations);
       if (_stations.length < beforeCount) {
@@ -80,7 +80,7 @@ class StationService {
       print('DEBUG StationService: After reset, stations=${_stations.map((r) => "${r.name}:${r.isConnected}").toList()}');
       LogService().log('Loaded ${_stations.length} stations from config');
     } else {
-      // First time - use default relays
+      // First time - use default stations
       _stations = _defaultRelays.map((r) => r.copyWith()).toList();
 
       // Set first as preferred
@@ -100,7 +100,7 @@ class StationService {
     LogService().log('Saved ${_stations.length} stations to config');
   }
 
-  /// Deduplicate relays with same callsign (e.g., localhost vs LAN IP)
+  /// Deduplicate stations with same callsign (e.g., localhost vs LAN IP)
   /// Prefers non-localhost URLs and entries with more info
   List<Station> _deduplicateStations(List<Station> stations) {
     if (stations.isEmpty) return stations;
@@ -168,7 +168,7 @@ class StationService {
     return scoreA > scoreB;
   }
 
-  /// Get all relays
+  /// Get all stations
   List<Station> getAllStations() {
     if (!_initialized) {
       throw Exception('StationService not initialized');
@@ -184,12 +184,12 @@ class StationService {
     );
   }
 
-  /// Get backup relays
+  /// Get backup stations
   List<Station> getBackupStations() {
     return _stations.where((r) => r.status == 'backup').toList();
   }
 
-  /// Get available relays (not selected)
+  /// Get available stations (not selected)
   List<Station> getAvailableStations() {
     return _stations.where((r) => r.status == 'available').toList();
   }
@@ -248,7 +248,7 @@ class StationService {
 
   /// Set station as preferred
   Future<void> setPreferred(String url) async {
-    // Remove preferred status from all relays
+    // Remove preferred status from all stations
     for (var i = 0; i < _stations.length; i++) {
       if (_stations[i].status == 'preferred') {
         _stations[i] = _stations[i].copyWith(status: 'available');
@@ -484,7 +484,7 @@ class StationService {
       LogService().log('Disconnecting from station...');
       _wsService.disconnect();
 
-      // Update all relays as disconnected
+      // Update all stations as disconnected
       for (var i = 0; i < _stations.length; i++) {
         if (_stations[i].isConnected) {
           _stations[i] = _stations[i].copyWith(isConnected: false);

@@ -285,7 +285,7 @@ class ReportService {
   /// Save report
   ///
   /// If [notifyRelays] is true and the report has already been shared,
-  /// it will send an update to the relays (using the same d-tag for replacement).
+  /// it will send an update to the stations (using the same d-tag for replacement).
   Future<void> saveReport(
     Report report, {
     bool isExpired = false,
@@ -316,7 +316,7 @@ class ReportService {
 
     LogService().log('ReportService: Saved report: ${report.folderName}');
 
-    // Notify relays of update if this is an existing alert
+    // Notify stations of update if this is an existing alert
     if (notifyRelays && report.nostrEventId != null) {
       try {
         final alertService = AlertSharingService();
@@ -394,7 +394,7 @@ class ReportService {
     // Save the signed report first
     await saveReport(report, notifyRelays: false);
 
-    // Share to relays using the pre-created event
+    // Share to stations using the pre-created event
     try {
       final stationUrls = alertService.getRelayUrls();
       if (stationUrls.isNotEmpty) {

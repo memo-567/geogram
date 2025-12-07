@@ -55,7 +55,7 @@ typedef ScanProgressCallback = void Function(String message, int scannedHosts, i
 /// Callback to check if scan should be cancelled
 typedef ScanCancelCheck = bool Function();
 
-/// Service for automatic discovery of relays on local network
+/// Service for automatic discovery of stations on local network
 class StationDiscoveryService {
   static final StationDiscoveryService _instance = StationDiscoveryService._internal();
   factory StationDiscoveryService() => _instance;
@@ -434,7 +434,7 @@ class StationDiscoveryService {
     return null;
   }
 
-  /// Discover relays on local network
+  /// Discover stations on local network
   Future<void> discover() async {
     // Network interface scanning not supported on web
     if (kIsWeb) return;
@@ -505,7 +505,7 @@ class StationDiscoveryService {
     return '${parts[0]}.${parts[1]}.${parts[2]}';
   }
 
-  /// Scan a network range for relays
+  /// Scan a network range for stations
   /// Uses batched connections to avoid exhausting file descriptors
   Future<int> _scanRange(String subnet) async {
     int foundCount = 0;

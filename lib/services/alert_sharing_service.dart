@@ -132,10 +132,10 @@ class AlertSharingService {
     }
   }
 
-  /// Share alert to all configured relays
+  /// Share alert to all configured stations
   ///
   /// Returns a summary with confirmed/failed/skipped counts.
-  /// Confirmed relays are skipped on subsequent calls.
+  /// Confirmed stations are skipped on subsequent calls.
   Future<AlertShareSummary> shareAlert(Report report) async {
     final stationUrls = getRelayUrls();
     if (stationUrls.isEmpty) {
@@ -151,9 +151,9 @@ class AlertSharingService {
     return await shareAlertToRelays(report, stationUrls);
   }
 
-  /// Share alert to specific relays
+  /// Share alert to specific stations
   ///
-  /// Creates one signed NOSTR event and sends it to all relays.
+  /// Creates one signed NOSTR event and sends it to all stations.
   /// Tracks status per station in the report.
   Future<AlertShareSummary> shareAlertToRelays(
     Report report,
@@ -168,7 +168,7 @@ class AlertSharingService {
       );
     }
 
-    // Create signed event once (same event for all relays)
+    // Create signed event once (same event for all stations)
     final event = await createAlertEvent(report);
     if (event == null) {
       LogService().log('AlertSharingService: Failed to create alert event');

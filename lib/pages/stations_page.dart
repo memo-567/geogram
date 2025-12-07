@@ -52,7 +52,7 @@ class _RelaysPageState extends State<StationsPage> {
         );
         LogService().log('User location auto-detected and saved: ${location['lat']}, ${location['lon']}');
 
-        // Reload relays to show distances
+        // Reload stations to show distances
         _loadStations();
       } else {
         LogService().log('Unable to auto-detect user location (offline?)');
@@ -767,7 +767,7 @@ class _RelayCard extends StatelessWidget {
 
             const SizedBox(height: 12),
 
-            // Connection Status (hide for available relays)
+            // Connection Status (hide for available stations)
             if (station.lastChecked != null && !isAvailableRelay)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -1210,7 +1210,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
         _results = results;
       });
 
-      // Auto-add found relays
+      // Auto-add found stations
       for (var result in results.where((r) => r.type == 'station')) {
         await _addStation(result);
       }

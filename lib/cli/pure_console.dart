@@ -2001,7 +2001,7 @@ class PureConsole {
   }
 
   Future<void> _handleRelayCallsign(List<String> args) async {
-    // Callsign is derived from npub (X3 prefix for relays) - cannot be set manually
+    // Callsign is derived from npub (X3 prefix for stations) - cannot be set manually
     stdout.writeln('Station callsign: ${_station.settings.callsign}');
     stdout.writeln('  (derived from npub: ${_station.settings.npub.substring(0, 20)}...)');
     if (args.isNotEmpty) {

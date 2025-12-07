@@ -90,7 +90,7 @@ GIT_CONFIG_NOSYSTEM=1 gh release create v1.x.x \
 ### Settings & Configuration
 - ✅ **Profile Management** - NOSTR identity generation (npub/nsec keys, callsign)
 - ✅ **Location Settings** - Interactive world map with IP-based geolocation
-- ✅ **Relay Management** - Configure preferred and backup internet relays
+- ✅ **Station Management** - Configure preferred and backup internet stations
 - ✅ **Notifications** - Granular notification controls
 - ✅ **About Page** - Project information and links
 

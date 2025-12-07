@@ -1157,7 +1157,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     }
   }
 
-  /// Upload all unsent alerts to relays
+  /// Upload all unsent alerts to stations
   Future<void> _uploadUnsentAlerts() async {
     final unsentReports = _allReports.where((report) => !_isReportSentToRelay(report)).toList();
     if (unsentReports.isEmpty) return;

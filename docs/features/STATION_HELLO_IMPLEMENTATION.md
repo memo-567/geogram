@@ -1,15 +1,15 @@
 # Relay Hello Handshake Implementation
 
 ## Overview
-This document outlines the implementation of the WebSocket "hello" handshake between geogram-desktop and geogram-relay with Nostr-style signed messages.
+This document outlines the implementation of the WebSocket "hello" handshake between geogram-desktop and geogram-station with Nostr-style signed messages.
 
 ## Protocol Flow
 
-1. **Desktop connects** to relay WebSocket endpoint (ws://localhost:8080/)
+1. **Desktop connects** to station WebSocket endpoint (ws://localhost:8080/)
 2. **Desktop sends "hello"** message with signed Nostr event
 3. **Relay verifies** signature and npub
 4. **Relay responds** with acknowledgment
-5. **Connection established** - relay listed as connected
+5. **Connection established** - station listed as connected
 
 ## Message Format
 
@@ -38,7 +38,7 @@ This document outlines the implementation of the WebSocket "hello" handshake bet
   "type": "hello_ack",
   "success": true,
   "callsign": "X1ABCD",
-  "relay_id": "X3QPSF",
+  "station_id": "X3QPSF",
   "message": "Connection established"
 }
 ```
@@ -64,7 +64,7 @@ class WebSocketService {
 
   Future<bool> connectAndHello(String url) async {
     try {
-      LogService().log('Connecting to relay: $url');
+      LogService().log('Connecting to station: $url');
       _channel = WebSocketChannel.connect(Uri.parse(url));
 
       // Get user profile
@@ -84,18 +84,18 @@ class WebSocketService {
         'event': event.toJson(),
       });
 
-      LogService().log('Sending hello to relay...');
+      LogService().log('Sending hello to station...');
       LogService().log('Hello message: $helloMessage');
       _channel!.sink.add(helloMessage);
 
       // Wait for response
       await for (final message in _channel!.stream) {
-        LogService().log('Received from relay: $message');
+        LogService().log('Received from station: $message');
         final data = jsonDecode(message);
 
         if (data['type'] == 'hello_ack') {
           if (data['success'] == true) {
-            LogService().log('✓ Hello acknowledged by relay ${data['relay_id']}');
+            LogService().log('✓ Hello acknowledged by station ${data['station_id']}');
             return true;
           } else {
             LogService().log('✗ Hello rejected: ${data['message']}');
@@ -106,7 +106,7 @@ class WebSocketService {
 
       return false;
     } catch (e) {
-      LogService().log('Error connecting to relay: $e');
+      LogService().log('Error connecting to station: $e');
       return false;
     }
   }
@@ -118,7 +118,7 @@ class WebSocketService {
 }
 ```
 
-#### 3. lib/services/relay_service.dart (MODIFY)
+#### 3. lib/services/station_service.dart (MODIFY)
 Add to RelayService class:
 ```dart
 final WebSocketService _wsService = WebSocketService();
@@ -127,21 +127,21 @@ Future<void> connectRelay(String url) async {
   final success = await _wsService.connectAndHello(url);
 
   if (success) {
-    // Update relay connection status
-    final index = _relays.indexWhere((r) => r.url == url);
+    // Update station connection status
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index != -1) {
-      _relays[index] = _relays[index].copyWith(
+      _stations[index] = _stations[index].copyWith(
         isConnected: true,
         lastChecked: DateTime.now(),
       );
       await _saveRelays();
-      LogService().log('Connected to relay: $url');
+      LogService().log('Connected to station: $url');
     }
   }
 }
 ```
 
-### Java (geogram-relay)
+### Java (geogram-station)
 
 #### 4. pom.xml (MODIFY)
 Add Bouncy Castle dependency:
@@ -155,7 +155,7 @@ Add Bouncy Castle dependency:
 
 #### 5. src/main/java/geogram/relay/NostrEvent.java (NEW)
 ```java
-package geogram.relay;
+package geogram.station;
 
 import com.google.gson.Gson;
 import org.slf4j.Logger;
@@ -227,7 +227,7 @@ public class NostrEvent {
 }
 ```
 
-#### 6. src/main/java/geogram/relay/RelayServer.java (MODIFY)
+#### 6. src/main/java/geogram/relay/StationServer.java (MODIFY)
 Update `onMessage` method:
 ```java
 private void handleHelloMessage(Session session, Map<String, Object> message) {
@@ -272,7 +272,7 @@ private void handleHelloMessage(Session session, Map<String, Object> message) {
             "type", "hello_ack",
             "success", true,
             "callsign", callsign,
-            "relay_id", config.aprsCallsign,
+            "station_id", config.aprsCallsign,
             "message", "Connection established"
         ));
 
@@ -291,34 +291,34 @@ private void handleHelloMessage(Session session, Map<String, Object> message) {
 
 ## Scripts
 
-### launch-relay-local.sh
+### launch-station-local.sh
 ```bash
 #!/bin/bash
-cd /home/brito/code/geogram/geogram-relay
-echo "Starting local relay on port 8080..."
-java -jar target/geogram-relay-1.0.0.jar
+cd /home/brito/code/geogram/geogram-station
+echo "Starting local station on port 8080..."
+java -jar target/geogram-station-1.0.0.jar
 ```
 
-### setup-local-relay.sh
+### setup-local-station.sh
 ```bash
 #!/bin/bash
-# Add local relay as preferred in desktop app
-RELAY_URL="ws://localhost:8080"
+# Add local station as preferred in desktop app
+STATION_URL="ws://localhost:8080"
 RELAY_NAME="Local Dev Relay"
 
-echo "Setting up local relay: $RELAY_URL"
-# This would update the config.json to add the local relay
+echo "Setting up local station: $STATION_URL"
+# This would update the config.json to add the local station
 # For now, add manually through UI
 ```
 
 ## Testing
 
-1. Build relay: `cd geogram-relay && mvn clean package`
-2. Start relay: `./launch-relay-local.sh`
+1. Build station: `cd geogram-station && mvn clean package`
+2. Start station: `./launch-station-local.sh`
 3. Build desktop: `cd geogram-desktop && flutter pub get && flutter build linux`
 4. Run desktop: `./launch-desktop.sh`
 5. Go to Relays page
-6. Add custom relay: ws://localhost:8080
+6. Add custom station: ws://localhost:8080
 7. Set as preferred
 8. Click "Test" button
 9. Check logs window for hello handshake messages
@@ -327,12 +327,12 @@ echo "Setting up local relay: $RELAY_URL"
 
 **Desktop Log:**
 ```
-Connecting to relay: ws://localhost:8080
-Sending hello to relay...
+Connecting to station: ws://localhost:8080
+Sending hello to station...
 Hello message: {"type":"hello","event":{...}}
-Received from relay: {"type":"hello_ack","success":true,...}
-✓ Hello acknowledged by relay X3QPSF
-Connected to relay: ws://localhost:8080
+Received from station: {"type":"hello_ack","success":true,...}
+✓ Hello acknowledged by station X3QPSF
+Connected to station: ws://localhost:8080
 ```
 
 **Relay Log:**

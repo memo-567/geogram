@@ -15,7 +15,7 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Local device channels
   final List<ChatChannel> localChannels;
 
-  /// List of connected device sources (relays, direct connections)
+  /// List of connected device sources (stations, direct connections)
   final List<DeviceSourceWithRooms> remoteSources;
 
   /// Currently selected local channel ID

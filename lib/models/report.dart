@@ -288,12 +288,12 @@ class Report {
     return stationShares.where((s) => s.stationUrl == stationUrl).firstOrNull;
   }
 
-  /// Get count of confirmed relays
+  /// Get count of confirmed stations
   int get confirmedRelayCount {
     return stationShares.where((s) => s.status == StationShareStatusType.confirmed).length;
   }
 
-  /// Get count of failed relays
+  /// Get count of failed stations
   int get failedRelayCount {
     return stationShares.where((s) => s.status == StationShareStatusType.failed).length;
   }

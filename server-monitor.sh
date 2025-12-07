@@ -7,7 +7,7 @@
 REMOTE_HOST="root@p2p.radio"
 SCREEN_NAME="geogram"
 
-echo "Connecting to geogram relay console on $REMOTE_HOST..."
+echo "Connecting to geogram station console on $REMOTE_HOST..."
 echo "Press Ctrl+A, D to detach from screen (leave server running)"
 echo ""
 

@@ -5,7 +5,7 @@
   "osmFallbackEnabled": true,
   "maxZoomLevel": 15,
   "maxCacheSize": 500,
-  "description": "Local relay for the region",
+  "description": "Local station for the region",
   "location": null,
   "latitude": null,
   "longitude": null,
