@@ -70,7 +70,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   /// Called when user location changes
   void _onLocationChanged() {
-    // Re-filter relay alerts when location updates
+    // Re-filter all alerts when location updates
+    _filterReports();
     _filterRelayAlertsByDistance();
   }
 
@@ -107,6 +108,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   void _filterReports() {
     final query = _searchController.text.toLowerCase();
+    final userLocation = _userLocationService.currentLocation;
+
     setState(() {
       _filteredReports = _allReports.where((report) {
         // Filter by severity
@@ -117,6 +120,19 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         // Filter by status
         if (_filterStatus != null && report.status != _filterStatus) {
           return false;
+        }
+
+        // Filter by distance (if location is available and radius is not unlimited)
+        if (userLocation != null && userLocation.isValid && _radiusKm < 500) {
+          final distance = _calculateDistance(
+            userLocation.latitude,
+            userLocation.longitude,
+            report.latitude,
+            report.longitude,
+          );
+          if (distance > _radiusKm) {
+            return false;
+          }
         }
 
         // Filter by search query
@@ -792,6 +808,30 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   }
 
   Widget _buildReportCard(Report report, ThemeData theme, {bool isMyAlert = true}) {
+    // Calculate distance from user's location
+    final userLocation = _userLocationService.currentLocation;
+    double? distanceKm;
+    if (userLocation != null && userLocation.isValid) {
+      distanceKm = _calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        report.latitude,
+        report.longitude,
+      );
+    }
+
+    // Format distance string
+    String? distanceText;
+    if (distanceKm != null) {
+      if (distanceKm < 1) {
+        distanceText = '${(distanceKm * 1000).round()} m';
+      } else if (distanceKm < 10) {
+        distanceText = '${distanceKm.toStringAsFixed(1)} km';
+      } else {
+        distanceText = '${distanceKm.round()} km';
+      }
+    }
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: InkWell(
@@ -851,7 +891,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                 children: [
                   Icon(Icons.location_on, size: 14, color: theme.colorScheme.onSurfaceVariant),
                   const SizedBox(width: 4),
-                  Expanded(
+                  Flexible(
                     child: Text(
                       report.address ?? '${report.latitude.toStringAsFixed(3)}, ${report.longitude.toStringAsFixed(3)}',
                       style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
@@ -859,6 +899,20 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  // Show distance from user
+                  if (distanceText != null) ...[
+                    const SizedBox(width: 6),
+                    Icon(Icons.straighten, size: 14, color: theme.colorScheme.primary),
+                    const SizedBox(width: 2),
+                    Text(
+                      distanceText,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                   if (report.verificationCount > 0) ...[
                     const SizedBox(width: 8),
                     Icon(Icons.verified, size: 14, color: Colors.green),
