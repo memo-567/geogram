@@ -11,7 +11,7 @@ import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_sharing_service.dart';
-import '../services/relay_alert_service.dart';
+import '../services/station_alert_service.dart';
 import '../services/user_location_service.dart';
 import '../services/log_service.dart';
 import 'report_detail_page.dart';
@@ -35,15 +35,15 @@ class ReportBrowserPage extends StatefulWidget {
 class _ReportBrowserPageState extends State<ReportBrowserPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
-  final RelayAlertService _relayAlertService = RelayAlertService();
+  final StationAlertService _stationAlertService = StationAlertService();
   final UserLocationService _userLocationService = UserLocationService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Report> _allReports = [];
   List<Report> _filteredReports = [];
-  List<Report> _relayAlerts = []; // Alerts fetched from relay
-  List<Report> _filteredRelayAlerts = []; // Relay alerts filtered by distance
+  List<Report> _stationAlerts = []; // Alerts fetched from station
+  List<Report> _filteredStationAlerts = []; // Station alerts filtered by distance
   ReportSeverity? _filterSeverity;
   ReportStatus? _filterStatus;
   bool _isLoading = true;
@@ -82,14 +82,14 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     // Initialize user location service for automatic updates
     await _userLocationService.initialize();
 
-    // Load cached relay alerts and start polling
-    await _relayAlertService.loadCachedAlerts();
-    _relayAlerts = _relayAlertService.cachedAlerts;
+    // Load cached station alerts and start polling
+    await _stationAlertService.loadCachedAlerts();
+    _stationAlerts = _stationAlertService.cachedAlerts;
     _filterRelayAlertsByDistance();
-    _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
-    _relayAlertService.startPolling();
+    _lastFetchTime = _stationAlertService.getTimeSinceLastFetch();
+    _stationAlertService.startPolling();
 
-    // Initial fetch of relay alerts
+    // Initial fetch of station alerts
     _loadRelayAlerts();
   }
 
@@ -164,7 +164,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     });
   }
 
-  /// Filter relay alerts by distance from user's current location
+  /// Filter station alerts by distance from user's current location
   void _filterRelayAlertsByDistance() {
     if (!mounted) return;
 
@@ -173,10 +173,10 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     setState(() {
       if (userLocation == null || !userLocation.isValid || _radiusKm >= 500) {
         // No location or unlimited radius - show all alerts
-        _filteredRelayAlerts = List.from(_relayAlerts);
+        _filteredStationAlerts = List.from(_stationAlerts);
       } else {
         // Filter alerts within the radius
-        _filteredRelayAlerts = _relayAlerts.where((alert) {
+        _filteredStationAlerts = _stationAlerts.where((alert) {
           final distance = _calculateDistance(
             userLocation.latitude,
             userLocation.longitude,
@@ -187,8 +187,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         }).toList();
       }
 
-      // Sort filtered relay alerts by date (newest first)
-      _filteredRelayAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+      // Sort filtered station alerts by date (newest first)
+      _filteredStationAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
     });
   }
 
@@ -582,7 +582,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   });
                 },
                 onChangeEnd: (value) {
-                  // Filter relay alerts by the new radius
+                  // Filter station alerts by the new radius
                   _filterRelayAlertsByDistance();
                   _filterReports();
                 },
@@ -607,11 +607,11 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   /// Build the alerts list with sections
   Widget _buildAlertsList(ThemeData theme) {
-    // Separate my alerts and relay alerts (filtered by distance)
+    // Separate my alerts and station alerts (filtered by distance)
     final myAlerts = _filteredReports;
-    final relayAlerts = _filteredRelayAlerts;
+    final stationAlerts = _filteredStationAlerts;
 
-    if (myAlerts.isEmpty && relayAlerts.isEmpty) {
+    if (myAlerts.isEmpty && stationAlerts.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -648,18 +648,18 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           ...myAlerts.map((report) => _buildReportCard(report, theme, isMyAlert: true)),
         ],
 
-        // Relay Alerts section
+        // Station Alerts section
         _buildSectionHeader(
           theme,
           icon: Icons.cloud,
-          title: _i18n.t('relay_alerts'),
-          count: relayAlerts.length,
+          title: _i18n.t('station_alerts'),
+          count: stationAlerts.length,
           isLoading: _isLoadingRelayAlerts,
           onRefresh: _loadRelayAlerts,
           subtitle: _lastFetchTime,
         ),
-        if (relayAlerts.isNotEmpty)
-          ...relayAlerts.map((report) => _buildReportCard(report, theme, isMyAlert: false))
+        if (stationAlerts.isNotEmpty)
+          ...stationAlerts.map((report) => _buildReportCard(report, theme, isMyAlert: false))
         else if (!_isLoadingRelayAlerts)
           Padding(
             padding: const EdgeInsets.all(16),
@@ -669,7 +669,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   Icon(Icons.cloud_off, size: 32, color: theme.colorScheme.onSurfaceVariant),
                   const SizedBox(height: 8),
                   Text(
-                    _i18n.t('no_relay_alerts'),
+                    _i18n.t('no_station_alerts'),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -760,7 +760,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     );
   }
 
-  /// Load alerts from relay
+  /// Load alerts from station
   Future<void> _loadRelayAlerts() async {
     if (_isLoadingRelayAlerts) return;
 
@@ -782,9 +782,9 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
         lon = profile.longitude != 0 ? profile.longitude : null;
       }
 
-      // Fetch from relay - get all alerts, we'll filter client-side
+      // Fetch from station - get all alerts, we'll filter client-side
       // Server-side filtering is optional but can reduce bandwidth
-      final result = await _relayAlertService.fetchAlerts(
+      final result = await _stationAlertService.fetchAlerts(
         lat: lat,
         lon: lon,
         radiusKm: null, // Get all alerts, filter client-side for responsiveness
@@ -792,14 +792,14 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
       if (mounted) {
         setState(() {
-          _relayAlerts = result.alerts;
-          _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
+          _stationAlerts = result.alerts;
+          _lastFetchTime = _stationAlertService.getTimeSinceLastFetch();
         });
         // Apply client-side distance filtering
         _filterRelayAlertsByDistance();
       }
     } catch (e) {
-      LogService().log('Error loading relay alerts: $e');
+      LogService().log('Error loading station alerts: $e');
     } finally {
       if (mounted) {
         setState(() => _isLoadingRelayAlerts = false);
@@ -931,7 +931,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                       style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
                     ),
                   ],
-                  // Show author for relay alerts
+                  // Show author for station alerts
                   if (!isMyAlert && report.author.isNotEmpty) ...[
                     const SizedBox(width: 8),
                     Icon(Icons.person, size: 14, color: theme.colorScheme.onSurfaceVariant),
@@ -1086,25 +1086,25 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     ).then((_) => _loadReports());
   }
 
-  /// Check if a report has been successfully sent to at least one relay
+  /// Check if a report has been successfully sent to at least one station
   bool _isReportSentToRelay(Report report) {
-    return report.relayShares.any((share) => share.status == RelayShareStatusType.confirmed);
+    return report.stationShares.any((share) => share.status == StationShareStatusType.confirmed);
   }
 
-  /// Get count of alerts that have not been sent to any relay
+  /// Get count of alerts that have not been sent to any station
   int _getUnsentAlertCount() {
     return _allReports.where((report) => !_isReportSentToRelay(report)).length;
   }
 
-  /// Build relay status badge for a report
+  /// Build station status badge for a report
   Widget _buildRelayStatusBadge(Report report) {
     final isSent = _isReportSentToRelay(report);
-    final confirmedCount = report.relayShares.where((s) => s.status == RelayShareStatusType.confirmed).length;
-    final failedCount = report.relayShares.where((s) => s.status == RelayShareStatusType.failed).length;
+    final confirmedCount = report.stationShares.where((s) => s.status == StationShareStatusType.confirmed).length;
+    final failedCount = report.stationShares.where((s) => s.status == StationShareStatusType.failed).length;
 
     if (isSent) {
       return Tooltip(
-        message: _i18n.t('sent_to_relays').replaceAll('{0}', '$confirmedCount'),
+        message: _i18n.t('sent_to_stations').replaceAll('{0}', '$confirmedCount'),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
@@ -1132,7 +1132,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       );
     } else if (failedCount > 0) {
       return Tooltip(
-        message: _i18n.t('relay_send_failed'),
+        message: _i18n.t('station_send_failed'),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
@@ -1144,7 +1144,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       );
     } else {
       return Tooltip(
-        message: _i18n.t('not_sent_to_relay'),
+        message: _i18n.t('not_sent_to_station'),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
@@ -1175,15 +1175,15 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
         if (result.anySuccess) {
           successCount++;
-          // Update report with relay status
+          // Update report with station status
           var updatedReport = report;
           for (final sendResult in result.results) {
-            updatedReport = alertService.updateRelayShareStatus(
+            updatedReport = alertService.updateStationShareStatus(
               updatedReport,
-              sendResult.relayUrl,
+              sendResult.stationUrl,
               sendResult.success
-                  ? RelayShareStatusType.confirmed
-                  : RelayShareStatusType.failed,
+                  ? StationShareStatusType.confirmed
+                  : StationShareStatusType.failed,
               nostrEventId: result.eventId,
             );
           }

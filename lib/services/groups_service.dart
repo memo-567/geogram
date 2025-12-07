@@ -10,7 +10,7 @@ import '../models/group_member.dart';
 import '../models/group_area.dart';
 import '../models/group_application.dart';
 import '../models/reputation_entry.dart';
-import '../models/relay_node.dart';
+import '../models/station_node.dart';
 import '../util/nostr_key_generator.dart';
 import 'log_service.dart';
 
@@ -810,8 +810,8 @@ class GroupsService {
     return entries.fold<int>(0, (sum, entry) => sum + entry.value);
   }
 
-  /// Save relay network topology to sync folder
-  Future<void> saveNetworkTopology(List<RelayNode> nodes) async {
+  /// Save station network topology to sync folder
+  Future<void> saveNetworkTopology(List<StationNode> nodes) async {
     if (_collectionPath == null) return;
 
     final syncDir = Directory('$_collectionPath/sync');
@@ -833,8 +833,8 @@ class GroupsService {
     LogService().log('GroupsService: Saved network topology with ${nodes.length} nodes');
   }
 
-  /// Load relay network topology from sync folder
-  Future<List<RelayNode>> loadNetworkTopology() async {
+  /// Load station network topology from sync folder
+  Future<List<StationNode>> loadNetworkTopology() async {
     if (_collectionPath == null) return [];
 
     final topologyFile = File('$_collectionPath/sync/network_topology.json');
@@ -846,7 +846,7 @@ class GroupsService {
       final nodesData = json['nodes'] as List<dynamic>;
 
       final nodes = nodesData
-          .map((data) => RelayNode.fromJson(data as Map<String, dynamic>))
+          .map((data) => StationNode.fromJson(data as Map<String, dynamic>))
           .toList();
 
       LogService().log('GroupsService: Loaded network topology with ${nodes.length} nodes');

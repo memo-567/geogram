@@ -378,8 +378,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         // TODO: Open news detail page when available
         _showItemSnackbar(item);
         break;
-      case MapItemType.relay:
-        // TODO: Open relay detail page when available
+      case MapItemType.station:
+        // TODO: Open station detail page when available
         _showItemSnackbar(item);
         break;
       case MapItemType.contact:
@@ -613,7 +613,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         return Colors.orange;
       case MapItemType.alert:
         return Colors.red;
-      case MapItemType.relay:
+      case MapItemType.station:
         return Colors.purple;
       case MapItemType.contact:
         return Colors.teal;
@@ -630,7 +630,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         return Icons.newspaper;
       case MapItemType.alert:
         return Icons.campaign;
-      case MapItemType.relay:
+      case MapItemType.station:
         return Icons.cell_tower;
       case MapItemType.contact:
         return Icons.person_pin;

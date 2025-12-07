@@ -314,7 +314,7 @@ class NostrEvent {
       'NostrEvent(id: ${id?.substring(0, 8)}..., kind: $kind, pubkey: ${pubkey.substring(0, 8)}...)';
 }
 
-/// NOSTR relay message types
+/// NOSTR station message types
 class NostrRelayMessage {
   /// Create EVENT message for publishing
   static List<dynamic> event(NostrEvent event) {
@@ -331,7 +331,7 @@ class NostrRelayMessage {
     return ['CLOSE', subscriptionId];
   }
 
-  /// Parse incoming relay message
+  /// Parse incoming station message
   static NostrRelayResponse? parse(String message) {
     try {
       final json = jsonDecode(message) as List;
@@ -383,7 +383,7 @@ class NostrRelayMessage {
   }
 }
 
-/// Response types from NOSTR relay
+/// Response types from NOSTR station
 enum NostrRelayResponseType {
   event,
   ok,
@@ -391,7 +391,7 @@ enum NostrRelayResponseType {
   notice,
 }
 
-/// Parsed response from NOSTR relay
+/// Parsed response from NOSTR station
 class NostrRelayResponse {
   final NostrRelayResponseType type;
   final String? subscriptionId;

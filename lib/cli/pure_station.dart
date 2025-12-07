@@ -1,4 +1,4 @@
-// Pure Dart relay server for CLI mode (no Flutter dependencies)
+// Pure Dart station server for CLI mode (no Flutter dependencies)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -19,7 +19,7 @@ import '../version.dart' show appVersion;
 /// Alias for backward compatibility
 String get cliAppVersion => appVersion;
 
-/// Relay server settings
+/// Station server settings
 class PureRelaySettings {
   int httpPort;
   bool enabled;
@@ -32,18 +32,18 @@ class PureRelaySettings {
   String? location;
   double? latitude;
   double? longitude;
-  // Relay identity (npub/nsec key pair)
+  // Station identity (npub/nsec key pair)
   String npub;
   String nsec;
   // Callsign is derived from npub (X3 prefix for relays)
-  String get callsign => NostrKeyGenerator.deriveRelayCallsign(npub);
+  String get callsign => NostrKeyGenerator.deriveStationCallsign(npub);
   bool enableAprs;
   bool enableCors;
   int httpRequestTimeout;
   int maxConnectedDevices;
 
-  // Relay role configuration
-  String relayRole; // 'root' or 'node'
+  // Station role configuration
+  String stationRole; // 'root' or 'node'
   String? networkId;
   String? parentRelayUrl; // For node relays
 
@@ -77,7 +77,7 @@ class PureRelaySettings {
     this.enableCors = true,
     this.httpRequestTimeout = 30000,
     this.maxConnectedDevices = 100,
-    this.relayRole = '',
+    this.stationRole = '',
     this.networkId,
     this.parentRelayUrl,
     this.setupComplete = false,
@@ -91,7 +91,7 @@ class PureRelaySettings {
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
-  // Generate default keys for relay (only created once per app run if no keys provided)
+  // Generate default keys for station (only created once per app run if no keys provided)
   static final NostrKeys _defaultKeys = NostrKeys.forRelay();
 
   factory PureRelaySettings.fromJson(Map<String, dynamic> json) {
@@ -109,7 +109,7 @@ class PureRelaySettings {
       location: json['location'] as String?,
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
-      // Relay identity keys (callsign is derived from npub with X3 prefix)
+      // Station identity keys (callsign is derived from npub with X3 prefix)
       // Treat empty strings as null to trigger default key generation
       npub: (json['npub'] as String?)?.isNotEmpty == true ? json['npub'] as String : null,
       nsec: (json['nsec'] as String?)?.isNotEmpty == true ? json['nsec'] as String : null,
@@ -117,7 +117,7 @@ class PureRelaySettings {
       enableCors: json['enableCors'] as bool? ?? true,
       httpRequestTimeout: json['httpRequestTimeout'] as int? ?? 30000,
       maxConnectedDevices: json['maxConnectedDevices'] as int? ?? 100,
-      relayRole: json['relayRole'] as String? ?? '',
+      stationRole: json['stationRole'] as String? ?? '',
       networkId: json['networkId'] as String?,
       parentRelayUrl: json['parentRelayUrl'] as String?,
       setupComplete: json['setupComplete'] as bool? ?? false,
@@ -144,7 +144,7 @@ class PureRelaySettings {
         'location': location,
         'latitude': latitude,
         'longitude': longitude,
-        // Relay identity keys
+        // Station identity keys
         'npub': npub,
         'nsec': nsec,
         'callsign': callsign, // Derived from npub (read-only)
@@ -152,7 +152,7 @@ class PureRelaySettings {
         'enableCors': enableCors,
         'httpRequestTimeout': httpRequestTimeout,
         'maxConnectedDevices': maxConnectedDevices,
-        'relayRole': relayRole,
+        'stationRole': stationRole,
         'networkId': networkId,
         'parentRelayUrl': parentRelayUrl,
         'setupComplete': setupComplete,
@@ -183,7 +183,7 @@ class PureRelaySettings {
     bool? enableCors,
     int? httpRequestTimeout,
     int? maxConnectedDevices,
-    String? relayRole,
+    String? stationRole,
     String? networkId,
     String? parentRelayUrl,
     bool? setupComplete,
@@ -213,7 +213,7 @@ class PureRelaySettings {
       enableCors: enableCors ?? this.enableCors,
       httpRequestTimeout: httpRequestTimeout ?? this.httpRequestTimeout,
       maxConnectedDevices: maxConnectedDevices ?? this.maxConnectedDevices,
-      relayRole: relayRole ?? this.relayRole,
+      stationRole: stationRole ?? this.stationRole,
       networkId: networkId ?? this.networkId,
       parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
       setupComplete: setupComplete ?? this.setupComplete,
@@ -229,7 +229,7 @@ class PureRelaySettings {
 
   /// Check if setup needs to be run
   bool needsSetup() {
-    return !setupComplete || callsign.isEmpty || relayRole.isEmpty;
+    return !setupComplete || callsign.isEmpty || stationRole.isEmpty;
   }
 }
 
@@ -436,7 +436,7 @@ class ServerStats {
       };
 }
 
-/// Tile cache for relay server
+/// Tile cache for station server
 class PureTileCache {
   final Map<String, Uint8List> _cache = {};
   final Map<String, DateTime> _timestamps = {};
@@ -505,8 +505,8 @@ class PureTileCache {
   }
 }
 
-/// Pure Dart relay server for CLI mode
-class PureRelayServer {
+/// Pure Dart station server for CLI mode
+class PureStationServer {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   PureRelaySettings _settings = PureRelaySettings();
@@ -525,7 +525,7 @@ class PureRelayServer {
 
   static const int maxLogEntries = 1000;
 
-  /// Access to the event bus for subscribing to relay events
+  /// Access to the event bus for subscribing to station events
   EventBus get eventBus => _eventBus;
 
   bool get isRunning => _running;
@@ -540,7 +540,7 @@ class PureRelayServer {
   set quietMode(bool value) => _quietMode = value;
   String? get dataDir => _dataDir;
 
-  /// Initialize relay server
+  /// Initialize station server
   ///
   /// Uses PureStorageConfig for path management. PureStorageConfig must be initialized
   /// before calling this method.
@@ -548,13 +548,13 @@ class PureRelayServer {
     final storageConfig = PureStorageConfig();
     if (!storageConfig.isInitialized) {
       throw StateError(
-        'PureStorageConfig must be initialized before PureRelayServer. '
+        'PureStorageConfig must be initialized before PureStationServer. '
         'Call PureStorageConfig().init() first.',
       );
     }
 
     _dataDir = storageConfig.baseDir;
-    _configPath = storageConfig.relayConfigPath;
+    _configPath = storageConfig.stationConfigPath;
     _tilesDirectory = storageConfig.tilesDir;
 
     // PureStorageConfig already creates directories, but ensure tiles exists
@@ -576,7 +576,7 @@ class PureRelayServer {
       await _saveChatData();
     }
 
-    _log('INFO', 'Pure Relay Server initialized');
+    _log('INFO', 'Pure Station Server initialized');
     _log('INFO', 'Data directory: $_dataDir');
   }
 
@@ -593,7 +593,7 @@ class PureRelayServer {
         final validNsec = NostrKeyGenerator.isValidNsec(_settings.nsec);
 
         if (!validNpub || !validNsec) {
-          _log('WARN', 'Invalid relay keys detected, regenerating...');
+          _log('WARN', 'Invalid station keys detected, regenerating...');
           // Generate new valid keys
           final newKeys = NostrKeys.forRelay();
           _settings = _settings.copyWith(
@@ -601,7 +601,7 @@ class PureRelayServer {
             nsec: newKeys.nsec,
           );
           await saveSettings();
-          _log('INFO', 'Generated and saved new relay identity keys: npub=${_settings.npub.substring(0, 20)}...');
+          _log('INFO', 'Generated and saved new station identity keys: npub=${_settings.npub.substring(0, 20)}...');
         }
       }
     } catch (e) {
@@ -623,7 +623,7 @@ class PureRelayServer {
 
   /// Get chat data directory path for a specific callsign: {devicesDir}/{callsign}/chat
   /// This matches the Java implementation structure
-  /// If no callsign provided, defaults to relay's callsign
+  /// If no callsign provided, defaults to station's callsign
   String _getChatDataPath([String? callsign]) {
     final storageConfig = PureStorageConfig();
     final targetCallsign = callsign ?? _settings.callsign;
@@ -1187,7 +1187,7 @@ class PureRelayServer {
 
   Future<bool> start() async {
     if (_running) {
-      _log('WARN', 'Relay server already running');
+      _log('WARN', 'Station server already running');
       return true;
     }
 
@@ -1253,7 +1253,7 @@ class PureRelayServer {
 
       return true;
     } catch (e) {
-      _log('ERROR', 'Failed to start relay server: $e');
+      _log('ERROR', 'Failed to start station server: $e');
       return false;
     }
   }
@@ -1347,11 +1347,11 @@ class PureRelayServer {
     _running = false;
     _startTime = null;
 
-    _log('INFO', 'Relay server stopped');
+    _log('INFO', 'Station server stopped');
   }
 
   Future<void> restart() async {
-    _log('INFO', 'Restarting relay server...');
+    _log('INFO', 'Restarting station server...');
     await stop();
     await Future.delayed(const Duration(milliseconds: 500));
     await start();
@@ -1439,7 +1439,7 @@ class PureRelayServer {
           'ip': ip,
           'port': port,
           'callsign': data['callsign'] ?? 'Unknown',
-          'type': data['relay_mode'] == true ? 'relay' : 'device',
+          'type': data['station_mode'] == true ? 'station' : 'device',
           'version': data['version'] ?? 'Unknown',
           'name': data['name'] ?? 'Unknown',
         };
@@ -1644,7 +1644,7 @@ class PureRelayServer {
 
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
-      } else if (path == '/relay/status') {
+      } else if (path == '/station/status') {
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
@@ -1668,7 +1668,7 @@ class PureRelayServer {
       } else if (_isChatFileContentPath(path)) {
         // /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
         await _handleChatFileContent(request);
-      } else if (path == '/api/relay/send' && method == 'POST') {
+      } else if (path == '/api/station/send' && method == 'POST') {
         await _handleRelaySend(request);
       } else if (path == '/api/groups') {
         await _handleGroups(request);
@@ -1786,7 +1786,7 @@ class PureRelayServer {
 
             final response = {
               'type': 'hello_response',
-              'server': 'geogram-desktop-relay',
+              'server': 'geogram-desktop-station',
               'version': cliAppVersion,
               'callsign': _settings.callsign,
             };
@@ -1822,8 +1822,8 @@ class PureRelayServer {
             final response = {
               'type': 'REGISTER_ACK',
               'success': true,
-              'relay_callsign': _settings.callsign,
-              'relay_version': cliAppVersion,
+              'station_callsign': _settings.callsign,
+              'station_version': cliAppVersion,
               'timestamp': DateTime.now().millisecondsSinceEpoch,
             };
             client.socket.add(jsonEncode(response));
@@ -2276,8 +2276,8 @@ class PureRelayServer {
       final response = {
         'success': true,
         'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'relay': {
-          'name': _settings.name ?? 'Geogram Relay',
+        'station': {
+          'name': _settings.name ?? 'Geogram Station',
           'callsign': _settings.callsign,
           'npub': _settings.npub,
         },
@@ -2688,14 +2688,14 @@ class PureRelayServer {
         : 0;
 
     final status = {
-      'service': 'Geogram Relay Server',
-      'name': _settings.name ?? 'Geogram Relay',
+      'service': 'Geogram Station Server',
+      'name': _settings.name ?? 'Geogram Station',
       'version': cliAppVersion,
       'callsign': _settings.callsign,
-      'description': _settings.description ?? 'Geogram Desktop Relay Server',
+      'description': _settings.description ?? 'Geogram Desktop Station Server',
       'connected_devices': _clients.length,
       'uptime': uptime,
-      'relay_mode': true,
+      'station_mode': true,
       'location': _settings.location,
       'latitude': _settings.latitude,
       'longitude': _settings.longitude,
@@ -2726,10 +2726,10 @@ class PureRelayServer {
     request.response.write(jsonEncode({'devices': devices}));
   }
 
-  /// GET /relay/status - List connected devices and relays
+  /// GET /station/status - List connected devices and relays
   Future<void> _handleRelayStatus(HttpRequest request) async {
     final devices = _clients.values
-        .where((c) => c.deviceType != 'relay')
+        .where((c) => c.deviceType != 'station')
         .map((c) => {
               'callsign': c.callsign,
               'uptime_seconds': DateTime.now().difference(c.connectedAt).inSeconds,
@@ -2738,8 +2738,8 @@ class PureRelayServer {
             })
         .toList();
 
-    final relays = _clients.values
-        .where((c) => c.deviceType == 'relay')
+    final stations = _clients.values
+        .where((c) => c.deviceType == 'station')
         .map((c) => {
               'callsign': c.callsign,
               'uptime_seconds': DateTime.now().difference(c.connectedAt).inSeconds,
@@ -2750,9 +2750,9 @@ class PureRelayServer {
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
       'connected_devices': devices.length,
-      'connected_relays': relays.length,
+      'connected_stations': stations.length,
       'devices': devices,
-      'relays': relays,
+      'stations': stations,
     }));
   }
 
@@ -2885,7 +2885,7 @@ class PureRelayServer {
     }));
   }
 
-  /// POST /api/relay/send - Send NOSTR-signed message from relay
+  /// POST /api/station/send - Send NOSTR-signed message from station
   Future<void> _handleRelaySend(HttpRequest request) async {
     try {
       final body = await utf8.decodeStream(request);
@@ -2964,7 +2964,7 @@ class PureRelayServer {
     // Groups are not yet implemented - return empty list
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
-      'relay': _settings.callsign,
+      'station': _settings.callsign,
       'groups': [],
       'count': 0,
     }));
@@ -3129,7 +3129,7 @@ class PureRelayServer {
         }
       }
 
-      // Fallback: Try to find the blog locally on the relay server
+      // Fallback: Try to find the blog locally on the station server
       // (for relays that also host their own content)
       final callsign = await _findCallsignByIdentifier(identifier);
       if (callsign == null) {
@@ -3499,7 +3499,7 @@ class PureRelayServer {
 <!DOCTYPE html>
 <html>
 <head>
-  <title>${_settings.name ?? 'Geogram Relay'}</title>
+  <title>${_settings.name ?? 'Geogram Station'}</title>
   <style>
     body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background: #1a1a2e; color: #eee; }
     h1 { color: #00d9ff; }
@@ -3512,11 +3512,11 @@ class PureRelayServer {
   </style>
 </head>
 <body>
-  <h1>${_settings.name ?? 'Geogram Relay'}</h1>
+  <h1>${_settings.name ?? 'Geogram Station'}</h1>
   <div class="info">
     <p><strong>Callsign:</strong> ${_settings.callsign}</p>
     <p><strong>Version:</strong> $cliAppVersion</p>
-    <p><strong>Description:</strong> ${_settings.description ?? 'Geogram Desktop Relay Server'}</p>
+    <p><strong>Description:</strong> ${_settings.description ?? 'Geogram Desktop Station Server'}</p>
   </div>
   <div class="info">
     <div class="stat"><div class="stat-value">${_clients.length}</div><div class="stat-label">Connected Devices</div></div>
@@ -3777,7 +3777,7 @@ class PureRelayServer {
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
       'room_id': roomId,
-      'relay': _settings.callsign,
+      'station': _settings.callsign,
       'files': files,
       'count': files.length,
     }));
@@ -3923,7 +3923,7 @@ class PureRelayServer {
 
       final response = await http.get(
         Uri.parse(url),
-        headers: {'User-Agent': 'Geogram-Desktop-Relay/$cliAppVersion'},
+        headers: {'User-Agent': 'Geogram-Desktop-Station/$cliAppVersion'},
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -3994,7 +3994,7 @@ class SslCertificateManager {
   PureRelaySettings _settings;
   final String _sslDir;
 
-  /// Update settings reference (called when relay settings change)
+  /// Update settings reference (called when station settings change)
   void updateSettings(PureRelaySettings newSettings) {
     _settings = newSettings;
   }
@@ -4179,12 +4179,12 @@ class SslCertificateManager {
     }
   }
 
-  // Reference to relay server for challenge handling
-  PureRelayServer? _relayServer;
+  // Reference to station server for challenge handling
+  PureStationServer? _stationServer;
 
-  /// Set relay server reference for ACME challenge handling
-  void setRelayServer(PureRelayServer server) {
-    _relayServer = server;
+  /// Set station server reference for ACME challenge handling
+  void setRelayServer(PureStationServer server) {
+    _stationServer = server;
   }
 
   /// Request certificate using native ACME protocol implementation
@@ -4419,12 +4419,12 @@ class SslCertificateManager {
       // Compute key authorization
       final keyAuthz = await _computeKeyAuthorization(token, accountKey);
 
-      // Set challenge response on relay server
-      if (_relayServer != null) {
-        _relayServer!.setAcmeChallenge(token, keyAuthz);
+      // Set challenge response on station server
+      if (_stationServer != null) {
+        _stationServer!.setAcmeChallenge(token, keyAuthz);
         stdout.writeln('  Challenge token set: $token');
       } else {
-        throw Exception('Relay server not available for challenge');
+        throw Exception('Station server not available for challenge');
       }
 
       // Tell ACME server to verify
@@ -4472,7 +4472,7 @@ class SslCertificateManager {
       }
 
       // Cleanup challenge
-      _relayServer?.clearAcmeChallenge(token);
+      _stationServer?.clearAcmeChallenge(token);
     }
   }
 

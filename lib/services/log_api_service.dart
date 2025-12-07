@@ -74,8 +74,8 @@ class LogApiService {
       return _handleLogRequest(request, headers);
     }
 
-    // API status endpoint (for relay discovery compatibility)
-    if ((request.url.path == 'api/status' || request.url.path == 'relay/status') &&
+    // API status endpoint (for station discovery compatibility)
+    if ((request.url.path == 'api/status' || request.url.path == 'station/status') &&
         request.method == 'GET') {
       return _handleStatusRequest(headers);
     }
@@ -121,7 +121,7 @@ class LogApiService {
     );
   }
 
-  /// Handle /api/status and /relay/status for discovery compatibility
+  /// Handle /api/status and /station/status for discovery compatibility
   shelf.Response _handleStatusRequest(Map<String, String> headers) {
     String callsign = '';
     try {

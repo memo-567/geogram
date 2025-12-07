@@ -4,23 +4,23 @@
  */
 
 import 'package:flutter/material.dart';
-import '../models/relay_node.dart';
-import '../models/relay_network.dart';
-import '../services/relay_node_service.dart';
+import '../models/station_node.dart';
+import '../models/station_network.dart';
+import '../services/station_node_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 
-/// Wizard for creating a root relay network
-class RelaySetupRootPage extends StatefulWidget {
-  const RelaySetupRootPage({super.key});
+/// Wizard for creating a root station network
+class StationSetupRootPage extends StatefulWidget {
+  const StationSetupRootPage({super.key});
 
   @override
-  State<RelaySetupRootPage> createState() => _RelaySetupRootPageState();
+  State<StationSetupRootPage> createState() => _RelaySetupRootPageState();
 }
 
-class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelaySetupRootPageState extends State<StationSetupRootPage> {
+  final StationNodeService _stationNodeService = StationNodeService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
 
@@ -71,7 +71,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Create Root Relay'),
+        title: Text('Create Root Station'),
       ),
       body: Stepper(
         currentStep: _currentStep,
@@ -122,7 +122,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
             enabled: false,
             decoration: InputDecoration(
               labelText: 'Operator Callsign (X1)',
-              helperText: 'Your identity as the relay operator',
+              helperText: 'Your identity as the station operator',
               border: OutlineInputBorder(),
               filled: true,
               fillColor: Colors.grey[800],
@@ -147,7 +147,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'The relay will receive its own X3 callsign (generated from its unique keypair). Your X1 callsign identifies you as the operator.',
+                    'The station will receive its own X3 callsign (generated from its unique keypair). Your X1 callsign identifies you as the operator.',
                     style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                   ),
                 ),
@@ -487,8 +487,8 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
           _buildSummarySection('Network Summary', [
             'Name: ${_networkNameController.text}',
             'Operator: ${_callsignController.text} (X1)',
-            'Relay: Will be assigned X3 callsign',
-            'Type: Root Relay',
+            'Station: Will be assigned X3 callsign',
+            'Type: Root Station',
           ]),
           SizedBox(height: 16),
           _buildSummarySection('Collections', [
@@ -521,7 +521,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Creating a root relay makes you responsible for the network. You will be the ultimate authority for all network decisions.',
+                    'Creating a root station makes you responsible for the network. You will be the ultimate authority for all network decisions.',
                     style: TextStyle(fontSize: 12),
                   ),
                 ),
@@ -612,8 +612,8 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
     setState(() => _isCreating = true);
 
     try {
-      final config = RelayNodeConfig(
-        storage: RelayStorageConfig(
+      final config = StationNodeConfig(
+        storage: StationStorageConfig(
           allocatedMb: _allocatedMb,
           binaryPolicy: _binaryPolicy,
           retentionDays: _foreverRetention ? 0 : _retentionDays,
@@ -640,7 +640,7 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
         userApprovalRequired: _userCollections.toList(),
       );
 
-      await _relayNodeService.createRootRelay(
+      await _stationNodeService.createRootRelay(
         networkName: _networkNameController.text,
         networkDescription: _networkDescriptionController.text,
         operatorCallsign: _callsignController.text,
@@ -652,11 +652,11 @@ class _RelaySetupRootPageState extends State<RelaySetupRootPage> {
       if (mounted) {
         Navigator.of(context).pop(true);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Root relay created successfully!')),
+          SnackBar(content: Text('Root station created successfully!')),
         );
       }
     } catch (e) {
-      LogService().log('Error creating root relay: $e');
+      LogService().log('Error creating root station: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),

@@ -9,7 +9,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
-import '../services/relay_node_service.dart';
+import '../services/station_node_service.dart';
 
 /// Node status in the topology
 enum NodeStatus {
@@ -22,7 +22,7 @@ enum NodeStatus {
 class TopologyNode {
   final String callsign;
   final String npub;
-  final String relayId;
+  final String stationId;
   final String type;
   final double? latitude;
   final double? longitude;
@@ -33,7 +33,7 @@ class TopologyNode {
   TopologyNode({
     required this.callsign,
     required this.npub,
-    required this.relayId,
+    required this.stationId,
     required this.type,
     this.latitude,
     this.longitude,
@@ -61,7 +61,7 @@ class TopologyNode {
     return TopologyNode(
       callsign: json['callsign'] as String,
       npub: json['npub'] as String? ?? '',
-      relayId: json['relay_id'] as String? ?? '',
+      stationId: json['station_id'] as String? ?? '',
       type: json['type'] as String? ?? 'node',
       latitude: location?['lat'] as double?,
       longitude: location?['lon'] as double?,
@@ -107,15 +107,15 @@ class TopologyConnection {
 }
 
 /// Page for viewing network topology
-class RelayTopologyPage extends StatefulWidget {
-  const RelayTopologyPage({super.key});
+class StationTopologyPage extends StatefulWidget {
+  const StationTopologyPage({super.key});
 
   @override
-  State<RelayTopologyPage> createState() => _RelayTopologyPageState();
+  State<StationTopologyPage> createState() => _RelayTopologyPageState();
 }
 
-class _RelayTopologyPageState extends State<RelayTopologyPage> {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelayTopologyPageState extends State<StationTopologyPage> {
+  final StationNodeService _stationNodeService = StationNodeService();
 
   Map<String, TopologyNode> _nodes = {};
   List<TopologyConnection> _connections = [];
@@ -139,8 +139,8 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
     });
 
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
-      final topologyFile = File(path.join(relayDir.path, 'sync', 'topology.json'));
+      final stationDir = await _stationNodeService.getStationDirectory();
+      final topologyFile = File(path.join(stationDir.path, 'sync', 'topology.json'));
 
       if (!await topologyFile.exists()) {
         // Create mock data for visualization
@@ -180,7 +180,7 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
   }
 
   void _createMockTopology() {
-    final node = _relayNodeService.relayNode;
+    final node = _stationNodeService.stationNode;
     if (node == null) return;
 
     // Add current node
@@ -188,7 +188,7 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
       node.callsign: TopologyNode(
         callsign: node.callsign,
         npub: node.npub,
-        relayId: node.id,
+        stationId: node.id,
         type: node.isRoot ? 'root' : 'node',
         latitude: node.config.coverage?.latitude,
         longitude: node.config.coverage?.longitude,
@@ -203,7 +203,7 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
       _nodes[node.rootCallsign!] = TopologyNode(
         callsign: node.rootCallsign!,
         npub: node.rootNpub ?? '',
-        relayId: '',
+        stationId: '',
         type: 'root',
         status: NodeStatus.unknown,
         channels: ['internet'],
@@ -441,7 +441,7 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(node.callsign, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    Text(node.type == 'root' ? 'Root Relay' : 'Node Relay',
+                    Text(node.type == 'root' ? 'Root Station' : 'Node Station',
                         style: TextStyle(color: Colors.grey[600])),
                   ],
                 ),
@@ -454,7 +454,7 @@ class _RelayTopologyPageState extends State<RelayTopologyPage> {
           ),
           Divider(height: 24),
           _buildDetailRow('Status', _getStatusText(node.status)),
-          _buildDetailRow('Relay ID', node.relayId.isNotEmpty ? node.relayId : 'N/A'),
+          _buildDetailRow('Station ID', node.stationId.isNotEmpty ? node.stationId : 'N/A'),
           _buildDetailRow('NPUB', _truncateNpub(node.npub)),
           if (node.lastSeen != null)
             _buildDetailRow('Last seen', _formatDateTime(node.lastSeen!)),

@@ -15,7 +15,7 @@ import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart' as fmtc;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'profile_service.dart';
-import 'relay_service.dart';
+import 'station_service.dart';
 import 'log_service.dart';
 import 'config_service.dart';
 
@@ -54,7 +54,7 @@ class TileLoadingStatus {
 }
 
 /// Centralized service for managing map tiles with offline caching
-/// Tile fetching priority: 1) Cache, 2) Relay, 3) Direct Internet (OSM)
+/// Tile fetching priority: 1) Cache, 2) Station, 3) Direct Internet (OSM)
 /// Tiles are stored in ~/Documents/geogram/tiles/
 class MapTileService {
   static final MapTileService _instance = MapTileService._internal();
@@ -142,10 +142,10 @@ class MapTileService {
       _initialized = true;
       LogService().log('MapTileService: Tile cache initialized at $_tilesPath');
 
-      // Log relay tile URL availability for debugging
-      final relayUrl = getRelayTileUrl();
-      if (relayUrl != null) {
-        LogService().log('MapTileService: Relay tiles enabled');
+      // Log station tile URL availability for debugging
+      final stationUrl = getStationTileUrl();
+      if (stationUrl != null) {
+        LogService().log('MapTileService: Station tiles enabled');
       }
 
       // Load saved layer preference
@@ -207,46 +207,46 @@ class MapTileService {
         : MapLayerType.standard);
   }
 
-  /// Get the relay tile URL if relay is available
+  /// Get the station tile URL if station is available
   /// [layerType] specifies the layer type (standard or satellite)
-  String? getRelayTileUrl([MapLayerType? layerType]) {
+  String? getStationTileUrl([MapLayerType? layerType]) {
     try {
-      final relay = RelayService().getPreferredRelay();
+      final station = StationService().getPreferredStation();
       final profile = _profileService.getProfile();
 
-      // Check requirements for relay tile URL
-      if (relay == null) {
+      // Check requirements for station tile URL
+      if (station == null) {
         return null;
       }
-      if (relay.url.isEmpty) {
+      if (station.url.isEmpty) {
         return null;
       }
       if (profile.callsign.isEmpty) {
-        LogService().log('MapTileService: User callsign is empty, cannot use relay for tiles');
+        LogService().log('MapTileService: User callsign is empty, cannot use station for tiles');
         return null;
       }
 
-      var relayUrl = relay.url;
+      var stationUrl = station.url;
 
       // Convert ws:// to http:// and wss:// to https://
-      if (relayUrl.startsWith('ws://')) {
-        relayUrl = relayUrl.replaceFirst('ws://', 'http://');
-      } else if (relayUrl.startsWith('wss://')) {
-        relayUrl = relayUrl.replaceFirst('wss://', 'https://');
+      if (stationUrl.startsWith('ws://')) {
+        stationUrl = stationUrl.replaceFirst('ws://', 'http://');
+      } else if (stationUrl.startsWith('wss://')) {
+        stationUrl = stationUrl.replaceFirst('wss://', 'https://');
       }
 
       // Remove trailing slash if present
-      if (relayUrl.endsWith('/')) {
-        relayUrl = relayUrl.substring(0, relayUrl.length - 1);
+      if (stationUrl.endsWith('/')) {
+        stationUrl = stationUrl.substring(0, stationUrl.length - 1);
       }
 
       // Add layer query parameter for satellite tiles
       final layer = layerType ?? _currentLayerType;
       final layerParam = layer == MapLayerType.satellite ? '?layer=satellite' : '';
 
-      return '$relayUrl/tiles/${profile.callsign}/{z}/{x}/{y}.png$layerParam';
+      return '$stationUrl/tiles/${profile.callsign}/{z}/{x}/{y}.png$layerParam';
     } catch (e) {
-      LogService().log('MapTileService: Error getting relay tile URL: $e');
+      LogService().log('MapTileService: Error getting station tile URL: $e');
     }
     return null;
   }
@@ -257,7 +257,7 @@ class MapTileService {
     return type == MapLayerType.satellite ? satelliteTileUrl : osmTileUrl;
   }
 
-  /// Get the tile provider with priority: Cache -> Relay -> Internet
+  /// Get the tile provider with priority: Cache -> Station -> Internet
   TileProvider getTileProvider([MapLayerType? layerType]) {
     final type = layerType ?? _currentLayerType;
     if (_initialized && _tileStore != null && !kIsWeb) {
@@ -358,7 +358,7 @@ class MapTileService {
 
   /// Test tile fetching by simulating map navigation
   /// This clears specific test tiles from cache and fetches them fresh
-  /// to verify the relay -> internet fallback chain works correctly
+  /// to verify the station -> internet fallback chain works correctly
   /// [layerType] can be 'standard' or 'satellite' to test different tile sources
   Future<Map<String, dynamic>> testTileFetching({
     double lat = 49.683,
@@ -374,13 +374,13 @@ class MapTileService {
     final results = <String, dynamic>{
       'success': false,
       'tiles': <Map<String, dynamic>>[],
-      'relayUrl': getRelayTileUrl(),
+      'stationUrl': getStationTileUrl(),
       'errors': <String>[],
     };
 
     LogService().log('=== TILE FETCH TEST START ===');
     LogService().log('Test location: lat=$lat, lon=$lon, zoom=$zoom');
-    LogService().log('Relay URL template: ${results['relayUrl'] ?? 'NOT AVAILABLE'}');
+    LogService().log('Station URL template: ${results['stationUrl'] ?? 'NOT AVAILABLE'}');
 
     // Convert lat/lon to tile coordinates for the specified zoom level
     // Standard Web Mercator tile calculation
@@ -438,34 +438,34 @@ class MapTileService {
       };
 
       try {
-        // First try relay
-        final relayUrl = getRelayTileUrl();
-        if (relayUrl != null) {
-          final url = relayUrl
+        // First try station
+        final stationUrl = getStationTileUrl();
+        if (stationUrl != null) {
+          final url = stationUrl
               .replaceAll('{z}', z.toString())
               .replaceAll('{x}', x.toString())
               .replaceAll('{y}', y.toString());
 
-          LogService().log('TEST [$z/$x/$y] Trying relay: $url');
+          LogService().log('TEST [$z/$x/$y] Trying station: $url');
           try {
             final response = await httpClient
                 .get(Uri.parse(url))
                 .timeout(const Duration(seconds: 5));
 
             if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-              tileResult['source'] = 'RELAY';
+              tileResult['source'] = 'STATION';
               tileResult['bytes'] = response.bodyBytes.length;
               LogService().log('TEST [$z/$x/$y] SUCCESS from RELAY (${response.bodyBytes.length} bytes)');
               (results['tiles'] as List).add(tileResult);
               continue;
             } else {
-              LogService().log('TEST [$z/$x/$y] Relay returned ${response.statusCode} (${response.bodyBytes.length} bytes)');
+              LogService().log('TEST [$z/$x/$y] Station returned ${response.statusCode} (${response.bodyBytes.length} bytes)');
             }
           } catch (e) {
-            LogService().log('TEST [$z/$x/$y] Relay failed: $e');
+            LogService().log('TEST [$z/$x/$y] Station failed: $e');
           }
         } else {
-          LogService().log('TEST [$z/$x/$y] No relay URL configured');
+          LogService().log('TEST [$z/$x/$y] No station URL configured');
         }
 
         // Fall back to internet
@@ -495,27 +495,27 @@ class MapTileService {
 
     // Summary
     final tiles = results['tiles'] as List;
-    final relayCount = tiles.where((t) => t['source'] == 'RELAY').length;
+    final stationCount = tiles.where((t) => t['source'] == 'STATION').length;
     final internetCount = tiles.where((t) => t['source'] == 'INTERNET').length;
     final failedCount = tiles.where((t) => t['error'] != null).length;
 
     results['success'] = failedCount == 0;
     results['summary'] = {
       'total': tiles.length,
-      'fromRelay': relayCount,
+      'fromStation': stationCount,
       'fromInternet': internetCount,
       'failed': failedCount,
     };
 
     LogService().log('=== TILE FETCH TEST COMPLETE ===');
     LogService().log('Results: ${tiles.length} tiles tested');
-    LogService().log('  From RELAY: $relayCount');
+    LogService().log('  From STATION: $stationCount');
     LogService().log('  From INTERNET: $internetCount');
     LogService().log('  FAILED: $failedCount');
 
-    if (relayCount == 0 && results['relayUrl'] != null) {
-      LogService().log('WARNING: Relay URL is configured but NO tiles came from relay!');
-      LogService().log('This indicates the desktop app is NOT using the relay for tiles.');
+    if (stationCount == 0 && results['stationUrl'] != null) {
+      LogService().log('WARNING: Station URL is configured but NO tiles came from station!');
+      LogService().log('This indicates the desktop app is NOT using the station for tiles.');
     }
 
     return results;
@@ -524,7 +524,7 @@ class MapTileService {
 
 /// Custom tile provider with fallback logic:
 /// 1. Check cache first
-/// 2. Try relay if available (standard layer only)
+/// 2. Try station if available (standard layer only)
 /// 3. Fall back to direct internet (OSM or Esri satellite)
 class GeogramTileProvider extends TileProvider {
   final fmtc.FMTCStore tileStore;
@@ -618,7 +618,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     return false;
   }
 
-  /// Load tile with priority: Cache -> Relay (standard only) -> Internet
+  /// Load tile with priority: Cache -> Station (standard only) -> Internet
   /// Retries failed tiles for up to 2 minutes with exponential backoff
   Future<ui.Codec> _loadTileWithFallback(ImageDecoderCallback decode) async {
     final z = coordinates.z.toInt();
@@ -669,10 +669,10 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
       int retryDelay = 2; // Start with 2 seconds
 
       while (tileData == null) {
-        // 2. Try relay if available (supports both standard and satellite tiles)
-        final relayUrl = mapTileService.getRelayTileUrl(layerType);
-        if (relayUrl != null) {
-          final url = relayUrl
+        // 2. Try station if available (supports both standard and satellite tiles)
+        final stationUrl = mapTileService.getStationTileUrl(layerType);
+        if (stationUrl != null) {
+          final url = stationUrl
               .replaceAll('{z}', z.toString())
               .replaceAll('{x}', x.toString())
               .replaceAll('{y}', y.toString());
@@ -689,14 +689,14 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
               await _cacheTile(z, x, y, tileData);
               break;
             } else {
-              LogService().log('TILE [$z/$x/$y] Relay returned status ${response.statusCode}');
+              LogService().log('TILE [$z/$x/$y] Station returned status ${response.statusCode}');
             }
           } catch (e) {
-            // Relay failed, continue to internet
-            LogService().log('TILE [$z/$x/$y] Relay FAILED: $e');
+            // Station failed, continue to internet
+            LogService().log('TILE [$z/$x/$y] Station FAILED: $e');
           }
         } else {
-          LogService().log('TILE [$z/$x/$y] No relay URL available');
+          LogService().log('TILE [$z/$x/$y] No station URL available');
         }
 
         // 3. Try direct internet

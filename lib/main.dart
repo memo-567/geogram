@@ -11,8 +11,8 @@ import 'services/log_api_service.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
-import 'services/relay_service.dart';
-import 'services/relay_discovery_service.dart';
+import 'services/station_service.dart';
+import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
@@ -23,7 +23,7 @@ import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
-import 'pages/relays_page.dart';
+import 'pages/stations_page.dart';
 import 'pages/location_page.dart';
 // import 'pages/notifications_page.dart'; // TODO: Not yet implemented
 import 'pages/chat_browser_page.dart';
@@ -38,7 +38,7 @@ import 'pages/market_browser_page.dart';
 import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
-import 'pages/relay_dashboard_page.dart';
+import 'pages/station_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
@@ -154,17 +154,17 @@ void main() async {
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
-      // RelayService can involve network calls - defer it
-      await RelayService().initialize();
-      LogService().log('RelayService initialized (deferred)');
+      // StationService can involve network calls - defer it
+      await StationService().initialize();
+      LogService().log('StationService initialized (deferred)');
 
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();
       LogService().log('UpdateService initialized (deferred)');
 
-      // Start relay auto-discovery (background task)
-      RelayDiscoveryService().start();
-      LogService().log('RelayDiscoveryService started (deferred)');
+      // Start station auto-discovery (background task)
+      StationDiscoveryService().start();
+      LogService().log('StationDiscoveryService started (deferred)');
 
       // Start log API service (only needed for debugging)
       await LogApiService().start();
@@ -416,16 +416,16 @@ class _HomePageState extends State<HomePage> {
           automaticallyImplyLeading: false,
           title: const ProfileSwitcher(),
           actions: [
-            // Show relay indicator if current profile is a relay
+            // Show station indicator if current profile is a station
             if (_profileService.getProfile().isRelay)
             IconButton(
               icon: const Icon(Icons.cell_tower),
-              tooltip: _i18n.t('relay_dashboard'),
+              tooltip: _i18n.t('station_dashboard'),
               onPressed: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => const RelayDashboardPage(),
+                    builder: (context) => const StationDashboardPage(),
                   ),
                 );
               },
@@ -579,7 +579,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'relay'
+      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'station'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -819,8 +819,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                     collectionPath: collection.storagePath ?? '',
                                                                                     collectionTitle: collection.title,
                                                                                   )
-                                                                                : collection.type == 'relay'
-                                                                                    ? const RelayDashboardPage()
+                                                                                : collection.type == 'station'
+                                                                                    ? const StationDashboardPage()
                                                                                     : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
@@ -974,7 +974,7 @@ class _CollectionGridCard extends StatelessWidget {
   bool _isFixedCollectionType() {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'alerts', 'relay'
+      'www', 'postcards', 'contacts', 'places', 'market', 'groups', 'alerts', 'station'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -1025,7 +1025,7 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.groups;
       case 'alerts':
         return Icons.campaign;
-      case 'relay':
+      case 'station':
         return Icons.cell_tower;
       default:
         return Icons.folder_special;
@@ -1741,26 +1741,26 @@ class _SettingsPageState extends State<SettingsPage> {
         ListTile(
           leading: const Icon(Icons.settings_input_antenna),
           title: Text(_i18n.t('connections')),
-          subtitle: Text(_i18n.t('manage_relays_and_network')),
+          subtitle: Text(_i18n.t('manage_stations_and_network')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const RelaysPage()),
+              MaterialPageRoute(builder: (context) => const StationsPage()),
             );
           },
         ),
-        // Show relay settings only for relay profiles
+        // Show station settings only for station profiles
         if (_profileService.getProfile().isRelay)
           ListTile(
             leading: const Icon(Icons.cell_tower, color: Colors.orange),
-            title: Text(_i18n.t('relay_settings')),
-            subtitle: Text(_i18n.t('configure_relay_server')),
+            title: Text(_i18n.t('station_settings')),
+            subtitle: Text(_i18n.t('configure_station_server')),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const RelayDashboardPage()),
+                MaterialPageRoute(builder: (context) => const StationDashboardPage()),
               );
             },
           ),

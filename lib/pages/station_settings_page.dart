@@ -4,22 +4,22 @@
  */
 
 import 'package:flutter/material.dart';
-import '../models/relay_node.dart';
-import '../services/relay_node_service.dart';
+import '../models/station_node.dart';
+import '../services/station_node_service.dart';
 import '../services/log_service.dart';
 
-/// Settings page for relay configuration
-class RelaySettingsPage extends StatefulWidget {
-  const RelaySettingsPage({super.key});
+/// Settings page for station configuration
+class StationSettingsPage extends StatefulWidget {
+  const StationSettingsPage({super.key});
 
   @override
-  State<RelaySettingsPage> createState() => _RelaySettingsPageState();
+  State<StationSettingsPage> createState() => _RelaySettingsPageState();
 }
 
-class _RelaySettingsPageState extends State<RelaySettingsPage> {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelaySettingsPageState extends State<StationSettingsPage> {
+  final StationNodeService _stationNodeService = StationNodeService();
 
-  late RelayNodeConfig _config;
+  late StationNodeConfig _config;
   bool _isSaving = false;
   bool _hasChanges = false;
 
@@ -48,7 +48,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
   }
 
   void _loadConfig() {
-    final node = _relayNodeService.relayNode;
+    final node = _stationNodeService.stationNode;
     if (node == null) return;
 
     _config = node.config;
@@ -76,17 +76,17 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final node = _relayNodeService.relayNode;
+    final node = _stationNodeService.stationNode;
     if (node == null) {
       return Scaffold(
-        appBar: AppBar(title: Text('Relay Settings')),
-        body: Center(child: Text('No relay configured')),
+        appBar: AppBar(title: Text('Station Settings')),
+        body: Center(child: Text('No station configured')),
       );
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Relay Settings'),
+        title: Text('Station Settings'),
         actions: [
           if (_hasChanges)
             TextButton(
@@ -124,7 +124,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
     );
   }
 
-  Widget _buildInfoCard(RelayNode node) {
+  Widget _buildInfoCard(StationNode node) {
     return Card(
       child: Padding(
         padding: EdgeInsets.all(16),
@@ -135,8 +135,8 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
             SizedBox(height: 12),
             _buildInfoRow('Name', node.name),
             _buildInfoRow('Type', node.typeDisplay),
-            _buildInfoRow('Relay (X3)', node.relayCallsign),
-            _buildInfoRow('Relay NPUB', _truncateNpub(node.relayNpub)),
+            _buildInfoRow('Station (X3)', node.stationCallsign),
+            _buildInfoRow('Station NPUB', _truncateNpub(node.stationNpub)),
             SizedBox(height: 8),
             Divider(),
             SizedBox(height: 8),
@@ -500,7 +500,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
     );
   }
 
-  Widget _buildChannelsSection(RelayNode node) {
+  Widget _buildChannelsSection(StationNode node) {
     return Card(
       child: Padding(
         padding: EdgeInsets.all(16),
@@ -563,7 +563,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
     }
   }
 
-  Widget _buildCollectionsSection(RelayNode node) {
+  Widget _buildCollectionsSection(StationNode node) {
     return Card(
       child: Padding(
         padding: EdgeInsets.all(16),
@@ -595,7 +595,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
     setState(() => _isSaving = true);
 
     try {
-      final newStorage = RelayStorageConfig(
+      final newStorage = StationStorageConfig(
         allocatedMb: _allocatedMb,
         binaryPolicy: _binaryPolicy,
         thumbnailMaxKb: _thumbnailMaxKb,
@@ -619,7 +619,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
         maxConnections: _maxConnections,
       );
 
-      await _relayNodeService.updateConfig(newConfig);
+      await _stationNodeService.updateConfig(newConfig);
 
       setState(() {
         _config = newConfig;
@@ -632,7 +632,7 @@ class _RelaySettingsPageState extends State<RelaySettingsPage> {
         );
       }
     } catch (e) {
-      LogService().log('Error saving relay settings: $e');
+      LogService().log('Error saving station settings: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error saving: $e')),

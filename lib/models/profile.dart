@@ -1,7 +1,7 @@
-/// Profile type - client or relay
+/// Profile type - client or station
 enum ProfileType {
   client, // X1 prefix - regular user
-  relay,  // X3 prefix - relay server
+  station,  // X3 prefix - station server
 }
 
 /// User profile model - represents a single identity/callsign
@@ -25,9 +25,9 @@ class Profile {
   // Profile activation state (multiple profiles can be active simultaneously)
   bool isActive;
 
-  // Relay-specific settings (only used when type == relay)
+  // Station-specific settings (only used when type == station)
   int? port;
-  String? relayRole; // 'root' or 'node'
+  String? stationRole; // 'root' or 'node'
   String? parentRelayUrl;
   String? networkId;
   bool tileServerEnabled;
@@ -51,7 +51,7 @@ class Profile {
     DateTime? createdAt,
     this.isActive = true,
     this.port,
-    this.relayRole,
+    this.stationRole,
     this.parentRelayUrl,
     this.networkId,
     this.tileServerEnabled = true,
@@ -60,7 +60,7 @@ class Profile {
   }) : id = id ?? _generateId(),
        createdAt = createdAt ?? DateTime.now();
 
-  bool get isRelay => type == ProfileType.relay;
+  bool get isRelay => type == ProfileType.station;
   bool get isClient => type == ProfileType.client;
 
   /// Generate a simple unique ID
@@ -73,7 +73,7 @@ class Profile {
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
       id: json['id'] as String?,
-      type: json['type'] == 'relay' ? ProfileType.relay : ProfileType.client,
+      type: json['type'] == 'station' ? ProfileType.station : ProfileType.client,
       callsign: json['callsign'] as String? ?? '',
       nickname: json['nickname'] as String? ?? '',
       description: json['description'] as String? ?? '',
@@ -90,7 +90,7 @@ class Profile {
           : null,
       isActive: json['isActive'] as bool? ?? false,
       port: json['port'] as int?,
-      relayRole: json['relayRole'] as String?,
+      stationRole: json['stationRole'] as String?,
       parentRelayUrl: json['parentRelayUrl'] as String?,
       networkId: json['networkId'] as String?,
       tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
@@ -103,7 +103,7 @@ class Profile {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'type': type == ProfileType.relay ? 'relay' : 'client',
+      'type': type == ProfileType.station ? 'station' : 'client',
       'callsign': callsign,
       'nickname': nickname,
       'description': description,
@@ -118,7 +118,7 @@ class Profile {
       'createdAt': createdAt.toIso8601String(),
       'isActive': isActive,
       if (port != null) 'port': port,
-      if (relayRole != null) 'relayRole': relayRole,
+      if (stationRole != null) 'stationRole': stationRole,
       if (parentRelayUrl != null) 'parentRelayUrl': parentRelayUrl,
       if (networkId != null) 'networkId': networkId,
       'tileServerEnabled': tileServerEnabled,
@@ -143,7 +143,7 @@ class Profile {
     String? locationName,
     bool? isActive,
     int? port,
-    String? relayRole,
+    String? stationRole,
     String? parentRelayUrl,
     String? networkId,
     bool? tileServerEnabled,
@@ -167,7 +167,7 @@ class Profile {
       createdAt: createdAt, // Preserve creation time
       isActive: isActive ?? this.isActive,
       port: port ?? this.port,
-      relayRole: relayRole ?? this.relayRole,
+      stationRole: stationRole ?? this.stationRole,
       parentRelayUrl: parentRelayUrl ?? this.parentRelayUrl,
       networkId: networkId ?? this.networkId,
       tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,

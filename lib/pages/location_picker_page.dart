@@ -505,7 +505,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               return TileLayer(
                                 urlTemplate: _mapTileService.getTileUrl(layerType),
                                 userAgentPackageName: 'dev.geogram.geogram_desktop',
-                                subdomains: const [], // No subdomains for relay/OSM
+                                subdomains: const [], // No subdomains for station/OSM
                                 tileProvider: _mapTileService.getTileProvider(layerType),
                                 errorTileCallback: (tile, error, stackTrace) {
                                   if (!_isOnline) return;

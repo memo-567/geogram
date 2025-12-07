@@ -9,7 +9,7 @@ import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
-import '../services/relay_cache_service.dart';
+import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import 'chat_browser_page.dart';
 
@@ -144,7 +144,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     if (_selectedDevice == null) return;
 
     // Build the remote device URL
-    // If the device has a direct URL, use it; otherwise construct via relay proxy
+    // If the device has a direct URL, use it; otherwise construct via station proxy
     String remoteUrl = _selectedDevice!.url ?? '';
 
     // Convert WebSocket URL to HTTP URL for API calls
@@ -696,7 +696,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     // Check if name matches a known collection type and translate it
     final knownTypes = ['chat', 'blog', 'forum', 'contacts', 'events', 'places',
                         'news', 'www', 'postcards', 'market', 'alerts', 'groups',
-                        'relay', 'documents', 'photos', 'files'];
+                        'station', 'documents', 'photos', 'files'];
     if (knownTypes.contains(name.toLowerCase())) {
       return _getCollectionTypeLabel(name.toLowerCase());
     }

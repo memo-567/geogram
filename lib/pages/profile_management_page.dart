@@ -11,7 +11,7 @@ import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import 'profile_page.dart';
-import 'relay_dashboard_page.dart';
+import 'station_dashboard_page.dart';
 
 /// Page for managing multiple profiles
 class ProfileManagementPage extends StatefulWidget {
@@ -223,11 +223,11 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
   }
 
   void _openRelayDashboard(Profile profile) {
-    // Switch to the profile first, then open relay dashboard
+    // Switch to the profile first, then open station dashboard
     _profileService.switchToProfile(profile.id).then((_) {
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const RelayDashboardPage()),
+        MaterialPageRoute(builder: (context) => const StationDashboardPage()),
       );
     });
   }
@@ -423,7 +423,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                             case 'edit':
                               _editProfile(profile);
                               break;
-                            case 'relay':
+                            case 'station':
                               _openRelayDashboard(profile);
                               break;
                             case 'switch':
@@ -456,12 +456,12 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                           ),
                           if (profile.isRelay)
                             PopupMenuItem(
-                              value: 'relay',
+                              value: 'station',
                               child: Row(
                                 children: [
                                   const Icon(Icons.cell_tower),
                                   const SizedBox(width: 8),
-                                  Text(_i18n.t('relay_dashboard')),
+                                  Text(_i18n.t('station_dashboard')),
                                 ],
                               ),
                             ),
@@ -575,7 +575,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
         ),
         const SizedBox(width: 8),
         Text(
-          _i18n.t('relay_profile'),
+          _i18n.t('station_profile'),
           style: TextStyle(
             fontSize: 12,
             color: Colors.orange[700],
@@ -706,10 +706,10 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildTypeOption(
-                      type: ProfileType.relay,
+                      type: ProfileType.station,
                       icon: Icons.cell_tower,
-                      title: _i18n.t('relay'),
-                      description: _i18n.t('relay_description'),
+                      title: _i18n.t('station'),
+                      description: _i18n.t('station_description'),
                       color: Colors.orange,
                     ),
                   ),

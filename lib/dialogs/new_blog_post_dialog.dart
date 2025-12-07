@@ -12,14 +12,21 @@ import '../models/blog_post.dart';
 import '../services/i18n_service.dart';
 import '../pages/location_picker_page.dart';
 
-/// Full-screen page for creating a new blog post
+/// Alias for backwards compatibility
+typedef BlogPostPage = NewBlogPostDialog;
+
+/// Full-screen page for creating or editing a blog post
 class NewBlogPostDialog extends StatefulWidget {
   final List<String> existingTags;
+  final BlogPost? post; // If provided, we're editing an existing post
 
   const NewBlogPostDialog({
     Key? key,
     this.existingTags = const [],
+    this.post,
   }) : super(key: key);
+
+  bool get isEditing => post != null;
 
   @override
   State<NewBlogPostDialog> createState() => _NewBlogPostDialogState();

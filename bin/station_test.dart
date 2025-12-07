@@ -1,5 +1,5 @@
 #!/usr/bin/env dart
-// Test script for relay server functionality
+// Test script for station server functionality
 
 import 'dart:io';
 import 'dart:convert';
@@ -8,12 +8,12 @@ import 'package:http/http.dart' as http;
 const int TEST_PORT = 9090;
 
 Future<void> main() async {
-  print('Geogram Desktop Relay Server Test');
+  print('Geogram Desktop Station Server Test');
   print('=' * 40);
 
-  // Start a simple HTTP server to simulate the relay
+  // Start a simple HTTP server to simulate the station
   final server = await HttpServer.bind(InternetAddress.anyIPv4, TEST_PORT);
-  print('Test relay server started on port $TEST_PORT');
+  print('Test station server started on port $TEST_PORT');
 
   // Handle requests
   server.listen((request) async {
@@ -26,13 +26,13 @@ Future<void> main() async {
     if (path == '/api/status' || path == '/status') {
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
-        'name': 'Geogram Desktop Relay Test',
+        'name': 'Geogram Desktop Station Test',
         'version': '1.5.3',
         'callsign': 'X3TEST',
-        'description': 'Test relay server',
+        'description': 'Test station server',
         'connected_devices': 0,
         'uptime': 0,
-        'relay_mode': true,
+        'station_mode': true,
         'tile_server': true,
         'osm_fallback': true,
       }));
@@ -41,9 +41,9 @@ Future<void> main() async {
       request.response.write('''
 <!DOCTYPE html>
 <html>
-<head><title>Geogram Relay Test</title></head>
+<head><title>Geogram Station Test</title></head>
 <body>
-  <h1>Geogram Desktop Relay Test</h1>
+  <h1>Geogram Desktop Station Test</h1>
   <p>Port: $TEST_PORT</p>
   <p>Status: Running</p>
 </body>

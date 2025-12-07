@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../models/relay.dart';
-import '../models/relay_chat_room.dart';
+import '../models/station.dart';
+import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
@@ -14,142 +14,142 @@ import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 
 /// Service for managing internet relays
-class RelayService {
-  static final RelayService _instance = RelayService._internal();
-  factory RelayService() => _instance;
-  RelayService._internal();
+class StationService {
+  static final StationService _instance = StationService._internal();
+  factory StationService() => _instance;
+  StationService._internal();
 
-  List<Relay> _relays = [];
+  List<Station> _stations = [];
   bool _initialized = false;
   final WebSocketService _wsService = WebSocketService();
 
   /// Default relays
-  static final List<Relay> _defaultRelays = [
-    Relay(
+  static final List<Station> _defaultRelays = [
+    Station(
       url: 'wss://p2p.radio',
       name: 'P2P Radio',
-      description: 'Public relay for the geogram network',
+      description: 'Public station for the geogram network',
       status: 'preferred',
     ),
   ];
 
-  /// Initialize relay service
+  /// Initialize station service
   Future<void> initialize() async {
     if (_initialized) return;
 
     try {
-      await _loadRelays();
+      await _loadStations();
       _initialized = true;
-      LogService().log('RelayService initialized with ${_relays.length} relays');
+      LogService().log('StationService initialized with ${_stations.length} stations');
 
-      // Auto-connect to preferred relay
-      final preferredRelay = getPreferredRelay();
-      if (preferredRelay != null && preferredRelay.url.isNotEmpty) {
-        LogService().log('Auto-connecting to preferred relay: ${preferredRelay.name}');
-        connectRelay(preferredRelay.url);
+      // Auto-connect to preferred station
+      final preferredStation = getPreferredStation();
+      if (preferredStation != null && preferredStation.url.isNotEmpty) {
+        LogService().log('Auto-connecting to preferred station: ${preferredStation.name}');
+        connectRelay(preferredStation.url);
       }
     } catch (e) {
-      LogService().log('Error initializing RelayService: $e');
+      LogService().log('Error initializing StationService: $e');
     }
   }
 
-  /// Load relays from config
-  Future<void> _loadRelays() async {
+  /// Load stations from config
+  Future<void> _loadStations() async {
     final config = ConfigService().getAll();
 
-    if (config.containsKey('relays')) {
-      final relaysData = config['relays'] as List<dynamic>;
-      _relays = relaysData.map((data) => Relay.fromJson(data as Map<String, dynamic>)).toList();
+    if (config.containsKey('stations')) {
+      final stationsData = config['stations'] as List<dynamic>;
+      _stations = stationsData.map((data) => Station.fromJson(data as Map<String, dynamic>)).toList();
 
       // Reset connection state - connection status shouldn't persist across app restarts
-      for (var i = 0; i < _relays.length; i++) {
-        if (_relays[i].isConnected) {
-          print('DEBUG RelayService: Resetting isConnected for ${_relays[i].name}');
-          _relays[i] = _relays[i].copyWith(isConnected: false);
+      for (var i = 0; i < _stations.length; i++) {
+        if (_stations[i].isConnected) {
+          print('DEBUG StationService: Resetting isConnected for ${_stations[i].name}');
+          _stations[i] = _stations[i].copyWith(isConnected: false);
         }
       }
 
       // Deduplicate relays with same callsign (e.g., 127.0.0.1 vs LAN IP)
-      final beforeCount = _relays.length;
-      _relays = _deduplicateRelays(_relays);
-      if (_relays.length < beforeCount) {
-        LogService().log('Merged ${beforeCount - _relays.length} duplicate relay entries');
-        _saveRelays(); // Save deduplicated list
+      final beforeCount = _stations.length;
+      _stations = _deduplicateStations(_stations);
+      if (_stations.length < beforeCount) {
+        LogService().log('Merged ${beforeCount - _stations.length} duplicate station entries');
+        _saveStations(); // Save deduplicated list
       }
 
-      print('DEBUG RelayService: After reset, relays=${_relays.map((r) => "${r.name}:${r.isConnected}").toList()}');
-      LogService().log('Loaded ${_relays.length} relays from config');
+      print('DEBUG StationService: After reset, stations=${_stations.map((r) => "${r.name}:${r.isConnected}").toList()}');
+      LogService().log('Loaded ${_stations.length} stations from config');
     } else {
       // First time - use default relays
-      _relays = _defaultRelays.map((r) => r.copyWith()).toList();
+      _stations = _defaultRelays.map((r) => r.copyWith()).toList();
 
       // Set first as preferred
-      if (_relays.isNotEmpty) {
-        _relays[0] = _relays[0].copyWith(status: 'preferred');
+      if (_stations.isNotEmpty) {
+        _stations[0] = _stations[0].copyWith(status: 'preferred');
       }
 
-      _saveRelays();
-      LogService().log('Created default relay configuration');
+      _saveStations();
+      LogService().log('Created default station configuration');
     }
   }
 
-  /// Save relays to config
-  void _saveRelays() {
-    final relaysData = _relays.map((r) => r.toJson()).toList();
-    ConfigService().set('relays', relaysData);
-    LogService().log('Saved ${_relays.length} relays to config');
+  /// Save stations to config
+  void _saveStations() {
+    final stationsData = _stations.map((r) => r.toJson()).toList();
+    ConfigService().set('stations', stationsData);
+    LogService().log('Saved ${_stations.length} stations to config');
   }
 
   /// Deduplicate relays with same callsign (e.g., localhost vs LAN IP)
   /// Prefers non-localhost URLs and entries with more info
-  List<Relay> _deduplicateRelays(List<Relay> relays) {
-    if (relays.isEmpty) return relays;
+  List<Station> _deduplicateStations(List<Station> stations) {
+    if (stations.isEmpty) return stations;
 
-    final Map<String, Relay> uniqueRelays = {};
+    final Map<String, Station> uniqueRelays = {};
 
-    for (var relay in relays) {
+    for (var station in stations) {
       // Create a unique key based on callsign+port, or name+port if no callsign
       String key;
-      final uri = Uri.tryParse(relay.url);
+      final uri = Uri.tryParse(station.url);
       final port = uri?.port ?? 8080;
 
-      if (relay.callsign != null && relay.callsign!.isNotEmpty) {
-        // Use callsign + port as key (same relay on different IPs has same callsign)
-        key = '${relay.callsign}:$port';
-      } else if (relay.name.isNotEmpty) {
+      if (station.callsign != null && station.callsign!.isNotEmpty) {
+        // Use callsign + port as key (same station on different IPs has same callsign)
+        key = '${station.callsign}:$port';
+      } else if (station.name.isNotEmpty) {
         // Fallback to name + port
-        key = '${relay.name}:$port';
+        key = '${station.name}:$port';
       } else {
         // No way to identify, keep all entries (use URL as key)
-        key = relay.url;
+        key = station.url;
       }
 
       if (uniqueRelays.containsKey(key)) {
         final existing = uniqueRelays[key]!;
         // Prefer non-localhost entry (LAN IP is more useful for other devices)
         final existingIsLocalhost = existing.url.contains('127.0.0.1') || existing.url.contains('localhost');
-        final newIsLocalhost = relay.url.contains('127.0.0.1') || relay.url.contains('localhost');
+        final newIsLocalhost = station.url.contains('127.0.0.1') || station.url.contains('localhost');
 
         if (existingIsLocalhost && !newIsLocalhost) {
           // Replace localhost with LAN IP, preserve status
-          uniqueRelays[key] = relay.copyWith(status: existing.status);
+          uniqueRelays[key] = station.copyWith(status: existing.status);
         } else if (!existingIsLocalhost && newIsLocalhost) {
           // Keep the existing LAN IP
-        } else if (_relayHasMoreInfo(relay, existing)) {
+        } else if (_stationHasMoreInfo(station, existing)) {
           // Keep the one with more info, preserve status
-          uniqueRelays[key] = relay.copyWith(status: existing.status);
+          uniqueRelays[key] = station.copyWith(status: existing.status);
         }
         // Otherwise keep existing
       } else {
-        uniqueRelays[key] = relay;
+        uniqueRelays[key] = station;
       }
     }
 
     return uniqueRelays.values.toList();
   }
 
-  /// Check if relay a has more info than relay b
-  bool _relayHasMoreInfo(Relay a, Relay b) {
+  /// Check if station a has more info than station b
+  bool _stationHasMoreInfo(Station a, Station b) {
     int scoreA = 0;
     int scoreB = 0;
 
@@ -169,129 +169,129 @@ class RelayService {
   }
 
   /// Get all relays
-  List<Relay> getAllRelays() {
+  List<Station> getAllStations() {
     if (!_initialized) {
-      throw Exception('RelayService not initialized');
+      throw Exception('StationService not initialized');
     }
-    return List.unmodifiable(_relays);
+    return List.unmodifiable(_stations);
   }
 
-  /// Get preferred relay
-  Relay? getPreferredRelay() {
-    return _relays.firstWhere(
+  /// Get preferred station
+  Station? getPreferredStation() {
+    return _stations.firstWhere(
       (r) => r.status == 'preferred',
-      orElse: () => _relays.isNotEmpty ? _relays[0] : Relay(url: '', name: ''),
+      orElse: () => _stations.isNotEmpty ? _stations[0] : Station(url: '', name: ''),
     );
   }
 
   /// Get backup relays
-  List<Relay> getBackupRelays() {
-    return _relays.where((r) => r.status == 'backup').toList();
+  List<Station> getBackupStations() {
+    return _stations.where((r) => r.status == 'backup').toList();
   }
 
   /// Get available relays (not selected)
-  List<Relay> getAvailableRelays() {
-    return _relays.where((r) => r.status == 'available').toList();
+  List<Station> getAvailableStations() {
+    return _stations.where((r) => r.status == 'available').toList();
   }
 
-  /// Add a new relay
-  /// Returns true if relay was added, false if it already exists
-  Future<bool> addRelay(Relay relay) async {
+  /// Add a new station
+  /// Returns true if station was added, false if it already exists
+  Future<bool> addStation(Station station) async {
     // Check if URL already exists
-    final existsByUrl = _relays.any((r) => r.url == relay.url);
+    final existsByUrl = _stations.any((r) => r.url == station.url);
     if (existsByUrl) {
-      LogService().log('Relay URL already exists: ${relay.url}');
+      LogService().log('Station URL already exists: ${station.url}');
       return false;
     }
 
-    // Check if callsign already exists (same relay on different IP)
-    if (relay.callsign != null && relay.callsign!.isNotEmpty) {
-      final existsByCallsign = _relays.indexWhere(
-        (r) => r.callsign == relay.callsign && r.callsign != null,
+    // Check if callsign already exists (same station on different IP)
+    if (station.callsign != null && station.callsign!.isNotEmpty) {
+      final existsByCallsign = _stations.indexWhere(
+        (r) => r.callsign == station.callsign && r.callsign != null,
       );
       if (existsByCallsign != -1) {
-        final existing = _relays[existsByCallsign];
+        final existing = _stations[existsByCallsign];
         // Update existing entry if new one has better URL (non-localhost)
         final existingIsLocalhost = existing.url.contains('127.0.0.1') || existing.url.contains('localhost');
-        final newIsLocalhost = relay.url.contains('127.0.0.1') || relay.url.contains('localhost');
+        final newIsLocalhost = station.url.contains('127.0.0.1') || station.url.contains('localhost');
 
         if (existingIsLocalhost && !newIsLocalhost) {
           // Replace localhost with LAN IP
-          _relays[existsByCallsign] = relay.copyWith(status: existing.status);
-          _saveRelays();
-          LogService().log('Updated relay URL from localhost to ${relay.url}');
+          _stations[existsByCallsign] = station.copyWith(status: existing.status);
+          _saveStations();
+          LogService().log('Updated station URL from localhost to ${station.url}');
           return true;
         } else {
-          LogService().log('Relay with callsign ${relay.callsign} already exists at ${existing.url}');
+          LogService().log('Station with callsign ${station.callsign} already exists at ${existing.url}');
           return false;
         }
       }
     }
 
-    _relays.add(relay);
-    _saveRelays();
-    LogService().log('Added relay: ${relay.name}');
+    _stations.add(station);
+    _saveStations();
+    LogService().log('Added station: ${station.name}');
     return true;
   }
 
-  /// Update relay
-  Future<void> updateRelay(String url, Relay updatedRelay) async {
-    final index = _relays.indexWhere((r) => r.url == url);
+  /// Update station
+  Future<void> updateStation(String url, Station updatedRelay) async {
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index == -1) {
-      throw Exception('Relay not found');
+      throw Exception('Station not found');
     }
 
-    _relays[index] = updatedRelay;
-    _saveRelays();
-    LogService().log('Updated relay: ${updatedRelay.name}');
+    _stations[index] = updatedRelay;
+    _saveStations();
+    LogService().log('Updated station: ${updatedRelay.name}');
   }
 
-  /// Set relay as preferred
+  /// Set station as preferred
   Future<void> setPreferred(String url) async {
     // Remove preferred status from all relays
-    for (var i = 0; i < _relays.length; i++) {
-      if (_relays[i].status == 'preferred') {
-        _relays[i] = _relays[i].copyWith(status: 'available');
+    for (var i = 0; i < _stations.length; i++) {
+      if (_stations[i].status == 'preferred') {
+        _stations[i] = _stations[i].copyWith(status: 'available');
       }
     }
 
     // Set new preferred
-    final index = _relays.indexWhere((r) => r.url == url);
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index != -1) {
-      _relays[index] = _relays[index].copyWith(status: 'preferred');
-      _saveRelays();
-      LogService().log('Set preferred relay: ${_relays[index].name}');
+      _stations[index] = _stations[index].copyWith(status: 'preferred');
+      _saveStations();
+      LogService().log('Set preferred station: ${_stations[index].name}');
     }
   }
 
-  /// Set relay as backup
-  /// Automatically switches preferred relay if current preferred is being set as backup
+  /// Set station as backup
+  /// Automatically switches preferred station if current preferred is being set as backup
   Future<void> setBackup(String url) async {
-    final index = _relays.indexWhere((r) => r.url == url);
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index == -1) return;
 
-    final wasPreferred = _relays[index].status == 'preferred';
+    final wasPreferred = _stations[index].status == 'preferred';
 
-    // Set the relay as backup
-    _relays[index] = _relays[index].copyWith(status: 'backup');
+    // Set the station as backup
+    _stations[index] = _stations[index].copyWith(status: 'backup');
 
-    // If this was the preferred relay, we need to select a new preferred
+    // If this was the preferred station, we need to select a new preferred
     if (wasPreferred) {
-      LogService().log('Current preferred relay being set as backup, selecting new preferred...');
+      LogService().log('Current preferred station being set as backup, selecting new preferred...');
 
-      // First, try to find another backup relay
-      Relay? newPreferred;
-      for (var relay in _relays) {
-        if (relay.status == 'backup' && relay.url != url) {
-          newPreferred = relay;
+      // First, try to find another backup station
+      Station? newPreferred;
+      for (var station in _stations) {
+        if (station.status == 'backup' && station.url != url) {
+          newPreferred = station;
           break;
         }
       }
 
-      // If no backup relay, find closest available relay
+      // If no backup station, find closest available station
       if (newPreferred == null) {
         final profile = ProfileService().getProfile();
-        final availableRelays = _relays.where((r) => r.status == 'available').toList();
+        final availableRelays = _stations.where((r) => r.status == 'available').toList();
 
         if (availableRelays.isNotEmpty) {
           if (profile.latitude != null && profile.longitude != null) {
@@ -302,73 +302,73 @@ class RelayService {
               return distA.compareTo(distB);
             });
             newPreferred = availableRelays.first;
-            LogService().log('Selected closest available relay: ${newPreferred.name}');
+            LogService().log('Selected closest available station: ${newPreferred.name}');
           } else {
             // No location available, just pick the first available
             newPreferred = availableRelays.first;
-            LogService().log('No location available, selected first available relay: ${newPreferred.name}');
+            LogService().log('No location available, selected first available station: ${newPreferred.name}');
           }
         }
       } else {
-        LogService().log('Selected next backup relay as preferred: ${newPreferred.name}');
+        LogService().log('Selected next backup station as preferred: ${newPreferred.name}');
       }
 
-      // Set the new preferred relay
+      // Set the new preferred station
       if (newPreferred != null) {
-        final newIndex = _relays.indexWhere((r) => r.url == newPreferred!.url);
+        final newIndex = _stations.indexWhere((r) => r.url == newPreferred!.url);
         if (newIndex != -1) {
-          _relays[newIndex] = _relays[newIndex].copyWith(status: 'preferred');
+          _stations[newIndex] = _stations[newIndex].copyWith(status: 'preferred');
         }
       } else {
-        LogService().log('WARNING: No other relay available to set as preferred!');
+        LogService().log('WARNING: No other station available to set as preferred!');
       }
     }
 
-    _saveRelays();
-    LogService().log('Set backup relay: ${_relays[index].name}');
+    _saveStations();
+    LogService().log('Set backup station: ${_stations[index].name}');
   }
 
-  /// Set relay as available (unselect)
+  /// Set station as available (unselect)
   Future<void> setAvailable(String url) async {
-    final index = _relays.indexWhere((r) => r.url == url);
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index != -1) {
-      _relays[index] = _relays[index].copyWith(status: 'available');
-      _saveRelays();
-      LogService().log('Set relay as available: ${_relays[index].name}');
+      _stations[index] = _stations[index].copyWith(status: 'available');
+      _saveStations();
+      LogService().log('Set station as available: ${_stations[index].name}');
     }
   }
 
-  /// Delete relay
-  Future<void> deleteRelay(String url) async {
-    final index = _relays.indexWhere((r) => r.url == url);
+  /// Delete station
+  Future<void> deleteStation(String url) async {
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index != -1) {
-      final relay = _relays[index];
-      _relays.removeAt(index);
-      _saveRelays();
-      LogService().log('Deleted relay: ${relay.name}');
+      final station = _stations[index];
+      _stations.removeAt(index);
+      _saveStations();
+      LogService().log('Deleted station: ${station.name}');
     }
   }
 
-  /// Test relay connection (stub for now)
+  /// Test station connection (stub for now)
   Future<void> testConnection(String url) async {
-    final index = _relays.indexWhere((r) => r.url == url);
+    final index = _stations.indexWhere((r) => r.url == url);
     if (index != -1) {
       // Simulate connection test
       await Future.delayed(const Duration(seconds: 1));
 
       // For now, just update last checked time
-      _relays[index] = _relays[index].copyWith(
+      _stations[index] = _stations[index].copyWith(
         lastChecked: DateTime.now(),
         isConnected: true,
         latency: 50 + (url.hashCode % 100), // Simulated latency
       );
 
-      _saveRelays();
-      LogService().log('Tested relay: ${_relays[index].name}');
+      _saveStations();
+      LogService().log('Tested station: ${_stations[index].name}');
     }
   }
 
-  /// Connect to relay with hello handshake
+  /// Connect to station with hello handshake
   Future<bool> connectRelay(String url) async {
     try {
       LogService().log('');
@@ -390,11 +390,11 @@ class RelayService {
       if (success) {
         final latency = DateTime.now().difference(startTime).inMilliseconds;
 
-        // Fetch relay status to get connected devices count, callsign, name and description
+        // Fetch station status to get connected devices count, callsign, name and description
         int? connectedDevices;
-        String? relayCallsign;
-        String? relayName;
-        String? relayDescription;
+        String? stationCallsign;
+        String? stationName;
+        String? stationDescription;
         try {
           final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
           final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
@@ -402,43 +402,43 @@ class RelayService {
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             connectedDevices = data['connected_devices'] as int?;
-            relayCallsign = data['callsign'] as String?;
-            relayName = data['name'] as String?;
-            relayDescription = data['description'] as String?;
-            LogService().log('Fetched relay status: $connectedDevices devices connected');
-            if (relayCallsign != null && relayCallsign.isNotEmpty) {
-              LogService().log('Relay callsign: $relayCallsign');
+            stationCallsign = data['callsign'] as String?;
+            stationName = data['name'] as String?;
+            stationDescription = data['description'] as String?;
+            LogService().log('Fetched station status: $connectedDevices devices connected');
+            if (stationCallsign != null && stationCallsign.isNotEmpty) {
+              LogService().log('Station callsign: $stationCallsign');
             }
-            if (relayName != null && relayName.isNotEmpty) {
-              LogService().log('Relay name: $relayName');
+            if (stationName != null && stationName.isNotEmpty) {
+              LogService().log('Station name: $stationName');
             }
           }
         } catch (e) {
-          LogService().log('Warning: Could not fetch relay status: $e');
+          LogService().log('Warning: Could not fetch station status: $e');
         }
 
-        // Update relay status
-        final index = _relays.indexWhere((r) => r.url == url);
+        // Update station status
+        final index = _stations.indexWhere((r) => r.url == url);
         if (index != -1) {
-          _relays[index] = _relays[index].copyWith(
+          _stations[index] = _stations[index].copyWith(
             lastChecked: DateTime.now(),
             isConnected: true,
             latency: latency,
             connectedDevices: connectedDevices,
-            callsign: relayCallsign,
-            name: relayName ?? _relays[index].name,
-            description: relayDescription,
+            callsign: stationCallsign,
+            name: stationName ?? _stations[index].name,
+            description: stationDescription,
           );
-          _saveRelays();
+          _saveStations();
 
           LogService().log('');
           LogService().log('✓ CONNECTION SUCCESSFUL');
-          LogService().log('Relay: ${_relays[index].name}');
-          if (relayCallsign != null && relayCallsign.isNotEmpty) {
-            LogService().log('Callsign: $relayCallsign');
+          LogService().log('Station: ${_stations[index].name}');
+          if (stationCallsign != null && stationCallsign.isNotEmpty) {
+            LogService().log('Callsign: $stationCallsign');
           }
-          if (_relays[index].description != null && _relays[index].description!.isNotEmpty) {
-            LogService().log('Description: ${_relays[index].description}');
+          if (_stations[index].description != null && _stations[index].description!.isNotEmpty) {
+            LogService().log('Description: ${_stations[index].description}');
           }
           LogService().log('Latency: ${latency}ms');
           if (connectedDevices != null) {
@@ -456,14 +456,14 @@ class RelayService {
         LogService().log('✗ CONNECTION FAILED');
         LogService().log('══════════════════════════════════════');
 
-        // Update relay as disconnected
-        final index = _relays.indexWhere((r) => r.url == url);
+        // Update station as disconnected
+        final index = _stations.indexWhere((r) => r.url == url);
         if (index != -1) {
-          _relays[index] = _relays[index].copyWith(
+          _stations[index] = _stations[index].copyWith(
             lastChecked: DateTime.now(),
             isConnected: false,
           );
-          _saveRelays();
+          _saveStations();
         }
 
         return false;
@@ -478,55 +478,55 @@ class RelayService {
     }
   }
 
-  /// Disconnect from current relay
+  /// Disconnect from current station
   void disconnect() {
     if (_wsService.isConnected) {
-      LogService().log('Disconnecting from relay...');
+      LogService().log('Disconnecting from station...');
       _wsService.disconnect();
 
       // Update all relays as disconnected
-      for (var i = 0; i < _relays.length; i++) {
-        if (_relays[i].isConnected) {
-          _relays[i] = _relays[i].copyWith(isConnected: false);
+      for (var i = 0; i < _stations.length; i++) {
+        if (_stations[i].isConnected) {
+          _stations[i] = _stations[i].copyWith(isConnected: false);
         }
       }
-      _saveRelays();
+      _saveStations();
     }
   }
 
-  /// Get currently connected relay
-  Relay? getConnectedRelay() {
+  /// Get currently connected station
+  Station? getConnectedRelay() {
     try {
-      return _relays.firstWhere((r) => r.isConnected);
+      return _stations.firstWhere((r) => r.isConnected);
     } catch (e) {
       return null;
     }
   }
 
-  /// Get stream of update notifications from connected relay
+  /// Get stream of update notifications from connected station
   Stream<UpdateNotification> get updates => _wsService.updates;
 
-  /// Get HTTP base URL for a relay
+  /// Get HTTP base URL for a station
   String _getHttpBaseUrl(String wsUrl) {
     return wsUrl
         .replaceFirst('ws://', 'http://')
         .replaceFirst('wss://', 'https://');
   }
 
-  /// Fetch public chat rooms from relay
-  /// [relayCallsign] is the relay's X3 callsign used in the API path
-  Future<List<RelayChatRoom>> fetchChatRooms(String relayUrl, {String? relayCallsign}) async {
+  /// Fetch public chat rooms from station
+  /// [stationCallsign] is the station's X3 callsign used in the API path
+  Future<List<StationChatRoom>> fetchChatRooms(String stationUrl, {String? stationCallsign}) async {
     try {
-      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final httpUrl = _getHttpBaseUrl(stationUrl);
 
       // If no callsign provided, try to get it from status endpoint
-      String? callsign = relayCallsign;
+      String? callsign = stationCallsign;
       if (callsign == null || callsign.isEmpty) {
-        callsign = await _getRelayCallsign(httpUrl);
+        callsign = await _getStationCallsign(httpUrl);
       }
 
       if (callsign == null || callsign.isEmpty) {
-        LogService().log('Cannot fetch chat rooms: relay callsign not available');
+        LogService().log('Cannot fetch chat rooms: station callsign not available');
         return [];
       }
 
@@ -537,18 +537,18 @@ class RelayService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final relayName = data['callsign'] as String? ?? callsign;
+        final stationName = data['callsign'] as String? ?? callsign;
         final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
         final rooms = roomsData.map((room) {
-          return RelayChatRoom.fromJson(
+          return StationChatRoom.fromJson(
             room as Map<String, dynamic>,
-            relayUrl,
-            relayName,
+            stationUrl,
+            stationName,
           );
         }).toList();
 
-        LogService().log('Fetched ${rooms.length} chat rooms from $relayName');
+        LogService().log('Fetched ${rooms.length} chat rooms from $stationName');
         return rooms;
       } else {
         LogService().log('Failed to fetch chat rooms: ${response.statusCode}');
@@ -560,8 +560,8 @@ class RelayService {
     }
   }
 
-  /// Get relay callsign from status endpoint
-  Future<String?> _getRelayCallsign(String httpUrl) async {
+  /// Get station callsign from status endpoint
+  Future<String?> _getStationCallsign(String httpUrl) async {
     try {
       final statusUrl = httpUrl.endsWith('/')
           ? '${httpUrl}api/status'
@@ -572,30 +572,30 @@ class RelayService {
         return data['callsign'] as String?;
       }
     } catch (e) {
-      LogService().log('Error fetching relay callsign: $e');
+      LogService().log('Error fetching station callsign: $e');
     }
     return null;
   }
 
-  /// Fetch messages from a relay chat room
-  /// [relayCallsign] is the relay's X3 callsign used in the API path
-  Future<List<RelayChatMessage>> fetchRoomMessages(
-    String relayUrl,
+  /// Fetch messages from a station chat room
+  /// [stationCallsign] is the station's X3 callsign used in the API path
+  Future<List<StationChatMessage>> fetchRoomMessages(
+    String stationUrl,
     String roomId, {
     int limit = 50,
-    String? relayCallsign,
+    String? stationCallsign,
   }) async {
     try {
-      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final httpUrl = _getHttpBaseUrl(stationUrl);
 
       // If no callsign provided, try to get it from status endpoint
-      String? callsign = relayCallsign;
+      String? callsign = stationCallsign;
       if (callsign == null || callsign.isEmpty) {
-        callsign = await _getRelayCallsign(httpUrl);
+        callsign = await _getStationCallsign(httpUrl);
       }
 
       if (callsign == null || callsign.isEmpty) {
-        LogService().log('Cannot fetch messages: relay callsign not available');
+        LogService().log('Cannot fetch messages: station callsign not available');
         return [];
       }
 
@@ -609,7 +609,7 @@ class RelayService {
         final messagesData = data['messages'] as List<dynamic>? ?? [];
 
         final messages = messagesData.map((msg) {
-          return RelayChatMessage.fromJson(
+          return StationChatMessage.fromJson(
             msg as Map<String, dynamic>,
             roomId,
           );
@@ -630,11 +630,11 @@ class RelayService {
   /// Fetch list of chat files available for a room (for caching)
   /// Returns list of {year, filename, size, modified}
   Future<List<Map<String, dynamic>>> fetchRoomChatFiles(
-    String relayUrl,
+    String stationUrl,
     String roomId,
   ) async {
     try {
-      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final httpUrl = _getHttpBaseUrl(stationUrl);
       final apiUrl = '$httpUrl/api/chat/rooms/$roomId/files';
 
       LogService().log('Fetching chat file list for room: $roomId');
@@ -660,13 +660,13 @@ class RelayService {
   /// Fetch raw content of a chat file
   /// Returns the raw text content of the file
   Future<String?> fetchRoomChatFile(
-    String relayUrl,
+    String stationUrl,
     String roomId,
     String year,
     String filename,
   ) async {
     try {
-      final httpUrl = _getHttpBaseUrl(relayUrl);
+      final httpUrl = _getHttpBaseUrl(stationUrl);
       final apiUrl = '$httpUrl/api/chat/rooms/$roomId/file/$year/$filename';
 
       LogService().log('Fetching chat file: $roomId/$year/$filename');
@@ -684,10 +684,10 @@ class RelayService {
     }
   }
 
-  /// Post a message to a relay chat room as a NOSTR event
+  /// Post a message to a station chat room as a NOSTR event
   /// Creates a signed kind 1 text note and sends via WebSocket or HTTP
   Future<bool> postRoomMessage(
-    String relayUrl,
+    String stationUrl,
     String roomId,
     String callsign,
     String content, {
@@ -756,16 +756,16 @@ class RelayService {
       // HTTP fallback (when WebSocket is unavailable or send failed)
       {
         // Fallback to HTTP API with NOSTR signature
-        final httpUrl = _getHttpBaseUrl(relayUrl);
+        final httpUrl = _getHttpBaseUrl(stationUrl);
 
-        // Get relay callsign for API path
-        final relayCallsign = await _getRelayCallsign(httpUrl);
-        if (relayCallsign == null || relayCallsign.isEmpty) {
-          LogService().log('Cannot post message: relay callsign not available');
+        // Get station callsign for API path
+        final stationCallsign = await _getStationCallsign(httpUrl);
+        if (stationCallsign == null || stationCallsign.isEmpty) {
+          LogService().log('Cannot post message: station callsign not available');
           return false;
         }
 
-        final apiUrl = ChatApi.messagesUrl(httpUrl, relayCallsign, roomId);
+        final apiUrl = ChatApi.messagesUrl(httpUrl, stationCallsign, roomId);
 
         LogService().log('Posting message via HTTP to room: $roomId');
 
@@ -844,7 +844,7 @@ class RelayService {
   /// Subscribe to a chat room for real-time NOSTR events
   void subscribeToRoom(String roomId) {
     if (!_wsService.isConnected) {
-      LogService().log('Cannot subscribe: not connected to relay');
+      LogService().log('Cannot subscribe: not connected to station');
       return;
     }
 
@@ -872,13 +872,13 @@ class RelayService {
     LogService().log('Unsubscribed from room: $roomId');
   }
 
-  /// Fetch chat rooms from connected relay
-  Future<List<RelayChatRoom>> fetchConnectedRelayChatRooms() async {
-    final relay = getConnectedRelay();
-    if (relay == null) {
-      LogService().log('No relay connected');
+  /// Fetch chat rooms from connected station
+  Future<List<StationChatRoom>> fetchConnectedRelayChatRooms() async {
+    final station = getConnectedRelay();
+    if (station == null) {
+      LogService().log('No station connected');
       return [];
     }
-    return fetchChatRooms(relay.url);
+    return fetchChatRooms(station.url);
   }
 }

@@ -8,7 +8,7 @@ import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
 import '../services/profile_service.dart';
-import '../services/relay_service.dart';
+import '../services/station_service.dart';
 import '../services/i18n_service.dart';
 import '../widgets/blog_post_tile_widget.dart';
 import '../widgets/blog_post_detail_widget.dart';
@@ -34,7 +34,7 @@ class BlogBrowserPage extends StatefulWidget {
 class _BlogBrowserPageState extends State<BlogBrowserPage> {
   final BlogService _blogService = BlogService();
   final ProfileService _profileService = ProfileService();
-  final RelayService _relayService = RelayService();
+  final StationService _stationService = StationService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _commentController = TextEditingController();
@@ -45,7 +45,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   BlogPost? _selectedPost;
   bool _isLoading = true;
   bool _showDraftsOnly = false;
-  String? _relayUrl;
+  String? _stationUrl;
   String? _profileIdentifier;
   Set<int> _expandedYears = {};
   String? _currentUserNpub;
@@ -71,8 +71,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     _currentUserNpub = profile.npub;
 
     // Get relay URL and profile identifier for shareable blog URLs
-    final connectedRelay = _relayService.getConnectedRelay();
-    _relayUrl = connectedRelay?.url;
+    final connectedRelay = _stationService.getConnectedRelay();
+    _stationUrl = connectedRelay?.url;
     // Use nickname if available, otherwise callsign
     _profileIdentifier = profile.nickname.isNotEmpty
         ? profile.nickname
@@ -154,7 +154,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           profileService: _profileService,
           i18n: _i18n,
           currentUserNpub: _currentUserNpub,
-          relayUrl: _relayUrl,
+          stationUrl: _stationUrl,
           profileIdentifier: _profileIdentifier,
         ),
       ),
@@ -628,7 +628,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
                 onEdit: _editPost,
                 onDelete: _deletePost,
                 onPublish: _selectedPost!.isDraft ? _publishDraft : null,
-                relayUrl: _relayUrl,
+                stationUrl: _stationUrl,
                 profileIdentifier: _profileIdentifier,
               ),
               const SizedBox(height: 24),
@@ -752,7 +752,7 @@ class _BlogPostDetailPage extends StatefulWidget {
   final ProfileService profileService;
   final I18nService i18n;
   final String? currentUserNpub;
-  final String? relayUrl;
+  final String? stationUrl;
   final String? profileIdentifier;
 
   const _BlogPostDetailPage({
@@ -763,7 +763,7 @@ class _BlogPostDetailPage extends StatefulWidget {
     required this.profileService,
     required this.i18n,
     required this.currentUserNpub,
-    this.relayUrl,
+    this.stationUrl,
     this.profileIdentifier,
   }) : super(key: key);
 
@@ -992,7 +992,7 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
                     onEdit: _editPost,
                     onDelete: _deletePost,
                     onPublish: _post.isDraft ? _publishDraft : null,
-                    relayUrl: widget.relayUrl,
+                    stationUrl: widget.stationUrl,
                     profileIdentifier: widget.profileIdentifier,
                   ),
                   const SizedBox(height: 24),

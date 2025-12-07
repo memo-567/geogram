@@ -324,10 +324,10 @@ class ReportService {
 
         if (result.anySuccess) {
           LogService().log(
-              'ReportService: Updated alert on ${result.confirmed} relay(s)');
+              'ReportService: Updated alert on ${result.confirmed} station(s)');
         }
       } catch (e) {
-        LogService().log('ReportService: Error updating alert on relays: $e');
+        LogService().log('ReportService: Error updating alert on stations: $e');
       }
     }
   }
@@ -396,14 +396,14 @@ class ReportService {
 
     // Share to relays using the pre-created event
     try {
-      final relayUrls = alertService.getRelayUrls();
-      if (relayUrls.isNotEmpty) {
+      final stationUrls = alertService.getRelayUrls();
+      if (stationUrls.isNotEmpty) {
         final results = <AlertSendResult>[];
         int confirmed = 0;
         int failed = 0;
 
-        for (final relayUrl in relayUrls) {
-          final result = await alertService.sendEventToRelay(signResult.event, relayUrl);
+        for (final stationUrl in stationUrls) {
+          final result = await alertService.sendEventToRelay(signResult.event, stationUrl);
           results.add(result);
           if (result.success) {
             confirmed++;
@@ -412,24 +412,24 @@ class ReportService {
           }
         }
 
-        // Update report with relay share status and event ID
+        // Update report with station share status and event ID
         for (final sendResult in results) {
-          report = alertService.updateRelayShareStatus(
+          report = alertService.updateStationShareStatus(
             report,
-            sendResult.relayUrl,
+            sendResult.stationUrl,
             sendResult.success
-                ? RelayShareStatusType.confirmed
-                : RelayShareStatusType.failed,
+                ? StationShareStatusType.confirmed
+                : StationShareStatusType.failed,
             nostrEventId: signResult.event.id,
           );
         }
 
-        // Re-save with relay status
+        // Re-save with station status
         await saveReport(report, notifyRelays: false);
-        LogService().log('ReportService: Alert shared to $confirmed relay(s), $failed failed');
+        LogService().log('ReportService: Alert shared to $confirmed station(s), $failed failed');
       }
     } catch (e) {
-      LogService().log('ReportService: Error sharing alert to relays: $e');
+      LogService().log('ReportService: Error sharing alert to stations: $e');
     }
 
     return report;

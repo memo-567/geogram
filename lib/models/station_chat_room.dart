@@ -1,29 +1,29 @@
-/// Model for a chat room from a remote relay
-class RelayChatRoom {
+/// Model for a chat room from a remote station
+class StationChatRoom {
   final String id;
   final String name;
   final String description;
   final int messageCount;
-  final String relayUrl;
-  final String relayName;
+  final String stationUrl;
+  final String stationName;
 
-  RelayChatRoom({
+  StationChatRoom({
     required this.id,
     required this.name,
     this.description = '',
     this.messageCount = 0,
-    required this.relayUrl,
-    this.relayName = '',
+    required this.stationUrl,
+    this.stationName = '',
   });
 
-  factory RelayChatRoom.fromJson(Map<String, dynamic> json, String relayUrl, String relayName) {
-    return RelayChatRoom(
+  factory StationChatRoom.fromJson(Map<String, dynamic> json, String stationUrl, String stationName) {
+    return StationChatRoom(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       description: json['description'] as String? ?? '',
       messageCount: json['message_count'] as int? ?? 0,
-      relayUrl: relayUrl,
-      relayName: relayName,
+      stationUrl: stationUrl,
+      stationName: stationName,
     );
   }
 
@@ -33,24 +33,24 @@ class RelayChatRoom {
       'name': name,
       'description': description,
       'message_count': messageCount,
-      'relay_url': relayUrl,
-      'relay_name': relayName,
+      'station_url': stationUrl,
+      'station_name': stationName,
     };
   }
 
   /// Get the HTTP base URL for API calls
   String get httpBaseUrl {
-    return relayUrl
+    return stationUrl
         .replaceFirst('ws://', 'http://')
         .replaceFirst('wss://', 'https://');
   }
 
   @override
-  String toString() => 'RelayChatRoom(id: $id, name: $name, relay: $relayName)';
+  String toString() => 'StationChatRoom(id: $id, name: $name, station: $stationName)';
 }
 
-/// Model for a message from a relay chat room
-class RelayChatMessage {
+/// Model for a message from a station chat room
+class StationChatMessage {
   final String timestamp;
   final String callsign;
   final String content;
@@ -63,7 +63,7 @@ class RelayChatMessage {
   final bool verified;     // Server-side signature verification result
   final bool hasSignature; // Whether message has a signature
 
-  RelayChatMessage({
+  StationChatMessage({
     required this.timestamp,
     required this.callsign,
     required this.content,
@@ -77,8 +77,8 @@ class RelayChatMessage {
     this.hasSignature = false,
   });
 
-  factory RelayChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
-    return RelayChatMessage(
+  factory StationChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
+    return StationChatMessage(
       timestamp: json['timestamp'] as String? ?? '',
       callsign: json['callsign'] as String? ?? '',
       content: json['content'] as String? ?? '',
@@ -94,7 +94,7 @@ class RelayChatMessage {
   }
 
   /// Create from a NOSTR event
-  factory RelayChatMessage.fromNostrEvent(
+  factory StationChatMessage.fromNostrEvent(
     Map<String, dynamic> eventJson,
     String roomId,
   ) {
@@ -121,7 +121,7 @@ class RelayChatMessage {
     final timestamp = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
 
-    return RelayChatMessage(
+    return StationChatMessage(
       timestamp: timestamp,
       callsign: callsign,
       content: content,

@@ -10,7 +10,7 @@ import 'event_service.dart';
 import 'place_service.dart';
 import 'news_service.dart';
 import 'report_service.dart';
-import 'relay_service.dart';
+import 'station_service.dart';
 import 'contact_service.dart';
 import 'profile_service.dart';
 import 'log_service.dart';
@@ -85,8 +85,8 @@ class MapsService {
     if (types.contains(MapItemType.alert)) {
       futures.add(_loadReports(centerLat, centerLon, radiusKm, languageCode, forceRefresh: forceRefresh));
     }
-    if (types.contains(MapItemType.relay)) {
-      futures.add(_loadRelays(centerLat, centerLon, radiusKm));
+    if (types.contains(MapItemType.station)) {
+      futures.add(_loadStations(centerLat, centerLon, radiusKm));
     }
     if (types.contains(MapItemType.contact)) {
       futures.add(_loadContacts(centerLat, centerLon, radiusKm, forceRefresh: forceRefresh));
@@ -323,8 +323,8 @@ class MapsService {
     return items;
   }
 
-  /// Load relays with location
-  Future<List<MapItem>> _loadRelays(
+  /// Load stations with location
+  Future<List<MapItem>> _loadStations(
     double centerLat,
     double centerLon,
     double? radiusKm,
@@ -332,26 +332,26 @@ class MapsService {
     final items = <MapItem>[];
 
     try {
-      final relays = RelayService().getAllRelays();
+      final stations = StationService().getAllStations();
 
-      for (var relay in relays) {
-        if (relay.latitude == null || relay.longitude == null) continue;
+      for (var station in stations) {
+        if (station.latitude == null || station.longitude == null) continue;
 
         final distance = MapItem.calculateDistance(
           centerLat,
           centerLon,
-          relay.latitude!,
-          relay.longitude!,
+          station.latitude!,
+          station.longitude!,
         );
 
         if (radiusKm != null && distance > radiusKm) continue;
 
-        items.add(MapItem.fromRelay(relay, distanceKm: distance));
+        items.add(MapItem.fromRelay(station, distanceKm: distance));
       }
 
-      LogService().log('MapsService: Found ${items.length} relays with location');
+      LogService().log('MapsService: Found ${items.length} stations with location');
     } catch (e) {
-      LogService().log('MapsService: Error loading relays: $e');
+      LogService().log('MapsService: Error loading stations: $e');
     }
 
     return items;

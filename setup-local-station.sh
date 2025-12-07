@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Setup local relay as preferred in desktop app
-# This adds ws://localhost:8080 to the relay configuration
+# Setup local station as preferred in desktop app
+# This adds ws://localhost:8080 to the station configuration
 
 CONFIG_DIR="$HOME/.local/share/geogram_desktop"
 CONFIG_FILE="$CONFIG_DIR/config.json"
@@ -21,7 +21,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-echo "Adding local relay to configuration..."
+echo "Adding local station to configuration..."
 echo "URL: ws://localhost:8080"
 echo "Name: Local Dev Relay"
 echo ""

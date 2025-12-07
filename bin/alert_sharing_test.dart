@@ -2,10 +2,10 @@
 /// Alert Sharing Test
 ///
 /// This test suite:
-/// - Launches a relay server on port 45691
+/// - Launches a station server on port 45691
 /// - Creates a mock client with NOSTR keys
-/// - Sends an alert event to the relay
-/// - Verifies the relay stores it correctly
+/// - Sends an alert event to the station
+/// - Verifies the station stores it correctly
 /// - Verifies the OK acknowledgment
 ///
 /// Run with: dart bin/alert_sharing_test.dart
@@ -14,7 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../lib/cli/pure_relay.dart';
+import '../lib/cli/pure_station.dart';
 import '../lib/cli/pure_storage_config.dart';
 import '../lib/util/nostr_event.dart';
 import '../lib/util/nostr_crypto.dart';
@@ -53,7 +53,7 @@ Future<void> main() async {
   final tempDir = await Directory.systemTemp.createTemp('geogram_alert_test_');
   print('Using temp directory: ${tempDir.path}');
 
-  PureRelayServer? relay;
+  PureRelayServer? station;
   WebSocket? ws;
 
   try {
@@ -61,26 +61,26 @@ Future<void> main() async {
     PureStorageConfig().reset();
     await PureStorageConfig().init(customBaseDir: tempDir.path);
 
-    // Create and initialize the relay server
-    relay = PureRelayServer();
-    relay.quietMode = true; // Suppress log output during tests
-    await relay.initialize();
+    // Create and initialize the station server
+    station = PureRelayServer();
+    station.quietMode = true; // Suppress log output during tests
+    await station.initialize();
 
-    // Configure relay settings
-    relay.setSetting('httpPort', TEST_PORT);
-    relay.setSetting('description', 'Alert Test Relay Server');
+    // Configure station settings
+    station.setSetting('httpPort', TEST_PORT);
+    station.setSetting('description', 'Alert Test Station Server');
 
-    // Get the relay callsign
-    final relayCallsign = relay.settings.callsign;
-    print('Relay callsign: $relayCallsign');
+    // Get the station callsign
+    final stationCallsign = station.settings.callsign;
+    print('Station callsign: $stationCallsign');
 
     // Start the server
-    final started = await relay.start();
+    final started = await station.start();
     if (!started) {
-      print('ERROR: Failed to start relay server on port $TEST_PORT');
+      print('ERROR: Failed to start station server on port $TEST_PORT');
       exit(1);
     }
-    print('Relay server started on port $TEST_PORT');
+    print('Station server started on port $TEST_PORT');
     print('');
 
     // Wait for server to be fully ready
@@ -304,7 +304,7 @@ The sidewalk has a large crack that needs repair.
   } finally {
     // Cleanup
     await ws?.close();
-    await relay?.stop();
+    await station?.stop();
 
     // Clean up temp directory
     try {

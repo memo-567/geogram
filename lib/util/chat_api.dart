@@ -1,6 +1,6 @@
 /*
  * Shared Chat API definitions
- * Used by both relay server and client
+ * Used by both station server and client
  */
 
 /// Chat API path utilities

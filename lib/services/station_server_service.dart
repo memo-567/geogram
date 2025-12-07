@@ -18,7 +18,7 @@ import '../util/nostr_crypto.dart';
 import '../util/event_bus.dart';
 import '../version.dart';
 
-/// Relay server settings
+/// Station server settings
 class RelayServerSettings {
   int port;
   bool enabled;
@@ -115,7 +115,7 @@ class ConnectedClient {
         lastActivity = DateTime.now();
 }
 
-/// Tile cache for relay server
+/// Tile cache for station server
 class TileCache {
   final Map<String, Uint8List> _cache = {};
   final Map<String, DateTime> _timestamps = {};
@@ -187,11 +187,11 @@ class TileCache {
   }
 }
 
-/// Relay server service for CLI mode
-class RelayServerService {
-  static final RelayServerService _instance = RelayServerService._internal();
-  factory RelayServerService() => _instance;
-  RelayServerService._internal();
+/// Station server service for CLI mode
+class StationServerService {
+  static final StationServerService _instance = StationServerService._internal();
+  factory StationServerService() => _instance;
+  StationServerService._internal();
 
   HttpServer? _httpServer;
   RelayServerSettings _settings = RelayServerSettings();
@@ -206,7 +206,7 @@ class RelayServerService {
   RelayServerSettings get settings => _settings;
   DateTime? get startTime => _startTime;
 
-  /// Initialize relay server service
+  /// Initialize station server service
   Future<void> initialize() async {
     await _loadSettings();
 
@@ -215,21 +215,21 @@ class RelayServerService {
     _tilesDirectory = '${appDir.path}/tiles';
     await Directory(_tilesDirectory!).create(recursive: true);
 
-    LogService().log('RelayServerService initialized');
+    LogService().log('StationServerService initialized');
   }
 
   /// Load settings from config
   Future<void> _loadSettings() async {
     final config = ConfigService().getAll();
-    if (config.containsKey('relayServer')) {
+    if (config.containsKey('stationServer')) {
       _settings = RelayServerSettings.fromJson(
-          config['relayServer'] as Map<String, dynamic>);
+          config['stationServer'] as Map<String, dynamic>);
     }
   }
 
   /// Save settings to config
   void _saveSettings() {
-    ConfigService().set('relayServer', _settings.toJson());
+    ConfigService().set('stationServer', _settings.toJson());
   }
 
   /// Update settings
@@ -247,10 +247,10 @@ class RelayServerService {
     }
   }
 
-  /// Start the relay server
+  /// Start the station server
   Future<bool> start() async {
     if (_running) {
-      LogService().log('Relay server already running');
+      LogService().log('Station server already running');
       return true;
     }
 
@@ -264,7 +264,7 @@ class RelayServerService {
       _running = true;
       _startTime = DateTime.now();
 
-      LogService().log('Relay server started on port ${_settings.port}');
+      LogService().log('Station server started on port ${_settings.port}');
 
       // Handle incoming connections
       _httpServer!.listen(_handleRequest, onError: (error) {
@@ -273,12 +273,12 @@ class RelayServerService {
 
       return true;
     } catch (e) {
-      LogService().log('Failed to start relay server: $e');
+      LogService().log('Failed to start station server: $e');
       return false;
     }
   }
 
-  /// Stop the relay server
+  /// Stop the station server
   Future<void> stop() async {
     if (!_running) return;
 
@@ -294,7 +294,7 @@ class RelayServerService {
     _running = false;
     _startTime = null;
 
-    LogService().log('Relay server stopped');
+    LogService().log('Station server stopped');
   }
 
   /// Handle incoming HTTP request
@@ -431,10 +431,10 @@ class RelayServerService {
     final response = {
       'type': 'hello_ack',
       'success': true,
-      'message': 'Welcome to Geogram Relay',
-      'server': 'geogram-desktop-relay',
+      'message': 'Welcome to Geogram Station',
+      'server': 'geogram-desktop-station',
       'version': appVersion,
-      'relay_id': ProfileService().getProfile().callsign,
+      'station_id': ProfileService().getProfile().callsign,
     };
     client.socket.add(jsonEncode(response));
 
@@ -592,20 +592,20 @@ class RelayServerService {
   /// Handle /api/status endpoint
   Future<void> _handleStatus(HttpRequest request) async {
     final profile = ProfileService().getProfile();
-    final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
+    final isRelay = CallsignGenerator.isStationCallsign(profile.callsign);
 
     final uptime = _startTime != null
         ? DateTime.now().difference(_startTime!).inSeconds
         : 0;
 
     final status = {
-      'name': 'Geogram Desktop Relay',
+      'name': 'Geogram Desktop Station',
       'version': appVersion,
       'callsign': profile.callsign,
-      'description': _settings.description ?? 'Geogram Desktop Relay Server',
+      'description': _settings.description ?? 'Geogram Desktop Station Server',
       'connected_devices': _clients.length,
       'uptime': uptime,
-      'relay_mode': isRelay,
+      'station_mode': isRelay,
       'location': _settings.location,
       'latitude': _settings.latitude,
       'longitude': _settings.longitude,
@@ -628,7 +628,7 @@ class RelayServerService {
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Geogram Desktop Relay</title>
+  <title>Geogram Desktop Station</title>
   <style>
     body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
     h1 { color: #333; }
@@ -637,7 +637,7 @@ class RelayServerService {
   </style>
 </head>
 <body>
-  <h1>Geogram Desktop Relay</h1>
+  <h1>Geogram Desktop Station</h1>
   <div class="info">
     <p><strong>Version:</strong> $appVersion</p>
     <p><strong>Callsign:</strong> ${profile.callsign}</p>
@@ -655,7 +655,7 @@ class RelayServerService {
     final profile = ProfileService().getProfile();
 
     final response = {
-      'relay': profile.callsign,
+      'station': profile.callsign,
       'rooms': [
         {
           'id': 'general',
@@ -782,7 +782,7 @@ class RelayServerService {
       final response = await http.get(
         Uri.parse(url),
         headers: {
-          'User-Agent': 'Geogram-Desktop-Relay/$appVersion',
+          'User-Agent': 'Geogram-Desktop-Station/$appVersion',
         },
       ).timeout(const Duration(seconds: 10));
 

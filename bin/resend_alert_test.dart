@@ -1,8 +1,8 @@
 #!/usr/bin/env dart
-/// Relay Connectivity Test
+/// Station Connectivity Test
 ///
 /// This test creates a fresh signed alert and sends it to p2p.radio
-/// to test relay connectivity.
+/// to test station connectivity.
 ///
 /// Run with: dart bin/resend_alert_test.dart
 
@@ -19,10 +19,10 @@ const String WS_URL = 'wss://p2p.radio';
 Future<void> main() async {
   print('');
   print('=' * 60);
-  print('Relay Connectivity Test');
+  print('Station Connectivity Test');
   print('=' * 60);
   print('');
-  print('Relay: $WS_URL');
+  print('Station: $WS_URL');
   print('');
 
   // Generate fresh keys for this test
@@ -44,7 +44,7 @@ SEVERITY: info
 TYPE: test
 STATUS: open
 
-This is a test alert to verify relay connectivity.
+This is a test alert to verify station connectivity.
 --> npub: ${keys.npub}
 ''';
 
@@ -86,7 +86,7 @@ This is a test alert to verify relay connectivity.
     exit(1);
   }
 
-  // Connect to relay
+  // Connect to station
   print('Connecting to $WS_URL...');
   WebSocket? ws;
 
@@ -142,17 +142,17 @@ This is a test alert to verify relay connectivity.
 
     if (success) {
       print('');
-      print('✓ Alert successfully sent to relay!');
+      print('✓ Alert successfully sent to station!');
     } else {
       print('');
-      print('✗ Relay rejected the alert: $message');
+      print('✗ Station rejected the alert: $message');
     }
   } catch (e) {
     print('');
     print('ERROR: $e');
     print('');
-    print('The relay may not be receiving or processing our message.');
-    print('Check if the relay is running and accepting connections.');
+    print('The station may not be receiving or processing our message.');
+    print('Check if the station is running and accepting connections.');
   }
 
   // Cleanup

@@ -16,7 +16,7 @@ import '../util/tlsh.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
 
-/// WebSocket service for relay connections (singleton)
+/// WebSocket service for station connections (singleton)
 class WebSocketService {
   static final WebSocketService _instance = WebSocketService._internal();
   factory WebSocketService() => _instance;
@@ -28,18 +28,18 @@ class WebSocketService {
   final _updateController = StreamController<UpdateNotification>.broadcast();
   Timer? _reconnectTimer;
   Timer? _pingTimer;
-  String? _relayUrl;
+  String? _stationUrl;
   bool _shouldReconnect = false;
   bool _isReconnecting = false;
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<UpdateNotification> get updates => _updateController.stream;
 
-  /// Connect to relay and send hello
+  /// Connect to station and send hello
   Future<bool> connectAndHello(String url) async {
     try {
       // Store URL for reconnection
-      _relayUrl = url;
+      _stationUrl = url;
       _shouldReconnect = true;
 
       LogService().log('══════════════════════════════════════');
@@ -169,12 +169,12 @@ class WebSocketService {
 
             if (data['type'] == 'PONG') {
               // Heartbeat response - connection is alive
-              LogService().log('✓ PONG received from relay');
+              LogService().log('✓ PONG received from station');
             } else if (data['type'] == 'hello_ack') {
               final success = data['success'] as bool? ?? false;
               if (success) {
                 LogService().log('✓ Hello acknowledged!');
-                LogService().log('Relay ID: ${data['relay_id']}');
+                LogService().log('Station ID: ${data['station_id']}');
                 LogService().log('Message: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
                 _isReconnecting = false; // Reset reconnecting flag on successful connection
@@ -184,17 +184,17 @@ class WebSocketService {
                 LogService().log('══════════════════════════════════════');
               }
             } else if (data['type'] == 'COLLECTIONS_REQUEST') {
-              LogService().log('✓ Relay requested collections');
+              LogService().log('✓ Station requested collections');
               _handleCollectionsRequest(data['requestId'] as String?);
             } else if (data['type'] == 'COLLECTION_FILE_REQUEST') {
-              LogService().log('✓ Relay requested collection file');
+              LogService().log('✓ Station requested collection file');
               _handleCollectionFileRequest(
                 data['requestId'] as String?,
                 data['collectionName'] as String?,
                 data['fileName'] as String?,
               );
             } else if (data['type'] == 'HTTP_REQUEST') {
-              LogService().log('✓ Relay forwarded HTTP request');
+              LogService().log('✓ Station forwarded HTTP request');
               _handleHttpRequest(
                 data['requestId'] as String?,
                 data['method'] as String?,
@@ -243,9 +243,9 @@ class WebSocketService {
     }
   }
 
-  /// Disconnect from relay
+  /// Disconnect from station
   void disconnect() {
-    LogService().log('Disconnecting from relay...');
+    LogService().log('Disconnecting from station...');
     _shouldReconnect = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -261,12 +261,12 @@ class WebSocketService {
     _subscription = null;
   }
 
-  /// Send message to relay
+  /// Send message to station
   void send(Map<String, dynamic> message) {
     if (_channel != null) {
       try {
         final json = jsonEncode(message);
-        LogService().log('Sending to relay: $json');
+        LogService().log('Sending to station: $json');
         _channel!.sink.add(json);
       } catch (e) {
         LogService().log('Error sending message: $e');
@@ -300,10 +300,10 @@ class WebSocketService {
     }
 
     // Not connected - try to reconnect if we have a URL
-    if (_relayUrl != null && _shouldReconnect) {
+    if (_stationUrl != null && _shouldReconnect) {
       LogService().log('Attempting to reconnect before sending message...');
       try {
-        final success = await connectAndHello(_relayUrl!);
+        final success = await connectAndHello(_stationUrl!);
         if (success) {
           LogService().log('✓ Reconnection successful');
           return true;
@@ -316,17 +316,17 @@ class WebSocketService {
     return false;
   }
 
-  /// Send message to relay with connection verification.
+  /// Send message to station with connection verification.
   /// Returns true if message was sent, false if send failed.
   Future<bool> sendWithVerification(Map<String, dynamic> message) async {
     if (!await ensureConnected()) {
-      LogService().log('Cannot send message: not connected to relay');
+      LogService().log('Cannot send message: not connected to station');
       return false;
     }
 
     try {
       final json = jsonEncode(message);
-      LogService().log('Sending to relay (${kIsWeb ? "Web" : "Native"}): ${json.length > 200 ? "${json.substring(0, 200)}..." : json}');
+      LogService().log('Sending to station (${kIsWeb ? "Web" : "Native"}): ${json.length > 200 ? "${json.substring(0, 200)}..." : json}');
       _channel!.sink.add(json);
       LogService().log('✓ Message sent to WebSocket sink');
       return true;
@@ -340,7 +340,7 @@ class WebSocketService {
   // Pending OK responses keyed by event ID
   final Map<String, Completer<({bool success, String? message})>> _pendingOkResponses = {};
 
-  /// Send a NOSTR event and wait for OK acknowledgment from the relay.
+  /// Send a NOSTR event and wait for OK acknowledgment from the station.
   /// Returns (success: true/false, message: error message if failed).
   /// Throws TimeoutException if no response within timeout.
   Future<({bool success, String? message})> sendEventAndWaitForOk(
@@ -349,8 +349,8 @@ class WebSocketService {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!await ensureConnected()) {
-      LogService().log('Cannot send event: not connected to relay');
-      return (success: false, message: 'Not connected to relay');
+      LogService().log('Cannot send event: not connected to station');
+      return (success: false, message: 'Not connected to station');
     }
 
     // Create completer for this event
@@ -369,7 +369,7 @@ class WebSocketService {
         timeout,
         onTimeout: () {
           LogService().log('✗ Timeout waiting for OK response for event $eventId');
-          return (success: false, message: 'Timeout waiting for relay response');
+          return (success: false, message: 'Timeout waiting for station response');
         },
       );
 
@@ -383,7 +383,7 @@ class WebSocketService {
     }
   }
 
-  /// Handle OK response from relay for a pending event
+  /// Handle OK response from station for a pending event
   void _handleOkResponse(String eventId, bool success, String? message) {
     final completer = _pendingOkResponses[eventId];
     if (completer != null && !completer.isCompleted) {
@@ -394,7 +394,7 @@ class WebSocketService {
     }
   }
 
-  /// Handle collections request from relay
+  /// Handle collections request from station
   Future<void> _handleCollectionsRequest(String? requestId) async {
     if (requestId == null) return;
 
@@ -430,13 +430,13 @@ class WebSocketService {
       };
 
       send(response);
-      LogService().log('Sent ${collectionNames.length} collection folder names to relay (filtered ${collections.length - publicCollections.length} private collections)');
+      LogService().log('Sent ${collectionNames.length} collection folder names to station (filtered ${collections.length - publicCollections.length} private collections)');
     } catch (e) {
       LogService().log('Error handling collections request: $e');
     }
   }
 
-  /// Handle collection file request from relay
+  /// Handle collection file request from station
   Future<void> _handleCollectionFileRequest(
     String? requestId,
     String? collectionName,
@@ -518,7 +518,7 @@ class WebSocketService {
     }
   }
 
-  /// Handle HTTP request from relay (for www collection proxying and blog API)
+  /// Handle HTTP request from station (for www collection proxying and blog API)
   Future<void> _handleHttpRequest(
     String? requestId,
     String? method,
@@ -614,7 +614,7 @@ class WebSocketService {
     }
   }
 
-  /// Handle blog API request from relay
+  /// Handle blog API request from station
   /// Path format: /api/blog/{filename}.html
   Future<void> _handleBlogApiRequest(String requestId, String path) async {
     try {
@@ -805,7 +805,7 @@ class WebSocketService {
         .replaceAll("'", '&#39;');
   }
 
-  /// Send HTTP response to relay
+  /// Send HTTP response to station
   void _sendHttpResponse(
     String requestId,
     int statusCode,
@@ -882,7 +882,7 @@ class WebSocketService {
         };
         final json = jsonEncode(pingMessage);
         _channel!.sink.add(json);
-        LogService().log('Sent PING to relay');
+        LogService().log('Sent PING to station');
       } catch (e) {
         LogService().log('Error sending PING: $e');
       }
@@ -915,17 +915,17 @@ class WebSocketService {
     LogService().log('Connection lost - will attempt reconnection in 10 seconds');
   }
 
-  /// Attempt to reconnect to relay
+  /// Attempt to reconnect to station
   Future<void> _attemptReconnect() async {
-    if (!_shouldReconnect || _isReconnecting || _relayUrl == null) {
+    if (!_shouldReconnect || _isReconnecting || _stationUrl == null) {
       return;
     }
 
     _isReconnecting = true;
-    LogService().log('Attempting to reconnect to relay...');
+    LogService().log('Attempting to reconnect to station...');
 
     try {
-      await connectAndHello(_relayUrl!);
+      await connectAndHello(_stationUrl!);
       LogService().log('✓ Reconnection successful!');
     } catch (e) {
       LogService().log('✗ Reconnection failed: $e');

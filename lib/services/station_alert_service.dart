@@ -2,7 +2,7 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Service for fetching alerts from relay and caching them locally.
+ * Service for fetching alerts from station and caching them locally.
  * Polls every 5 minutes and stores alerts in ./devices/{callsign}/alerts/
  */
 
@@ -13,36 +13,36 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/report.dart';
 import 'log_service.dart';
-import 'relay_service.dart';
+import 'station_service.dart';
 import 'config_service.dart';
 import 'storage_config.dart';
 
-/// Result of fetching alerts from relay
-class RelayAlertFetchResult {
+/// Result of fetching alerts from station
+class StationAlertFetchResult {
   final bool success;
   final List<Report> alerts;
   final int timestamp;
   final String? error;
-  final String? relayName;
-  final String? relayCallsign;
+  final String? stationName;
+  final String? stationCallsign;
 
-  RelayAlertFetchResult({
+  StationAlertFetchResult({
     required this.success,
     required this.alerts,
     required this.timestamp,
     this.error,
-    this.relayName,
-    this.relayCallsign,
+    this.stationName,
+    this.stationCallsign,
   });
 }
 
-/// Service for fetching and caching alerts from relay
-class RelayAlertService {
-  static final RelayAlertService _instance = RelayAlertService._internal();
-  factory RelayAlertService() => _instance;
-  RelayAlertService._internal();
+/// Service for fetching and caching alerts from station
+class StationAlertService {
+  static final StationAlertService _instance = StationAlertService._internal();
+  factory StationAlertService() => _instance;
+  StationAlertService._internal();
 
-  final RelayService _relayService = RelayService();
+  final StationService _stationService = StationService();
   final ConfigService _configService = ConfigService();
 
   Timer? _pollTimer;
@@ -64,7 +64,7 @@ class RelayAlertService {
     if (_isPolling) return;
     _isPolling = true;
 
-    LogService().log('RelayAlertService: Starting polling every ${pollInterval.inMinutes} minutes');
+    LogService().log('StationAlertService: Starting polling every ${pollInterval.inMinutes} minutes');
 
     // Fetch immediately, then poll
     fetchAlerts();
@@ -80,36 +80,36 @@ class RelayAlertService {
     _isPolling = false;
     _pollTimer?.cancel();
     _pollTimer = null;
-    LogService().log('RelayAlertService: Stopped polling');
+    LogService().log('StationAlertService: Stopped polling');
   }
 
-  /// Fetch alerts from the relay
+  /// Fetch alerts from the station
   ///
   /// Parameters:
   /// - lat: User's latitude for distance filtering
   /// - lon: User's longitude for distance filtering
   /// - radiusKm: Maximum distance in km (null for unlimited)
   /// - useSince: If true, only fetch alerts newer than last fetch
-  Future<RelayAlertFetchResult> fetchAlerts({
+  Future<StationAlertFetchResult> fetchAlerts({
     double? lat,
     double? lon,
     double? radiusKm,
     bool useSince = true,
   }) async {
     try {
-      final relay = _relayService.getPreferredRelay();
-      if (relay == null || relay.url.isEmpty) {
-        LogService().log('RelayAlertService: No preferred relay configured');
-        return RelayAlertFetchResult(
+      final station = _stationService.getPreferredStation();
+      if (station == null || station.url.isEmpty) {
+        LogService().log('StationAlertService: No preferred station configured');
+        return StationAlertFetchResult(
           success: false,
           alerts: [],
           timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          error: 'No relay configured',
+          error: 'No station configured',
         );
       }
 
       // Build URL - convert wss:// to https://
-      var baseUrl = relay.url;
+      var baseUrl = station.url;
       if (baseUrl.startsWith('wss://')) {
         baseUrl = baseUrl.replaceFirst('wss://', 'https://');
       } else if (baseUrl.startsWith('ws://')) {
@@ -131,7 +131,7 @@ class RelayAlertService {
 
       final uri = Uri.parse('$baseUrl/api/alerts').replace(queryParameters: queryParams);
 
-      LogService().log('RelayAlertService: Fetching from $uri');
+      LogService().log('StationAlertService: Fetching from $uri');
 
       final response = await http.get(
         uri,
@@ -139,8 +139,8 @@ class RelayAlertService {
       ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
-        LogService().log('RelayAlertService: HTTP ${response.statusCode}');
-        return RelayAlertFetchResult(
+        LogService().log('StationAlertService: HTTP ${response.statusCode}');
+        return StationAlertFetchResult(
           success: false,
           alerts: _cachedAlerts,
           timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -152,8 +152,8 @@ class RelayAlertService {
 
       if (json['success'] != true) {
         final error = json['error'] as String? ?? 'Unknown error';
-        LogService().log('RelayAlertService: API error: $error');
-        return RelayAlertFetchResult(
+        LogService().log('StationAlertService: API error: $error');
+        return StationAlertFetchResult(
           success: false,
           alerts: _cachedAlerts,
           timestamp: json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -172,7 +172,7 @@ class RelayAlertService {
             newAlerts.add(report);
           }
         } catch (e) {
-          LogService().log('RelayAlertService: Error parsing alert: $e');
+          LogService().log('StationAlertService: Error parsing alert: $e');
         }
       }
 
@@ -189,20 +189,20 @@ class RelayAlertService {
       // Save last fetch timestamp
       _saveLastFetchTimestamp();
 
-      final relayInfo = json['relay'] as Map<String, dynamic>?;
+      final stationInfo = json['station'] as Map<String, dynamic>?;
 
-      LogService().log('RelayAlertService: Fetched ${newAlerts.length} alerts, cache now has ${_cachedAlerts.length}');
+      LogService().log('StationAlertService: Fetched ${newAlerts.length} alerts, cache now has ${_cachedAlerts.length}');
 
-      return RelayAlertFetchResult(
+      return StationAlertFetchResult(
         success: true,
         alerts: _cachedAlerts,
         timestamp: serverTimestamp,
-        relayName: relayInfo?['name'] as String?,
-        relayCallsign: relayInfo?['callsign'] as String?,
+        stationName: stationInfo?['name'] as String?,
+        stationCallsign: stationInfo?['callsign'] as String?,
       );
     } catch (e) {
-      LogService().log('RelayAlertService: Fetch error: $e');
-      return RelayAlertFetchResult(
+      LogService().log('StationAlertService: Fetch error: $e');
+      return StationAlertFetchResult(
         success: false,
         alerts: _cachedAlerts,
         timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -277,12 +277,12 @@ class RelayAlertService {
         author: json['author'] as String? ?? callsign,
         address: json['address'] as String?,
         metadata: {
-          'relay_callsign': callsign,
-          'from_relay': 'true',
+          'station_callsign': callsign,
+          'from_station': 'true',
         },
       );
     } catch (e) {
-      LogService().log('RelayAlertService: Parse error: $e');
+      LogService().log('StationAlertService: Parse error: $e');
       return null;
     }
   }
@@ -317,7 +317,7 @@ class RelayAlertService {
 
     for (final alert in alerts) {
       try {
-        final callsign = alert.metadata['relay_callsign'] ?? 'unknown';
+        final callsign = alert.metadata['station_callsign'] ?? 'unknown';
         final alertDir = Directory('$devicesDir/$callsign/alerts/${alert.folderName}');
 
         if (!await alertDir.exists()) {
@@ -328,9 +328,9 @@ class RelayAlertService {
         final reportFile = File('${alertDir.path}/report.txt');
         await reportFile.writeAsString(alert.exportAsText());
 
-        LogService().log('RelayAlertService: Stored alert ${alert.folderName}');
+        LogService().log('StationAlertService: Stored alert ${alert.folderName}');
       } catch (e) {
-        LogService().log('RelayAlertService: Error storing alert ${alert.folderName}: $e');
+        LogService().log('StationAlertService: Error storing alert ${alert.folderName}: $e');
       }
     }
   }
@@ -367,14 +367,14 @@ class RelayAlertService {
             final content = await reportFile.readAsString();
             final report = Report.fromText(content, alertEntity.path.split('/').last);
 
-            // Mark as from relay
+            // Mark as from station
             final metadata = Map<String, String>.from(report.metadata);
-            metadata['relay_callsign'] = callsign;
-            metadata['from_relay'] = 'true';
+            metadata['station_callsign'] = callsign;
+            metadata['from_station'] = 'true';
 
             _cachedAlerts.add(report.copyWith(metadata: metadata));
           } catch (e) {
-            LogService().log('RelayAlertService: Error loading alert: $e');
+            LogService().log('StationAlertService: Error loading alert: $e');
           }
         }
       }
@@ -385,30 +385,30 @@ class RelayAlertService {
       // Load last fetch timestamp
       _loadLastFetchTimestamp();
 
-      LogService().log('RelayAlertService: Loaded ${_cachedAlerts.length} cached alerts');
+      LogService().log('StationAlertService: Loaded ${_cachedAlerts.length} cached alerts');
     } catch (e) {
-      LogService().log('RelayAlertService: Error loading cached alerts: $e');
+      LogService().log('StationAlertService: Error loading cached alerts: $e');
     }
   }
 
   /// Save last fetch timestamp to config
   void _saveLastFetchTimestamp() {
     try {
-      _configService.set('relay_alerts_last_fetch', _lastFetchTimestamp.toString());
+      _configService.set('station_alerts_last_fetch', _lastFetchTimestamp.toString());
     } catch (e) {
-      LogService().log('RelayAlertService: Error saving timestamp: $e');
+      LogService().log('StationAlertService: Error saving timestamp: $e');
     }
   }
 
   /// Load last fetch timestamp from config
   void _loadLastFetchTimestamp() {
     try {
-      final value = _configService.get('relay_alerts_last_fetch');
+      final value = _configService.get('station_alerts_last_fetch');
       if (value != null && value is String) {
         _lastFetchTimestamp = int.tryParse(value) ?? 0;
       }
     } catch (e) {
-      LogService().log('RelayAlertService: Error loading timestamp: $e');
+      LogService().log('StationAlertService: Error loading timestamp: $e');
     }
   }
 
@@ -417,7 +417,7 @@ class RelayAlertService {
     _cachedAlerts.clear();
     _lastFetchTimestamp = 0;
     _saveLastFetchTimestamp();
-    LogService().log('RelayAlertService: Cache cleared');
+    LogService().log('StationAlertService: Cache cleared');
   }
 
   /// Get time since last fetch as human-readable string

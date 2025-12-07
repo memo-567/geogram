@@ -167,8 +167,8 @@ class NetworkStats {
   }
 }
 
-/// Represents a relay network
-class RelayNetwork {
+/// Represents a station network
+class StationNetwork {
   final String id;
   final String name;
   final String description;
@@ -181,7 +181,7 @@ class RelayNetwork {
   final DateTime founded;
   final DateTime updated;
 
-  const RelayNetwork({
+  const StationNetwork({
     required this.id,
     required this.name,
     this.description = '',
@@ -195,8 +195,8 @@ class RelayNetwork {
     required this.updated,
   });
 
-  factory RelayNetwork.fromJson(Map<String, dynamic> json) {
-    return RelayNetwork(
+  factory StationNetwork.fromJson(Map<String, dynamic> json) {
+    return StationNetwork(
       id: json['id'] as String,
       name: json['name'] as String,
       description: json['description'] as String? ?? '',
@@ -233,7 +233,7 @@ class RelayNetwork {
     };
   }
 
-  RelayNetwork copyWith({
+  StationNetwork copyWith({
     String? id,
     String? name,
     String? description,
@@ -246,7 +246,7 @@ class RelayNetwork {
     DateTime? founded,
     DateTime? updated,
   }) {
-    return RelayNetwork(
+    return StationNetwork(
       id: id ?? this.id,
       name: name ?? this.name,
       description: description ?? this.description,

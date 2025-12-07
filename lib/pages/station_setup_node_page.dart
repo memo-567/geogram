@@ -4,23 +4,23 @@
  */
 
 import 'package:flutter/material.dart';
-import '../models/relay_node.dart';
-import '../models/relay_network.dart';
-import '../services/relay_node_service.dart';
+import '../models/station_node.dart';
+import '../models/station_network.dart';
+import '../services/station_node_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 
-/// Wizard for joining a network as a node relay
-class RelaySetupNodePage extends StatefulWidget {
-  const RelaySetupNodePage({super.key});
+/// Wizard for joining a network as a node station
+class StationSetupNodePage extends StatefulWidget {
+  const StationSetupNodePage({super.key});
 
   @override
-  State<RelaySetupNodePage> createState() => _RelaySetupNodePageState();
+  State<StationSetupNodePage> createState() => _RelaySetupNodePageState();
 }
 
-class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelaySetupNodePageState extends State<StationSetupNodePage> {
+  final StationNodeService _stationNodeService = StationNodeService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
 
@@ -30,7 +30,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
 
   // Step 1: Network Selection
   final _rootUrlController = TextEditingController();
-  RelayNetwork? _selectedNetwork;
+  StationNetwork? _selectedNetwork;
 
   // Step 2: Node Configuration
   final _nodeNameController = TextEditingController();
@@ -68,7 +68,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Join as Node Relay'),
+        title: Text('Join as Node Station'),
       ),
       body: Stepper(
         currentStep: _currentStep,
@@ -94,7 +94,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Enter Root Relay URL', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text('Enter Root Station URL', style: TextStyle(fontWeight: FontWeight.bold)),
           SizedBox(height: 8),
           Row(
             children: [
@@ -102,7 +102,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
                 child: TextField(
                   controller: _rootUrlController,
                   decoration: InputDecoration(
-                    hintText: 'wss://relay.example.com',
+                    hintText: 'wss://station.example.com',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -159,7 +159,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
             ),
             child: Center(
               child: Text(
-                'No networks discovered nearby.\nEnter a root relay URL above.',
+                'No networks discovered nearby.\nEnter a root station URL above.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey),
               ),
@@ -191,7 +191,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
             controller: _nodeNameController,
             decoration: InputDecoration(
               labelText: 'Your Node Name *',
-              hintText: 'e.g., Lisbon Downtown Relay',
+              hintText: 'e.g., Lisbon Downtown Station',
               border: OutlineInputBorder(),
             ),
           ),
@@ -201,7 +201,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
             enabled: false,
             decoration: InputDecoration(
               labelText: 'Operator Callsign (X1)',
-              helperText: 'Your identity as the relay operator',
+              helperText: 'Your identity as the station operator',
               border: OutlineInputBorder(),
               filled: true,
               fillColor: Colors.grey[800],
@@ -368,8 +368,8 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
           _buildSummarySection('Node Summary', [
             'Name: ${_nodeNameController.text}',
             'Operator: ${_callsignController.text} (X1)',
-            'Relay: Will be assigned X3 callsign',
-            'Type: Node Relay',
+            'Station: Will be assigned X3 callsign',
+            'Type: Node Station',
           ]),
           SizedBox(height: 16),
           _buildSummarySection('Network', [
@@ -506,7 +506,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
     final url = _rootUrlController.text.trim();
     if (url.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enter a root relay URL')),
+        SnackBar(content: Text('Please enter a root station URL')),
       );
       return;
     }
@@ -514,14 +514,14 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
     setState(() => _isConnecting = true);
 
     try {
-      // TODO: Actually connect to the root relay and fetch network info
+      // TODO: Actually connect to the root station and fetch network info
       // For now, create a mock network
       await Future.delayed(Duration(seconds: 1));
 
-      final mockNetwork = RelayNetwork(
+      final mockNetwork = StationNetwork(
         id: 'mock-network-id',
         name: 'Demo Network',
-        description: 'A demo relay network',
+        description: 'A demo station network',
         rootNpub: 'npub1demo...',
         rootCallsign: 'DEMO1',
         rootUrl: url,
@@ -568,8 +568,8 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
         channels.add(ChannelConfig(type: 'lora', enabled: true));
       }
 
-      final config = RelayNodeConfig(
-        storage: RelayStorageConfig(
+      final config = StationNodeConfig(
+        storage: StationStorageConfig(
           allocatedMb: _allocatedMb,
           binaryPolicy: _binaryPolicy,
         ),
@@ -584,7 +584,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
         supportedCollections: _selectedNetwork!.collections.all,
       );
 
-      await _relayNodeService.joinAsNode(
+      await _stationNodeService.joinAsNode(
         nodeName: _nodeNameController.text,
         operatorCallsign: _callsignController.text,
         network: _selectedNetwork!,
@@ -594,7 +594,7 @@ class _RelaySetupNodePageState extends State<RelaySetupNodePage> {
       if (mounted) {
         Navigator.of(context).pop(true);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Joined network as node relay!')),
+          SnackBar(content: Text('Joined network as node station!')),
         );
       }
     } catch (e) {

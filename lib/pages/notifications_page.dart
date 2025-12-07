@@ -182,12 +182,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.cloud_outlined,
-            title: _i18n.t('relay_status'),
-            subtitle: _i18n.t('relay_status_desc'),
-            value: _settings!.notifyRelayStatus,
+            title: _i18n.t('station_status'),
+            subtitle: _i18n.t('station_status_desc'),
+            value: _settings!.notifyStationStatus,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
-              _updateSettings(_settings!.copyWith(notifyRelayStatus: value));
+              _updateSettings(_settings!.copyWith(notifyStationStatus: value));
             },
           ),
 

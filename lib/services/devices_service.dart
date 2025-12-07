@@ -9,11 +9,11 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
-import '../models/relay.dart';
+import '../models/station.dart';
 import '../util/chat_api.dart';
-import 'relay_cache_service.dart';
-import 'relay_service.dart';
-import 'relay_discovery_service.dart';
+import 'station_cache_service.dart';
+import 'station_service.dart';
+import 'station_discovery_service.dart';
 import 'log_service.dart';
 
 /// Service for managing remote devices we've contacted
@@ -23,8 +23,8 @@ class DevicesService {
   DevicesService._internal();
 
   final RelayCacheService _cacheService = RelayCacheService();
-  final RelayService _relayService = RelayService();
-  final RelayDiscoveryService _discoveryService = RelayDiscoveryService();
+  final StationService _stationService = StationService();
+  final StationDiscoveryService _discoveryService = StationDiscoveryService();
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -48,20 +48,20 @@ class DevicesService {
         final cacheTime = await _cacheService.getCacheTime(callsign);
         final cachedRelayUrl = await _cacheService.getCachedRelayUrl(callsign);
 
-        // Try to find matching relay
-        Relay? matchingRelay;
+        // Try to find matching station
+        Station? matchingRelay;
         try {
-          for (final relay in _relayService.getAllRelays()) {
-            if (relay.callsign?.toUpperCase() == callsign.toUpperCase()) {
-              matchingRelay = relay;
+          for (final station in _stationService.getAllStations()) {
+            if (station.callsign?.toUpperCase() == callsign.toUpperCase()) {
+              matchingRelay = station;
               break;
             }
           }
         } catch (e) {
-          // RelayService might not be initialized
+          // StationService might not be initialized
         }
 
-        // Use relay URL if available, otherwise use cached relay URL
+        // Use station URL if available, otherwise use cached station URL
         final deviceUrl = matchingRelay?.url ?? cachedRelayUrl;
 
         _devices[callsign] = RemoteDevice(
@@ -77,25 +77,25 @@ class DevicesService {
         );
       }
 
-      // Also add known relays that might not have cache
+      // Also add known stations that might not have cache
       try {
-        for (final relay in _relayService.getAllRelays()) {
-          if (relay.callsign != null && !_devices.containsKey(relay.callsign!.toUpperCase())) {
-            _devices[relay.callsign!.toUpperCase()] = RemoteDevice(
-              callsign: relay.callsign!,
-              name: relay.name,
-              url: relay.url,
-              isOnline: relay.isConnected,
-              lastSeen: relay.lastChecked,
+        for (final station in _stationService.getAllStations()) {
+          if (station.callsign != null && !_devices.containsKey(station.callsign!.toUpperCase())) {
+            _devices[station.callsign!.toUpperCase()] = RemoteDevice(
+              callsign: station.callsign!,
+              name: station.name,
+              url: station.url,
+              isOnline: station.isConnected,
+              lastSeen: station.lastChecked,
               hasCachedData: false,
               collections: [],
-              latitude: relay.latitude,
-              longitude: relay.longitude,
+              latitude: station.latitude,
+              longitude: station.longitude,
             );
           }
         }
       } catch (e) {
-        // RelayService might not be initialized
+        // StationService might not be initialized
       }
 
       _notifyListeners();
@@ -127,21 +127,21 @@ class DevicesService {
     if (device == null) return false;
 
     if (device.url == null) {
-      // Try to find via relay proxy
+      // Try to find via station proxy
       return await _checkViaRelayProxy(device);
     }
 
     return await _checkDirectConnection(device);
   }
 
-  /// Check device via relay proxy
+  /// Check device via station proxy
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
-    // Get connected relay
-    final relay = _relayService.getConnectedRelay();
-    if (relay == null) return false;
+    // Get connected station
+    final station = _stationService.getConnectedRelay();
+    if (station == null) return false;
 
     try {
-      final baseUrl = relay.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+      final baseUrl = station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
       final response = await http.get(
         Uri.parse('$baseUrl/device/${device.callsign}'),
       ).timeout(const Duration(seconds: 5));
@@ -227,13 +227,13 @@ class DevicesService {
       String baseUrl;
 
       if (device.url != null) {
-        // Direct connection to device or relay
+        // Direct connection to device or station
         baseUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
       } else {
-        // Via relay proxy
-        final relay = _relayService.getConnectedRelay();
-        if (relay == null) return [];
-        baseUrl = '${relay.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
+        // Via station proxy
+        final station = _stationService.getConnectedRelay();
+        if (station == null) return [];
+        baseUrl = '${station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
       }
 
       LogService().log('DevicesService: Fetching collections from $baseUrl');
@@ -273,7 +273,7 @@ class DevicesService {
         LogService().log('DevicesService: Error fetching files: $e');
       }
 
-      // If no collections found via /files, check if it's a relay with chat
+      // If no collections found via /files, check if it's a station with chat
       if (collections.isEmpty) {
         try {
           // Use callsign-scoped API: /{callsign}/api/chat/rooms
@@ -285,7 +285,7 @@ class DevicesService {
           if (chatResponse.statusCode == 200) {
             final data = json.decode(chatResponse.body);
             if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
-              // This relay has chat rooms, add a chat collection
+              // This station has chat rooms, add a chat collection
               collections.add(RemoteCollection(
                 name: 'Chat',
                 deviceCallsign: device.callsign,

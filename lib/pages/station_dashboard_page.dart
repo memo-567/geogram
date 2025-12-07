@@ -5,31 +5,31 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../models/relay_node.dart';
-import '../services/relay_node_service.dart';
+import '../models/station_node.dart';
+import '../services/station_node_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
-import 'relay_setup_root_page.dart';
-import 'relay_setup_node_page.dart';
-import 'relay_settings_page.dart';
-import 'relay_logs_page.dart';
-import 'relay_authorities_page.dart';
-import 'relay_topology_page.dart';
+import 'station_setup_root_page.dart';
+import 'station_setup_node_page.dart';
+import 'station_settings_page.dart';
+import 'station_logs_page.dart';
+import 'station_authorities_page.dart';
+import 'station_topology_page.dart';
 
-/// Dashboard for managing relay node
-class RelayDashboardPage extends StatefulWidget {
-  const RelayDashboardPage({super.key});
+/// Dashboard for managing station node
+class StationDashboardPage extends StatefulWidget {
+  const StationDashboardPage({super.key});
 
   @override
-  State<RelayDashboardPage> createState() => _RelayDashboardPageState();
+  State<StationDashboardPage> createState() => _RelayDashboardPageState();
 }
 
-class _RelayDashboardPageState extends State<RelayDashboardPage> {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelayDashboardPageState extends State<StationDashboardPage> {
+  final StationNodeService _stationNodeService = StationNodeService();
   final I18nService _i18n = I18nService();
 
-  StreamSubscription<RelayNode?>? _subscription;
-  RelayNode? _relayNode;
+  StreamSubscription<StationNode?>? _subscription;
+  StationNode? _stationNode;
   bool _isLoading = true;
 
   @override
@@ -39,16 +39,16 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   }
 
   Future<void> _initialize() async {
-    await _relayNodeService.initialize();
+    await _stationNodeService.initialize();
 
-    _subscription = _relayNodeService.stateStream.listen((node) {
+    _subscription = _stationNodeService.stateStream.listen((node) {
       if (mounted) {
-        setState(() => _relayNode = node);
+        setState(() => _stationNode = node);
       }
     });
 
     setState(() {
-      _relayNode = _relayNodeService.relayNode;
+      _stationNode = _stationNodeService.stationNode;
       _isLoading = false;
     });
   }
@@ -63,12 +63,12 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: Text('Relay')),
+        appBar: AppBar(title: Text('Station')),
         body: Center(child: CircularProgressIndicator()),
       );
     }
 
-    if (_relayNode == null) {
+    if (_stationNode == null) {
       return _buildSetupView();
     }
 
@@ -77,7 +77,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
 
   Widget _buildSetupView() {
     return Scaffold(
-      appBar: AppBar(title: Text('Relay')),
+      appBar: AppBar(title: Text('Station')),
       body: Center(
         child: Container(
           constraints: BoxConstraints(maxWidth: 500),
@@ -88,12 +88,12 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
               Icon(Icons.cell_tower, size: 80, color: Colors.grey),
               SizedBox(height: 24),
               Text(
-                'Enable Relay Mode',
+                'Enable Station Mode',
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               SizedBox(height: 8),
               Text(
-                'Turn this device into a relay node to help connect other devices across networks.',
+                'Turn this device into a station node to help connect other devices across networks.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[600]),
               ),
@@ -104,8 +104,8 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                   Expanded(
                     child: _buildSetupCard(
                       icon: Icons.hub,
-                      title: 'Root Relay',
-                      description: 'Create a new relay network. You become the network owner.',
+                      title: 'Root Station',
+                      description: 'Create a new station network. You become the network owner.',
                       buttonText: 'Create Network',
                       onTap: _createRootRelay,
                     ),
@@ -114,8 +114,8 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                   Expanded(
                     child: _buildSetupCard(
                       icon: Icons.device_hub,
-                      title: 'Node Relay',
-                      description: 'Join an existing relay network. Extend network coverage.',
+                      title: 'Node Station',
+                      description: 'Join an existing station network. Extend network coverage.',
                       buttonText: 'Join Network',
                       onTap: _joinAsNode,
                     ),
@@ -164,7 +164,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   Widget _buildDashboardView() {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Relay Dashboard'),
+        title: Text('Station Dashboard'),
         actions: [
           IconButton(
             icon: Icon(Icons.settings),
@@ -182,9 +182,9 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
             SizedBox(height: 16),
             Row(
               children: [
-                Expanded(child: _buildStatCard('Connected Devices', '${_relayNode!.stats.connectedDevices}', Icons.devices)),
+                Expanded(child: _buildStatCard('Connected Devices', '${_stationNode!.stats.connectedDevices}', Icons.devices)),
                 SizedBox(width: 16),
-                Expanded(child: _buildStatCard('Messages Relayed', '${_relayNode!.stats.messagesRelayed}', Icons.message)),
+                Expanded(child: _buildStatCard('Messages Relayed', '${_stationNode!.stats.messagesRelayed}', Icons.message)),
               ],
             ),
             SizedBox(height: 16),
@@ -200,7 +200,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   }
 
   Widget _buildStatusCard() {
-    final isRunning = _relayNode!.isRunning;
+    final isRunning = _stationNode!.isRunning;
     final statusColor = isRunning ? Colors.green : Colors.grey;
 
     return Card(
@@ -221,7 +221,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                 ),
                 SizedBox(width: 8),
                 Text(
-                  'RELAY STATUS: ${_relayNode!.statusDisplay.toUpperCase()}',
+                  'RELAY STATUS: ${_stationNode!.statusDisplay.toUpperCase()}',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Spacer(),
@@ -232,15 +232,15 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
               ],
             ),
             SizedBox(height: 12),
-            Text('Type: ${_relayNode!.typeDisplay}'),
-            Text('Network: ${_relayNode!.networkName ?? "N/A"}'),
-            if (_relayNode!.isRunning)
-              Text('Uptime: ${_formatUptime(_relayNode!.stats.uptime)}'),
-            if (_relayNode!.errorMessage != null)
+            Text('Type: ${_stationNode!.typeDisplay}'),
+            Text('Network: ${_stationNode!.networkName ?? "N/A"}'),
+            if (_stationNode!.isRunning)
+              Text('Uptime: ${_formatUptime(_stationNode!.stats.uptime)}'),
+            if (_stationNode!.errorMessage != null)
               Padding(
                 padding: EdgeInsets.only(top: 8),
                 child: Text(
-                  'Error: ${_relayNode!.errorMessage}',
+                  'Error: ${_stationNode!.errorMessage}',
                   style: TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ),
@@ -267,8 +267,8 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   }
 
   Widget _buildStorageCard() {
-    final used = _relayNode!.stats.storageUsedMb;
-    final allocated = _relayNode!.config.storage.allocatedMb;
+    final used = _stationNode!.stats.storageUsedMb;
+    final allocated = _stationNode!.config.storage.allocatedMb;
     final percent = allocated > 0 ? (used / allocated).clamp(0.0, 1.0) : 0.0;
 
     return Card(
@@ -298,7 +298,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
             ),
             SizedBox(height: 4),
             Text(
-              'Policy: ${_relayNode!.config.storage.binaryPolicy.name}',
+              'Policy: ${_stationNode!.config.storage.binaryPolicy.name}',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],
@@ -308,7 +308,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
   }
 
   Widget _buildChannelsCard() {
-    final channels = _relayNode!.config.channels;
+    final channels = _stationNode!.config.channels;
 
     return Card(
       child: Padding(
@@ -410,17 +410,17 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                 OutlinedButton.icon(
                   onPressed: () {
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => RelayLogsPage()),
+                      MaterialPageRoute(builder: (_) => StationLogsPage()),
                     );
                   },
                   icon: Icon(Icons.article),
                   label: Text('View Logs'),
                 ),
-                if (_relayNode!.isRoot)
+                if (_stationNode!.isRoot)
                   OutlinedButton.icon(
                     onPressed: () {
                       Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => RelayAuthoritiesPage()),
+                        MaterialPageRoute(builder: (_) => StationAuthoritiesPage()),
                       );
                     },
                     icon: Icon(Icons.admin_panel_settings),
@@ -429,7 +429,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                 OutlinedButton.icon(
                   onPressed: () {
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => RelayTopologyPage()),
+                      MaterialPageRoute(builder: (_) => StationTopologyPage()),
                     );
                   },
                   icon: Icon(Icons.account_tree),
@@ -438,7 +438,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
                 OutlinedButton.icon(
                   onPressed: _confirmDeleteRelay,
                   icon: Icon(Icons.delete_outline, color: Colors.red),
-                  label: Text('Delete Relay', style: TextStyle(color: Colors.red)),
+                  label: Text('Delete Station', style: TextStyle(color: Colors.red)),
                 ),
               ],
             ),
@@ -450,31 +450,31 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
 
   void _createRootRelay() async {
     final result = await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => RelaySetupRootPage()),
+      MaterialPageRoute(builder: (_) => StationSetupRootPage()),
     );
     if (result == true) {
-      setState(() => _relayNode = _relayNodeService.relayNode);
+      setState(() => _stationNode = _stationNodeService.stationNode);
     }
   }
 
   void _joinAsNode() async {
     final result = await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => RelaySetupNodePage()),
+      MaterialPageRoute(builder: (_) => StationSetupNodePage()),
     );
     if (result == true) {
-      setState(() => _relayNode = _relayNodeService.relayNode);
+      setState(() => _stationNode = _stationNodeService.stationNode);
     }
   }
 
   void _toggleRelay(bool enabled) async {
     try {
       if (enabled) {
-        await _relayNodeService.start();
+        await _stationNodeService.start();
       } else {
-        await _relayNodeService.stop();
+        await _stationNodeService.stop();
       }
     } catch (e) {
-      LogService().log('Error toggling relay: $e');
+      LogService().log('Error toggling station: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
       );
@@ -483,7 +483,7 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
 
   void _openSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => RelaySettingsPage()),
+      MaterialPageRoute(builder: (_) => StationSettingsPage()),
     );
   }
 
@@ -491,10 +491,10 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete Relay?'),
+        title: Text('Delete Station?'),
         content: Text(
-          'This will delete all relay configuration and data. '
-          'If this is a root relay, the network will be destroyed. '
+          'This will delete all station configuration and data. '
+          'If this is a root station, the network will be destroyed. '
           'This action cannot be undone.',
         ),
         actions: [
@@ -505,10 +505,10 @@ class _RelayDashboardPageState extends State<RelayDashboardPage> {
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-              await _relayNodeService.deleteRelay();
-              setState(() => _relayNode = null);
+              await _stationNodeService.deleteStation();
+              setState(() => _stationNode = null);
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Relay deleted')),
+                SnackBar(content: Text('Station deleted')),
               );
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),

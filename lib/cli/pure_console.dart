@@ -4,10 +4,10 @@ import 'dart:io';
 
 import 'package:dart_console/dart_console.dart';
 
-import 'pure_relay.dart';
+import 'pure_station.dart';
 import 'cli_profile_service.dart';
 import 'cli_location_service.dart';
-import 'cli_relay_cache_service.dart';
+import 'cli_station_cache_service.dart';
 import '../models/profile.dart';
 import '../models/chat_message.dart' as chat;
 import '../util/event_bus.dart';
@@ -36,30 +36,30 @@ class PureConsole {
   /// Current chat room (when in /chat/<room>)
   String? _currentChatRoom;
 
-  /// Root directories - relay-only dirs filtered dynamically
-  static const List<String> _allRootDirs = ['relay', 'devices', 'chat', 'config', 'logs', 'ssl', 'games'];
-  static const List<String> _relayOnlyDirs = ['relay', 'ssl', 'logs'];
+  /// Root directories - station-only dirs filtered dynamically
+  static const List<String> _allRootDirs = ['station', 'devices', 'chat', 'config', 'logs', 'ssl', 'games'];
+  static const List<String> _stationOnlyDirs = ['station', 'ssl', 'logs'];
 
   /// Get root directories based on profile type (sorted alphabetically)
   List<String> get rootDirs {
     final profile = _profileService.activeProfile;
     final dirs = profile?.isRelay == true
         ? List<String>.from(_allRootDirs)
-        : _allRootDirs.where((d) => !_relayOnlyDirs.contains(d)).toList();
+        : _allRootDirs.where((d) => !_stationOnlyDirs.contains(d)).toList();
     dirs.sort();
     return dirs;
   }
 
-  /// Global commands - relay-only commands filtered dynamically
+  /// Global commands - station-only commands filtered dynamically
   static const List<String> _allGlobalCommands = [
     'help', 'status', 'stats', 'ls', 'cd', 'pwd', 'df',
-    'relay', 'devices', 'chat', 'config', 'logs',
+    'station', 'devices', 'chat', 'config', 'logs',
     'broadcast', 'kick', 'quiet', 'verbose', 'restart', 'reload',
     'clear', 'quit', 'exit', 'shutdown',
     'top', 'tail', 'head', 'cat', 'setup', 'ssl',
     'play', 'games', 'profile'
   ];
-  static const List<String> _relayOnlyCommands = ['relay', 'ssl', 'logs', 'broadcast', 'kick', 'restart', 'reload', 'shutdown'];
+  static const List<String> _stationOnlyCommands = ['station', 'ssl', 'logs', 'broadcast', 'kick', 'restart', 'reload', 'shutdown'];
 
   /// Get global commands based on profile type
   List<String> get globalCommands {
@@ -67,12 +67,12 @@ class PureConsole {
     if (profile?.isRelay == true) {
       return _allGlobalCommands;
     }
-    return _allGlobalCommands.where((c) => !_relayOnlyCommands.contains(c)).toList();
+    return _allGlobalCommands.where((c) => !_stationOnlyCommands.contains(c)).toList();
   }
 
   /// Sub-commands for main commands
   static const Map<String, List<String>> subCommands = {
-    'relay': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
+    'station': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
     'devices': ['list', 'scan', 'ping'],
     'chat': ['list', 'info', 'create', 'delete', 'rename', 'history', 'say', 'delmsg'],
     'config': ['set', 'save'],
@@ -84,14 +84,14 @@ class PureConsole {
 
   /// Descriptions for sub-commands (shown in tab completion)
   static const Map<String, String> subCommandDescriptions = {
-    // Relay
-    'relay.start': 'Start the relay server',
-    'relay.stop': 'Stop the relay server',
-    'relay.status': 'Show relay status',
-    'relay.restart': 'Restart the relay',
-    'relay.port': 'Get/set port',
-    'relay.callsign': 'Get/set callsign',
-    'relay.cache': 'Manage cache',
+    // Station
+    'station.start': 'Start the station server',
+    'station.stop': 'Stop the station server',
+    'station.status': 'Show station status',
+    'station.restart': 'Restart the station',
+    'station.port': 'Get/set port',
+    'station.callsign': 'Get/set callsign',
+    'station.cache': 'Manage cache',
     // Devices
     'devices.list': 'List all devices',
     'devices.scan': 'Scan network',
@@ -135,7 +135,7 @@ class PureConsole {
   static const Map<String, String> commandHelp = {
     // Global commands
     'help': 'help - Show available commands',
-    'status': 'status - Show relay/client status',
+    'status': 'status - Show station/client status',
     'stats': 'stats - Show statistics',
     'ls': 'ls [path] - List directory contents',
     'cd': 'cd <path> - Change directory',
@@ -146,21 +146,21 @@ class PureConsole {
     'exit': 'exit - Exit the console',
     'setup': 'setup - Run initial setup wizard',
     'broadcast': 'broadcast <message> - Send message to all connected devices',
-    'kick': 'kick <callsign> - Disconnect a device from the relay',
-    // Relay commands
-    'relay': 'relay <subcommand> - Manage relay (start|stop|status|restart|port|callsign|cache)',
-    'relay start': 'relay start - Start the relay server',
-    'relay stop': 'relay stop - Stop the relay server',
-    'relay status': 'relay status - Show relay status',
-    'relay restart': 'relay restart - Restart the relay server',
-    'relay port': 'relay port [port] - Get or set relay port (1-65535)',
-    'relay callsign': 'relay callsign [callsign] - Get or set relay callsign',
-    'relay cache': 'relay cache [clear] - Show cache stats or clear cache',
-    'start': 'start - Start the relay server',
-    'stop': 'stop - Stop the relay server',
-    'restart': 'restart - Restart the relay server',
-    'port': 'port [port] - Get or set relay port (1-65535)',
-    'callsign': 'callsign - Show relay callsign (derived from key pair)',
+    'kick': 'kick <callsign> - Disconnect a device from the station',
+    // Station commands
+    'station': 'station <subcommand> - Manage station (start|stop|status|restart|port|callsign|cache)',
+    'station start': 'station start - Start the station server',
+    'station stop': 'station stop - Stop the station server',
+    'station status': 'station status - Show station status',
+    'station restart': 'station restart - Restart the station server',
+    'station port': 'station port [port] - Get or set station port (1-65535)',
+    'station callsign': 'station callsign [callsign] - Get or set station callsign',
+    'station cache': 'station cache [clear] - Show cache stats or clear cache',
+    'start': 'start - Start the station server',
+    'stop': 'stop - Stop the station server',
+    'restart': 'restart - Restart the station server',
+    'port': 'port [port] - Get or set station port (1-65535)',
+    'callsign': 'callsign - Show station callsign (derived from key pair)',
     'cache': 'cache [clear] - Show cache stats or clear cache',
     // Devices commands
     'devices': 'devices <subcommand> - Manage devices (list|scan|ping)',
@@ -236,7 +236,7 @@ class PureConsole {
     final isRelay = profile?.isRelay == true;
 
     return {
-      if (isRelay) '/relay': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
+      if (isRelay) '/station': ['start', 'stop', 'status', 'restart', 'port', 'callsign', 'cache'],
       '/devices': ['list', 'scan', 'ping'],
       '/chat': ['list', 'info', 'create', 'delete', 'rename', 'history', 'say', 'delmsg', 'messages'],
       '/config': ['set', 'show', 'location'],
@@ -256,7 +256,7 @@ class PureConsole {
     'longitude': 'double',
     'locationName': 'string',
     'enableAprs': 'bool',
-    // Relay-only settings
+    // Station-only settings
     'httpPort': 'int',
     'httpsPort': 'int',
     'tileServerEnabled': 'bool',
@@ -267,8 +267,8 @@ class PureConsole {
     'maxConnectedDevices': 'int',
   };
 
-  /// Config keys that are relay-only
-  static const List<String> _relayOnlyConfigKeys = [
+  /// Config keys that are station-only
+  static const List<String> _stationOnlyConfigKeys = [
     'httpPort', 'httpsPort', 'tileServerEnabled', 'osmFallbackEnabled', 'maxZoomLevel',
     'maxCacheSizeMB', 'enableCors', 'maxConnectedDevices'
   ];
@@ -279,7 +279,7 @@ class PureConsole {
     if (profile?.isRelay == true) {
       return configKeyTypes.keys.toList();
     }
-    return configKeyTypes.keys.where((k) => !_relayOnlyConfigKeys.contains(k)).toList();
+    return configKeyTypes.keys.where((k) => !_stationOnlyConfigKeys.contains(k)).toList();
   }
 
   /// Command history
@@ -292,8 +292,8 @@ class PureConsole {
   DateTime? _lastCtrlCTime;
   static const _ctrlCTimeout = Duration(seconds: 2);
 
-  /// Relay server instance
-  final PureRelayServer _relay = PureRelayServer();
+  /// Station server instance
+  final PureStationServer _station = PureStationServer();
 
   /// Event subscription for chat messages
   EventSubscription<ChatMessageEvent>? _chatMessageSubscription;
@@ -301,7 +301,7 @@ class PureConsole {
   /// CLI Profile service
   final CliProfileService _profileService = CliProfileService();
 
-  /// CLI Relay cache service
+  /// CLI Station cache service
   final CliRelayCacheService _cacheService = CliRelayCacheService();
 
   /// SSL certificate manager
@@ -333,8 +333,8 @@ class PureConsole {
       await _handleSetup();
     }
 
-    // Check for daemon mode: ./geogram-cli relay (runs relay server without interactive prompt)
-    if (args.isNotEmpty && args[0] == 'relay') {
+    // Check for daemon mode: ./geogram-cli station (runs station server without interactive prompt)
+    if (args.isNotEmpty && args[0] == 'station') {
       await _runDaemonMode();
       return;
     }
@@ -347,21 +347,21 @@ class PureConsole {
       // Initialize profile service first
       await _profileService.initialize();
 
-      // Initialize relay server
-      await _relay.initialize();
+      // Initialize station server
+      await _station.initialize();
 
       // Enable quiet mode by default (logs go to buffer, not stderr)
       // Users can disable with 'verbose' command or view logs with 'top'/'tail'
-      _relay.quietMode = true;
+      _station.quietMode = true;
 
       // Initialize SSL manager
-      _sslManager = SslCertificateManager(_relay.settings, _relay.dataDir!);
+      _sslManager = SslCertificateManager(_station.settings, _station.dataDir!);
       await _sslManager!.initialize();
-      _sslManager!.setRelayServer(_relay);
+      _sslManager!.setStationServer(_station);
       _sslManager!.startAutoRenewal();
 
       // Initialize game engine
-      await _gameConfig.initialize(_relay.dataDir!);
+      await _gameConfig.initialize(_station.dataDir!);
 
       // Initialize cache service
       await _cacheService.initialize();
@@ -370,7 +370,7 @@ class PureConsole {
       await _loadHistory();
 
       // Subscribe to chat message events for real-time display
-      _chatMessageSubscription = _relay.eventBus.on<ChatMessageEvent>((event) {
+      _chatMessageSubscription = _station.eventBus.on<ChatMessageEvent>((event) {
         _handleIncomingChatMessage(event);
       });
     } catch (e) {
@@ -379,30 +379,30 @@ class PureConsole {
     }
   }
 
-  /// Run in daemon mode - start relay server and wait indefinitely
-  /// Used when running: ./geogram-cli relay
+  /// Run in daemon mode - start station server and wait indefinitely
+  /// Used when running: ./geogram-cli station
   Future<void> _runDaemonMode() async {
     stdout.writeln('Starting in daemon mode...');
 
-    // Start the relay server
-    final success = await _relay.start();
+    // Start the station server
+    final success = await _station.start();
 
     if (!success) {
-      _printError('Failed to start relay server');
+      _printError('Failed to start station server');
       exit(1);
     }
 
     stdout.writeln('\x1B[32mRelay server started in daemon mode\x1B[0m');
-    stdout.writeln('  HTTP Port:  ${_relay.settings.httpPort}');
-    stdout.writeln('  HTTPS Port: ${_relay.settings.httpsPort}');
-    stdout.writeln('  Callsign:   ${_relay.settings.callsign}');
+    stdout.writeln('  HTTP Port:  ${_station.settings.httpPort}');
+    stdout.writeln('  HTTPS Port: ${_station.settings.httpsPort}');
+    stdout.writeln('  Callsign:   ${_station.settings.callsign}');
     stdout.writeln('');
     stdout.writeln('Press Ctrl+C to stop the server.');
 
     // Set up signal handler for graceful shutdown
     ProcessSignal.sigint.watch().listen((_) async {
       stdout.writeln('\nShutting down...');
-      await _relay.stop();
+      await _station.stop();
       await _cleanup();
       exit(0);
     });
@@ -457,9 +457,9 @@ class PureConsole {
     _saveHistory();
     // Stop SSL auto-renewal timer
     _sslManager?.stop();
-    // Stop relay server
-    if (_relay.isRunning) {
-      await _relay.stop();
+    // Stop station server
+    if (_station.isRunning) {
+      await _station.stop();
     }
     // Reset console to normal mode
     _cleanupAsyncStdin();
@@ -503,7 +503,7 @@ class PureConsole {
 
     final activeProfile = _profileService.activeProfile;
     if (activeProfile != null) {
-      final typeStr = activeProfile.isRelay ? 'Relay' : 'Client';
+      final typeStr = activeProfile.isStation ? ' [station]' : '';
       stdout.writeln('\x1B[36m  Active Profile: ${activeProfile.callsign} ($typeStr)\x1B[0m');
     } else {
       stdout.writeln('\x1B[33m  No profile configured\x1B[0m');
@@ -544,9 +544,9 @@ class PureConsole {
 
       // If in a chat room, treat non-command input as a message
       if (_currentChatRoom != null && !input.startsWith('/') && !_isCommand(input)) {
-        // Use relay's chat room management in CLI mode
-        if (_relay.chatRooms[_currentChatRoom!] != null) {
-          await _relay.postMessage(_currentChatRoom!, input);
+        // Use station's chat room management in CLI mode
+        if (_station.chatRooms[_currentChatRoom!] != null) {
+          await _station.postMessage(_currentChatRoom!, input);
           // IRC-style: show formatted message (replacing the raw input line)
           final now = DateTime.now();
           final timeStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
@@ -601,7 +601,7 @@ class PureConsole {
       stdin.lineMode = false;
     } catch (e) {
       // Ignore terminal mode errors when running non-interactively (e.g., nohup, screen detached)
-      // The relay will still work, just without fancy input handling
+      // The station will still work, just without fancy input handling
     }
     _stdinSubscription = stdin.listen((data) {
       _stdinQueue.addAll(data);
@@ -1012,8 +1012,8 @@ class PureConsole {
       final subCmd = parts.length > 1 ? parts[1].toLowerCase() : '';
       final partial = parts.length > 2 ? parts[2].toLowerCase() : '';
 
-      // relay cache <subcommand>
-      if (firstWord == 'relay' && subCmd == 'cache') {
+      // station cache <subcommand>
+      if (firstWord == 'station' && subCmd == 'cache') {
         return _filterCandidates(['clear', 'stats'], partial);
       }
 
@@ -1098,7 +1098,7 @@ class PureConsole {
       if (localCmd == 'scan' && partial.startsWith('-')) {
         return _filterCandidates(['-t'], partial);
       }
-    } else if (_currentPath == '/relay') {
+    } else if (_currentPath == '/station') {
       if (localCmd == 'cache') {
         return _filterCandidates(['clear', 'stats'], partial);
       }
@@ -1146,9 +1146,9 @@ class PureConsole {
           }
         }
       } else if (baseDir == 'chat' && pathParts.length == 2) {
-        // Completing chat room name - use relay's chat rooms in CLI mode
+        // Completing chat room name - use station's chat rooms in CLI mode
         final roomPartial = pathParts[1].toLowerCase();
-        for (final room in _relay.chatRooms.values) {
+        for (final room in _station.chatRooms.values) {
           if (room.id.toLowerCase().startsWith(roomPartial)) {
             candidates.add(Candidate('/chat/${room.id}', display: '/chat/${room.id}/', group: 'chat room', complete: false));
           }
@@ -1165,14 +1165,14 @@ class PureConsole {
         }
       }
     } else if (_currentPath == '/chat') {
-      // Use relay's chat rooms in CLI mode
-      for (final room in _relay.chatRooms.values) {
+      // Use station's chat rooms in CLI mode
+      for (final room in _station.chatRooms.values) {
         if (room.id.toLowerCase().startsWith(lowerPartial)) {
           candidates.add(Candidate(room.id, display: '${room.id}/', group: 'chat room', complete: false));
         }
       }
     } else if (_currentPath == '/devices') {
-      for (final client in _relay.clients.values) {
+      for (final client in _station.clients.values) {
         final callsign = client.callsign ?? 'unknown';
         if (callsign.toLowerCase().startsWith(lowerPartial)) {
           candidates.add(Candidate(callsign, group: 'device'));
@@ -1188,7 +1188,7 @@ class PureConsole {
     final candidates = <Candidate>[];
     final upperPartial = partial.toUpperCase();
 
-    for (final client in _relay.clients.values) {
+    for (final client in _station.clients.values) {
       final callsign = client.callsign ?? '';
       if (callsign.toUpperCase().startsWith(upperPartial)) {
         candidates.add(Candidate(callsign, group: 'device'));
@@ -1206,7 +1206,7 @@ class PureConsole {
     for (final profile in _profileService.profiles) {
       if (profile.callsign.toUpperCase().startsWith(upperPartial)) {
         final label = profile.nickname.isNotEmpty ? '${profile.callsign} (${profile.nickname})' : profile.callsign;
-        candidates.add(Candidate(profile.callsign, display: label, group: profile.isRelay ? 'relay' : 'client'));
+        candidates.add(Candidate(profile.callsign, display: label, group: profile.isStation ? ' [station]' : '';
       }
     }
 
@@ -1218,8 +1218,8 @@ class PureConsole {
     final candidates = <Candidate>[];
     final lowerPartial = partial.toLowerCase();
 
-    // Use relay's chat rooms in CLI mode
-    for (final room in _relay.chatRooms.values) {
+    // Use station's chat rooms in CLI mode
+    for (final room in _station.chatRooms.values) {
       if (room.id.toLowerCase().startsWith(lowerPartial)) {
         candidates.add(Candidate(room.id, display: '${room.id} (${room.name})', group: 'room'));
       }
@@ -1359,7 +1359,7 @@ class PureConsole {
   }
 
   bool _isCommand(String input) {
-    final commands = ['help', 'status', 'stats', 'ls', 'cd', 'pwd', 'relay', 'devices',
+    final commands = ['help', 'status', 'stats', 'ls', 'cd', 'pwd', 'station', 'devices',
       'chat', 'config', 'logs', 'clear', 'quit', 'exit', 'broadcast', 'kick', 'df',
       'quiet', 'verbose', 'restart', 'reload', 'messages', 'delmsg'];
     final firstWord = input.split(' ').first.toLowerCase();
@@ -1373,8 +1373,8 @@ class PureConsole {
       return false;
     }
 
-    // Context-specific commands when in /relay
-    if (_currentPath == '/relay' || _currentPath.startsWith('/relay/')) {
+    // Context-specific commands when in /station
+    if (_currentPath == '/station' || _currentPath.startsWith('/station/')) {
       switch (command) {
         case 'start':
           await _handleRelayStart();
@@ -1557,7 +1557,7 @@ class PureConsole {
       case 'pwd':
         stdout.writeln(_currentPath);
         break;
-      case 'relay':
+      case 'station':
         await _handleRelay(args);
         break;
       case 'devices':
@@ -1582,18 +1582,18 @@ class PureConsole {
         await _handleDf(args);
         break;
       case 'quiet':
-        _relay.quietMode = true;
+        _station.quietMode = true;
         stdout.writeln('Quiet mode enabled');
         break;
       case 'verbose':
-        _relay.quietMode = false;
+        _station.quietMode = false;
         stdout.writeln('Verbose mode enabled');
         break;
       case 'restart':
-        await _relay.restart();
+        await _station.restart();
         break;
       case 'reload':
-        await _relay.reloadSettings();
+        await _station.reloadSettings();
         stdout.writeln('Settings reloaded');
         break;
       case 'clear':
@@ -1660,14 +1660,14 @@ class PureConsole {
     stdout.writeln('    verbose            Enable verbose mode (show logs)');
     stdout.writeln();
     stdout.writeln('  \x1B[33mRelay Server:\x1B[0m');
-    stdout.writeln('    relay start        Start the relay server');
-    stdout.writeln('    relay stop         Stop the relay server');
-    stdout.writeln('    relay status       Show relay server status');
-    stdout.writeln('    relay restart      Restart the relay server');
-    stdout.writeln('    relay port <port>  Set relay server port');
-    stdout.writeln('    relay callsign <cs> Set relay callsign');
-    stdout.writeln('    relay cache clear  Clear tile cache');
-    stdout.writeln('    relay cache stats  Show cache statistics');
+    stdout.writeln('    station start        Start the station server');
+    stdout.writeln('    station stop         Stop the station server');
+    stdout.writeln('    station status       Show station server status');
+    stdout.writeln('    station restart      Restart the station server');
+    stdout.writeln('    station port <port>  Set station server port');
+    stdout.writeln('    station callsign <cs> Set station callsign');
+    stdout.writeln('    station cache clear  Clear tile cache');
+    stdout.writeln('    station cache stats  Show cache statistics');
     stdout.writeln();
     stdout.writeln('  \x1B[33mDevice Management:\x1B[0m');
     stdout.writeln('    devices list       List connected devices');
@@ -1712,12 +1712,12 @@ class PureConsole {
     stdout.writeln();
     stdout.writeln('  \x1B[33mSystem:\x1B[0m');
     stdout.writeln('    setup              Run the setup wizard');
-    stdout.writeln('    restart            Restart the relay server');
+    stdout.writeln('    restart            Restart the station server');
     stdout.writeln('    clear              Clear the screen');
     stdout.writeln('    quit / exit        Exit the CLI');
     stdout.writeln();
     stdout.writeln('  \x1B[33mVirtual Filesystem:\x1B[0m');
-    stdout.writeln('    /relay/            Relay status and settings');
+    stdout.writeln('    /station/            Station status and settings');
     stdout.writeln('    /devices/          Connected devices');
     stdout.writeln('    /chat/             Chat rooms (cd into room to chat)');
     stdout.writeln('    /config/           Configuration');
@@ -1765,37 +1765,37 @@ class PureConsole {
   }
 
   void _printStatus() {
-    final relayStatus = _relay.getStatus();
+    final stationStatus = _station.getStatus();
 
     stdout.writeln();
     stdout.writeln('\x1B[1mGeogram Desktop Status\x1B[0m');
     stdout.writeln('-' * 40);
     stdout.writeln('Version:        $cliAppVersion');
-    stdout.writeln('Callsign:       ${_relay.settings.callsign}');
-    stdout.writeln('Mode:           Relay (CLI)');
-    stdout.writeln('Data Dir:       ${_relay.dataDir}');
+    stdout.writeln('Callsign:       ${_station.settings.callsign}');
+    stdout.writeln('Mode:           Station (CLI)');
+    stdout.writeln('Data Dir:       ${_station.dataDir}');
     stdout.writeln();
     stdout.writeln('\x1B[1mRelay Server:\x1B[0m');
     stdout.writeln('-' * 40);
-    if (relayStatus['running'] == true) {
+    if (stationStatus['running'] == true) {
       stdout.writeln('Status:         \x1B[32mRunning\x1B[0m');
-      stdout.writeln('HTTP Port:      ${relayStatus['httpPort']}');
-      stdout.writeln('HTTPS Port:     ${relayStatus['httpsPort']}');
-      stdout.writeln('Devices:        ${relayStatus['connected_devices']}');
-      stdout.writeln('Uptime:         ${_formatUptime(relayStatus['uptime'] as int)}');
-      stdout.writeln('Cache:          ${relayStatus['cache_size']} tiles (${relayStatus['cache_size_mb']} MB)');
-      stdout.writeln('Chat Rooms:     ${relayStatus['chat_rooms']}');
-      stdout.writeln('Messages:       ${relayStatus['total_messages']}');
+      stdout.writeln('HTTP Port:      ${stationStatus['httpPort']}');
+      stdout.writeln('HTTPS Port:     ${stationStatus['httpsPort']}');
+      stdout.writeln('Devices:        ${stationStatus['connected_devices']}');
+      stdout.writeln('Uptime:         ${_formatUptime(stationStatus['uptime'] as int)}');
+      stdout.writeln('Cache:          ${stationStatus['cache_size']} tiles (${stationStatus['cache_size_mb']} MB)');
+      stdout.writeln('Chat Rooms:     ${stationStatus['chat_rooms']}');
+      stdout.writeln('Messages:       ${stationStatus['total_messages']}');
     } else {
       stdout.writeln('Status:         \x1B[33mStopped\x1B[0m');
-      stdout.writeln('HTTP Port:      ${_relay.settings.httpPort}');
-      stdout.writeln('HTTPS Port:     ${_relay.settings.httpsPort}');
+      stdout.writeln('HTTP Port:      ${_station.settings.httpPort}');
+      stdout.writeln('HTTPS Port:     ${_station.settings.httpsPort}');
     }
     stdout.writeln();
   }
 
   void _printStats() {
-    final stats = _relay.stats;
+    final stats = _station.stats;
 
     stdout.writeln();
     stdout.writeln('\x1B[1mServer Statistics\x1B[0m');
@@ -1819,17 +1819,17 @@ class PureConsole {
     stdout.writeln();
   }
 
-  // --- Relay commands ---
+  // --- Station commands ---
 
-  /// Check if relay commands are allowed in current context
+  /// Check if station commands are allowed in current context
   bool _isRelayContextAllowed() {
-    // Check if active profile is a relay
+    // Check if active profile is a station
     final activeProfile = _profileService.activeProfile;
     if (activeProfile != null && activeProfile.isRelay) {
       return true;
     }
 
-    // Check if we're inside a managed relay's device folder
+    // Check if we're inside a managed station's device folder
     if (_currentPath.startsWith('/devices/')) {
       final parts = _currentPath.split('/');
       if (parts.length >= 3) {
@@ -1843,8 +1843,8 @@ class PureConsole {
     return false;
   }
 
-  /// Get the relay callsign from current context
-  String? _getRelayCallsignFromContext() {
+  /// Get the station callsign from current context
+  String? _getStationCallsignFromContext() {
     // First check if we're in a device folder
     if (_currentPath.startsWith('/devices/')) {
       final parts = _currentPath.split('/');
@@ -1856,7 +1856,7 @@ class PureConsole {
       }
     }
 
-    // Fall back to active profile if it's a relay
+    // Fall back to active profile if it's a station
     final activeProfile = _profileService.activeProfile;
     if (activeProfile != null && activeProfile.isRelay) {
       return activeProfile.callsign;
@@ -1866,15 +1866,15 @@ class PureConsole {
   }
 
   Future<void> _handleRelay(List<String> args) async {
-    // Check if relay commands are allowed
+    // Check if station commands are allowed
     if (!_isRelayContextAllowed()) {
-      _printError('Relay commands require a relay profile or being in a managed relay folder.');
+      _printError('Station commands require a station profile or being in a managed station folder.');
       stdout.writeln('Current profile: ${_profileService.activeProfile?.callsign ?? "none"}');
       stdout.writeln();
       stdout.writeln('Options:');
-      stdout.writeln('  - Create a relay profile: \x1B[36msetup\x1B[0m (choose option 2)');
-      stdout.writeln('  - Switch to a relay profile: \x1B[36mprofile switch <relay-callsign>\x1B[0m');
-      stdout.writeln('  - Navigate to a managed relay: \x1B[36mcd /devices/<relay-callsign>\x1B[0m');
+      stdout.writeln('  - Create a station profile: \x1B[36msetup\x1B[0m (choose option 2)');
+      stdout.writeln('  - Switch to a station profile: \x1B[36mprofile switch <station-callsign>\x1B[0m');
+      stdout.writeln('  - Navigate to a managed station: \x1B[36mcd /devices/<station-callsign>\x1B[0m');
       return;
     }
 
@@ -1897,7 +1897,7 @@ class PureConsole {
         _printRelayStatus();
         break;
       case 'restart':
-        await _relay.restart();
+        await _station.restart();
         break;
       case 'port':
         await _handleRelayPort(subargs);
@@ -1909,46 +1909,46 @@ class PureConsole {
         _handleRelayCache(subargs);
         break;
       default:
-        _printError('Unknown relay command: $subcommand');
+        _printError('Unknown station command: $subcommand');
         _printError('Available: start, stop, status, restart, port, callsign, cache');
     }
   }
 
   Future<void> _handleRelayStart() async {
-    if (_relay.isRunning) {
-      stdout.writeln('\x1B[33mRelay server is already running on port ${_relay.settings.httpPort}\x1B[0m');
+    if (_station.isRunning) {
+      stdout.writeln('\x1B[33mRelay server is already running on port ${_station.settings.httpPort}\x1B[0m');
       return;
     }
 
-    stdout.writeln('Starting relay server on port ${_relay.settings.httpPort}...');
-    final success = await _relay.start();
+    stdout.writeln('Starting station server on port ${_station.settings.httpPort}...');
+    final success = await _station.start();
 
     if (success) {
       stdout.writeln('\x1B[32mRelay server started successfully\x1B[0m');
-      stdout.writeln('  HTTP Port:  ${_relay.settings.httpPort}');
-      stdout.writeln('  HTTPS Port: ${_relay.settings.httpsPort}');
-      stdout.writeln('  Callsign: ${_relay.settings.callsign}');
-      stdout.writeln('  Status: http://localhost:${_relay.settings.httpPort}/api/status');
-      stdout.writeln('  Tiles:  http://localhost:${_relay.settings.httpPort}/tiles/{callsign}/{z}/{x}/{y}.png');
+      stdout.writeln('  HTTP Port:  ${_station.settings.httpPort}');
+      stdout.writeln('  HTTPS Port: ${_station.settings.httpsPort}');
+      stdout.writeln('  Callsign: ${_station.settings.callsign}');
+      stdout.writeln('  Status: http://localhost:${_station.settings.httpPort}/api/status');
+      stdout.writeln('  Tiles:  http://localhost:${_station.settings.httpPort}/tiles/{callsign}/{z}/{x}/{y}.png');
     } else {
-      _printError('Failed to start relay server');
+      _printError('Failed to start station server');
     }
   }
 
   Future<void> _handleRelayStop() async {
-    if (!_relay.isRunning) {
+    if (!_station.isRunning) {
       stdout.writeln('\x1B[33mRelay server is not running\x1B[0m');
       return;
     }
 
-    stdout.writeln('Stopping relay server...');
-    await _relay.stop();
+    stdout.writeln('Stopping station server...');
+    await _station.stop();
     stdout.writeln('\x1B[32mRelay server stopped\x1B[0m');
   }
 
   void _printRelayStatus() {
-    final status = _relay.getStatus();
-    final settings = _relay.settings;
+    final status = _station.getStatus();
+    final settings = _station.settings;
 
     stdout.writeln();
     stdout.writeln('\x1B[1mRelay Server Status\x1B[0m');
@@ -1984,8 +1984,8 @@ class PureConsole {
 
   Future<void> _handleRelayPort(List<String> args) async {
     if (args.isEmpty) {
-      stdout.writeln('Current HTTP port: ${_relay.settings.httpPort}');
-      stdout.writeln('Current HTTPS port: ${_relay.settings.httpsPort}');
+      stdout.writeln('Current HTTP port: ${_station.settings.httpPort}');
+      stdout.writeln('Current HTTPS port: ${_station.settings.httpsPort}');
       return;
     }
 
@@ -1995,41 +1995,41 @@ class PureConsole {
       return;
     }
 
-    final settings = _relay.settings.copyWith(httpPort: port);
-    await _relay.updateSettings(settings);
+    final settings = _station.settings.copyWith(httpPort: port);
+    await _station.updateSettings(settings);
     stdout.writeln('\x1B[32mPort set to $port\x1B[0m');
   }
 
   Future<void> _handleRelayCallsign(List<String> args) async {
     // Callsign is derived from npub (X3 prefix for relays) - cannot be set manually
-    stdout.writeln('Relay callsign: ${_relay.settings.callsign}');
-    stdout.writeln('  (derived from npub: ${_relay.settings.npub.substring(0, 20)}...)');
+    stdout.writeln('Station callsign: ${_station.settings.callsign}');
+    stdout.writeln('  (derived from npub: ${_station.settings.npub.substring(0, 20)}...)');
     if (args.isNotEmpty) {
-      _printError('Callsign cannot be set manually - it is derived from the relay key pair');
+      _printError('Callsign cannot be set manually - it is derived from the station key pair');
     }
   }
 
   void _handleRelayCache(List<String> args) {
     if (args.isEmpty) {
-      final status = _relay.getStatus();
+      final status = _station.getStatus();
       stdout.writeln('Cache: ${status['cache_size']} tiles (${status['cache_size_mb']} MB)');
       return;
     }
 
     switch (args[0].toLowerCase()) {
       case 'clear':
-        _relay.clearCache();
+        _station.clearCache();
         stdout.writeln('\x1B[32mCache cleared\x1B[0m');
         break;
       case 'stats':
-        final stats = _relay.stats;
+        final stats = _station.stats;
         stdout.writeln();
         stdout.writeln('\x1B[1mCache Statistics\x1B[0m');
         stdout.writeln('-' * 30);
         stdout.writeln('Tiles Cached:       ${stats.tilesCached}');
         stdout.writeln('Served from Cache:  ${stats.tilesServedFromCache}');
         stdout.writeln('Downloaded:         ${stats.tilesDownloaded}');
-        stdout.writeln('Max Size:           ${_relay.settings.maxCacheSizeMB} MB');
+        stdout.writeln('Max Size:           ${_station.settings.maxCacheSizeMB} MB');
         stdout.writeln();
         break;
       default:
@@ -2081,7 +2081,7 @@ class PureConsole {
       for (final device in ownedDevices) {
         final isActive = device['active'] == true;
         final activeMarker = isActive ? '\x1B[32m*\x1B[0m' : ' ';
-        final typeStr = device['type'] == 'relay' ? '\x1B[33mrelay\x1B[0m' : '\x1B[36mclient\x1B[0m';
+        final typeStr = device['type'] == 'station' ? '\x1B[33mstation\x1B[0m' : '\x1B[36mclient\x1B[0m';
         final callsign = device['callsign'] as String;
         final nickname = device['nickname'] as String;
         final displayName = nickname.isNotEmpty ? '$callsign ($nickname)' : callsign;
@@ -2103,13 +2103,13 @@ class PureConsole {
       stdout.writeln();
     }
 
-    // Section 3: Currently Connected (relay clients)
-    final clients = _relay.clients;
+    // Section 3: Currently Connected (station clients)
+    final clients = _station.clients;
     stdout.writeln('\x1B[1mConnected Now (${clients.length})\x1B[0m');
     stdout.writeln('-' * 60);
 
     if (clients.isEmpty) {
-      stdout.writeln('  No devices connected to this relay');
+      stdout.writeln('  No devices connected to this station');
     } else {
       for (final client in clients.values) {
         final connectedAgo = DateTime.now().difference(client.connectedAt);
@@ -2134,7 +2134,7 @@ class PureConsole {
     }
 
     stdout.writeln('Scanning network for Geogram devices (timeout: ${timeout}ms)...');
-    final devices = await _relay.scanNetwork(timeout: timeout);
+    final devices = await _station.scanNetwork(timeout: timeout);
 
     stdout.writeln();
     stdout.writeln('\x1B[1mDiscovered Devices (${devices.length})\x1B[0m');
@@ -2157,7 +2157,7 @@ class PureConsole {
 
   Future<void> _pingDevice(String address) async {
     stdout.writeln('Pinging $address...');
-    final result = await _relay.pingDevice(address);
+    final result = await _station.pingDevice(address);
 
     if (result != null) {
       stdout.writeln();
@@ -2179,7 +2179,7 @@ class PureConsole {
     }
 
     final callsign = args[0];
-    if (_relay.kickDevice(callsign)) {
+    if (_station.kickDevice(callsign)) {
       stdout.writeln('\x1B[32mDevice $callsign disconnected\x1B[0m');
     } else {
       _printError('Device not found: $callsign');
@@ -2254,8 +2254,8 @@ class PureConsole {
   }
 
   Future<void> _listChatRooms() async {
-    // Use relay's chat rooms in CLI mode
-    final rooms = _relay.chatRooms.values.toList();
+    // Use station's chat rooms in CLI mode
+    final rooms = _station.chatRooms.values.toList();
 
     stdout.writeln();
     stdout.writeln('\x1B[1mChat Rooms (${rooms.length})\x1B[0m');
@@ -2272,8 +2272,8 @@ class PureConsole {
   }
 
   Future<void> _showChatInfo(String roomId) async {
-    // Use relay's chat rooms in CLI mode
-    final room = _relay.chatRooms[roomId];
+    // Use station's chat rooms in CLI mode
+    final room = _station.chatRooms[roomId];
     if (room == null) {
       _printError('Room not found: $roomId');
       return;
@@ -2294,8 +2294,8 @@ class PureConsole {
   }
 
   Future<void> _createChatRoom(String id, String name, String? description) async {
-    // Use relay's chat room management in CLI mode
-    final room = _relay.createChatRoom(id, name, description: description);
+    // Use station's chat room management in CLI mode
+    final room = _station.createChatRoom(id, name, description: description);
     if (room != null) {
       stdout.writeln('\x1B[32mChat room created: $name ($id)\x1B[0m');
     } else {
@@ -2304,12 +2304,12 @@ class PureConsole {
   }
 
   Future<void> _deleteChatRoom(String id) async {
-    // Use relay's chat room management in CLI mode
+    // Use station's chat room management in CLI mode
     if (id == 'general') {
       _printError('Cannot delete the general room');
       return;
     }
-    if (_relay.deleteChatRoom(id)) {
+    if (_station.deleteChatRoom(id)) {
       stdout.writeln('\x1B[32mChat room deleted: $id\x1B[0m');
     } else {
       _printError('Room not found: $id');
@@ -2317,8 +2317,8 @@ class PureConsole {
   }
 
   Future<void> _renameChatRoom(String id, String newName) async {
-    // Use relay's chat room management in CLI mode
-    if (_relay.renameChatRoom(id, newName)) {
+    // Use station's chat room management in CLI mode
+    if (_station.renameChatRoom(id, newName)) {
       stdout.writeln('\x1B[32mRoom renamed to: $newName\x1B[0m');
     } else {
       _printError('Room not found: $id');
@@ -2326,8 +2326,8 @@ class PureConsole {
   }
 
   Future<void> _showChatHistory(String roomId, int? limit) async {
-    // Use relay's chat rooms in CLI mode
-    final room = _relay.chatRooms[roomId];
+    // Use station's chat rooms in CLI mode
+    final room = _station.chatRooms[roomId];
     if (room == null) {
       _printError('Room not found: $roomId');
       return;
@@ -2350,7 +2350,7 @@ class PureConsole {
       // Determine verification indicator
       String verifyIndicator;
       if (msg.hasSignature) {
-        final isVerified = _relay.verifyMessage(msg);
+        final isVerified = _station.verifyMessage(msg);
         verifyIndicator = isVerified ? '\x1B[32m✓\x1B[0m' : '\x1B[31m✗\x1B[0m';
       } else {
         verifyIndicator = '\x1B[90m○\x1B[0m'; // No signature (gray circle)
@@ -2361,13 +2361,13 @@ class PureConsole {
   }
 
   Future<void> _postMessage(String roomId, String message) async {
-    // Use relay's chat room management in CLI mode
-    if (_relay.chatRooms[roomId] == null) {
+    // Use station's chat room management in CLI mode
+    if (_station.chatRooms[roomId] == null) {
       _printError('Room not found: $roomId');
       return;
     }
 
-    await _relay.postMessage(roomId, message);
+    await _station.postMessage(roomId, message);
     stdout.writeln('Message sent');
   }
 
@@ -2380,9 +2380,9 @@ class PureConsole {
   Future<void> _handleDeleteMessage(List<String> args) async {
     if (_currentChatRoom == null || args.isEmpty) return;
 
-    // Use relay's chat room management in CLI mode
+    // Use station's chat room management in CLI mode
     final messageId = args[0];
-    if (_relay.deleteMessage(_currentChatRoom!, messageId)) {
+    if (_station.deleteMessage(_currentChatRoom!, messageId)) {
       stdout.writeln('\x1B[32mMessage deleted\x1B[0m');
     } else {
       _printError('Message not found');
@@ -2426,15 +2426,15 @@ class PureConsole {
       case 'longitude': return profile.longitude;
       case 'locationName': return profile.locationName;
       case 'enableAprs': return profile.enableAprs;
-      // Relay settings
-      case 'httpPort': return _relay.settings.httpPort;
-      case 'httpsPort': return _relay.settings.httpsPort;
+      // Station settings
+      case 'httpPort': return _station.settings.httpPort;
+      case 'httpsPort': return _station.settings.httpsPort;
       case 'tileServerEnabled': return profile.tileServerEnabled;
       case 'osmFallbackEnabled': return profile.osmFallbackEnabled;
-      case 'maxZoomLevel': return _relay.settings.maxZoomLevel;
-      case 'maxCacheSizeMB': return _relay.settings.maxCacheSizeMB;
-      case 'enableCors': return _relay.settings.enableCors;
-      case 'maxConnectedDevices': return _relay.settings.maxConnectedDevices;
+      case 'maxZoomLevel': return _station.settings.maxZoomLevel;
+      case 'maxCacheSizeMB': return _station.settings.maxCacheSizeMB;
+      case 'enableCors': return _station.settings.enableCors;
+      case 'maxConnectedDevices': return _station.settings.maxConnectedDevices;
       default: return null;
     }
   }
@@ -2545,7 +2545,7 @@ class PureConsole {
             break;
           case 'port':
             updatedProfile = profile.copyWith(port: parsedValue);
-            _relay.setSetting(key, parsedValue);
+            _station.setSetting(key, parsedValue);
             break;
           case 'tileServerEnabled':
             updatedProfile = profile.copyWith(tileServerEnabled: parsedValue);
@@ -2554,8 +2554,8 @@ class PureConsole {
             updatedProfile = profile.copyWith(osmFallbackEnabled: parsedValue);
             break;
           default:
-            // Relay-only settings stored in relay settings
-            _relay.setSetting(key, parsedValue);
+            // Station-only settings stored in station settings
+            _station.setSetting(key, parsedValue);
             stdout.writeln('\x1B[32m$key set to $value\x1B[0m');
             return;
         }
@@ -2605,7 +2605,7 @@ class PureConsole {
 
   void _handleLogs(List<String> args) {
     final limit = args.isNotEmpty ? int.tryParse(args[0]) ?? 20 : 20;
-    final logs = _relay.getLogs(limit: limit);
+    final logs = _station.getLogs(limit: limit);
 
     stdout.writeln();
     stdout.writeln('\x1B[1mRecent Logs (${logs.length})\x1B[0m');
@@ -2638,15 +2638,15 @@ class PureConsole {
     }
 
     final message = args.join(' ');
-    _relay.broadcast(message);
-    stdout.writeln('\x1B[32mBroadcast sent to ${_relay.connectedDevices} devices\x1B[0m');
+    _station.broadcast(message);
+    stdout.writeln('\x1B[32mBroadcast sent to ${_station.connectedDevices} devices\x1B[0m');
   }
 
   // --- Disk usage command ---
 
   Future<void> _handleDf(List<String> args) async {
     final humanReadable = args.contains('-h');
-    final dataDir = _relay.dataDir;
+    final dataDir = _station.dataDir;
 
     if (dataDir == null) {
       _printError('Data directory not initialized');
@@ -2668,7 +2668,7 @@ class PureConsole {
       }
     }
 
-    final configFile = File('$dataDir/relay_config.json');
+    final configFile = File('$dataDir/station_config.json');
     final configSize = await configFile.exists() ? await configFile.length() : 0;
 
     final total = tilesSize + configSize;
@@ -2711,18 +2711,18 @@ class PureConsole {
         stdout.writeln();
 
         // Status section
-        final status = _relay.getStatus();
-        final relayStatus = status['running'] == true
+        final status = _station.getStatus();
+        final stationStatus = status['running'] == true
             ? '\x1B[32mRunning\x1B[0m'
             : '\x1B[33mStopped\x1B[0m';
-        stdout.writeln('\x1B[1mRelay:\x1B[0m $relayStatus  '
+        stdout.writeln('\x1B[1mRelay:\x1B[0m $stationStatus  '
             '\x1B[1mPort:\x1B[0m ${status['port']}  '
             '\x1B[1mDevices:\x1B[0m ${status['connected_devices']}  '
             '\x1B[1mUptime:\x1B[0m ${_formatUptime(status['uptime'] as int)}');
         stdout.writeln();
 
         // Stats section
-        final stats = _relay.stats;
+        final stats = _station.stats;
         stdout.writeln('\x1B[1mStats:\x1B[0m  '
             'Connections: ${stats.totalConnections}  '
             'Messages: ${stats.totalMessages}  '
@@ -2733,7 +2733,7 @@ class PureConsole {
         // Recent logs
         stdout.writeln('\x1B[1mRecent Logs:\x1B[0m');
         stdout.writeln('-' * 60);
-        final logs = _relay.getLogs(limit: 15);
+        final logs = _station.getLogs(limit: 15);
         if (logs.isEmpty) {
           stdout.writeln('(no logs)');
         } else {
@@ -2834,7 +2834,7 @@ class PureConsole {
     switch (target.toLowerCase()) {
       case 'logs':
       case '/logs':
-        final logs = _relay.logs;
+        final logs = _station.logs;
         content = logs.map((log) {
           final time = log.timestamp.toLocal();
           final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}';
@@ -2844,8 +2844,8 @@ class PureConsole {
 
       case 'config':
       case '/config':
-      case 'relay_config.json':
-        final settings = _relay.settings;
+      case 'station_config.json':
+        final settings = _station.settings;
         content = [
           '{',
           '  "httpPort": ${settings.httpPort},',
@@ -2967,7 +2967,7 @@ class PureConsole {
       return;
     }
 
-    final typeStr = profile.isRelay ? 'Relay (X3)' : 'Client (X1)';
+    final typeStr = profile.isStation ? ' [station]' : '';
     stdout.writeln();
     stdout.writeln('\x1B[1mActive Profile:\x1B[0m');
     stdout.writeln('  Type:        \x1B[36m$typeStr\x1B[0m');
@@ -2984,7 +2984,7 @@ class PureConsole {
       stdout.writeln();
       stdout.writeln('\x1B[1mRelay Settings:\x1B[0m');
       stdout.writeln('  Port:        \x1B[36m${profile.port ?? 8080}\x1B[0m');
-      stdout.writeln('  Role:        \x1B[36m${profile.relayRole ?? 'not set'}\x1B[0m');
+      stdout.writeln('  Role:        \x1B[36m${profile.stationRole ?? 'not set'}\x1B[0m');
       if (profile.parentRelayUrl != null) {
         stdout.writeln('  Parent URL:  \x1B[36m${profile.parentRelayUrl}\x1B[0m');
       }
@@ -3005,7 +3005,7 @@ class PureConsole {
 
     for (final profile in profiles) {
       final isActive = profile.id == _profileService.activeProfile?.id;
-      final typeStr = profile.isRelay ? 'relay' : 'client';
+      final typeStr = profile.isStation ? ' [station]' : '';
       final activeStr = isActive ? '\x1B[32m*\x1B[0m ' : '  ';
       final displayName = profile.nickname.isNotEmpty
           ? '${profile.callsign} (${profile.nickname})'
@@ -3028,9 +3028,9 @@ class PureConsole {
 
     await _profileService.setActiveProfile(profile.id);
 
-    // If switching to a relay, update relay server settings
+    // If switching to a station, update station server settings
     if (profile.isRelay) {
-      final newSettings = _relay.settings.copyWith(
+      final newSettings = _station.settings.copyWith(
         httpPort: profile.port,
         description: profile.description,
         location: profile.locationName,
@@ -3039,12 +3039,12 @@ class PureConsole {
         tileServerEnabled: profile.tileServerEnabled,
         osmFallbackEnabled: profile.osmFallbackEnabled,
         enableAprs: profile.enableAprs,
-        relayRole: profile.relayRole,
+        stationRole: profile.stationRole,
         networkId: profile.networkId,
         parentRelayUrl: profile.parentRelayUrl,
         setupComplete: true,
       );
-      await _relay.updateSettings(newSettings);
+      await _station.updateSettings(newSettings);
     }
 
     stdout.writeln('\x1B[32mSwitched to profile: ${profile.callsign}\x1B[0m');
@@ -3088,7 +3088,7 @@ class PureConsole {
     _printSection('STEP 1: PROFILE TYPE');
     stdout.writeln('What would you like to create?');
     stdout.writeln('  \x1B[33m1)\x1B[0m Client - Regular user profile for messaging and browsing');
-    stdout.writeln('  \x1B[33m2)\x1B[0m Relay  - Server that routes messages between devices');
+    stdout.writeln('  \x1B[33m2)\x1B[0m Station  - Server that routes messages between devices');
     stdout.writeln();
 
     final typeChoice = await _promptChoice('Enter choice (1 or 2)', ['1', '2']);
@@ -3177,7 +3177,7 @@ class PureConsole {
     stdout.writeln();
   }
 
-  /// Setup wizard for relay profile
+  /// Setup wizard for station profile
   Future<void> _handleRelaySetup() async {
     stdout.writeln();
     stdout.writeln('Creating \x1B[32mRelay Profile\x1B[0m...');
@@ -3186,15 +3186,15 @@ class PureConsole {
     // Generate keys and callsign
     _printSection('STEP 2: RELAY IDENTITY');
     final keys = CliProfileService.generateKeys();
-    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.relay);
-    stdout.writeln('Generated relay callsign: \x1B[32m$callsign\x1B[0m');
+    final callsign = CliProfileService.generateCallsign(keys['npub']!, ProfileType.station);
+    stdout.writeln('Generated station callsign: \x1B[32m$callsign\x1B[0m');
     stdout.writeln();
 
-    // Step 3: Relay Role
+    // Step 3: Station Role
     _printSection('STEP 3: RELAY NETWORK ROLE');
-    stdout.writeln('Select relay role:');
-    stdout.writeln('  \x1B[33m1)\x1B[0m Root Relay - Primary relay (accepts node connections)');
-    stdout.writeln('  \x1B[33m2)\x1B[0m Node Relay - Connects to an existing root relay');
+    stdout.writeln('Select station role:');
+    stdout.writeln('  \x1B[33m1)\x1B[0m Root Station - Primary station (accepts node connections)');
+    stdout.writeln('  \x1B[33m2)\x1B[0m Node Station - Connects to an existing root station');
     stdout.writeln();
 
     final roleChoice = await _promptChoice('Enter choice (1 or 2)', ['1', '2']);
@@ -3203,14 +3203,14 @@ class PureConsole {
     String? networkId;
 
     if (isRoot) {
-      stdout.writeln('Configuring as \x1B[32mRoot Relay\x1B[0m');
+      stdout.writeln('Configuring as \x1B[32mRoot Station\x1B[0m');
       networkId = await _promptInputWithDefault('Network ID (optional)', '');
     } else {
-      stdout.writeln('Configuring as \x1B[33mNode Relay\x1B[0m');
+      stdout.writeln('Configuring as \x1B[33mNode Station\x1B[0m');
       stdout.writeln();
 
       while (parentUrl == null || parentUrl.isEmpty) {
-        parentUrl = await _promptInput('Root relay WebSocket URL (e.g., ws://relay.example.com:8080): ');
+        parentUrl = await _promptInput('Root station WebSocket URL (e.g., ws://station.example.com:8080): ');
         if (parentUrl != null && parentUrl.isNotEmpty) {
           if (!parentUrl.startsWith('ws://') && !parentUrl.startsWith('wss://')) {
             stdout.writeln('\x1B[31mInvalid URL format. Must start with "ws://" or "wss://"\x1B[0m');
@@ -3218,7 +3218,7 @@ class PureConsole {
           }
         }
       }
-      networkId = await _promptInputWithDefault('Network ID (should match root relay)', '');
+      networkId = await _promptInputWithDefault('Network ID (should match root station)', '');
     }
     stdout.writeln();
 
@@ -3230,7 +3230,7 @@ class PureConsole {
 
     final description = await _promptInputWithDefault(
       'Server description',
-      'Geogram Relay',
+      'Geogram Station',
     );
 
     // Auto-detect location via IP
@@ -3269,11 +3269,11 @@ class PureConsole {
 
     // Summary
     _printSection('SETUP SUMMARY');
-    stdout.writeln('Relay Profile:');
+    stdout.writeln('Station Profile:');
     stdout.writeln('  Callsign:       \x1B[36m$callsign\x1B[0m');
     stdout.writeln('  Role:           \x1B[36m${isRoot ? 'ROOT' : 'NODE'}\x1B[0m');
     if (!isRoot && parentUrl != null) {
-      stdout.writeln('  Parent Relay:   \x1B[36m$parentUrl\x1B[0m');
+      stdout.writeln('  Parent Station:   \x1B[36m$parentUrl\x1B[0m');
     }
     if (networkId != null && networkId.isNotEmpty) {
       stdout.writeln('  Network ID:     \x1B[36m$networkId\x1B[0m');
@@ -3296,13 +3296,13 @@ class PureConsole {
 
     final confirm = await _promptConfirm('Save this configuration?', true);
     if (!confirm) {
-      stdout.writeln('\x1B[33mSetup cancelled. No relay created.\x1B[0m');
+      stdout.writeln('\x1B[33mSetup cancelled. No station created.\x1B[0m');
       return;
     }
 
-    // Create relay profile
+    // Create station profile
     final profile = Profile(
-      type: ProfileType.relay,
+      type: ProfileType.station,
       callsign: callsign,
       description: description,
       npub: keys['npub']!,
@@ -3311,7 +3311,7 @@ class PureConsole {
       latitude: latitude,
       longitude: longitude,
       port: port,
-      relayRole: isRoot ? 'root' : 'node',
+      stationRole: isRoot ? 'root' : 'node',
       parentRelayUrl: parentUrl,
       networkId: networkId,
       tileServerEnabled: enableTiles,
@@ -3321,8 +3321,8 @@ class PureConsole {
 
     await _profileService.addProfile(profile);
 
-    // Also update relay server settings
-    final newSettings = _relay.settings.copyWith(
+    // Also update station server settings
+    final newSettings = _station.settings.copyWith(
       httpPort: port,
       description: description,
       location: location.isNotEmpty ? location : null,
@@ -3331,19 +3331,19 @@ class PureConsole {
       tileServerEnabled: enableTiles,
       osmFallbackEnabled: enableOsmFallback,
       enableAprs: enableAprs,
-      relayRole: isRoot ? 'root' : 'node',
+      stationRole: isRoot ? 'root' : 'node',
       networkId: networkId,
       parentRelayUrl: parentUrl,
       setupComplete: true,
     );
-    await _relay.updateSettings(newSettings);
+    await _station.updateSettings(newSettings);
 
     stdout.writeln();
     stdout.writeln('\x1B[32mRelay profile created successfully!\x1B[0m');
     stdout.writeln();
-    stdout.writeln('Your relay callsign is: \x1B[36m$callsign\x1B[0m');
+    stdout.writeln('Your station callsign is: \x1B[36m$callsign\x1B[0m');
     stdout.writeln();
-    stdout.writeln('To start the relay server, type: \x1B[36mrelay start\x1B[0m');
+    stdout.writeln('To start the station server, type: \x1B[36mstation start\x1B[0m');
     stdout.writeln();
   }
 
@@ -3474,20 +3474,20 @@ class PureConsole {
 
   Future<void> _handleSslDomain(List<String> args) async {
     if (args.isEmpty) {
-      stdout.writeln('Current domain: ${_relay.settings.sslDomain ?? '(not set)'}');
+      stdout.writeln('Current domain: ${_station.settings.sslDomain ?? '(not set)'}');
       return;
     }
 
     final domain = args[0];
-    final settings = _relay.settings.copyWith(sslDomain: domain);
-    await _relay.updateSettings(settings);
-    _sslManager?.updateSettings(_relay.settings);
+    final settings = _station.settings.copyWith(sslDomain: domain);
+    await _station.updateSettings(settings);
+    _sslManager?.updateSettings(_station.settings);
     stdout.writeln('\x1B[32mSSL domain set to: $domain\x1B[0m');
   }
 
   Future<void> _handleSslEmail(List<String> args) async {
     if (args.isEmpty) {
-      stdout.writeln('Current email: ${_relay.settings.sslEmail ?? '(not set)'}');
+      stdout.writeln('Current email: ${_station.settings.sslEmail ?? '(not set)'}');
       return;
     }
 
@@ -3497,9 +3497,9 @@ class PureConsole {
       return;
     }
 
-    final settings = _relay.settings.copyWith(sslEmail: email);
-    await _relay.updateSettings(settings);
-    _sslManager?.updateSettings(_relay.settings);
+    final settings = _station.settings.copyWith(sslEmail: email);
+    await _station.updateSettings(settings);
+    _sslManager?.updateSettings(_station.settings);
     stdout.writeln('\x1B[32mSSL email set to: $email\x1B[0m');
   }
 
@@ -3511,8 +3511,8 @@ class PureConsole {
 
     final envType = staging ? 'staging (test)' : 'production';
     stdout.writeln('Requesting $envType certificate...');
-    stdout.writeln('Domain: ${_relay.settings.sslDomain}');
-    stdout.writeln('Email:  ${_relay.settings.sslEmail}');
+    stdout.writeln('Domain: ${_station.settings.sslDomain}');
+    stdout.writeln('Email:  ${_station.settings.sslEmail}');
     stdout.writeln();
 
     try {
@@ -3521,7 +3521,7 @@ class PureConsole {
         stdout.writeln('\x1B[32mCertificate request successful!\x1B[0m');
         stdout.writeln();
         stdout.writeln('To enable HTTPS, run: ssl enable');
-        stdout.writeln('Then restart the relay: restart');
+        stdout.writeln('Then restart the station: restart');
       }
     } catch (e) {
       _printError('Certificate request failed: $e');
@@ -3548,7 +3548,7 @@ class PureConsole {
 
   Future<void> _handleSslAutoRenew(List<String> args) async {
     if (args.isEmpty) {
-      final current = _relay.settings.sslAutoRenew ? 'on' : 'off';
+      final current = _station.settings.sslAutoRenew ? 'on' : 'off';
       stdout.writeln('Auto-renewal is currently: $current');
       return;
     }
@@ -3556,9 +3556,9 @@ class PureConsole {
     final value = args[0].toLowerCase();
     final enabled = value == 'on' || value == 'true' || value == '1';
 
-    final settings = _relay.settings.copyWith(sslAutoRenew: enabled);
-    await _relay.updateSettings(settings);
-    _sslManager?.updateSettings(_relay.settings);
+    final settings = _station.settings.copyWith(sslAutoRenew: enabled);
+    await _station.updateSettings(settings);
+    _sslManager?.updateSettings(_station.settings);
 
     if (enabled) {
       _sslManager?.startAutoRenewal();
@@ -3575,7 +3575,7 @@ class PureConsole {
       return;
     }
 
-    final domain = args.isNotEmpty ? args[0] : (_relay.settings.sslDomain ?? 'localhost');
+    final domain = args.isNotEmpty ? args[0] : (_station.settings.sslDomain ?? 'localhost');
 
     stdout.writeln('Generating self-signed certificate for: $domain');
 
@@ -3586,7 +3586,7 @@ class PureConsole {
         stdout.writeln('\x1B[33mWarning: Self-signed certificates are not trusted by browsers.\x1B[0m');
         stdout.writeln();
         stdout.writeln('To enable HTTPS, run: ssl enable');
-        stdout.writeln('Then restart the relay: restart');
+        stdout.writeln('Then restart the station: restart');
       }
     } catch (e) {
       _printError('Failed to generate self-signed certificate: $e');
@@ -3604,21 +3604,21 @@ class PureConsole {
       return;
     }
 
-    final settings = _relay.settings.copyWith(
+    final settings = _station.settings.copyWith(
       enableSsl: enable,
       sslCertPath: enable ? _sslManager!.certPath : null,
       sslKeyPath: enable ? _sslManager!.domainKeyPath : null,
     );
-    await _relay.updateSettings(settings);
-    _sslManager?.updateSettings(_relay.settings);
+    await _station.updateSettings(settings);
+    _sslManager?.updateSettings(_station.settings);
 
     if (enable) {
       stdout.writeln('\x1B[32mSSL/HTTPS enabled\x1B[0m');
-      stdout.writeln('HTTPS will be available on port ${_relay.settings.httpsPort} after restart');
+      stdout.writeln('HTTPS will be available on port ${_station.settings.httpsPort} after restart');
     } else {
       stdout.writeln('\x1B[33mSSL/HTTPS disabled\x1B[0m');
     }
-    stdout.writeln('Restart the relay for changes to take effect: restart');
+    stdout.writeln('Restart the station for changes to take effect: restart');
   }
 
   // --- Game commands ---
@@ -3739,21 +3739,21 @@ class PureConsole {
       for (final dir in rootDirs) {
         stdout.writeln('\x1B[34m$dir/\x1B[0m');
       }
-    } else if (path == '/relay') {
-      final status = _relay.isRunning ? '\x1B[32mRunning\x1B[0m' : '\x1B[33mStopped\x1B[0m';
+    } else if (path == '/station') {
+      final status = _station.isRunning ? '\x1B[32mRunning\x1B[0m' : '\x1B[33mStopped\x1B[0m';
       stdout.writeln('status      $status');
       stdout.writeln('\x1B[34mconfig/\x1B[0m');
       stdout.writeln('\x1B[34mcache/\x1B[0m');
     } else if (path == '/devices') {
       _listDevices();
     } else if (path == '/chat') {
-      // Use relay's chat rooms in CLI mode
-      for (final room in _relay.chatRooms.values) {
+      // Use station's chat rooms in CLI mode
+      for (final room in _station.chatRooms.values) {
         stdout.writeln('\x1B[34m${room.id}/\x1B[0m  ${room.name}');
       }
     } else if (path.startsWith('/chat/')) {
       final roomId = path.substring('/chat/'.length);
-      final room = _relay.chatRooms[roomId];
+      final room = _station.chatRooms[roomId];
       if (room != null) {
         stdout.writeln('${room.messages.length} messages');
         if (room.messages.isNotEmpty) {
@@ -3766,18 +3766,18 @@ class PureConsole {
     } else if (path == '/config') {
       _showConfigList();
     } else if (path == '/logs') {
-      stdout.writeln('(${_relay.logs.length} log entries)');
+      stdout.writeln('(${_station.logs.length} log entries)');
     } else if (path == '/ssl') {
-      final sslEnabled = _relay.settings.enableSsl;
+      final sslEnabled = _station.settings.enableSsl;
       final hasCert = _sslManager?.hasCertificate() == true;
 
       stdout.writeln('\x1B[1mSSL/TLS Status\x1B[0m');
       stdout.writeln('─' * 40);
-      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_relay.settings.httpsPort}' : '\x1B[33mDisabled\x1B[0m'}');
+      stdout.writeln('HTTPS:       ${sslEnabled ? '\x1B[32mEnabled\x1B[0m on port ${_station.settings.httpsPort}' : '\x1B[33mDisabled\x1B[0m'}');
       stdout.writeln('Certificate: ${hasCert ? '\x1B[32mInstalled\x1B[0m' : '\x1B[33mNot installed\x1B[0m'}');
-      stdout.writeln('Domain:      ${_relay.settings.sslDomain ?? '\x1B[33m(not set)\x1B[0m'}');
-      stdout.writeln('Email:       ${_relay.settings.sslEmail ?? '\x1B[33m(not set)\x1B[0m'}');
-      stdout.writeln('Auto-renew:  ${_relay.settings.sslAutoRenew ? '\x1B[32mon\x1B[0m' : '\x1B[33moff\x1B[0m'}');
+      stdout.writeln('Domain:      ${_station.settings.sslDomain ?? '\x1B[33m(not set)\x1B[0m'}');
+      stdout.writeln('Email:       ${_station.settings.sslEmail ?? '\x1B[33m(not set)\x1B[0m'}');
+      stdout.writeln('Auto-renew:  ${_station.settings.sslAutoRenew ? '\x1B[32mon\x1B[0m' : '\x1B[33moff\x1B[0m'}');
       stdout.writeln('');
       stdout.writeln('\x1B[1mCommands\x1B[0m (run from /ssl)');
       stdout.writeln('─' * 40);
@@ -3813,8 +3813,8 @@ class PureConsole {
       // Check if we're entering a chat room
       if (target.startsWith('/chat/') && target.length > '/chat/'.length) {
         final roomId = target.substring('/chat/'.length).split('/')[0];
-        // Use relay's chat rooms in CLI mode
-        final room = _relay.chatRooms[roomId];
+        // Use station's chat rooms in CLI mode
+        final room = _station.chatRooms[roomId];
         if (room != null) {
           _currentChatRoom = roomId;
           stdout.writeln('--- ${room.name} ---');

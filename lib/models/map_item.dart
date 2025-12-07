@@ -8,7 +8,7 @@ import 'event.dart';
 import 'place.dart';
 import 'news_article.dart';
 import 'report.dart';
-import 'relay.dart';
+import 'station.dart';
 import 'contact.dart';
 
 /// Types of items that can be displayed on the map
@@ -17,7 +17,7 @@ enum MapItemType {
   place,
   news,
   alert,
-  relay,
+  station,
   contact;
 
   /// Get display name for the type
@@ -31,7 +31,7 @@ enum MapItemType {
         return 'News';
       case MapItemType.alert:
         return 'Alerts';
-      case MapItemType.relay:
+      case MapItemType.station:
         return 'Relays';
       case MapItemType.contact:
         return 'Contacts';
@@ -49,8 +49,8 @@ enum MapItemType {
         return 'News';
       case MapItemType.alert:
         return 'Alert';
-      case MapItemType.relay:
-        return 'Relay';
+      case MapItemType.station:
+        return 'Station';
       case MapItemType.contact:
         return 'Contact';
     }
@@ -66,7 +66,7 @@ class MapItem {
   final double latitude;
   final double longitude;
   final double? distanceKm;
-  final dynamic sourceItem; // Original Event/Place/NewsArticle/Report/Relay/Contact
+  final dynamic sourceItem; // Original Event/Place/NewsArticle/Report/Station/Contact
   final String? collectionPath; // Path to collection folder for opening details
 
   MapItem({
@@ -141,17 +141,17 @@ class MapItem {
     );
   }
 
-  /// Create MapItem from a Relay
-  factory MapItem.fromRelay(Relay relay, {double? distanceKm}) {
+  /// Create MapItem from a Station
+  factory MapItem.fromRelay(Station station, {double? distanceKm}) {
     return MapItem(
-      type: MapItemType.relay,
-      id: relay.url,
-      title: relay.name,
-      subtitle: relay.location ?? relay.statusDisplay,
-      latitude: relay.latitude!,
-      longitude: relay.longitude!,
+      type: MapItemType.station,
+      id: station.url,
+      title: station.name,
+      subtitle: station.location ?? station.statusDisplay,
+      latitude: station.latitude!,
+      longitude: station.longitude!,
       distanceKm: distanceKm,
-      sourceItem: relay,
+      sourceItem: station,
     );
   }
 

@@ -3,15 +3,15 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import '../models/relay.dart';
-import '../services/relay_service.dart';
+import '../models/station.dart';
+import '../services/station_service.dart';
 import '../services/log_service.dart';
 
 /// Result of a network scan for a geogram device
 class NetworkScanResult {
   final String ip;
   final int port;
-  final String type; // 'relay', 'desktop', 'client', 'unknown'
+  final String type; // 'station', 'desktop', 'client', 'unknown'
   final String? callsign;
   final String? name;
   final String? version;
@@ -56,14 +56,14 @@ typedef ScanProgressCallback = void Function(String message, int scannedHosts, i
 typedef ScanCancelCheck = bool Function();
 
 /// Service for automatic discovery of relays on local network
-class RelayDiscoveryService {
-  static final RelayDiscoveryService _instance = RelayDiscoveryService._internal();
-  factory RelayDiscoveryService() => _instance;
-  RelayDiscoveryService._internal();
+class StationDiscoveryService {
+  static final StationDiscoveryService _instance = StationDiscoveryService._internal();
+  factory StationDiscoveryService() => _instance;
+  StationDiscoveryService._internal();
 
   Timer? _discoveryTimer;
   bool _isScanning = false;
-  final List<int> _ports = [8080, 80, 8081, 45678, 3000, 5000]; // Common relay/app ports (8080 first as most common)
+  final List<int> _ports = [8080, 80, 8081, 45678, 3000, 5000]; // Common station/app ports (8080 first as most common)
   final Duration _scanInterval = const Duration(minutes: 5);
   final Duration _requestTimeout = const Duration(milliseconds: 1500); // Increased timeout for reliability
   final Duration _startupDelay = const Duration(seconds: 5);
@@ -73,11 +73,11 @@ class RelayDiscoveryService {
   void start() {
     // Network interface scanning not supported on web
     if (kIsWeb) {
-      LogService().log('Relay auto-discovery not supported on web platform');
+      LogService().log('Station auto-discovery not supported on web platform');
       return;
     }
 
-    LogService().log('Starting relay auto-discovery service (delayed ${_startupDelay.inSeconds}s)');
+    LogService().log('Starting station auto-discovery service (delayed ${_startupDelay.inSeconds}s)');
 
     // Delay initial scan to let the app initialize fully
     // This prevents "too many open files" errors on startup
@@ -93,7 +93,7 @@ class RelayDiscoveryService {
 
   /// Stop automatic discovery
   void stop() {
-    LogService().log('Stopping relay auto-discovery service');
+    LogService().log('Stopping station auto-discovery service');
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
   }
@@ -256,7 +256,7 @@ class RelayDiscoveryService {
       // Create a unique key based on callsign+port, or type+port if no callsign
       String key;
       if (result.callsign != null && result.callsign!.isNotEmpty) {
-        // Use callsign + port as key (same relay on different IPs has same callsign)
+        // Use callsign + port as key (same station on different IPs has same callsign)
         key = '${result.callsign}:${result.port}';
       } else if (result.description != null && result.description!.isNotEmpty) {
         // Fallback to description + port
@@ -326,9 +326,9 @@ class RelayDiscoveryService {
           String type = 'unknown';
           final serviceField = data['service'];
 
-          if (body.contains('Geogram Relay') || body.contains('geogram-relay') ||
-              serviceField == 'Geogram Relay Server') {
-            type = 'relay';
+          if (body.contains('Geogram Station') || body.contains('geogram-station') ||
+              serviceField == 'Geogram Station Server') {
+            type = 'station';
           } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop')) {
             type = 'desktop';
           } else if (body.contains('Geogram') || body.contains('geogram')) {
@@ -341,7 +341,7 @@ class RelayDiscoveryService {
               ip: ip,
               port: port,
               type: type,
-              callsign: data['callsign'] as String? ?? data['relayCallsign'] as String?,
+              callsign: data['callsign'] as String? ?? data['stationCallsign'] as String?,
               name: data['name'] as String?,
               version: data['version'] as String?,
               description: data['description'] as String?,
@@ -357,16 +357,16 @@ class RelayDiscoveryService {
       }
 
       try {
-        // Try /relay/status endpoint (legacy)
-        final relayStatusUrl = Uri.parse('http://$ip:$port/relay/status');
-        final response = await client.get(relayStatusUrl).timeout(timeout);
+        // Try /station/status endpoint (legacy)
+        final stationStatusUrl = Uri.parse('http://$ip:$port/station/status');
+        final response = await client.get(stationStatusUrl).timeout(timeout);
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
           return NetworkScanResult(
             ip: ip,
             port: port,
-            type: 'relay',
+            type: 'station',
             callsign: data['callsign'] as String?,
             name: data['name'] as String?,
             description: data['description'] as String?,
@@ -386,12 +386,12 @@ class RelayDiscoveryService {
           final body = response.body;
 
           // Check if it's a geogram service
-          if (body.contains('Geogram Relay Server') || body.contains('geogram-relay')) {
+          if (body.contains('Geogram Station Server') || body.contains('geogram-station')) {
             final data = jsonDecode(body) as Map<String, dynamic>;
             return NetworkScanResult(
               ip: ip,
               port: port,
-              type: 'relay',
+              type: 'station',
               callsign: data['callsign'] as String?,
               name: data['name'] as String?,
               version: data['version'] as String?,
@@ -474,8 +474,8 @@ class RelayDiscoveryService {
       int foundCount = 0;
       LogService().log('  Scanning localhost (127.0.0.1)...');
       for (var port in _ports) {
-        final relay = await _checkRelay('127.0.0.1', port);
-        if (relay != null) {
+        final station = await _checkRelay('127.0.0.1', port);
+        if (station != null) {
           foundCount++;
         }
       }
@@ -488,7 +488,7 @@ class RelayDiscoveryService {
       }
 
       LogService().log('');
-      LogService().log('Discovery complete: $foundCount relay(s) found');
+      LogService().log('Discovery complete: $foundCount station(s) found');
       LogService().log('══════════════════════════════════════');
 
     } catch (e) {
@@ -525,8 +525,8 @@ class RelayDiscoveryService {
       final batch = targets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
-        final relay = await _checkRelay(target.key, target.value);
-        if (relay != null) {
+        final station = await _checkRelay(target.key, target.value);
+        if (station != null) {
           foundCount++;
         }
       }).toList();
@@ -544,8 +544,8 @@ class RelayDiscoveryService {
     return foundCount;
   }
 
-  /// Check if a relay exists at given IP and port
-  Future<Relay?> _checkRelay(String ip, int port) async {
+  /// Check if a station exists at given IP and port
+  Future<Station?> _checkRelay(String ip, int port) async {
     try {
       // Use /api/status endpoint for detection (returns JSON)
       final url = 'http://$ip:$port/api/status';
@@ -557,14 +557,14 @@ class RelayDiscoveryService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // Check if it's a Geogram relay
-        if (data['service'] == 'Geogram Relay Server') {
-          LogService().log('✓ Found relay at $ip:$port');
+        // Check if it's a Geogram station
+        if (data['service'] == 'Geogram Station Server') {
+          LogService().log('✓ Found station at $ip:$port');
 
-          // Create relay object with callsign
-          final relay = Relay(
+          // Create station object with callsign
+          final station = Station(
             url: 'ws://$ip:$port',
-            name: data['callsign'] as String? ?? data['name'] as String? ?? data['description'] as String? ?? 'Local Relay ($ip)',
+            name: data['callsign'] as String? ?? data['name'] as String? ?? data['description'] as String? ?? 'Local Station ($ip)',
             callsign: data['callsign'] as String?,
             status: 'available',
             location: _buildLocation(data),
@@ -573,10 +573,10 @@ class RelayDiscoveryService {
             connectedDevices: data['connected_devices'] as int?,
           );
 
-          // Add to relay service
-          await _addDiscoveredRelay(relay);
+          // Add to station service
+          await _addDiscoveredRelay(station);
 
-          return relay;
+          return station;
         }
       }
     } catch (e) {
@@ -586,7 +586,7 @@ class RelayDiscoveryService {
     return null;
   }
 
-  /// Build location string from relay status data
+  /// Build location string from station status data
   String? _buildLocation(Map<String, dynamic> data) {
     if (data['location'] is Map) {
       final loc = data['location'] as Map<String, dynamic>;
@@ -619,81 +619,81 @@ class RelayDiscoveryService {
     return null;
   }
 
-  /// Add discovered relay to relay service
-  Future<void> _addDiscoveredRelay(Relay relay) async {
+  /// Add discovered station to station service
+  Future<void> _addDiscoveredRelay(Station station) async {
     try {
-      final relayService = RelayService();
-      final existingRelays = relayService.getAllRelays();
+      final stationService = StationService();
+      final existingStations = stationService.getAllStations();
 
-      // Check if relay already exists by URL
-      final existingByUrl = existingRelays.indexWhere((r) => r.url == relay.url);
+      // Check if station already exists by URL
+      final existingByUrl = existingStations.indexWhere((r) => r.url == station.url);
       if (existingByUrl != -1) {
-        LogService().log('  Relay already exists: ${relay.url}');
+        LogService().log('  Station already exists: ${station.url}');
         // Update cached info (connected devices, location, etc.)
-        final existing = existingRelays[existingByUrl];
-        await relayService.updateRelay(
-          relay.url,
+        final existing = existingStations[existingByUrl];
+        await stationService.updateStation(
+          station.url,
           existing.copyWith(
-            name: relay.name,
-            callsign: relay.callsign ?? existing.callsign,
-            location: relay.location ?? existing.location,
-            latitude: relay.latitude ?? existing.latitude,
-            longitude: relay.longitude ?? existing.longitude,
-            connectedDevices: relay.connectedDevices,
+            name: station.name,
+            callsign: station.callsign ?? existing.callsign,
+            location: station.location ?? existing.location,
+            latitude: station.latitude ?? existing.latitude,
+            longitude: station.longitude ?? existing.longitude,
+            connectedDevices: station.connectedDevices,
             lastChecked: DateTime.now(),
           ),
         );
-        LogService().log('  Updated relay cache: ${relay.connectedDevices} devices connected');
+        LogService().log('  Updated station cache: ${station.connectedDevices} devices connected');
         return;
       }
 
-      // Check if relay already exists by callsign (same relay on different IP)
-      if (relay.callsign != null && relay.callsign!.isNotEmpty) {
-        final existingByCallsign = existingRelays.indexWhere(
-          (r) => r.callsign == relay.callsign && r.callsign != null,
+      // Check if station already exists by callsign (same station on different IP)
+      if (station.callsign != null && station.callsign!.isNotEmpty) {
+        final existingByCallsign = existingStations.indexWhere(
+          (r) => r.callsign == station.callsign && r.callsign != null,
         );
         if (existingByCallsign != -1) {
-          final existing = existingRelays[existingByCallsign];
-          LogService().log('  Relay with callsign ${relay.callsign} already exists at ${existing.url}');
+          final existing = existingStations[existingByCallsign];
+          LogService().log('  Station with callsign ${station.callsign} already exists at ${existing.url}');
           // Prefer non-localhost URL
-          if (existing.url.contains('127.0.0.1') && !relay.url.contains('127.0.0.1')) {
+          if (existing.url.contains('127.0.0.1') && !station.url.contains('127.0.0.1')) {
             // Update existing entry with new URL (prefer LAN IP)
-            await relayService.updateRelay(
+            await stationService.updateStation(
               existing.url,
               existing.copyWith(
-                url: relay.url,
-                location: relay.location ?? existing.location,
-                latitude: relay.latitude ?? existing.latitude,
-                longitude: relay.longitude ?? existing.longitude,
-                connectedDevices: relay.connectedDevices,
+                url: station.url,
+                location: station.location ?? existing.location,
+                latitude: station.latitude ?? existing.latitude,
+                longitude: station.longitude ?? existing.longitude,
+                connectedDevices: station.connectedDevices,
                 lastChecked: DateTime.now(),
               ),
             );
-            LogService().log('  Updated relay URL from localhost to ${relay.url}');
+            LogService().log('  Updated station URL from localhost to ${station.url}');
           }
           return;
         }
       }
 
-      // Add the relay
-      await relayService.addRelay(relay);
-      LogService().log('  Added relay: ${relay.name}');
-      LogService().log('  URL: ${relay.url}');
-      if (relay.location != null) {
-        LogService().log('  Location: ${relay.location}');
+      // Add the station
+      await stationService.addStation(station);
+      LogService().log('  Added station: ${station.name}');
+      LogService().log('  URL: ${station.url}');
+      if (station.location != null) {
+        LogService().log('  Location: ${station.location}');
       }
 
-      // If this is the only relay, mark it as preferred
-      final allRelays = relayService.getAllRelays();
-      final hasPreferred = allRelays.any((r) => r.status == 'preferred');
+      // If this is the only station, mark it as preferred
+      final allStations = stationService.getAllStations();
+      final hasPreferred = allStations.any((r) => r.status == 'preferred');
 
       if (!hasPreferred) {
-        await relayService.setPreferred(relay.url);
-        LogService().log('  ✓ Set as preferred relay (first relay discovered)');
+        await stationService.setPreferred(station.url);
+        LogService().log('  ✓ Set as preferred station (first station discovered)');
       }
 
     } catch (e) {
-      LogService().log('  Error adding relay: $e');
+      LogService().log('  Error adding station: $e');
     }
   }
 

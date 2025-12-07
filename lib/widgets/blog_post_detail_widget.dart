@@ -19,7 +19,7 @@ class BlogPostDetailWidget extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onPublish;
-  final String? relayUrl;
+  final String? stationUrl;
   final String? profileIdentifier; // nickname or callsign for URL
 
   const BlogPostDetailWidget({
@@ -30,17 +30,17 @@ class BlogPostDetailWidget extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onPublish,
-    this.relayUrl,
+    this.stationUrl,
     this.profileIdentifier,
   }) : super(key: key);
 
   /// Get shareable URL for this blog post
   String? get shareableUrl {
-    if (relayUrl == null || profileIdentifier == null || post.isDraft) {
+    if (stationUrl == null || profileIdentifier == null || post.isDraft) {
       return null;
     }
     // Convert ws:// or wss:// to http:// or https://
-    final httpUrl = relayUrl!
+    final httpUrl = stationUrl!
         .replaceFirst('ws://', 'http://')
         .replaceFirst('wss://', 'https://');
     return '$httpUrl/$profileIdentifier/blog/${post.id}.html';

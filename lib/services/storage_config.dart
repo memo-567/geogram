@@ -15,7 +15,7 @@ import 'package:path_provider/path_provider.dart';
 /// Standard folder structure:
 /// {BASE_DIR}/
 /// ├── config.json         # Main config (profiles, settings)
-/// ├── relay_config.json   # Relay specific config
+/// ├── station_config.json   # Station specific config
 /// ├── devices/            # Device data per callsign
 /// │   └── {CALLSIGN}/
 /// │       └── {collections}
@@ -64,8 +64,8 @@ class StorageConfig {
   /// Get the main config file path
   String get configPath => path.join(baseDir, 'config.json');
 
-  /// Get the relay config file path
-  String get relayConfigPath => path.join(baseDir, 'relay_config.json');
+  /// Get the station config file path
+  String get stationConfigPath => path.join(baseDir, 'station_config.json');
 
   /// Get the collections directory for a specific callsign
   String getCallsignDir(String callsign) {
@@ -202,7 +202,7 @@ class StorageConfig {
       'sslDir': sslDir,
       'logsDir': logsDir,
       'configPath': configPath,
-      'relayConfigPath': relayConfigPath,
+      'stationConfigPath': stationConfigPath,
     };
   }
 

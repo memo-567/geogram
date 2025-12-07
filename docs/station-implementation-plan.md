@@ -1,4 +1,4 @@
-# Relay Collection Implementation Plan
+# Station Collection Implementation Plan
 
 **Version**: 1.0
 **Date**: 2025-11-26
@@ -6,25 +6,25 @@
 
 ## Overview
 
-This document outlines the implementation plan for enabling geogram-desktop to function as a relay (either root or node), allowing it to bridge devices across networks and participate in the Geogram relay mesh.
+This document outlines the implementation plan for enabling geogram-desktop to function as a station (either root or node), allowing it to bridge devices across networks and participate in the Geogram station mesh.
 
 ## Current State
 
 ### Existing Infrastructure
-- `RelayService`: Manages connections TO external internet relays
-- `Relay` model: Represents an external relay to connect to
-- `RelaysPage`: UI for selecting and connecting to relays
+- `StationService`: Manages connections TO external internet stations
+- `Station` model: Represents an external station to connect to
+- `StationsPage`: UI for selecting and connecting to stations
 - `WebSocketService`: Handles WebSocket connections
-- `relay_discovery_service.dart`: Discovers nearby relays
+- `station_discovery_service.dart`: Discovers nearby stations
 
 ### What's Missing
-- Ability to BECOME a relay (not just connect to one)
-- Root relay creation and management
-- Node relay registration and operation
+- Ability to BECOME a station (not just connect to one)
+- Root station creation and management
+- Node station registration and operation
 - Channel bridging (WiFi, BLE, LoRa, etc.)
 - Points/reputation tracking
 - Authority management (admins, moderators)
-- Collection sync/caching for relay operation
+- Collection sync/caching for station operation
 
 ## Architecture Decision: Root vs Node
 
@@ -35,22 +35,22 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │                     RELAY SETUP WIZARD                               │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  "Would you like this device to act as a relay?"                   │
+│  "Would you like this device to act as a station?"                   │
 │                                                                     │
 │  ┌─────────────────────┐     ┌─────────────────────┐               │
-│  │   Enable Relay      │     │   Skip (Client Only) │               │
+│  │   Enable Station      │     │   Skip (Client Only) │               │
 │  │   Mode              │     │                      │               │
 │  └──────────┬──────────┘     └──────────────────────┘               │
 │             │                                                       │
 │             ▼                                                       │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  "What type of relay do you want to create?"                │   │
+│  │  "What type of station do you want to create?"                │   │
 │  │                                                             │   │
 │  │  ┌─────────────────────┐  ┌─────────────────────────────┐  │   │
 │  │  │   ROOT RELAY        │  │   NODE RELAY                │  │   │
 │  │  │                     │  │                             │  │   │
 │  │  │   Create a new      │  │   Join an existing          │  │   │
-│  │  │   relay network.    │  │   relay network.            │  │   │
+│  │  │   station network.    │  │   station network.            │  │   │
 │  │  │   You become the    │  │   Extend network            │  │   │
 │  │  │   network owner.    │  │   coverage.                 │  │   │
 │  │  │                     │  │                             │  │   │
@@ -70,33 +70,33 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 
 ## Screen Specifications
 
-### 1. Relay Mode Toggle (Settings)
+### 1. Station Mode Toggle (Settings)
 
-**Location**: Settings page, new "Relay" section
+**Location**: Settings page, new "Station" section
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  RELAY SETTINGS                                                     │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  Enable Relay Mode                                    [  Toggle  ]  │
-│  Allow this device to act as a relay node                          │
+│  Enable Station Mode                                    [  Toggle  ]  │
+│  Allow this device to act as a station node                          │
 │                                                                     │
 │  ─────────────────────────────────────────────────────────────────  │
 │                                                                     │
-│  Relay Status: ACTIVE (Node)                                       │
+│  Station Status: ACTIVE (Node)                                       │
 │  Network: Portugal Community Network                                │
 │  Connected Devices: 12                                              │
 │  Points This Month: 425                                             │
 │                                                                     │
-│  [ Configure Relay ]    [ View Dashboard ]                          │
+│  [ Configure Station ]    [ View Dashboard ]                          │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. Root Relay Setup Wizard
+### 2. Root Station Setup Wizard
 
-**File**: `lib/pages/relay_setup_root_page.dart`
+**File**: `lib/pages/station_setup_root_page.dart`
 
 #### Step 1: Network Identity
 
@@ -113,7 +113,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │                                                                     │
 │  Network Description                                                │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ Community relay network for Portuguese communities.          │   │
+│  │ Community station network for Portuguese communities.          │   │
 │  │ Emergency reports, local events, and regional communication. │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
@@ -169,13 +169,13 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │                                                                     │
 │  Available Disk Space: 245 GB                                       │
 │                                                                     │
-│  Allocate to Relay:                                                 │
+│  Allocate to Station:                                                 │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │  ◄━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━► │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                         10 GB                                       │
 │                                                                     │
-│  Recommended: 10 GB for root relay                                  │
+│  Recommended: 10 GB for root station                                  │
 │  Minimum: 1 GB                                                      │
 │                                                                     │
 │  Binary Data Policy:                                                │
@@ -233,7 +233,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │  Network Summary                                                    │
 │  ├─ Name: Portugal Community Network                                │
 │  ├─ Owner: PT1ROOT (npub1abc123...)                                │
-│  └─ Type: Root Relay                                                │
+│  └─ Type: Root Station                                                │
 │                                                                     │
 │  Collections                                                        │
 │  ├─ Community: Reports, Places, Events                              │
@@ -243,23 +243,23 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │  Storage                                                            │
 │  ├─ Allocated: 10 GB                                                │
 │  ├─ Binary policy: Thumbnails only                                  │
-│  └─ Location: ~/geogram/relay/                                      │
+│  └─ Location: ~/geogram/station/                                      │
 │                                                                     │
 │  Policy                                                             │
 │  ├─ Node registration: Open                                         │
 │  ├─ User registration: Open                                         │
 │  └─ Federation: Enabled (manual approval)                           │
 │                                                                     │
-│  ⚠️  Creating a root relay makes you responsible for the network.   │
+│  ⚠️  Creating a root station makes you responsible for the network.   │
 │      You will be the ultimate authority for all network decisions.  │
 │                                                                     │
 │                                        [ Back ]  [ Create Network ] │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. Node Relay Setup Wizard
+### 3. Node Station Setup Wizard
 
-**File**: `lib/pages/relay_setup_node_page.dart`
+**File**: `lib/pages/station_setup_node_page.dart`
 
 #### Step 1: Join Network
 
@@ -272,9 +272,9 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │  How would you like to join a network?                              │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Enter Root Relay URL                                        │   │
+│  │  Enter Root Station URL                                        │   │
 │  │  ┌─────────────────────────────────────────────────────────┐│   │
-│  │  │ wss://relay.example.com                                 ││   │
+│  │  │ wss://station.example.com                                 ││   │
 │  │  └─────────────────────────────────────────────────────────┘│   │
 │  │                                           [ Connect ]        │   │
 │  └─────────────────────────────────────────────────────────────┘   │
@@ -310,7 +310,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │                                                                     │
 │  Your Node Name *                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ Lisbon Downtown Relay                                        │   │
+│  │ Lisbon Downtown Station                                        │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  Your Callsign *                                                    │
@@ -377,9 +377,9 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Node Summary                                                       │
-│  ├─ Name: Lisbon Downtown Relay                                     │
+│  ├─ Name: Lisbon Downtown Station                                     │
 │  ├─ Callsign: RELAY1PT                                             │
-│  └─ Type: Node Relay                                                │
+│  └─ Type: Node Station                                                │
 │                                                                     │
 │  Network                                                            │
 │  ├─ Name: Portugal Community Network                                │
@@ -404,9 +404,9 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4. Relay Dashboard
+### 4. Station Dashboard
 
-**File**: `lib/pages/relay_dashboard_page.dart`
+**File**: `lib/pages/station_dashboard_page.dart`
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -415,7 +415,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │  RELAY STATUS: ONLINE                           🟢 Active    │   │
-│  │  Type: Node Relay                                            │   │
+│  │  Type: Node Station                                            │   │
 │  │  Network: Portugal Community Network                         │   │
 │  │  Uptime: 15 days, 8 hours                                    │   │
 │  └─────────────────────────────────────────────────────────────┘   │
@@ -457,7 +457,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 
 ### 5. Authority Management (Root Only)
 
-**File**: `lib/pages/relay_authorities_page.dart`
+**File**: `lib/pages/station_authorities_page.dart`
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -492,7 +492,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 
 ### 6. Network Topology View
 
-**File**: `lib/pages/relay_topology_page.dart`
+**File**: `lib/pages/station_topology_page.dart`
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -536,7 +536,7 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 
 ### 7. Points Dashboard
 
-**File**: `lib/pages/relay_points_page.dart`
+**File**: `lib/pages/station_points_page.dart`
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -576,37 +576,37 @@ This document outlines the implementation plan for enabling geogram-desktop to f
 
 ## New Models Required
 
-### 1. RelayNode Model
+### 1. StationNode Model
 
-**File**: `lib/models/relay_node.dart`
+**File**: `lib/models/station_node.dart`
 
 ```dart
-/// Represents this device operating as a relay
-class RelayNode {
+/// Represents this device operating as a station
+class StationNode {
   final String id;              // Collection ID (auto-generated)
   final String name;
   final String callsign;
   final String npub;
-  final RelayType type;         // root, node
+  final StationType type;         // root, node
   final String? networkId;      // For nodes: the network they belong to
   final String? rootNpub;       // For nodes: root's npub
-  final RelayNodeConfig config;
-  final RelayNodeStatus status;
+  final StationNodeConfig config;
+  final StationNodeStatus status;
   final DateTime created;
   final DateTime updated;
   // ...
 }
 
-enum RelayType { root, node }
+enum StationType { root, node }
 ```
 
-### 2. RelayNetwork Model
+### 2. StationNetwork Model
 
-**File**: `lib/models/relay_network.dart`
+**File**: `lib/models/station_network.dart`
 
 ```dart
-/// Represents a relay network (for root or joined by node)
-class RelayNetwork {
+/// Represents a station network (for root or joined by node)
+class StationNetwork {
   final String id;
   final String name;
   final String description;
@@ -619,13 +619,13 @@ class RelayNetwork {
 }
 ```
 
-### 3. RelayAuthority Model
+### 3. StationAuthority Model
 
-**File**: `lib/models/relay_authority.dart`
+**File**: `lib/models/station_authority.dart`
 
 ```dart
 /// Represents an authority (admin, group admin, moderator)
-class RelayAuthority {
+class StationAuthority {
   final String callsign;
   final String npub;
   final AuthorityLevel level;   // admin, groupAdmin, moderator
@@ -645,17 +645,17 @@ enum AuthorityLevel { admin, groupAdmin, moderator }
 **File**: `lib/models/user_points.dart`
 
 ```dart
-/// Tracks points for a user at a relay
+/// Tracks points for a user at a station
 class UserPoints {
   final String callsign;
   final String npub;
-  final String relayCallsign;
+  final String stationCallsign;
   final String period;          // e.g., "2025-11"
   final PointsBreakdown breakdown;
   final int totalPoints;
   final double multiplier;
   final int finalScore;
-  final String signature;       // Relay's signature
+  final String signature;       // Station's signature
   // ...
 }
 
@@ -665,7 +665,7 @@ class PointsBreakdown {
   final int verification;
   final int community;
   final int moderation;
-  final int relayOperation;
+  final int stationOperation;
   // ...
 }
 ```
@@ -696,29 +696,29 @@ enum ChannelType { internet, wifiLan, bluetooth, lora, radio, espMesh, espNow }
 
 ## New Services Required
 
-### 1. RelayNodeService
+### 1. StationNodeService
 
-**File**: `lib/services/relay_node_service.dart`
+**File**: `lib/services/station_node_service.dart`
 
-Manages this device's relay operation:
-- Start/stop relay mode
+Manages this device's station operation:
+- Start/stop station mode
 - Handle incoming connections
 - Manage collection caching
 - Forward messages
 - Bridge between channels
 
-### 2. RelayAuthorityService
+### 2. StationAuthorityService
 
-**File**: `lib/services/relay_authority_service.dart`
+**File**: `lib/services/station_authority_service.dart`
 
 Manages authorities:
 - Appoint/revoke admins, group admins, moderators
 - Verify authority chains
 - Sync authority files
 
-### 3. RelayPointsService
+### 3. StationPointsService
 
-**File**: `lib/services/relay_points_service.dart`
+**File**: `lib/services/station_points_service.dart`
 
 Tracks and awards points:
 - Track connection time
@@ -726,9 +726,9 @@ Tracks and awards points:
 - Calculate score and tier
 - Issue signed certificates
 
-### 4. RelayBridgeService
+### 4. StationBridgeService
 
-**File**: `lib/services/relay_bridge_service.dart`
+**File**: `lib/services/station_bridge_service.dart`
 
 Manages channel bridging:
 - Detect available channels
@@ -736,9 +736,9 @@ Manages channel bridging:
 - Route messages across channels
 - Handle protocol adaptation
 
-### 5. RelaySyncService
+### 5. StationSyncService
 
-**File**: `lib/services/relay_sync_service.dart`
+**File**: `lib/services/station_sync_service.dart`
 
 Handles collection synchronization:
 - Sync with root
@@ -751,28 +751,28 @@ Handles collection synchronization:
 ```
 lib/
 ├── models/
-│   ├── relay_node.dart
-│   ├── relay_network.dart
-│   ├── relay_authority.dart
+│   ├── station_node.dart
+│   ├── station_network.dart
+│   ├── station_authority.dart
 │   ├── user_points.dart
 │   ├── bridge_config.dart
 │   └── feature_tier.dart
 ├── services/
-│   ├── relay_node_service.dart
-│   ├── relay_authority_service.dart
-│   ├── relay_points_service.dart
-│   ├── relay_bridge_service.dart
-│   └── relay_sync_service.dart
+│   ├── station_node_service.dart
+│   ├── station_authority_service.dart
+│   ├── station_points_service.dart
+│   ├── station_bridge_service.dart
+│   └── station_sync_service.dart
 ├── pages/
-│   ├── relay_setup_root_page.dart
-│   ├── relay_setup_node_page.dart
-│   ├── relay_dashboard_page.dart
-│   ├── relay_authorities_page.dart
-│   ├── relay_topology_page.dart
-│   ├── relay_points_page.dart
-│   └── relay_settings_page.dart
+│   ├── station_setup_root_page.dart
+│   ├── station_setup_node_page.dart
+│   ├── station_dashboard_page.dart
+│   ├── station_authorities_page.dart
+│   ├── station_topology_page.dart
+│   ├── station_points_page.dart
+│   └── station_settings_page.dart
 └── widgets/
-    ├── relay_status_card.dart
+    ├── station_status_card.dart
     ├── channel_status_widget.dart
     ├── points_progress_widget.dart
     ├── authority_list_widget.dart
@@ -781,11 +781,11 @@ lib/
 
 ## Implementation Phases
 
-### Phase 1: Core Relay Infrastructure
-1. Create relay models
-2. Implement RelayNodeService (basic)
-3. Create relay setup wizards (root & node)
-4. Add relay toggle to settings
+### Phase 1: Core Station Infrastructure
+1. Create station models
+2. Implement StationNodeService (basic)
+3. Create station setup wizards (root & node)
+4. Add station toggle to settings
 
 ### Phase 2: Storage & Caching
 1. Implement collection caching
@@ -795,13 +795,13 @@ lib/
 
 ### Phase 3: Points & Reputation
 1. Create points models
-2. Implement RelayPointsService
+2. Implement StationPointsService
 3. Create points dashboard
 4. Implement feature tiers
 
 ### Phase 4: Authority Management
 1. Create authority models
-2. Implement RelayAuthorityService
+2. Implement StationAuthorityService
 3. Create authority management UI
 4. Add signature verification
 
@@ -819,26 +819,26 @@ lib/
 
 ## Integration Points
 
-### Existing RelaysPage
-- Add "Become a Relay" button
-- Show relay status if active
+### Existing StationsPage
+- Add "Become a Station" button
+- Show station status if active
 
 ### Settings Page
-- Add "Relay Mode" section
-- Quick toggle for relay on/off
+- Add "Station Mode" section
+- Quick toggle for station on/off
 
 ### Profile Page
 - Show points/tier
 - Link to points dashboard
 
 ### Navigation
-- Add "Relay" section when relay mode is active
+- Add "Station" section when station mode is active
 - Dashboard, Authorities, Topology, Points
 
 ## Questions to Resolve
 
 1. **Channel Hardware**: How to detect LoRa/BLE hardware availability?
-2. **Background Operation**: How to keep relay running when app minimized?
+2. **Background Operation**: How to keep station running when app minimized?
 3. **Power Management**: How to handle power-saving on laptops?
 4. **Network Ports**: What ports to use for incoming connections?
 5. **Certificate Storage**: Where to store signed authorities securely?
@@ -846,7 +846,7 @@ lib/
 ## Next Steps
 
 1. Review and approve this plan
-2. Start with Phase 1: Core Relay Infrastructure
-3. Create relay_node.dart model
-4. Create relay_node_service.dart (basic start/stop)
-5. Create relay_setup_root_page.dart wizard
+2. Start with Phase 1: Core Station Infrastructure
+3. Create station_node.dart model
+4. Create station_node_service.dart (basic start/stop)
+5. Create station_setup_root_page.dart wizard

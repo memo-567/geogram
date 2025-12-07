@@ -1,21 +1,21 @@
 import 'dart:math';
 
-/// Internet relay model
-class Relay {
+/// Internet station model
+class Station {
   String url;
   String name;
-  String? callsign; // Relay's X3 callsign (from API)
-  String? description; // Relay description from API
+  String? callsign; // Station's X3 callsign (from API)
+  String? description; // Station description from API
   String status; // 'preferred', 'backup', 'available'
   bool isConnected;
   int? latency; // in milliseconds
   DateTime? lastChecked;
-  double? latitude; // Relay disclosed location
-  double? longitude; // Relay disclosed location
+  double? latitude; // Station disclosed location
+  double? longitude; // Station disclosed location
   String? location; // Human-readable location (e.g., "New York, USA")
   int? connectedDevices; // Number of connected devices (cached)
 
-  Relay({
+  Station({
     required this.url,
     required this.name,
     this.callsign,
@@ -30,9 +30,9 @@ class Relay {
     this.connectedDevices,
   });
 
-  /// Create a Relay from JSON map
-  factory Relay.fromJson(Map<String, dynamic> json) {
-    return Relay(
+  /// Create a Station from JSON map
+  factory Station.fromJson(Map<String, dynamic> json) {
+    return Station(
       url: json['url'] as String,
       name: json['name'] as String,
       callsign: json['callsign'] as String?,
@@ -50,7 +50,7 @@ class Relay {
     );
   }
 
-  /// Convert Relay to JSON map
+  /// Convert Station to JSON map
   Map<String, dynamic> toJson() {
     return {
       'url': url,
@@ -68,8 +68,8 @@ class Relay {
     };
   }
 
-  /// Create a copy of this relay
-  Relay copyWith({
+  /// Create a copy of this station
+  Station copyWith({
     String? url,
     String? name,
     String? callsign,
@@ -83,7 +83,7 @@ class Relay {
     String? location,
     int? connectedDevices,
   }) {
-    return Relay(
+    return Station(
       url: url ?? this.url,
       name: name ?? this.name,
       callsign: callsign ?? this.callsign,
@@ -120,7 +120,7 @@ class Relay {
   }
 
   /// Calculate distance from given coordinates using Haversine formula
-  /// Returns distance in kilometers, or null if relay or user location is unavailable
+  /// Returns distance in kilometers, or null if station or user location is unavailable
   double? calculateDistance(double? userLat, double? userLon) {
     if (latitude == null || longitude == null || userLat == null || userLon == null) {
       return null;

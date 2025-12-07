@@ -48,8 +48,8 @@ class PureStorageConfig {
   /// Get the main config file path
   String get configPath => path.join(baseDir, 'config.json');
 
-  /// Get the relay config file path
-  String get relayConfigPath => path.join(baseDir, 'relay_config.json');
+  /// Get the station config file path
+  String get stationConfigPath => path.join(baseDir, 'station_config.json');
 
   /// Get the collections directory for a specific callsign
   String getCallsignDir(String callsign) {
@@ -161,7 +161,7 @@ class PureStorageConfig {
       'sslDir': sslDir,
       'logsDir': logsDir,
       'configPath': configPath,
-      'relayConfigPath': relayConfigPath,
+      'stationConfigPath': stationConfigPath,
     };
   }
 

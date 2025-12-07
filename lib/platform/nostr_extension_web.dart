@@ -154,7 +154,7 @@ class NostrExtensionService {
   }
 
   /// Get relays from extension (NIP-07: window.nostr.getRelays())
-  /// Returns a map of relay URLs to read/write permissions
+  /// Returns a map of station URLs to read/write permissions
   Future<Map<String, dynamic>?> getRelays() async {
     if (!_extensionAvailable) return null;
 

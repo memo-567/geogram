@@ -1,12 +1,12 @@
-// Standalone test to verify tile fetching from relay vs internet
+// Standalone test to verify tile fetching from station vs internet
 // Run with: dart test/tile_source_test.dart
 //
-// This test checks if tiles can be fetched from the relay and logs the source
+// This test checks if tiles can be fetched from the station and logs the source
 
 import 'dart:io';
 import 'package:http/http.dart' as http;
 
-const String relayUrl = 'http://localhost:8080';
+const String stationUrl = 'http://localhost:8080';
 const String userCallsign = 'X1NZG9';
 
 // Test tiles around Germany (lat: 49.683, lon: 8.622)
@@ -20,23 +20,23 @@ final testTiles = [
 
 Future<void> main() async {
   print('=== Tile Source Test ===\n');
-  print('This test verifies that tiles can be fetched from the relay.');
-  print('Relay URL: $relayUrl');
+  print('This test verifies that tiles can be fetched from the station.');
+  print('Station URL: $stationUrl');
   print('User callsign: $userCallsign\n');
 
   // Step 1: Check relay status
-  print('1. Checking relay status...');
+  print('1. Checking station status...');
   try {
-    final statusResponse = await http.get(Uri.parse('$relayUrl/api/status'));
+    final statusResponse = await http.get(Uri.parse('$stationUrl/api/status'));
     if (statusResponse.statusCode == 200) {
-      print('   PASS: Relay is running at $relayUrl');
+      print('   PASS: Station is running at $stationUrl');
     } else {
-      print('   FAIL: Relay returned status ${statusResponse.statusCode}');
+      print('   FAIL: Station returned status ${statusResponse.statusCode}');
       exit(1);
     }
   } catch (e) {
     print('   FAIL: Relay not reachable: $e');
-    print('   Please start the relay first: cd geogram-relay && java -jar target/geogram-relay.jar');
+    print('   Please start the station first: cd geogram-relay && java -jar target/geogram-relay.jar');
     exit(1);
   }
 
@@ -49,29 +49,29 @@ Future<void> main() async {
 
   // Summary
   print('\n=== Final Summary ===');
-  print('STANDARD tiles: ${standardResults['relay']} from relay, ${standardResults['internet']} from internet, ${standardResults['failed']} failed');
-  print('SATELLITE tiles: ${satelliteResults['relay']} from relay, ${satelliteResults['internet']} from internet, ${satelliteResults['failed']} failed');
+  print('STANDARD tiles: ${standardResults['relay']} from station, ${standardResults['internet']} from internet, ${standardResults['failed']} failed');
+  print('SATELLITE tiles: ${satelliteResults['relay']} from station, ${satelliteResults['internet']} from internet, ${satelliteResults['failed']} failed');
 
   final totalRelay = standardResults['relay']! + satelliteResults['relay']!;
   final totalInternet = standardResults['internet']! + satelliteResults['internet']!;
   final totalFailed = standardResults['failed']! + satelliteResults['failed']!;
 
   if (totalRelay == 0) {
-    print('\nWARNING: No tiles came from relay!');
+    print('\nWARNING: No tiles came from station!');
   } else {
-    print('\nSUCCESS: $totalRelay total tiles fetched from relay');
+    print('\nSUCCESS: $totalRelay total tiles fetched from station');
   }
 
   print('\n=== Test Complete ===');
 }
 
 Future<Map<String, int>> _testTiles(String layer) async {
-  int relaySuccess = 0;
+  int stationSuccess = 0;
   int internetSuccess = 0;
   int failed = 0;
 
   final layerParam = layer == 'satellite' ? '?layer=satellite' : '';
-  print('   Relay URL template: $relayUrl/tiles/$userCallsign/{z}/{x}/{y}.png$layerParam');
+  print('   Station URL template: $stationUrl/tiles/$userCallsign/{z}/{x}/{y}.png$layerParam');
 
   for (final tile in testTiles) {
     final z = tile[0];
@@ -79,20 +79,20 @@ Future<Map<String, int>> _testTiles(String layer) async {
     final y = tile[2];
 
     // Try relay first (mimicking desktop app behavior)
-    final relayTileUrl = '$relayUrl/tiles/$userCallsign/$z/$x/$y.png$layerParam';
+    final stationTileUrl = '$stationUrl/tiles/$userCallsign/$z/$x/$y.png$layerParam';
     print('\n   Tile [$z/$x/$y] ($layer):');
-    print('   -> Trying RELAY: $relayTileUrl');
+    print('   -> Trying STATION: $stationTileUrl');
 
     try {
-      final relayResponse = await http.get(Uri.parse(relayTileUrl))
+      final relayResponse = await http.get(Uri.parse(stationTileUrl))
           .timeout(const Duration(seconds: 10));
 
       if (relayResponse.statusCode == 200 && _isValidImage(relayResponse.bodyBytes)) {
-        print('   -> SOURCE: RELAY (${relayResponse.bodyBytes.length} bytes)');
-        relaySuccess++;
+        print('   -> SOURCE: STATION (${relayResponse.bodyBytes.length} bytes)');
+        stationSuccess++;
         continue;
       } else {
-        print('   -> Relay returned ${relayResponse.statusCode}, trying internet...');
+        print('   -> Station returned ${relayResponse.statusCode}, trying internet...');
       }
     } catch (e) {
       print('   -> Relay failed: $e, trying internet...');
@@ -128,7 +128,7 @@ Future<Map<String, int>> _testTiles(String layer) async {
     }
   }
 
-  return {'relay': relaySuccess, 'internet': internetSuccess, 'failed': failed};
+  return {'station': stationSuccess, 'internet': internetSuccess, 'failed': failed};
 }
 
 bool _isValidImage(List<int> bytes) {

@@ -2,7 +2,7 @@
 /// Comprehensive tile server tests for PureRelayServer
 ///
 /// This test suite:
-/// - Launches a relay server on port 45690
+/// - Launches a station server on port 45690
 /// - Clears any existing tile cache for clean results
 /// - Tests tile fetching from internet (OSM)
 /// - Tests tile caching (memory and disk)
@@ -18,7 +18,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import '../lib/cli/pure_relay.dart';
+import '../lib/cli/pure_station.dart';
 import '../lib/cli/pure_storage_config.dart';
 
 const int TEST_PORT = 45690;
@@ -65,7 +65,7 @@ Future<void> main() async {
   final tempDir = await Directory.systemTemp.createTemp('geogram_tile_test_');
   print('Using temp directory: ${tempDir.path}');
 
-  PureRelayServer? relay;
+  PureRelayServer? station;
 
   try {
     // Initialize storage config
@@ -82,24 +82,24 @@ Future<void> main() async {
     print('Tile cache directory: ${tilesDir.path}');
     print('');
 
-    // Create and initialize the relay server
-    relay = PureRelayServer();
-    relay.quietMode = true; // Suppress log output during tests
-    await relay.initialize();
+    // Create and initialize the station server
+    station = PureRelayServer();
+    station.quietMode = true; // Suppress log output during tests
+    await station.initialize();
 
-    // Configure relay settings - enable tile server
-    relay.setSetting('httpPort', TEST_PORT);
-    relay.setSetting('description', 'Tile Test Relay');
-    relay.setSetting('tileServerEnabled', true);
-    relay.setSetting('osmFallbackEnabled', true);
+    // Configure station settings - enable tile server
+    station.setSetting('httpPort', TEST_PORT);
+    station.setSetting('description', 'Tile Test Station');
+    station.setSetting('tileServerEnabled', true);
+    station.setSetting('osmFallbackEnabled', true);
 
     // Start the server
-    final started = await relay.start();
+    final started = await station.start();
     if (!started) {
-      print('ERROR: Failed to start relay server on port $TEST_PORT');
+      print('ERROR: Failed to start station server on port $TEST_PORT');
       exit(1);
     }
-    print('Relay server started on port $TEST_PORT');
+    print('Station server started on port $TEST_PORT');
     print('Tile server enabled: true');
     print('OSM fallback enabled: true');
     print('');
@@ -120,7 +120,7 @@ Future<void> main() async {
     await _testTileStatsAccumulation();
 
     // Stop the server
-    await relay.stop();
+    await station.stop();
 
     // Print summary
     print('');
@@ -148,9 +148,9 @@ Future<void> main() async {
     exit(1);
   } finally {
     // Ensure server is stopped
-    if (relay != null) {
+    if (station != null) {
       try {
-        await relay.stop();
+        await station.stop();
       } catch (_) {}
     }
 

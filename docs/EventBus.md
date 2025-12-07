@@ -93,7 +93,7 @@ class ChatRoomDeletedEvent extends AppEvent {
 
 ### ClientConnectedEvent
 
-Fired when a client connects to the relay.
+Fired when a client connects to the station.
 
 ```dart
 class ClientConnectedEvent extends AppEvent {
@@ -105,7 +105,7 @@ class ClientConnectedEvent extends AppEvent {
 
 ### ClientDisconnectedEvent
 
-Fired when a client disconnects from the relay.
+Fired when a client disconnects from the station.
 
 ```dart
 class ClientDisconnectedEvent extends AppEvent {
@@ -114,24 +114,24 @@ class ClientDisconnectedEvent extends AppEvent {
 }
 ```
 
-### RelayStartedEvent
+### StationStartedEvent
 
-Fired when the relay server starts.
+Fired when the station server starts.
 
 ```dart
-class RelayStartedEvent extends AppEvent {
+class StationStartedEvent extends AppEvent {
   final int httpPort;
   final int? httpsPort;
   final String callsign;
 }
 ```
 
-### RelayStoppedEvent
+### StationStoppedEvent
 
-Fired when the relay server stops.
+Fired when the station server stops.
 
 ```dart
-class RelayStoppedEvent extends AppEvent {}
+class StationStoppedEvent extends AppEvent {}
 ```
 
 ### ProfileChangedEvent
@@ -184,9 +184,9 @@ class StatusUpdateEvent extends AppEvent {
 
 ### Publishers (Fire Events)
 
-#### PureRelayServer (`lib/cli/pure_relay.dart`)
+#### PureStationServer (`lib/cli/pure_station.dart`)
 
-The relay server fires `ChatMessageEvent` when messages are added:
+The station server fires `ChatMessageEvent` when messages are added:
 
 | Location | Trigger |
 |----------|---------|
@@ -216,7 +216,7 @@ The CLI console subscribes to `ChatMessageEvent` for real-time chat display:
 
 ```dart
 // In _initializeServices()
-_chatMessageSubscription = _relay.eventBus.on<ChatMessageEvent>((event) {
+_chatMessageSubscription = _station.eventBus.on<ChatMessageEvent>((event) {
   _handleIncomingChatMessage(event);
 });
 
@@ -270,7 +270,7 @@ if (eventBus.hasSubscribers<ChatMessageEvent>()) {
 
 ## WebSocket UPDATE Notifications
 
-In addition to the EventBus (used internally), the relay broadcasts UPDATE notifications to WebSocket clients for GUI real-time updates:
+In addition to the EventBus (used internally), the station broadcasts UPDATE notifications to WebSocket clients for GUI real-time updates:
 
 **Format:** `UPDATE:{callsign}/chat/{roomId}`
 
@@ -284,7 +284,7 @@ Events defined but not yet integrated:
 
 - `ChatRoomCreatedEvent` / `ChatRoomDeletedEvent` - For room management notifications
 - `ClientConnectedEvent` / `ClientDisconnectedEvent` - For presence awareness
-- `RelayStartedEvent` / `RelayStoppedEvent` - For relay lifecycle management
+- `StationStartedEvent` / `StationStoppedEvent` - For station lifecycle management
 - `ProfileChangedEvent` - For profile synchronization
 - `CollectionUpdatedEvent` - For file/tile collection updates
 - `ErrorEvent` / `StatusUpdateEvent` - For global error handling and status display

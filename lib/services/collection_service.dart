@@ -841,10 +841,10 @@ class CollectionService {
         // Initialize groups collection structure
         await _initializeGroupsCollection(collectionFolder);
         stderr.writeln('Created groups collection skeleton');
-      } else if (type == 'relay') {
-        // Initialize relay collection structure
+      } else if (type == 'station') {
+        // Initialize station collection structure
         await _initializeRelayCollection(collectionFolder);
-        stderr.writeln('Created relay collection skeleton');
+        stderr.writeln('Created station collection skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -1207,8 +1207,8 @@ ${currentProfile.callsign}
     }
   }
 
-  /// Initialize relay collection with basic structure
-  /// Note: The actual relay configuration is managed by RelayNodeService
+  /// Initialize station collection with basic structure
+  /// Note: The actual station configuration is managed by StationNodeService
   Future<void> _initializeRelayCollection(Directory collectionFolder) async {
     // Get current profile
     final profileService = ProfileService();
@@ -1216,14 +1216,14 @@ ${currentProfile.callsign}
     final now = DateTime.now();
     final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
 
-    // Create relay.json at root (basic metadata - actual relay config is separate)
-    final relayJsonFile = File('${collectionFolder.path}/relay.json');
-    final relayData = {
+    // Create station.json at root (basic metadata - actual station config is separate)
+    final stationJsonFile = File('${collectionFolder.path}/station.json');
+    final stationData = {
       'collection': {
-        'id': 'relay-collection',
-        'title': 'Relay',
-        'description': 'Configure this device as a relay node',
-        'type': 'relay',
+        'id': 'station-collection',
+        'title': 'Station',
+        'description': 'Configure this device as a station node',
+        'type': 'station',
         'created': timestamp,
         'updated': timestamp,
       },
@@ -1232,11 +1232,11 @@ ${currentProfile.callsign}
         'npub': currentProfile.npub,
       },
     };
-    await relayJsonFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(relayData),
+    await stationJsonFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(stationData),
     );
 
-    stderr.writeln('Relay collection initialized');
+    stderr.writeln('Station collection initialized');
   }
 
   /// Write collection metadata files to disk

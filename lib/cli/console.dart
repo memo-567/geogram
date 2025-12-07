@@ -6,7 +6,7 @@ import '../services/config_service.dart';
 import '../services/collection_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
-import '../services/relay_server_service.dart';
+import '../services/station_server_service.dart';
 import '../version.dart';
 
 /// Main CLI console for geogram-desktop
@@ -15,15 +15,15 @@ class Console {
   String _currentPath = '/';
 
   /// Root directories in virtual filesystem
-  static const List<String> rootDirs = ['profiles', 'config', 'logs', 'relay'];
+  static const List<String> rootDirs = ['profiles', 'config', 'logs', 'station'];
 
   /// Directory-specific commands
   static const Map<String, List<String>> dirCommands = {
-    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'relay'],
+    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'station'],
     '/profiles': ['ls', 'cd', 'pwd', 'profile', 'status', 'help', 'quit', 'exit', 'clear'],
     '/config': ['ls', 'cd', 'pwd', 'set', 'get', 'status', 'help', 'quit', 'exit', 'clear'],
     '/logs': ['ls', 'cd', 'pwd', 'tail', 'status', 'help', 'quit', 'exit', 'clear'],
-    '/relay': ['ls', 'cd', 'pwd', 'start', 'stop', 'status', 'port', 'cache', 'help', 'quit', 'exit', 'clear'],
+    '/station': ['ls', 'cd', 'pwd', 'start', 'stop', 'status', 'port', 'cache', 'help', 'quit', 'exit', 'clear'],
   };
 
   /// Run CLI mode
@@ -45,8 +45,8 @@ class Console {
       final profile = ProfileService().getProfile();
       await CollectionService().setActiveCallsign(profile.callsign);
 
-      // Initialize relay server service
-      await RelayServerService().initialize();
+      // Initialize station server service
+      await StationServerService().initialize();
 
       LogService().log('CLI services initialized');
     } catch (e) {
@@ -58,12 +58,12 @@ class Console {
   /// Print welcome banner
   void _printBanner() {
     final profile = ProfileService().getProfile();
-    final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
+    final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
 
     stdout.writeln();
     stdout.writeln('\x1B[36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln('\x1B[36m  Geogram Desktop v$appVersion - CLI Mode\x1B[0m');
-    stdout.writeln('\x1B[36m  Active Profile: ${profile.callsign}${isRelay ? ' (Relay)' : ''}\x1B[0m');
+    stdout.writeln('\x1B[36m  Active Profile: ${profile.callsign}${isStation ? ' (Relay)' : ''}\x1B[0m');
     stdout.writeln('\x1B[36m' + '=' * 60 + '\x1B[0m');
     stdout.writeln();
     stdout.writeln('Type "help" for available commands.');
@@ -93,8 +93,8 @@ class Console {
 
   /// Process a single command
   Future<bool> _processCommand(String command, List<String> args) async {
-    // Check if we're in /relay directory for relay-specific commands
-    if (_currentPath == '/relay' || _currentPath.startsWith('/relay/')) {
+    // Check if we're in /station directory for station-specific commands
+    if (_currentPath == '/station' || _currentPath.startsWith('/station/')) {
       switch (command) {
         case 'start':
           await _handleRelayStart();
@@ -130,7 +130,7 @@ class Console {
       case 'profile':
         await _handleProfile(args);
         break;
-      case 'relay':
+      case 'station':
         await _handleRelay(args);
         break;
       case 'clear':
@@ -138,10 +138,10 @@ class Console {
         break;
       case 'quit':
       case 'exit':
-        // Stop relay server if running
-        if (RelayServerService().isRunning) {
-          stdout.writeln('Stopping relay server...');
-          await RelayServerService().stop();
+        // Stop station server if running
+        if (StationServerService().isRunning) {
+          stdout.writeln('Stopping station server...');
+          await StationServerService().stop();
         }
         stdout.writeln('Goodbye!');
         return true;
@@ -164,16 +164,16 @@ class Console {
     stdout.writeln('  \x1B[33mProfile Management:\x1B[0m');
     stdout.writeln('    profile list       List all profiles');
     stdout.writeln('    profile switch <id|callsign>  Switch active profile');
-    stdout.writeln('    profile create [--relay]      Create new profile');
+    stdout.writeln('    profile create [--station]      Create new profile');
     stdout.writeln('    profile info [id]  Show profile details');
     stdout.writeln();
     stdout.writeln('  \x1B[33mRelay Server:\x1B[0m');
-    stdout.writeln('    relay start        Start the relay server');
-    stdout.writeln('    relay stop         Stop the relay server');
-    stdout.writeln('    relay status       Show relay server status');
-    stdout.writeln('    relay port <port>  Set relay server port');
-    stdout.writeln('    relay cache clear  Clear tile cache');
-    stdout.writeln('    relay cache stats  Show cache statistics');
+    stdout.writeln('    station start        Start the station server');
+    stdout.writeln('    station stop         Stop the station server');
+    stdout.writeln('    station status       Show station server status');
+    stdout.writeln('    station port <port>  Set station server port');
+    stdout.writeln('    station cache clear  Clear tile cache');
+    stdout.writeln('    station cache stats  Show cache statistics');
     stdout.writeln();
     stdout.writeln('  \x1B[33mGeneral:\x1B[0m');
     stdout.writeln('    status             Show application status');
@@ -185,7 +185,7 @@ class Console {
     stdout.writeln('    /profiles/         List all profiles/callsigns');
     stdout.writeln('    /config/           Configuration settings');
     stdout.writeln('    /logs/             View logs');
-    stdout.writeln('    /relay/            Relay status and commands');
+    stdout.writeln('    /station/            Station status and commands');
     stdout.writeln();
   }
 
@@ -193,35 +193,35 @@ class Console {
   void _printStatus() {
     final profile = ProfileService().getProfile();
     final profiles = ProfileService().getAllProfiles();
-    final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
-    final relayStatus = RelayServerService().getStatus();
+    final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
+    final stationStatus = StationServerService().getStatus();
 
     stdout.writeln();
     stdout.writeln('\x1B[1mGeogram Desktop Status\x1B[0m');
     stdout.writeln('-' * 40);
     stdout.writeln('Version:        $appVersion');
     stdout.writeln('Profile:        ${profile.callsign}');
-    stdout.writeln('Mode:           ${isRelay ? 'Relay (X3 callsign)' : 'Standard'}');
+    stdout.writeln('Mode:           ${isStation ? 'Relay (X3 callsign)' : 'Standard'}');
     stdout.writeln('Total Profiles: ${profiles.length}');
     stdout.writeln('Nickname:       ${profile.nickname.isNotEmpty ? profile.nickname : '(not set)'}');
     stdout.writeln('NPub:           ${_truncateNpub(profile.npub)}');
     stdout.writeln();
     stdout.writeln('\x1B[1mRelay Server:\x1B[0m');
     stdout.writeln('-' * 40);
-    if (relayStatus['running'] == true) {
+    if (stationStatus['running'] == true) {
       stdout.writeln('Status:         \x1B[32mRunning\x1B[0m');
-      stdout.writeln('Port:           ${relayStatus['port']}');
-      stdout.writeln('Devices:        ${relayStatus['connected_devices']}');
-      stdout.writeln('Uptime:         ${_formatUptime(relayStatus['uptime'] as int)}');
-      stdout.writeln('Cache:          ${relayStatus['cache_size']} tiles (${relayStatus['cache_size_mb']} MB)');
+      stdout.writeln('Port:           ${stationStatus['port']}');
+      stdout.writeln('Devices:        ${stationStatus['connected_devices']}');
+      stdout.writeln('Uptime:         ${_formatUptime(stationStatus['uptime'] as int)}');
+      stdout.writeln('Cache:          ${stationStatus['cache_size']} tiles (${stationStatus['cache_size_mb']} MB)');
     } else {
       stdout.writeln('Status:         \x1B[33mStopped\x1B[0m');
-      stdout.writeln('Port:           ${RelayServerService().settings.port}');
+      stdout.writeln('Port:           ${StationServerService().settings.port}');
     }
     stdout.writeln();
   }
 
-  /// Handle relay command
+  /// Handle station command
   Future<void> _handleRelay(List<String> args) async {
     if (args.isEmpty) {
       _printRelayStatus();
@@ -248,47 +248,47 @@ class Console {
         _handleRelayCache(subargs);
         break;
       default:
-        _printError('Unknown relay command: $subcommand');
+        _printError('Unknown station command: $subcommand');
         _printError('Available: start, stop, status, port, cache');
     }
   }
 
-  /// Start relay server
+  /// Start station server
   Future<void> _handleRelayStart() async {
-    if (RelayServerService().isRunning) {
-      stdout.writeln('\x1B[33mRelay server is already running on port ${RelayServerService().settings.port}\x1B[0m');
+    if (StationServerService().isRunning) {
+      stdout.writeln('\x1B[33mStation server is already running on port ${StationServerService().settings.port}\x1B[0m');
       return;
     }
 
-    stdout.writeln('Starting relay server on port ${RelayServerService().settings.port}...');
-    final success = await RelayServerService().start();
+    stdout.writeln('Starting station server on port ${StationServerService().settings.port}...');
+    final success = await StationServerService().start();
 
     if (success) {
-      stdout.writeln('\x1B[32mRelay server started successfully\x1B[0m');
-      stdout.writeln('  Port: ${RelayServerService().settings.port}');
-      stdout.writeln('  Status: http://localhost:${RelayServerService().settings.port}/api/status');
-      stdout.writeln('  Tiles:  http://localhost:${RelayServerService().settings.port}/tiles/{callsign}/{z}/{x}/{y}.png');
+      stdout.writeln('\x1B[32mStation server started successfully\x1B[0m');
+      stdout.writeln('  Port: ${StationServerService().settings.port}');
+      stdout.writeln('  Status: http://localhost:${StationServerService().settings.port}/api/status');
+      stdout.writeln('  Tiles:  http://localhost:${StationServerService().settings.port}/tiles/{callsign}/{z}/{x}/{y}.png');
     } else {
-      _printError('Failed to start relay server');
+      _printError('Failed to start station server');
     }
   }
 
-  /// Stop relay server
+  /// Stop station server
   Future<void> _handleRelayStop() async {
-    if (!RelayServerService().isRunning) {
-      stdout.writeln('\x1B[33mRelay server is not running\x1B[0m');
+    if (!StationServerService().isRunning) {
+      stdout.writeln('\x1B[33mStation server is not running\x1B[0m');
       return;
     }
 
-    stdout.writeln('Stopping relay server...');
-    await RelayServerService().stop();
-    stdout.writeln('\x1B[32mRelay server stopped\x1B[0m');
+    stdout.writeln('Stopping station server...');
+    await StationServerService().stop();
+    stdout.writeln('\x1B[32mStation server stopped\x1B[0m');
   }
 
-  /// Print relay status
+  /// Print station status
   void _printRelayStatus() {
-    final status = RelayServerService().getStatus();
-    final settings = RelayServerService().settings;
+    final status = StationServerService().getStatus();
+    final settings = StationServerService().settings;
 
     stdout.writeln();
     stdout.writeln('\x1B[1mRelay Server Status\x1B[0m');
@@ -316,10 +316,10 @@ class Console {
     stdout.writeln();
   }
 
-  /// Handle relay port command
+  /// Handle station port command
   Future<void> _handleRelayPort(List<String> args) async {
     if (args.isEmpty) {
-      stdout.writeln('Current port: ${RelayServerService().settings.port}');
+      stdout.writeln('Current port: ${StationServerService().settings.port}');
       return;
     }
 
@@ -331,20 +331,20 @@ class Console {
       return;
     }
 
-    final settings = RelayServerService().settings.copyWith(port: port);
-    await RelayServerService().updateSettings(settings);
+    final settings = StationServerService().settings.copyWith(port: port);
+    await StationServerService().updateSettings(settings);
 
     stdout.writeln('\x1B[32mPort set to $port\x1B[0m');
 
-    if (RelayServerService().isRunning) {
-      stdout.writeln('Relay server will restart on new port...');
+    if (StationServerService().isRunning) {
+      stdout.writeln('Station server will restart on new port...');
     }
   }
 
-  /// Handle relay cache command
+  /// Handle station cache command
   void _handleRelayCache(List<String> args) {
     if (args.isEmpty) {
-      final status = RelayServerService().getStatus();
+      final status = StationServerService().getStatus();
       stdout.writeln('Cache: ${status['cache_size']} tiles (${status['cache_size_mb']} MB)');
       return;
     }
@@ -353,17 +353,17 @@ class Console {
 
     switch (subcommand) {
       case 'clear':
-        RelayServerService().clearCache();
+        StationServerService().clearCache();
         stdout.writeln('\x1B[32mCache cleared\x1B[0m');
         break;
       case 'stats':
-        final status = RelayServerService().getStatus();
+        final status = StationServerService().getStatus();
         stdout.writeln();
         stdout.writeln('\x1B[1mCache Statistics\x1B[0m');
         stdout.writeln('-' * 30);
         stdout.writeln('Tiles:    ${status['cache_size']}');
         stdout.writeln('Size:     ${status['cache_size_mb']} MB');
-        stdout.writeln('Max Size: ${RelayServerService().settings.maxCacheSize} MB');
+        stdout.writeln('Max Size: ${StationServerService().settings.maxCacheSize} MB');
         stdout.writeln();
         break;
       default:
@@ -388,11 +388,11 @@ class Console {
 
       for (final profile in profiles) {
         final isActive = profile.id == activeId;
-        final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
+        final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
         final marker = isActive ? '\x1B[32m*\x1B[0m ' : '  ';
-        final relayTag = isRelay ? ' \x1B[33m[relay]\x1B[0m' : '';
+        final stationTag = isStation ? ' \x1B[33m[station]\x1B[0m' : '';
 
-        stdout.writeln('$marker\x1B[34m${profile.callsign}/\x1B[0m$relayTag');
+        stdout.writeln('$marker\x1B[34m${profile.callsign}/\x1B[0m$stationTag');
       }
     } else if (path.startsWith('/profiles/')) {
       // Contents of a specific profile
@@ -410,11 +410,11 @@ class Console {
     } else if (path == '/config') {
       stdout.writeln('\x1B[34mprofile.json\x1B[0m');
       stdout.writeln('\x1B[34mconfig.json\x1B[0m');
-      stdout.writeln('\x1B[34mrelayServer.json\x1B[0m');
+      stdout.writeln('\x1B[34mstationServer.json\x1B[0m');
     } else if (path == '/logs') {
       stdout.writeln('\x1B[34mgeogram.log\x1B[0m');
-    } else if (path == '/relay') {
-      final status = RelayServerService().isRunning ? '\x1B[32mRunning\x1B[0m' : '\x1B[33mStopped\x1B[0m';
+    } else if (path == '/station') {
+      final status = StationServerService().isRunning ? '\x1B[32mRunning\x1B[0m' : '\x1B[33mStopped\x1B[0m';
       stdout.writeln('status      $status');
       stdout.writeln('\x1B[34mdevices/\x1B[0m');
       stdout.writeln('\x1B[34mconfig/\x1B[0m');
@@ -481,9 +481,9 @@ class Console {
 
     for (final profile in profiles) {
       final isActive = profile.id == activeId;
-      final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
+      final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
       final marker = isActive ? '\x1B[32m* \x1B[0m' : '  ';
-      final modeTag = isRelay ? '\x1B[33m[Relay]\x1B[0m' : '\x1B[36m[Standard]\x1B[0m';
+      final modeTag = isStation ? '\x1B[33m[Relay]\x1B[0m' : '\x1B[36m[Standard]\x1B[0m';
 
       stdout.writeln('$marker${profile.callsign.padRight(12)} $modeTag');
       if (profile.nickname.isNotEmpty) {
@@ -512,30 +512,30 @@ class Console {
     }
 
     await ProfileService().switchToProfile(profile.id);
-    final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
-    stdout.writeln('\x1B[32mSwitched to profile: ${profile.callsign}${isRelay ? ' (Relay Mode)' : ''}\x1B[0m');
+    final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
+    stdout.writeln('\x1B[32mSwitched to profile: ${profile.callsign}${isStation ? ' (Relay Mode)' : ''}\x1B[0m');
   }
 
   /// Create a new profile
   Future<void> _handleProfileCreate(List<String> args) async {
-    final isRelay = args.contains('--relay');
+    final isStation = args.contains('--station');
 
     stdout.writeln('Creating new profile...');
 
     final profile = await ProfileService().createNewProfile();
 
-    // If relay mode, derive X3 callsign
-    if (isRelay) {
-      final x3Callsign = CallsignGenerator.deriveRelayCallsign(profile.npub);
+    // If station mode, derive X3 callsign
+    if (isStation) {
+      final x3Callsign = CallsignGenerator.deriveStationCallsign(profile.npub);
       // Update the profile with X3 callsign
       final updatedProfile = profile.copyWith(callsign: x3Callsign);
       await ProfileService().saveProfile(updatedProfile);
-      stdout.writeln('\x1B[32mCreated relay profile: $x3Callsign\x1B[0m');
+      stdout.writeln('\x1B[32mCreated station profile: $x3Callsign\x1B[0m');
     } else {
       stdout.writeln('\x1B[32mCreated profile: ${profile.callsign}\x1B[0m');
     }
 
-    stdout.writeln('Use "profile switch ${isRelay ? CallsignGenerator.deriveRelayCallsign(profile.npub) : profile.callsign}" to activate.');
+    stdout.writeln('Use "profile switch ${isStation ? CallsignGenerator.deriveStationCallsign(profile.npub) : profile.callsign}" to activate.');
   }
 
   /// Show profile info
@@ -554,14 +554,14 @@ class Console {
       return;
     }
 
-    final isRelay = CallsignGenerator.isRelayCallsign(profile.callsign);
+    final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
     final isActive = profile.id == ProfileService().activeProfileId;
 
     stdout.writeln();
     stdout.writeln('\x1B[1mProfile: ${profile.callsign}\x1B[0m${isActive ? ' \x1B[32m(active)\x1B[0m' : ''}');
     stdout.writeln('-' * 40);
     stdout.writeln('ID:       ${profile.id}');
-    stdout.writeln('Mode:     ${isRelay ? 'Relay (X3)' : 'Standard'}');
+    stdout.writeln('Mode:     ${isStation ? 'Relay (X3)' : 'Standard'}');
     stdout.writeln('Nickname: ${profile.nickname.isNotEmpty ? profile.nickname : '(not set)'}');
     stdout.writeln('NPub:     ${profile.npub}');
     stdout.writeln('Color:    ${profile.preferredColor}');

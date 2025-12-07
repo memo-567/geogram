@@ -6,11 +6,11 @@
 import 'package:flutter/material.dart';
 import '../models/device_source.dart';
 import '../models/chat_channel.dart';
-import '../models/relay_chat_room.dart';
+import '../models/station_chat_room.dart';
 import '../services/i18n_service.dart';
 
 /// Unified sidebar for browsing chat rooms across multiple devices
-/// Shows local device channels and remote device (relay/direct) rooms
+/// Shows local device channels and remote device (station/direct) rooms
 class DeviceChatSidebar extends StatefulWidget {
   /// Local device channels
   final List<ChatChannel> localChannels;
@@ -28,7 +28,7 @@ class DeviceChatSidebar extends StatefulWidget {
   final Function(ChatChannel) onLocalChannelSelect;
 
   /// Callback when remote room is selected
-  final Function(DeviceSource, RelayChatRoom) onRemoteRoomSelect;
+  final Function(DeviceSource, StationChatRoom) onRemoteRoomSelect;
 
   /// Callback to create new local channel (null hides the button)
   final VoidCallback? onNewLocalChannel;
@@ -90,7 +90,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
           Expanded(
             child: ListView(
               children: [
-                // Remote device sections (relay rooms first)
+                // Remote device sections (station rooms first)
                 for (final source in widget.remoteSources)
                   _buildDeviceSection(
                     theme,
@@ -143,10 +143,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     ThemeData theme,
     DeviceSource device,
     List<ChatChannel>? localChannels,
-    List<RelayChatRoom>? remoteRooms,
+    List<StationChatRoom>? remoteRooms,
   ) {
     // Default to expanded if:
-    // - It's a remote device (relay), OR
+    // - It's a remote device (station), OR
     // - There are no remote sources (local only mode)
     final defaultExpanded = !device.isLocal || widget.remoteSources.isEmpty;
     final isExpanded = _expandedDevices[device.id] ?? defaultExpanded;
@@ -338,7 +338,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
   Widget _buildRemoteRoomTile(
     ThemeData theme,
     DeviceSource device,
-    RelayChatRoom room,
+    StationChatRoom room,
   ) {
     final isSelected = widget.selectedRemoteRoom?.deviceId == device.id &&
         widget.selectedRemoteRoom?.roomId == room.id;
@@ -454,7 +454,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     switch (type) {
       case DeviceSourceType.local:
         return Icons.smartphone;
-      case DeviceSourceType.relay:
+      case DeviceSourceType.station:
         return Icons.cell_tower;
       case DeviceSourceType.direct:
         return Icons.wifi_tethering;
@@ -465,7 +465,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
 /// Combines a device source with its chat rooms
 class DeviceSourceWithRooms {
   final DeviceSource device;
-  final List<RelayChatRoom> rooms;
+  final List<StationChatRoom> rooms;
   final bool isLoading;
 
   DeviceSourceWithRooms({

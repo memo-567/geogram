@@ -5,7 +5,7 @@
 
 import 'dart:async';
 import '../models/update_notification.dart';
-import 'relay_service.dart';
+import 'station_service.dart';
 import 'log_service.dart';
 
 /// Service for tracking unread chat message notifications
@@ -14,7 +14,7 @@ class ChatNotificationService {
   factory ChatNotificationService() => _instance;
   ChatNotificationService._internal();
 
-  final RelayService _relayService = RelayService();
+  final StationService _stationService = StationService();
 
   // Unread counts per room (roomId -> count)
   final Map<String, int> _unreadCounts = {};
@@ -50,7 +50,7 @@ class ChatNotificationService {
   void _setupUpdateListener() {
     _updateSubscription?.cancel();
 
-    final updates = _relayService.updates;
+    final updates = _stationService.updates;
     if (updates != null) {
       _updateSubscription = updates.listen(_handleUpdateNotification);
       LogService().log('ChatNotificationService: Listening for update notifications');
@@ -109,7 +109,7 @@ class ChatNotificationService {
     }
   }
 
-  /// Re-connect to relay updates (call after relay reconnection)
+  /// Re-connect to station updates (call after station reconnection)
   void reconnect() {
     _setupUpdateListener();
   }

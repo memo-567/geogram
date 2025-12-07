@@ -17,7 +17,7 @@ class CachedDevice {
   final String? npub;
   final String? url;
   final String? description;
-  final String? type; // 'client', 'relay', 'unknown'
+  final String? type; // 'client', 'station', 'unknown'
   DateTime lastSeen;
   DateTime firstSeen;
 
@@ -103,7 +103,7 @@ class CliProfileService {
     }
   }
 
-  /// Check if a profile is a relay we manage
+  /// Check if a profile is a station we manage
   bool isManagedRelay(String callsign) {
     final profile = getProfileByCallsign(callsign);
     return profile != null && profile.isRelay;
@@ -278,7 +278,7 @@ class CliProfileService {
     for (final profile in [...ownedRelays, ...ownedClients]) {
       result.add({
         'callsign': profile.callsign,
-        'type': profile.isRelay ? 'relay' : 'client',
+        'type': profile.isRelay ? 'station' : 'client',
         'nickname': profile.nickname,
         'owned': true,
         'active': profile.id == _activeProfileId,
@@ -318,8 +318,8 @@ class CliProfileService {
 
   /// Generate callsign from npub
   static String generateCallsign(String npub, ProfileType type) {
-    if (type == ProfileType.relay) {
-      return NostrKeyGenerator.deriveRelayCallsign(npub);
+    if (type == ProfileType.station) {
+      return NostrKeyGenerator.deriveStationCallsign(npub);
     } else {
       return NostrKeyGenerator.deriveCallsign(npub);
     }
@@ -331,7 +331,7 @@ class CliProfileService {
     String? nickname,
     String? description,
     int? port,
-    String? relayRole,
+    String? stationRole,
     String? parentRelayUrl,
     String? networkId,
   }) async {
@@ -351,7 +351,7 @@ class CliProfileService {
       nsec: keys['nsec']!,
       preferredColor: preferredColor,
       port: port,
-      relayRole: relayRole,
+      stationRole: stationRole,
       parentRelayUrl: parentRelayUrl,
       networkId: networkId,
     );

@@ -127,8 +127,8 @@ class ProfileService {
 
     // Generate callsign with appropriate prefix based on type
     final profileType = type ?? profile.type;
-    if (profileType == ProfileType.relay) {
-      // Relay callsigns start with X3
+    if (profileType == ProfileType.station) {
+      // Station callsigns start with X3
       profile.callsign = 'X3${keys.callsign.substring(2)}';
     } else {
       // Client callsigns start with X1

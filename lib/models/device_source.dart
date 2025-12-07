@@ -4,12 +4,12 @@
  */
 
 /// Represents a device source for chat rooms
-/// Can be the local device, a relay, or a directly connected remote device
+/// Can be the local device, a station, or a directly connected remote device
 class DeviceSource {
   /// Unique identifier for this device source
   final String id;
 
-  /// Display name (e.g., "This Device", relay name, or device callsign)
+  /// Display name (e.g., "This Device", station name, or device callsign)
   final String name;
 
   /// Device callsign (X3 format)
@@ -59,8 +59,8 @@ class DeviceSource {
     );
   }
 
-  /// Create relay device source
-  factory DeviceSource.relay({
+  /// Create station device source
+  factory DeviceSource.station({
     required String id,
     required String name,
     String? callsign,
@@ -73,7 +73,7 @@ class DeviceSource {
       id: id,
       name: name,
       callsign: callsign,
-      type: DeviceSourceType.relay,
+      type: DeviceSourceType.station,
       url: url,
       isOnline: isOnline,
       latency: latency,
@@ -103,8 +103,8 @@ class DeviceSource {
   /// Whether this is the local device
   bool get isLocal => type == DeviceSourceType.local;
 
-  /// Whether this is a relay connection
-  bool get isRelay => type == DeviceSourceType.relay;
+  /// Whether this is a station connection
+  bool get isRelay => type == DeviceSourceType.station;
 
   /// Whether this is a direct P2P connection
   bool get isDirect => type == DeviceSourceType.direct;
@@ -122,7 +122,7 @@ class DeviceSource {
     switch (type) {
       case DeviceSourceType.local:
         return 'smartphone';
-      case DeviceSourceType.relay:
+      case DeviceSourceType.station:
         return 'cell_tower';
       case DeviceSourceType.direct:
         return 'wifi_tethering';
@@ -149,8 +149,8 @@ enum DeviceSourceType {
   /// The local device running this app
   local,
 
-  /// A relay server (internet gateway)
-  relay,
+  /// A station server (internet gateway)
+  station,
 
   /// Direct P2P connection to another device (future)
   direct,

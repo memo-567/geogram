@@ -7,8 +7,8 @@ import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
-import '../services/relay_node_service.dart';
-import '../models/relay_node.dart';
+import '../services/station_node_service.dart';
+import '../models/station_node.dart';
 
 /// Authority role types
 enum AuthorityRole {
@@ -85,16 +85,16 @@ class AuthorityEntry {
   }
 }
 
-/// Page for managing relay authorities (admins, group admins, moderators)
-class RelayAuthoritiesPage extends StatefulWidget {
-  const RelayAuthoritiesPage({super.key});
+/// Page for managing station authorities (admins, group admins, moderators)
+class StationAuthoritiesPage extends StatefulWidget {
+  const StationAuthoritiesPage({super.key});
 
   @override
-  State<RelayAuthoritiesPage> createState() => _RelayAuthoritiesPageState();
+  State<StationAuthoritiesPage> createState() => _RelayAuthoritiesPageState();
 }
 
-class _RelayAuthoritiesPageState extends State<RelayAuthoritiesPage> with SingleTickerProviderStateMixin {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelayAuthoritiesPageState extends State<StationAuthoritiesPage> with SingleTickerProviderStateMixin {
+  final StationNodeService _stationNodeService = StationNodeService();
 
   late TabController _tabController;
   List<AuthorityEntry> _admins = [];
@@ -125,8 +125,8 @@ class _RelayAuthoritiesPageState extends State<RelayAuthoritiesPage> with Single
     });
 
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
-      final authDir = Directory(path.join(relayDir.path, 'authorities'));
+      final stationDir = await _stationNodeService.getStationDirectory();
+      final authDir = Directory(path.join(stationDir.path, 'authorities'));
 
       if (!await authDir.exists()) {
         setState(() {
@@ -219,7 +219,7 @@ class _RelayAuthoritiesPageState extends State<RelayAuthoritiesPage> with Single
 
   @override
   Widget build(BuildContext context) {
-    final node = _relayNodeService.relayNode;
+    final node = _stationNodeService.stationNode;
     final isRoot = node?.isRoot ?? false;
 
     return Scaffold(
@@ -489,18 +489,18 @@ class _RelayAuthoritiesPageState extends State<RelayAuthoritiesPage> with Single
 
   Future<void> _revokeAuthority(AuthorityEntry entry) async {
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
+      final stationDir = await _stationNodeService.getStationDirectory();
       String filePath;
 
       switch (entry.role) {
         case AuthorityRole.admin:
-          filePath = path.join(relayDir.path, 'authorities', 'admins', '${entry.callsign}.txt');
+          filePath = path.join(stationDir.path, 'authorities', 'admins', '${entry.callsign}.txt');
           break;
         case AuthorityRole.groupAdmin:
-          filePath = path.join(relayDir.path, 'authorities', 'group-admins', entry.collectionType!, '${entry.callsign}.txt');
+          filePath = path.join(stationDir.path, 'authorities', 'group-admins', entry.collectionType!, '${entry.callsign}.txt');
           break;
         case AuthorityRole.moderator:
-          filePath = path.join(relayDir.path, 'authorities', 'moderators', entry.collectionType!, '${entry.callsign}.txt');
+          filePath = path.join(stationDir.path, 'authorities', 'moderators', entry.collectionType!, '${entry.callsign}.txt');
           break;
       }
 
@@ -539,18 +539,18 @@ class _RelayAuthoritiesPageState extends State<RelayAuthoritiesPage> with Single
 
   Future<void> _addAuthority(AuthorityEntry entry) async {
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
+      final stationDir = await _stationNodeService.getStationDirectory();
       String dirPath;
 
       switch (entry.role) {
         case AuthorityRole.admin:
-          dirPath = path.join(relayDir.path, 'authorities', 'admins');
+          dirPath = path.join(stationDir.path, 'authorities', 'admins');
           break;
         case AuthorityRole.groupAdmin:
-          dirPath = path.join(relayDir.path, 'authorities', 'group-admins', entry.collectionType!);
+          dirPath = path.join(stationDir.path, 'authorities', 'group-admins', entry.collectionType!);
           break;
         case AuthorityRole.moderator:
-          dirPath = path.join(relayDir.path, 'authorities', 'moderators', entry.collectionType!);
+          dirPath = path.join(stationDir.path, 'authorities', 'moderators', entry.collectionType!);
           break;
       }
 
@@ -732,7 +732,7 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
       return;
     }
 
-    final node = RelayNodeService().relayNode;
+    final node = StationNodeService().stationNode;
 
     final entry = AuthorityEntry(
       callsign: _callsignController.text.trim().toUpperCase(),

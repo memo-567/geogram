@@ -14,17 +14,17 @@ import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'websocket_service.dart';
-import 'relay_service.dart';
+import 'station_service.dart';
 
-/// Result of sending an alert to a relay
+/// Result of sending an alert to a station
 class AlertSendResult {
-  final String relayUrl;
+  final String stationUrl;
   final bool success;
   final String? eventId;
   final String? message;
 
   AlertSendResult({
-    required this.relayUrl,
+    required this.stationUrl,
     required this.success,
     this.eventId,
     this.message,
@@ -32,10 +32,10 @@ class AlertSendResult {
 
   @override
   String toString() =>
-      'AlertSendResult($relayUrl, success: $success, eventId: ${eventId?.substring(0, 8)}...)';
+      'AlertSendResult($stationUrl, success: $success, eventId: ${eventId?.substring(0, 8)}...)';
 }
 
-/// Summary of multi-relay alert sharing
+/// Summary of multi-station alert sharing
 class AlertShareSummary {
   final int confirmed;
   final int failed;
@@ -68,7 +68,7 @@ class AlertSharingService {
   final ProfileService _profileService = ProfileService();
   final SigningService _signingService = SigningService();
   final WebSocketService _webSocketService = WebSocketService();
-  final RelayService _relayService = RelayService();
+  final StationService _stationService = StationService();
 
   /// Sign a report and create a NOSTR alert event
   ///
@@ -137,9 +137,9 @@ class AlertSharingService {
   /// Returns a summary with confirmed/failed/skipped counts.
   /// Confirmed relays are skipped on subsequent calls.
   Future<AlertShareSummary> shareAlert(Report report) async {
-    final relayUrls = getRelayUrls();
-    if (relayUrls.isEmpty) {
-      LogService().log('AlertSharingService: No relays configured');
+    final stationUrls = getRelayUrls();
+    if (stationUrls.isEmpty) {
+      LogService().log('AlertSharingService: No stations configured');
       return AlertShareSummary(
         confirmed: 0,
         failed: 0,
@@ -148,18 +148,18 @@ class AlertSharingService {
       );
     }
 
-    return await shareAlertToRelays(report, relayUrls);
+    return await shareAlertToRelays(report, stationUrls);
   }
 
   /// Share alert to specific relays
   ///
   /// Creates one signed NOSTR event and sends it to all relays.
-  /// Tracks status per relay in the report.
+  /// Tracks status per station in the report.
   Future<AlertShareSummary> shareAlertToRelays(
     Report report,
-    List<String> relayUrls,
+    List<String> stationUrls,
   ) async {
-    if (relayUrls.isEmpty) {
+    if (stationUrls.isEmpty) {
       return AlertShareSummary(
         confirmed: 0,
         failed: 0,
@@ -174,11 +174,11 @@ class AlertSharingService {
       LogService().log('AlertSharingService: Failed to create alert event');
       return AlertShareSummary(
         confirmed: 0,
-        failed: relayUrls.length,
+        failed: stationUrls.length,
         skipped: 0,
-        results: relayUrls
+        results: stationUrls
             .map((url) => AlertSendResult(
-                  relayUrl: url,
+                  stationUrl: url,
                   success: false,
                   message: 'Failed to create event',
                 ))
@@ -191,14 +191,14 @@ class AlertSharingService {
     int failed = 0;
     int skipped = 0;
 
-    // Send to each relay
-    for (final relayUrl in relayUrls) {
-      // Check if already confirmed for this relay
-      if (!report.needsSharingToRelay(relayUrl)) {
-        LogService().log('AlertSharingService: Skipping $relayUrl (already confirmed)');
+    // Send to each station
+    for (final stationUrl in stationUrls) {
+      // Check if already confirmed for this station
+      if (!report.needsSharingToRelay(stationUrl)) {
+        LogService().log('AlertSharingService: Skipping $stationUrl (already confirmed)');
         skipped++;
         results.add(AlertSendResult(
-          relayUrl: relayUrl,
+          stationUrl: stationUrl,
           success: true,
           eventId: event.id,
           message: 'Already confirmed',
@@ -206,8 +206,8 @@ class AlertSharingService {
         continue;
       }
 
-      // Send to relay
-      final result = await sendEventToRelay(event, relayUrl);
+      // Send to station
+      final result = await sendEventToRelay(event, stationUrl);
       results.add(result);
 
       if (result.success) {
@@ -218,7 +218,7 @@ class AlertSharingService {
     }
 
     LogService().log(
-        'AlertSharingService: Shared alert to relays - confirmed: $confirmed, failed: $failed, skipped: $skipped');
+        'AlertSharingService: Shared alert to stations - confirmed: $confirmed, failed: $failed, skipped: $skipped');
 
     return AlertShareSummary(
       confirmed: confirmed,
@@ -276,15 +276,15 @@ class AlertSharingService {
     }
   }
 
-  /// Send a NOSTR event to a specific relay and wait for acknowledgment
+  /// Send a NOSTR event to a specific station and wait for acknowledgment
   Future<AlertSendResult> sendEventToRelay(
     NostrEvent event,
-    String relayUrl, {
+    String stationUrl, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     try {
       LogService().log('═══════════════════════════════════════════════════════');
-      LogService().log('ALERT SEND: Attempting to send alert to $relayUrl');
+      LogService().log('ALERT SEND: Attempting to send alert to $stationUrl');
       LogService().log('  Event ID: ${event.id}');
       LogService().log('  Event Kind: ${event.kind}');
       LogService().log('═══════════════════════════════════════════════════════');
@@ -293,14 +293,14 @@ class AlertSharingService {
       if (eventId == null) {
         LogService().log('ALERT SEND FAILED: Event has no ID');
         return AlertSendResult(
-          relayUrl: relayUrl,
+          stationUrl: stationUrl,
           success: false,
           eventId: null,
           message: 'Event has no ID',
         );
       }
 
-      // Create the NOSTR EVENT message in the format the relay expects
+      // Create the NOSTR EVENT message in the format the station expects
       // Format: {"nostr_event": ["EVENT", {...event object...}]}
       final eventMessage = {
         'nostr_event': ['EVENT', event.toJson()],
@@ -314,29 +314,29 @@ class AlertSharingService {
       );
 
       if (result.success) {
-        LogService().log('ALERT SEND SUCCESS: Relay confirmed receipt');
+        LogService().log('ALERT SEND SUCCESS: Station confirmed receipt');
         LogService().log('  Event ID: $eventId');
         return AlertSendResult(
-          relayUrl: relayUrl,
+          stationUrl: stationUrl,
           success: true,
           eventId: eventId,
-          message: result.message ?? 'Confirmed by relay',
+          message: result.message ?? 'Confirmed by station',
         );
       } else {
-        LogService().log('ALERT SEND FAILED: Relay rejected or no response');
+        LogService().log('ALERT SEND FAILED: Station rejected or no response');
         LogService().log('  Reason: ${result.message}');
         return AlertSendResult(
-          relayUrl: relayUrl,
+          stationUrl: stationUrl,
           success: false,
           eventId: eventId,
-          message: result.message ?? 'Relay rejected event',
+          message: result.message ?? 'Station rejected event',
         );
       }
     } catch (e) {
-      LogService().log('ALERT SEND ERROR: Failed to send to $relayUrl');
+      LogService().log('ALERT SEND ERROR: Failed to send to $stationUrl');
       LogService().log('  Error: $e');
       return AlertSendResult(
-        relayUrl: relayUrl,
+        stationUrl: stationUrl,
         success: false,
         eventId: event.id,
         message: e.toString(),
@@ -344,35 +344,35 @@ class AlertSharingService {
     }
   }
 
-  /// Get configured relay URLs
+  /// Get configured station URLs
   List<String> getRelayUrls() {
-    // Get the preferred relay from RelayService
-    final preferredRelay = _relayService.getPreferredRelay();
+    // Get the preferred station from StationService
+    final preferredStation = _stationService.getPreferredStation();
 
-    if (preferredRelay != null && preferredRelay.url.isNotEmpty) {
-      LogService().log('AlertSharingService: Using preferred relay: ${preferredRelay.url}');
-      return [preferredRelay.url];
+    if (preferredStation != null && preferredStation.url.isNotEmpty) {
+      LogService().log('AlertSharingService: Using preferred station: ${preferredStation.url}');
+      return [preferredStation.url];
     }
 
-    // Fall back to default relay
-    LogService().log('AlertSharingService: No preferred relay, using default wss://p2p.radio');
+    // Fall back to default station
+    LogService().log('AlertSharingService: No preferred station, using default wss://p2p.radio');
     return ['wss://p2p.radio'];
   }
 
-  /// Update relay share status in a report
+  /// Update station share status in a report
   ///
-  /// Returns a new Report with updated relayShares list.
-  Report updateRelayShareStatus(
+  /// Returns a new Report with updated stationShares list.
+  Report updateStationShareStatus(
     Report report,
-    String relayUrl,
-    RelayShareStatusType status, {
+    String stationUrl,
+    StationShareStatusType status, {
     String? nostrEventId,
   }) {
     final now = DateTime.now();
-    final shares = List<RelayShareStatus>.from(report.relayShares);
+    final shares = List<StationShareStatus>.from(report.stationShares);
 
-    // Find existing share for this relay
-    final existingIndex = shares.indexWhere((s) => s.relayUrl == relayUrl);
+    // Find existing share for this station
+    final existingIndex = shares.indexWhere((s) => s.stationUrl == stationUrl);
 
     if (existingIndex >= 0) {
       // Update existing
@@ -382,15 +382,15 @@ class AlertSharingService {
       );
     } else {
       // Add new
-      shares.add(RelayShareStatus(
-        relayUrl: relayUrl,
+      shares.add(StationShareStatus(
+        stationUrl: stationUrl,
         sentAt: now,
         status: status,
       ));
     }
 
     return report.copyWith(
-      relayShares: shares,
+      stationShares: shares,
       nostrEventId: nostrEventId ?? report.nostrEventId,
     );
   }

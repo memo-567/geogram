@@ -1,8 +1,8 @@
-/// Callsign generator for relay mode (X3 callsigns)
+/// Callsign generator for station mode (X3 callsigns)
 class CallsignGenerator {
   /// Derives X3 callsign from npub (deterministic)
   /// Example: npub1qcmh5... → X3QCMH
-  static String deriveRelayCallsign(String npub) {
+  static String deriveStationCallsign(String npub) {
     if (!npub.startsWith('npub1')) return 'X3XXXX';
     final data = npub.substring(5); // Remove 'npub1'
     final chars = data
@@ -13,8 +13,8 @@ class CallsignGenerator {
     return 'X3$chars';
   }
 
-  /// Check if a callsign is a relay callsign (starts with X3)
-  static bool isRelayCallsign(String callsign) {
+  /// Check if a callsign is a station callsign (starts with X3)
+  static bool isStationCallsign(String callsign) {
     return callsign.startsWith('X3') && callsign.length == 6;
   }
 
@@ -30,8 +30,8 @@ class CallsignGenerator {
 
   /// Get callsign type description
   static String getCallsignType(String callsign) {
-    if (isRelayCallsign(callsign)) {
-      return 'Relay (X3)';
+    if (isStationCallsign(callsign)) {
+      return 'Station (X3)';
     }
     return 'Standard';
   }

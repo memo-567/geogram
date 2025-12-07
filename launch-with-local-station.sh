@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Launch Geogram Desktop with Local Relay for testing
-# This script starts both the relay server and desktop app
+# This script starts both the station server and desktop app
 
 set -e
 
@@ -25,26 +25,26 @@ echo ""
 # Determine script directory and derive paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_DIR="$SCRIPT_DIR"
-RELAY_DIR="$(dirname "$SCRIPT_DIR")/geogram-relay"
+RELAY_DIR="$(dirname "$SCRIPT_DIR")/geogram-station"
 
-# Check if relay exists
+# Check if station exists
 if [ ! -d "$RELAY_DIR" ]; then
     echo "Error: Relay directory not found at $RELAY_DIR"
     exit 1
 fi
 
-# Build relay (always rebuild to ensure latest code)
-echo "[1/3] Building relay..."
+# Build station (always rebuild to ensure latest code)
+echo "[1/3] Building station..."
 cd "$RELAY_DIR"
 
 # Check if source is newer than JAR
 NEEDS_BUILD=false
-if [ ! -f "target/geogram-relay-1.0.0.jar" ]; then
+if [ ! -f "target/geogram-station-1.0.0.jar" ]; then
     NEEDS_BUILD=true
     echo "  JAR not found, need to build"
 else
     # Check if any Java source files are newer than the JAR
-    NEWEST_SOURCE=$(find src -name "*.java" -type f -newer target/geogram-relay-1.0.0.jar 2>/dev/null | head -1)
+    NEWEST_SOURCE=$(find src -name "*.java" -type f -newer target/geogram-station-1.0.0.jar 2>/dev/null | head -1)
     if [ ! -z "$NEWEST_SOURCE" ]; then
         NEEDS_BUILD=true
         echo "  Source files changed, need to rebuild"
@@ -63,13 +63,13 @@ else
     echo "✓ Relay already up to date"
 fi
 
-# Check if relay is already running on port 8080
+# Check if station is already running on port 8080
 echo ""
-echo "[2/3] Starting local relay..."
+echo "[2/3] Starting local station..."
 echo "URL: ws://localhost:8080"
 
-# Kill all existing relay processes with multiple methods
-echo "  Checking for existing relay processes..."
+# Kill all existing station processes with multiple methods
+echo "  Checking for existing station processes..."
 
 # Method 1: Kill by port 8080
 EXISTING_PIDS=$(lsof -ti:8080 2>/dev/null || true)
@@ -82,9 +82,9 @@ if [ ! -z "$EXISTING_PIDS" ]; then
 fi
 
 # Method 2: Kill by process name pattern
-RELAY_PIDS=$(pgrep -f "geogram-relay.*\.jar" || true)
+RELAY_PIDS=$(pgrep -f "geogram-station.*\.jar" || true)
 if [ ! -z "$RELAY_PIDS" ]; then
-    echo "  Found relay process(es): $RELAY_PIDS"
+    echo "  Found station process(es): $RELAY_PIDS"
     for PID in $RELAY_PIDS; do
         echo "    Killing PID $PID..."
         kill -9 $PID 2>/dev/null || true
@@ -92,7 +92,7 @@ if [ ! -z "$RELAY_PIDS" ]; then
 fi
 
 # Method 3: Fallback - pkill
-pkill -9 -f "geogram-relay" 2>/dev/null || true
+pkill -9 -f "geogram-station" 2>/dev/null || true
 
 # Wait a moment for processes to die
 sleep 2
@@ -105,22 +105,22 @@ if lsof -ti:8080 >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "  ✓ All relay processes stopped, port 8080 is free"
+echo "  ✓ All station processes stopped, port 8080 is free"
 
 cd "$RELAY_DIR"
-java -jar target/geogram-relay-1.0.0.jar > /tmp/geogram-relay.log 2>&1 &
+java -jar target/geogram-station-1.0.0.jar > /tmp/geogram-station.log 2>&1 &
 RELAY_PID=$!
 echo "✓ Relay started (PID: $RELAY_PID)"
-echo "  Log: tail -f /tmp/geogram-relay.log"
+echo "  Log: tail -f /tmp/geogram-station.log"
 
-# Wait for relay to start
-echo "  Waiting for relay to initialize..."
+# Wait for station to start
+echo "  Waiting for station to initialize..."
 sleep 3
 
-# Check if relay is still running
+# Check if station is still running
 if ! kill -0 $RELAY_PID 2>/dev/null; then
     echo "✗ Relay failed to start. Check log:"
-    tail -20 /tmp/geogram-relay.log
+    tail -20 /tmp/geogram-station.log
     exit 1
 fi
 
@@ -150,7 +150,7 @@ if ! command -v flutter &> /dev/null; then
     echo "  cd $DESKTOP_DIR"
     echo "  /path/to/flutter/bin/flutter run -d linux"
     echo ""
-    echo "The relay is still running at ws://localhost:8080 (PID: $RELAY_PID)"
+    echo "The station is still running at ws://localhost:8080 (PID: $RELAY_PID)"
     echo "To stop it: kill $RELAY_PID"
     exit 1
 fi
@@ -179,7 +179,7 @@ echo "  Running Services"
 echo "=================================================="
 echo ""
 echo "Relay:   ws://localhost:8080 (PID: $RELAY_PID)"
-echo "Logs:    tail -f /tmp/geogram-relay.log"
+echo "Logs:    tail -f /tmp/geogram-station.log"
 echo ""
 echo "Press Ctrl+C to stop both services"
 echo "=================================================="

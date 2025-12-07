@@ -3,63 +3,63 @@
  * License: Apache-2.0
  */
 
-/// Status of relay share for an alert
-enum RelayShareStatusType {
+/// Status of station share for an alert
+enum StationShareStatusType {
   pending,
   confirmed,
   failed;
 
-  static RelayShareStatusType fromString(String value) {
-    return RelayShareStatusType.values.firstWhere(
+  static StationShareStatusType fromString(String value) {
+    return StationShareStatusType.values.firstWhere(
       (e) => e.name == value.toLowerCase(),
-      orElse: () => RelayShareStatusType.pending,
+      orElse: () => StationShareStatusType.pending,
     );
   }
 }
 
-/// Tracks the status of sharing an alert to a specific relay
-class RelayShareStatus {
-  final String relayUrl;
+/// Tracks the status of sharing an alert to a specific station
+class StationShareStatus {
+  final String stationUrl;
   final DateTime sentAt;
-  final RelayShareStatusType status;
+  final StationShareStatusType status;
 
-  RelayShareStatus({
-    required this.relayUrl,
+  StationShareStatus({
+    required this.stationUrl,
     required this.sentAt,
     required this.status,
   });
 
-  /// Parse from text line: "wss://relay.example.com,2025-12-06T10:30:00Z,confirmed"
-  factory RelayShareStatus.fromLine(String line) {
+  /// Parse from text line: "wss://station.example.com,2025-12-06T10:30:00Z,confirmed"
+  factory StationShareStatus.fromLine(String line) {
     final parts = line.split(',');
     if (parts.length >= 3) {
-      return RelayShareStatus(
-        relayUrl: parts[0].trim(),
+      return StationShareStatus(
+        stationUrl: parts[0].trim(),
         sentAt: DateTime.tryParse(parts[1].trim()) ?? DateTime.now(),
-        status: RelayShareStatusType.fromString(parts[2].trim()),
+        status: StationShareStatusType.fromString(parts[2].trim()),
       );
     }
-    throw FormatException('Invalid relay_sent format: $line');
+    throw FormatException('Invalid station_sent format: $line');
   }
 
   /// Export to text line
-  String toLine() => '$relayUrl,${sentAt.toUtc().toIso8601String()},${status.name}';
+  String toLine() => '$stationUrl,${sentAt.toUtc().toIso8601String()},${status.name}';
 
   /// Create copy with updated status
-  RelayShareStatus copyWith({
-    String? relayUrl,
+  StationShareStatus copyWith({
+    String? stationUrl,
     DateTime? sentAt,
-    RelayShareStatusType? status,
+    StationShareStatusType? status,
   }) {
-    return RelayShareStatus(
-      relayUrl: relayUrl ?? this.relayUrl,
+    return StationShareStatus(
+      stationUrl: stationUrl ?? this.stationUrl,
       sentAt: sentAt ?? this.sentAt,
       status: status ?? this.status,
     );
   }
 
   @override
-  String toString() => 'RelayShareStatus($relayUrl, ${status.name})';
+  String toString() => 'StationShareStatus($stationUrl, ${status.name})';
 }
 
 /// Severity levels for reports
@@ -132,7 +132,7 @@ class Report {
   final Map<String, String> titles;
   final Map<String, String> descriptions;
   final Map<String, String> metadata;
-  final List<RelayShareStatus> relayShares;
+  final List<StationShareStatus> stationShares;
   final String? nostrEventId;
 
   Report({
@@ -164,7 +164,7 @@ class Report {
     this.titles = const {},
     this.descriptions = const {},
     this.metadata = const {},
-    this.relayShares = const [],
+    this.stationShares = const [],
     this.nostrEventId,
   });
 
@@ -268,34 +268,34 @@ class Report {
     return subscribers.contains(npub);
   }
 
-  /// Check if alert has been shared to any relay
-  bool get isSharedToRelays => relayShares.isNotEmpty;
+  /// Check if alert has been shared to any station
+  bool get isSharedToStations => stationShares.isNotEmpty;
 
-  /// Check if alert has been shared to a specific relay
-  bool isSharedToRelay(String relayUrl) {
-    return relayShares.any((s) => s.relayUrl == relayUrl);
+  /// Check if alert has been shared to a specific station
+  bool isSharedToRelay(String stationUrl) {
+    return stationShares.any((s) => s.stationUrl == stationUrl);
   }
 
-  /// Check if alert needs sharing to a specific relay (not confirmed)
-  bool needsSharingToRelay(String relayUrl) {
-    final share = relayShares.where((s) => s.relayUrl == relayUrl).firstOrNull;
+  /// Check if alert needs sharing to a specific station (not confirmed)
+  bool needsSharingToRelay(String stationUrl) {
+    final share = stationShares.where((s) => s.stationUrl == stationUrl).firstOrNull;
     if (share == null) return true;
-    return share.status != RelayShareStatusType.confirmed;
+    return share.status != StationShareStatusType.confirmed;
   }
 
-  /// Get share status for a specific relay
-  RelayShareStatus? getRelayShareStatus(String relayUrl) {
-    return relayShares.where((s) => s.relayUrl == relayUrl).firstOrNull;
+  /// Get share status for a specific station
+  StationShareStatus? getRelayShareStatus(String stationUrl) {
+    return stationShares.where((s) => s.stationUrl == stationUrl).firstOrNull;
   }
 
   /// Get count of confirmed relays
   int get confirmedRelayCount {
-    return relayShares.where((s) => s.status == RelayShareStatusType.confirmed).length;
+    return stationShares.where((s) => s.status == StationShareStatusType.confirmed).length;
   }
 
   /// Get count of failed relays
   int get failedRelayCount {
-    return relayShares.where((s) => s.status == RelayShareStatusType.failed).length;
+    return stationShares.where((s) => s.status == StationShareStatusType.failed).length;
   }
 
   /// Parse report from text
@@ -349,7 +349,7 @@ class Report {
     List<String> likedBy = [];
     int likeCount = 0;
     Map<String, String> metadata = {};
-    List<RelayShareStatus> relayShares = [];
+    List<StationShareStatus> stationShares = [];
     String? nostrEventId;
 
     int contentStart = headerEnd;
@@ -412,12 +412,12 @@ class Report {
         if (colonIndex > 0) {
           final key = metaLine.substring(0, colonIndex).trim();
           final value = metaLine.substring(colonIndex + 1).trim();
-          // Handle special relay sharing metadata
-          if (key == 'relay_sent') {
+          // Handle special station sharing metadata
+          if (key == 'station_sent') {
             try {
-              relayShares.add(RelayShareStatus.fromLine(value));
+              stationShares.add(StationShareStatus.fromLine(value));
             } catch (_) {
-              // Ignore malformed relay_sent entries
+              // Ignore malformed station_sent entries
             }
           } else if (key == 'nostr_event_id') {
             nostrEventId = value;
@@ -466,7 +466,7 @@ class Report {
       }
     }
 
-    // Parse trailing metadata after descriptions (npub, signature, relay_sent, nostr_event_id)
+    // Parse trailing metadata after descriptions (npub, signature, station_sent, nostr_event_id)
     for (int i = metadataStart; i < lines.length; i++) {
       final line = lines[i];
       if (line.startsWith('-->')) {
@@ -475,12 +475,12 @@ class Report {
         if (colonIndex > 0) {
           final key = metaLine.substring(0, colonIndex).trim();
           final value = metaLine.substring(colonIndex + 1).trim();
-          // Handle special relay sharing metadata
-          if (key == 'relay_sent') {
+          // Handle special station sharing metadata
+          if (key == 'station_sent') {
             try {
-              relayShares.add(RelayShareStatus.fromLine(value));
+              stationShares.add(StationShareStatus.fromLine(value));
             } catch (_) {
-              // Ignore malformed relay_sent entries
+              // Ignore malformed station_sent entries
             }
           } else if (key == 'nostr_event_id') {
             nostrEventId = value;
@@ -525,7 +525,7 @@ class Report {
       titles: titles,
       descriptions: descriptions,
       metadata: metadata,
-      relayShares: relayShares,
+      stationShares: stationShares,
       nostrEventId: nostrEventId,
     );
   }
@@ -631,12 +631,12 @@ class Report {
       buffer.writeln('--> signature: $sig');
     }
 
-    // Relay sharing metadata (after signature)
+    // Station sharing metadata (after signature)
     if (nostrEventId != null && nostrEventId!.isNotEmpty) {
       buffer.writeln('--> nostr_event_id: $nostrEventId');
     }
-    for (final share in relayShares) {
-      buffer.writeln('--> relay_sent: ${share.toLine()}');
+    for (final share in stationShares) {
+      buffer.writeln('--> station_sent: ${share.toLine()}');
     }
 
     return buffer.toString();
@@ -672,7 +672,7 @@ class Report {
     Map<String, String>? titles,
     Map<String, String>? descriptions,
     Map<String, String>? metadata,
-    List<RelayShareStatus>? relayShares,
+    List<StationShareStatus>? stationShares,
     String? nostrEventId,
   }) {
     return Report(
@@ -704,7 +704,7 @@ class Report {
       titles: titles ?? this.titles,
       descriptions: descriptions ?? this.descriptions,
       metadata: metadata ?? this.metadata,
-      relayShares: relayShares ?? this.relayShares,
+      stationShares: stationShares ?? this.stationShares,
       nostrEventId: nostrEventId ?? this.nostrEventId,
     );
   }

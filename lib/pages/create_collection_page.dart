@@ -734,7 +734,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
       case 'news':
         return 'Share news and announcements with your network. Keep your community informed about updates and important information.';
       case 'www':
-        return 'Host a personal website with full HTML, CSS, and JavaScript support. Accessible via your relay URL.';
+        return 'Host a personal website with full HTML, CSS, and JavaScript support. Accessible via your station URL.';
       case 'postcards':
         return 'Send and receive digital postcards with images and personal messages. A fun way to share memories and greetings.';
       case 'contacts':
@@ -747,8 +747,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Receive and manage alerts and notifications. Stay informed about important updates and events in your network.';
       case 'groups':
         return 'Organize people into groups for easier management and communication. Create teams or interest groups.';
-      case 'relay':
-        return 'Relay configuration for network communication settings. Manage how your node connects to the network.';
+      case 'station':
+        return 'Station configuration for network communication settings. Manage how your node connects to the network.';
       default:
         return '';
     }
@@ -810,7 +810,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return [
           'Full web hosting',
           'Custom HTML/CSS/JS',
-          'Accessible at relay-url/callsign',
+          'Accessible at station-url/callsign',
         ];
       case 'postcards':
         return [
@@ -852,7 +852,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Group roles',
           'Bulk actions',
         ];
-      case 'relay':
+      case 'station':
         return [
           'Connection settings',
           'Peer management',

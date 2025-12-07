@@ -7,10 +7,10 @@ import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
-import '../services/relay_node_service.dart';
+import '../services/station_node_service.dart';
 
-/// Log types for relay
-enum RelayLogType {
+/// Log types for station
+enum StationLogType {
   connections,
   moderation,
   sync,
@@ -54,16 +54,16 @@ class RelayLogEntry {
   }
 }
 
-/// Page for viewing relay logs
-class RelayLogsPage extends StatefulWidget {
-  const RelayLogsPage({super.key});
+/// Page for viewing station logs
+class StationLogsPage extends StatefulWidget {
+  const StationLogsPage({super.key});
 
   @override
-  State<RelayLogsPage> createState() => _RelayLogsPageState();
+  State<StationLogsPage> createState() => _RelayLogsPageState();
 }
 
-class _RelayLogsPageState extends State<RelayLogsPage> with SingleTickerProviderStateMixin {
-  final RelayNodeService _relayNodeService = RelayNodeService();
+class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProviderStateMixin {
+  final StationNodeService _stationNodeService = StationNodeService();
 
   late TabController _tabController;
   List<RelayLogEntry> _connectionLogs = [];
@@ -96,8 +96,8 @@ class _RelayLogsPageState extends State<RelayLogsPage> with SingleTickerProvider
     });
 
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
-      final logsDir = Directory(path.join(relayDir.path, 'logs'));
+      final stationDir = await _stationNodeService.getStationDirectory();
+      final logsDir = Directory(path.join(stationDir.path, 'logs'));
 
       if (!await logsDir.exists()) {
         setState(() {
@@ -145,7 +145,7 @@ class _RelayLogsPageState extends State<RelayLogsPage> with SingleTickerProvider
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Relay Logs'),
+        title: Text('Station Logs'),
         actions: [
           IconButton(
             icon: Icon(Icons.refresh),
@@ -349,7 +349,7 @@ class _RelayLogsPageState extends State<RelayLogsPage> with SingleTickerProvider
       context: context,
       builder: (context) => AlertDialog(
         title: Text('Clear Logs?'),
-        content: Text('This will delete all relay logs. This cannot be undone.'),
+        content: Text('This will delete all station logs. This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -367,8 +367,8 @@ class _RelayLogsPageState extends State<RelayLogsPage> with SingleTickerProvider
     if (confirm != true) return;
 
     try {
-      final relayDir = await _relayNodeService.getRelayDirectory();
-      final logsDir = Directory(path.join(relayDir.path, 'logs'));
+      final stationDir = await _stationNodeService.getStationDirectory();
+      final logsDir = Directory(path.join(stationDir.path, 'logs'));
 
       if (await logsDir.exists()) {
         for (final file in logsDir.listSync()) {

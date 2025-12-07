@@ -116,7 +116,7 @@ class ChatRoomDeletedEvent extends AppEvent {
   ChatRoomDeletedEvent({required this.roomId});
 }
 
-/// Client connected to relay
+/// Client connected to station
 class ClientConnectedEvent extends AppEvent {
   final String clientId;
   final String? callsign;
@@ -129,7 +129,7 @@ class ClientConnectedEvent extends AppEvent {
   });
 }
 
-/// Client disconnected from relay
+/// Client disconnected from station
 class ClientDisconnectedEvent extends AppEvent {
   final String clientId;
   final String? callsign;
@@ -140,21 +140,21 @@ class ClientDisconnectedEvent extends AppEvent {
   });
 }
 
-/// Relay server started
-class RelayStartedEvent extends AppEvent {
+/// Station server started
+class StationStartedEvent extends AppEvent {
   final int httpPort;
   final int? httpsPort;
   final String callsign;
 
-  RelayStartedEvent({
+  StationStartedEvent({
     required this.httpPort,
     this.httpsPort,
     required this.callsign,
   });
 }
 
-/// Relay server stopped
-class RelayStoppedEvent extends AppEvent {}
+/// Station server stopped
+class StationStoppedEvent extends AppEvent {}
 
 /// Profile changed
 class ProfileChangedEvent extends AppEvent {

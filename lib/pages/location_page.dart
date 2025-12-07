@@ -309,7 +309,7 @@ class _LocationPageState extends State<LocationPage> {
                               return TileLayer(
                                 urlTemplate: _mapTileService.getTileUrl(layerType),
                                 userAgentPackageName: 'dev.geogram.geogram_desktop',
-                                subdomains: const [], // No subdomains for relay/OSM
+                                subdomains: const [], // No subdomains for station/OSM
                                 tileProvider: _mapTileService.getTileProvider(layerType),
                                 errorTileCallback: (tile, error, stackTrace) {
                                   // Map tiles failed to load - probably offline

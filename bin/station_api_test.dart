@@ -1,8 +1,8 @@
 #!/usr/bin/env dart
-/// Comprehensive API endpoint tests for PureRelayServer
+/// Comprehensive API endpoint tests for PureStationServer
 ///
 /// This test suite:
-/// - Launches a relay server on port 45689
+/// - Launches a station server on port 45689
 /// - Creates dummy data (chat rooms, messages)
 /// - Tests all HTTP API endpoints
 /// - Tests WebSocket connectivity and messages
@@ -15,13 +15,13 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-import '../lib/cli/pure_relay.dart';
+import '../lib/cli/pure_station.dart';
 import '../lib/cli/pure_storage_config.dart';
 
 const int TEST_PORT = 45689;
 const String BASE_URL = 'http://localhost:$TEST_PORT';
 
-// Relay callsign - set dynamically after initialization
+// Station callsign - set dynamically after initialization
 late String RELAY_CALLSIGN;
 
 // Test results tracking
@@ -43,14 +43,14 @@ void fail(String test, String reason) {
 Future<void> main() async {
   print('');
   print('=' * 60);
-  print('Geogram Desktop Relay API Test Suite');
+  print('Geogram Desktop Station API Test Suite');
   print('=' * 60);
   print('');
   print('Test server port: $TEST_PORT');
   print('');
 
   // Setup temp directory for test data
-  final tempDir = await Directory.systemTemp.createTemp('geogram_relay_test_');
+  final tempDir = await Directory.systemTemp.createTemp('geogram_station_test_');
   print('Using temp directory: ${tempDir.path}');
 
   try {
@@ -58,30 +58,30 @@ Future<void> main() async {
     PureStorageConfig().reset();
     await PureStorageConfig().init(customBaseDir: tempDir.path);
 
-    // Create and initialize the relay server
-    final relay = PureRelayServer();
-    relay.quietMode = true; // Suppress log output during tests
-    await relay.initialize();
+    // Create and initialize the station server
+    final station = PureStationServer();
+    station.quietMode = true; // Suppress log output during tests
+    await station.initialize();
 
-    // Configure relay settings
-    relay.setSetting('httpPort', TEST_PORT);
-    relay.setSetting('description', 'Test Relay Server');
+    // Configure station settings
+    station.setSetting('httpPort', TEST_PORT);
+    station.setSetting('description', 'Test Station Server');
 
-    // Get the relay callsign (derived from npub)
-    RELAY_CALLSIGN = relay.settings.callsign;
-    print('Relay callsign: $RELAY_CALLSIGN');
+    // Get the station callsign (derived from npub)
+    RELAY_CALLSIGN = station.settings.callsign;
+    print('Station callsign: $RELAY_CALLSIGN');
 
     // Start the server
-    final started = await relay.start();
+    final started = await station.start();
     if (!started) {
-      print('ERROR: Failed to start relay server on port $TEST_PORT');
+      print('ERROR: Failed to start station server on port $TEST_PORT');
       exit(1);
     }
-    print('Relay server started on port $TEST_PORT');
+    print('Station server started on port $TEST_PORT');
     print('');
 
     // Create test data
-    await _createTestData(relay);
+    await _createTestData(station);
 
     // Wait for server to be fully ready
     await Future.delayed(const Duration(milliseconds: 500));
@@ -101,14 +101,14 @@ Future<void> main() async {
     await _testPostChatMessage();
     await _testRelaySendEndpoint();
     await _testGroupsEndpoint();
-    await _testAcmeChallengeEndpoint(relay);
+    await _testAcmeChallengeEndpoint(station);
     await _testCorsHeaders();
     await _testOptionsRequest();
     await _test404Endpoint();
     await _testWebSocketConnection();
 
     // Stop the server
-    await relay.stop();
+    await station.stop();
 
     // Test persistence - this requires a full server restart
     await _testChatPersistence(tempDir.path);
@@ -145,21 +145,21 @@ Future<void> main() async {
   }
 }
 
-Future<void> _createTestData(PureRelayServer relay) async {
+Future<void> _createTestData(PureStationServer station) async {
   print('Creating test data...');
 
   // Create additional chat rooms
-  relay.createChatRoom('tech', 'Technology', description: 'Tech discussions');
-  relay.createChatRoom('random', 'Random', description: 'Off-topic chat');
+  station.createChatRoom('tech', 'Technology', description: 'Tech discussions');
+  station.createChatRoom('random', 'Random', description: 'Off-topic chat');
 
   // Add messages to general room
-  relay.postMessage('general', 'Hello from test!');
-  relay.postMessage('general', 'This is a test message.');
-  relay.postMessage('general', 'Testing the relay API.');
+  station.postMessage('general', 'Hello from test!');
+  station.postMessage('general', 'This is a test message.');
+  station.postMessage('general', 'Testing the station API.');
 
   // Add messages to tech room
-  relay.postMessage('tech', 'Dart is great!');
-  relay.postMessage('tech', 'Flutter rocks!');
+  station.postMessage('tech', 'Dart is great!');
+  station.postMessage('tech', 'Flutter rocks!');
 
   print('Test data created: 3 chat rooms, 5 messages');
   print('');
@@ -176,7 +176,7 @@ Future<void> _testRootEndpoint() async {
     if (response.statusCode == 200) {
       if (response.body.contains('Geogram') &&
           response.body.contains(RELAY_CALLSIGN)) {
-        pass('Root endpoint returns HTML with relay info');
+        pass('Root endpoint returns HTML with station info');
       } else {
         fail('Root endpoint', 'HTML missing expected content');
       }
@@ -198,7 +198,7 @@ Future<void> _testStatusEndpoint() async {
       // Check required fields
       final hasCallsign = data['callsign'] == RELAY_CALLSIGN;
       final hasVersion = data['version'] != null;
-      final hasRelayMode = data['relay_mode'] == true;
+      final hasRelayMode = data['station_mode'] == true;
       final hasConnectedDevices = data.containsKey('connected_devices');
       final hasUptime = data.containsKey('uptime');
       final hasChatRooms = data['chat_rooms'] == 3;
@@ -223,34 +223,34 @@ Future<void> _testStatusEndpoint() async {
 }
 
 Future<void> _testRelayStatusEndpoint() async {
-  print('Testing GET /relay/status...');
+  print('Testing GET /station/status...');
   try {
-    final response = await http.get(Uri.parse('$BASE_URL/relay/status'));
+    final response = await http.get(Uri.parse('$BASE_URL/station/status'));
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
       final hasDevices = data.containsKey('devices');
-      final hasRelays = data.containsKey('relays');
+      final hasRelays = data.containsKey('stations');
       final hasConnectedDevices = data.containsKey('connected_devices');
-      final hasConnectedRelays = data.containsKey('connected_relays');
+      final hasConnectedRelays = data.containsKey('connected_stations');
 
       if (hasDevices && hasRelays && hasConnectedDevices && hasConnectedRelays) {
-        pass('Relay status endpoint returns device/relay lists');
+        pass('Station status endpoint returns device/station lists');
       } else {
-        fail('Relay status endpoint', 'Missing required fields');
+        fail('Station status endpoint', 'Missing required fields');
       }
 
       // With no connected devices, counts should be 0
-      if (data['connected_devices'] == 0 && data['connected_relays'] == 0) {
-        pass('Relay status shows 0 connected (correct for test)');
+      if (data['connected_devices'] == 0 && data['connected_stations'] == 0) {
+        pass('Station status shows 0 connected (correct for test)');
       } else {
-        fail('Relay status counts', 'Expected 0 devices/relays');
+        fail('Station status counts', 'Expected 0 devices/stations');
       }
     } else {
-      fail('Relay status endpoint', 'HTTP ${response.statusCode}');
+      fail('Station status endpoint', 'HTTP ${response.statusCode}');
     }
   } catch (e) {
-    fail('Relay status endpoint', 'Error: $e');
+    fail('Station status endpoint', 'Error: $e');
   }
 }
 
@@ -388,7 +388,7 @@ Future<void> _testChatRoomsEndpoint() async {
       }
 
       if (data['callsign'] == RELAY_CALLSIGN) {
-        pass('Chat rooms includes relay callsign');
+        pass('Chat rooms includes station callsign');
       } else {
         fail('Chat rooms callsign', 'Missing or incorrect callsign: got ${data['callsign']}, expected $RELAY_CALLSIGN');
       }
@@ -465,10 +465,10 @@ Future<void> _testChatFilesEndpoint() async {
         fail('Chat files room_id', 'Expected "general", got ${data['room_id']}');
       }
 
-      if (data.containsKey('relay') && data['relay'] == RELAY_CALLSIGN) {
-        pass('Chat files endpoint returns relay callsign');
+      if (data.containsKey('station') && data['station'] == RELAY_CALLSIGN) {
+        pass('Chat files endpoint returns station callsign');
       } else {
-        fail('Chat files relay', 'Missing or incorrect relay callsign');
+        fail('Chat files station', 'Missing or incorrect station callsign');
       }
 
       if (data.containsKey('files') && data['files'] is List) {
@@ -708,14 +708,14 @@ Future<void> _testPostChatMessage() async {
 }
 
 Future<void> _testRelaySendEndpoint() async {
-  print('Testing POST /api/relay/send...');
+  print('Testing POST /api/station/send...');
   try {
     final response = await http.post(
-      Uri.parse('$BASE_URL/api/relay/send'),
+      Uri.parse('$BASE_URL/api/station/send'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'room': 'tech',
-        'content': 'Message from relay',
+        'content': 'Message from station',
         'callsign': RELAY_CALLSIGN,
       }),
     );
@@ -723,27 +723,27 @@ Future<void> _testRelaySendEndpoint() async {
     if (response.statusCode == 201) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (data['success'] == true && data['room'] == 'tech') {
-        pass('Relay send endpoint works');
+        pass('Station send endpoint works');
       } else {
-        fail('Relay send', 'Incorrect response');
+        fail('Station send', 'Incorrect response');
       }
     } else {
-      fail('Relay send endpoint', 'HTTP ${response.statusCode}');
+      fail('Station send endpoint', 'HTTP ${response.statusCode}');
     }
 
     // Test missing content
     final response2 = await http.post(
-      Uri.parse('$BASE_URL/api/relay/send'),
+      Uri.parse('$BASE_URL/api/station/send'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'room': 'tech'}),
     );
     if (response2.statusCode == 400) {
-      pass('Relay send returns 400 without content');
+      pass('Station send returns 400 without content');
     } else {
-      fail('Relay send no content', 'Expected 400');
+      fail('Station send no content', 'Expected 400');
     }
   } catch (e) {
-    fail('Relay send endpoint', 'Error: $e');
+    fail('Station send endpoint', 'Error: $e');
   }
 }
 
@@ -754,8 +754,8 @@ Future<void> _testGroupsEndpoint() async {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-      if (data['relay'] == RELAY_CALLSIGN && data.containsKey('groups')) {
-        pass('Groups endpoint returns relay info');
+      if (data['station'] == RELAY_CALLSIGN && data.containsKey('groups')) {
+        pass('Groups endpoint returns station info');
       } else {
         fail('Groups endpoint', 'Missing required fields');
       }
@@ -785,11 +785,11 @@ Future<void> _testGroupsEndpoint() async {
   }
 }
 
-Future<void> _testAcmeChallengeEndpoint(PureRelayServer relay) async {
+Future<void> _testAcmeChallengeEndpoint(PureStationServer station) async {
   print('Testing GET /.well-known/acme-challenge/{token}...');
   try {
     // Set a test challenge
-    relay.setAcmeChallenge('test-token-123', 'test-response-456');
+    station.setAcmeChallenge('test-token-123', 'test-response-456');
 
     final response = await http.get(
       Uri.parse('$BASE_URL/.well-known/acme-challenge/test-token-123'),
@@ -811,7 +811,7 @@ Future<void> _testAcmeChallengeEndpoint(PureRelayServer relay) async {
     }
 
     // Clean up
-    relay.clearAcmeChallenge('test-token-123');
+    station.clearAcmeChallenge('test-token-123');
   } catch (e) {
     fail('ACME challenge endpoint', 'Error: $e');
   }
@@ -930,7 +930,7 @@ Future<void> _testWebSocketConnection() async {
 
     if (helloResponse['type'] == 'hello_response' &&
         helloResponse['callsign'] == RELAY_CALLSIGN &&
-        helloResponse['server'] == 'geogram-desktop-relay') {
+        helloResponse['server'] == 'geogram-desktop-station') {
       pass('WebSocket hello/hello_response works');
     } else if (helloResponse.isEmpty) {
       fail('WebSocket hello', 'Timeout waiting for response');
@@ -971,7 +971,7 @@ Future<void> _testWebSocketConnection() async {
 
     if (registerResponse['type'] == 'REGISTER_ACK' &&
         registerResponse['success'] == true &&
-        registerResponse['relay_callsign'] == RELAY_CALLSIGN) {
+        registerResponse['station_callsign'] == RELAY_CALLSIGN) {
       pass('WebSocket REGISTER works');
     } else if (registerResponse.isEmpty) {
       fail('WebSocket REGISTER', 'Timeout waiting for ACK');
@@ -1100,24 +1100,24 @@ Future<void> _testChatPersistence(String tempDirPath) async {
     return;
   }
 
-  // Step 2: Start a NEW relay server and verify messages are loaded
-  print('  Starting new relay server to verify persistence...');
+  // Step 2: Start a NEW station server and verify messages are loaded
+  print('  Starting new station server to verify persistence...');
 
   PureStorageConfig().reset();
   await PureStorageConfig().init(customBaseDir: tempDirPath);
 
-  final relay2 = PureRelayServer();
-  relay2.quietMode = true;
-  await relay2.initialize();
+  final station2 = PureStationServer();
+  station2.quietMode = true;
+  await station2.initialize();
 
-  relay2.setSetting('httpPort', TEST_PORT);
+  station2.setSetting('httpPort', TEST_PORT);
 
-  final started = await relay2.start();
+  final started = await station2.start();
   if (!started) {
-    fail('Relay restart', 'Failed to start second relay instance');
+    fail('Station restart', 'Failed to start second station instance');
     return;
   }
-  pass('Second relay instance started');
+  pass('Second station instance started');
 
   await Future.delayed(const Duration(milliseconds: 500));
 
@@ -1208,6 +1208,6 @@ Future<void> _testChatPersistence(String tempDirPath) async {
     fail('Persistence verification', 'Error: $e');
   }
 
-  await relay2.stop();
-  pass('Second relay stopped cleanly');
+  await station2.stop();
+  pass('Second station stopped cleanly');
 }

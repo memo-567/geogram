@@ -1,31 +1,31 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../models/relay.dart';
-import '../services/relay_service.dart';
+import '../models/station.dart';
+import '../services/station_service.dart';
 import '../services/log_service.dart';
-import '../services/relay_discovery_service.dart';
+import '../services/station_discovery_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 
-class RelaysPage extends StatefulWidget {
-  const RelaysPage({super.key});
+class StationsPage extends StatefulWidget {
+  const StationsPage({super.key});
 
   @override
-  State<RelaysPage> createState() => _RelaysPageState();
+  State<StationsPage> createState() => _RelaysPageState();
 }
 
-class _RelaysPageState extends State<RelaysPage> {
-  final RelayService _relayService = RelayService();
+class _RelaysPageState extends State<StationsPage> {
+  final StationService _stationService = StationService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
-  List<Relay> _allRelays = [];
+  List<Station> _allStations = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadRelays();
+    _loadStations();
     _ensureUserLocation();
   }
 
@@ -53,7 +53,7 @@ class _RelaysPageState extends State<RelaysPage> {
         LogService().log('User location auto-detected and saved: ${location['lat']}, ${location['lon']}');
 
         // Reload relays to show distances
-        _loadRelays();
+        _loadStations();
       } else {
         LogService().log('Unable to auto-detect user location (offline?)');
       }
@@ -91,18 +91,18 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  Future<void> _loadRelays() async {
+  Future<void> _loadStations() async {
     setState(() => _isLoading = true);
 
     try {
-      final relays = _relayService.getAllRelays();
+      final stations = _stationService.getAllStations();
       setState(() {
-        _allRelays = relays;
+        _allStations = stations;
         _isLoading = false;
       });
-      LogService().log('Loaded ${relays.length} relays');
+      LogService().log('Loaded ${stations.length} stations');
     } catch (e) {
-      LogService().log('Error loading relays: $e');
+      LogService().log('Error loading stations: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -115,11 +115,11 @@ class _RelaysPageState extends State<RelaysPage> {
 
     if (result != null) {
       try {
-        // Auto-set as preferred if this is the first relay
-        final existingRelays = _relayService.getAllRelays();
+        // Auto-set as preferred if this is the first station
+        final existingRelays = _stationService.getAllStations();
         final isFirstRelay = existingRelays.isEmpty;
 
-        final relay = Relay(
+        final station = Station(
           url: result['url']!,
           name: result['name']!,
           callsign: result['callsign'],
@@ -130,32 +130,32 @@ class _RelaysPageState extends State<RelaysPage> {
           longitude: result['longitude'] != null ? double.tryParse(result['longitude']!) : null,
         );
 
-        final added = await _relayService.addRelay(relay);
+        final added = await _stationService.addStation(station);
 
         if (mounted) {
           if (added) {
             final message = isFirstRelay
-                ? 'Added ${relay.name} as preferred relay'
-                : _i18n.t('added_relay', params: [relay.name]);
+                ? 'Added ${station.name} as preferred station'
+                : _i18n.t('added_station', params: [station.name]);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(message)),
             );
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Relay already exists: ${relay.name}'),
+                content: Text('Station already exists: ${station.name}'),
                 backgroundColor: Colors.orange,
               ),
             );
           }
         }
 
-        await _loadRelays();
+        await _loadStations();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_i18n.t('error_adding_relay', params: [e.toString()])),
+              content: Text(_i18n.t('error_adding_station', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -164,13 +164,13 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  Future<void> _setPreferred(Relay relay) async {
+  Future<void> _setPreferred(Station station) async {
     try {
-      await _relayService.setPreferred(relay.url);
+      await _stationService.setPreferred(station.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('set_preferred_success', params: [relay.name]))),
+        SnackBar(content: Text(_i18n.t('set_preferred_success', params: [station.name]))),
       );
-      _loadRelays();
+      _loadStations();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -181,13 +181,13 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  Future<void> _setBackup(Relay relay) async {
+  Future<void> _setBackup(Station station) async {
     try {
-      await _relayService.setBackup(relay.url);
+      await _stationService.setBackup(station.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('added_to_backup', params: [relay.name]))),
+        SnackBar(content: Text(_i18n.t('added_to_backup', params: [station.name]))),
       );
-      _loadRelays();
+      _loadStations();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -198,13 +198,13 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  Future<void> _setAvailable(Relay relay) async {
+  Future<void> _setAvailable(Station station) async {
     try {
-      await _relayService.setAvailable(relay.url);
+      await _stationService.setAvailable(station.url);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('removed_from_selection', params: [relay.name]))),
+        SnackBar(content: Text(_i18n.t('removed_from_selection', params: [station.name]))),
       );
-      _loadRelays();
+      _loadStations();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -215,12 +215,12 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  Future<void> _deleteRelay(Relay relay) async {
+  Future<void> _deleteStation(Station station) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(_i18n.t('delete_relay')),
-        content: Text(_i18n.t('delete_relay_confirm', params: [relay.name])),
+        title: Text(_i18n.t('delete_station')),
+        content: Text(_i18n.t('delete_station_confirm', params: [station.name])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -237,18 +237,18 @@ class _RelaysPageState extends State<RelaysPage> {
 
     if (confirmed == true) {
       try {
-        await _relayService.deleteRelay(relay.url);
+        await _stationService.deleteStation(station.url);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('deleted_relay', params: [relay.name]))),
+            SnackBar(content: Text(_i18n.t('deleted_station', params: [station.name]))),
           );
         }
-        _loadRelays();
+        _loadStations();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_i18n.t('error_deleting_relay', params: [e.toString()])),
+              content: Text(_i18n.t('error_deleting_station', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -261,8 +261,8 @@ class _RelaysPageState extends State<RelaysPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(_i18n.t('clear_all_relays_title')),
-        content: Text(_i18n.t('clear_all_relays_confirm')),
+        title: Text(_i18n.t('clear_all_stations_title')),
+        content: Text(_i18n.t('clear_all_stations_confirm')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -282,21 +282,21 @@ class _RelaysPageState extends State<RelaysPage> {
 
     if (confirmed == true) {
       try {
-        final relays = _relayService.getAllRelays();
-        for (var relay in relays) {
-          await _relayService.deleteRelay(relay.url);
+        final stations = _stationService.getAllStations();
+        for (var station in stations) {
+          await _stationService.deleteStation(station.url);
         }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('all_relays_cleared'))),
+            SnackBar(content: Text(_i18n.t('all_stations_cleared'))),
           );
         }
-        _loadRelays();
+        _loadStations();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_i18n.t('error_clearing_relays', params: [e.toString()])),
+              content: Text(_i18n.t('error_clearing_stations', params: [e.toString()])),
               backgroundColor: Colors.red,
             ),
           );
@@ -310,35 +310,35 @@ class _RelaysPageState extends State<RelaysPage> {
       context: context,
       barrierDismissible: false,
       builder: (context) => _NetworkScanDialog(
-        relayService: _relayService,
+        stationService: _stationService,
         i18n: _i18n,
       ),
     );
 
     if (results != null && results.isNotEmpty) {
-      _loadRelays();
+      _loadStations();
     }
   }
 
-  Future<void> _testConnection(Relay relay) async {
+  Future<void> _testConnection(Station station) async {
     // Show loading indicator
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(_i18n.t('connecting_to_relay', params: [relay.name])),
+        content: Text(_i18n.t('connecting_to_station', params: [station.name])),
         duration: const Duration(seconds: 2),
       ),
     );
 
     try {
       // Use new connectRelay method with hello handshake
-      final success = await _relayService.connectRelay(relay.url);
-      _loadRelays();
+      final success = await _stationService.connectRelay(station.url);
+      _loadStations();
 
       if (mounted) {
         if (success) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_i18n.t('connected_success', params: [relay.name])),
+              content: Text(_i18n.t('connected_success', params: [station.name])),
               backgroundColor: Colors.green,
               duration: const Duration(seconds: 3),
             ),
@@ -365,8 +365,8 @@ class _RelaysPageState extends State<RelaysPage> {
     }
   }
 
-  List<Relay> get _selectedRelays {
-    return _allRelays.where((r) => r.status == 'preferred' || r.status == 'backup').toList()
+  List<Station> get _selectedStations {
+    return _allStations.where((r) => r.status == 'preferred' || r.status == 'backup').toList()
       ..sort((a, b) {
         // Preferred first
         if (a.status == 'preferred') return -1;
@@ -375,15 +375,15 @@ class _RelaysPageState extends State<RelaysPage> {
       });
   }
 
-  List<Relay> get _availableRelays {
-    return _allRelays.where((r) => r.status == 'available').toList();
+  List<Station> get _availableRelays {
+    return _allStations.where((r) => r.status == 'available').toList();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('internet_relays')),
+        title: Text(_i18n.t('internet_stations')),
         actions: [
           IconButton(
             icon: const Icon(Icons.radar),
@@ -393,14 +393,14 @@ class _RelaysPageState extends State<RelaysPage> {
           IconButton(
             icon: const Icon(Icons.delete_sweep),
             onPressed: _clearAllRelays,
-            tooltip: _i18n.t('clear_all_relays'),
+            tooltip: _i18n.t('clear_all_stations'),
           ),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
-              onRefresh: _loadRelays,
+              onRefresh: _loadStations,
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
@@ -421,7 +421,7 @@ class _RelaysPageState extends State<RelaysPage> {
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
-                                  _i18n.t('internet_relay_config'),
+                                  _i18n.t('internet_station_config'),
                                   style: TextStyle(
                                     color: Theme.of(context).colorScheme.onPrimaryContainer,
                                     fontWeight: FontWeight.bold,
@@ -432,7 +432,7 @@ class _RelaysPageState extends State<RelaysPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            _i18n.t('relay_instructions'),
+                            _i18n.t('station_instructions'),
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.onPrimaryContainer,
                               fontSize: 13,
@@ -445,7 +445,7 @@ class _RelaysPageState extends State<RelaysPage> {
 
                   const SizedBox(height: 24),
 
-                  // Selected Relay Section
+                  // Selected Station Section
                   Row(
                     children: [
                       Icon(
@@ -455,7 +455,7 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        _selectedRelays.length == 1 ? _i18n.t('selected_relay') : _i18n.t('selected_relays'),
+                        _selectedStations.length == 1 ? _i18n.t('selected_station') : _i18n.t('selected_stations'),
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -464,13 +464,13 @@ class _RelaysPageState extends State<RelaysPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  if (_selectedRelays.isEmpty)
+                  if (_selectedStations.isEmpty)
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Center(
                           child: Text(
-                            _i18n.t('no_relays_selected'),
+                            _i18n.t('no_stations_selected'),
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                                 ),
@@ -479,17 +479,17 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                     )
                   else
-                    ..._selectedRelays.map((relay) {
+                    ..._selectedStations.map((station) {
                       final profile = _profileService.getProfile();
                       return _RelayCard(
-                        relay: relay,
+                        station: station,
                         userLatitude: profile.latitude,
                         userLongitude: profile.longitude,
-                        onSetPreferred: () => _setPreferred(relay),
-                        onSetBackup: () => _setBackup(relay),
-                        onSetAvailable: () => _setAvailable(relay),
-                        onDelete: () => _deleteRelay(relay),
-                        onTest: () => _testConnection(relay),
+                        onSetPreferred: () => _setPreferred(station),
+                        onSetBackup: () => _setBackup(station),
+                        onSetAvailable: () => _setAvailable(station),
+                        onDelete: () => _deleteStation(station),
+                        onTest: () => _testConnection(station),
                       );
                     }),
 
@@ -505,7 +505,7 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        _i18n.t('available_relays'),
+                        _i18n.t('available_stations'),
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -520,7 +520,7 @@ class _RelaysPageState extends State<RelaysPage> {
                         padding: const EdgeInsets.all(24),
                         child: Center(
                           child: Text(
-                            _i18n.t('all_relays_selected'),
+                            _i18n.t('all_stations_selected'),
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                                 ),
@@ -529,17 +529,17 @@ class _RelaysPageState extends State<RelaysPage> {
                       ),
                     )
                   else
-                    ..._availableRelays.map((relay) {
+                    ..._availableRelays.map((station) {
                       final profile = _profileService.getProfile();
                       return _RelayCard(
-                        relay: relay,
+                        station: station,
                         userLatitude: profile.latitude,
                         userLongitude: profile.longitude,
-                        onSetPreferred: () => _setPreferred(relay),
-                        onSetBackup: () => _setBackup(relay),
+                        onSetPreferred: () => _setPreferred(station),
+                        onSetBackup: () => _setBackup(station),
                         onSetAvailable: null, // Already available
-                        onDelete: () => _deleteRelay(relay),
-                        onTest: () => _testConnection(relay),
+                        onDelete: () => _deleteStation(station),
+                        onTest: () => _testConnection(station),
                         isAvailableRelay: true,
                       );
                     }),
@@ -551,15 +551,15 @@ class _RelaysPageState extends State<RelaysPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addCustomRelay,
         icon: const Icon(Icons.add),
-        label: Text(_i18n.t('add_relay')),
+        label: Text(_i18n.t('add_station')),
       ),
     );
   }
 }
 
-// Relay Card Widget
+// Station Card Widget
 class _RelayCard extends StatelessWidget {
-  final Relay relay;
+  final Station station;
   final double? userLatitude;
   final double? userLongitude;
   final VoidCallback onSetPreferred;
@@ -570,7 +570,7 @@ class _RelayCard extends StatelessWidget {
   final bool isAvailableRelay;
 
   const _RelayCard({
-    required this.relay,
+    required this.station,
     this.userLatitude,
     this.userLongitude,
     required this.onSetPreferred,
@@ -584,7 +584,7 @@ class _RelayCard extends StatelessWidget {
   I18nService get _i18n => I18nService();
 
   String _getStatusDisplayText() {
-    switch (relay.status) {
+    switch (station.status) {
       case 'preferred':
         return _i18n.t('preferred');
       case 'backup':
@@ -595,16 +595,16 @@ class _RelayCard extends StatelessWidget {
   }
 
   String _getConnectionStatusText() {
-    if (relay.isConnected) {
-      return relay.latency != null
-        ? _i18n.translate('connected_with_latency', params: [relay.latency.toString()])
+    if (station.isConnected) {
+      return station.latency != null
+        ? _i18n.translate('connected_with_latency', params: [station.latency.toString()])
         : _i18n.t('connected');
     }
     return _i18n.t('disconnected');
   }
 
   String? _getDistanceText(double? userLat, double? userLon) {
-    final distance = relay.calculateDistance(userLat, userLon);
+    final distance = station.calculateDistance(userLat, userLon);
     if (distance == null) return null;
 
     if (distance < 1) {
@@ -617,21 +617,21 @@ class _RelayCard extends StatelessWidget {
   }
 
   Color _getStatusColor(BuildContext context) {
-    switch (relay.status) {
+    switch (station.status) {
       case 'preferred':
         return Colors.green;
       case 'backup':
         return Colors.orange;
       default:
-        // Show green if relay is online/reachable (has device count data)
-        return relay.connectedDevices != null
+        // Show green if station is online/reachable (has device count data)
+        return station.connectedDevices != null
             ? Colors.green
             : Theme.of(context).colorScheme.outline;
     }
   }
 
   IconData _getStatusIcon() {
-    switch (relay.status) {
+    switch (station.status) {
       case 'preferred':
         return Icons.star;
       case 'backup':
@@ -664,15 +664,15 @@ class _RelayCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        relay.name,
+                        station.name,
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
                       ),
-                      if (relay.description != null && relay.description!.isNotEmpty) ...[
+                      if (station.description != null && station.description!.isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(
-                          relay.description!,
+                          station.description!,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
@@ -682,13 +682,13 @@ class _RelayCard extends StatelessWidget {
                       ],
                       const SizedBox(height: 2),
                       Text(
-                        relay.url,
+                        station.url,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.outline,
                               fontSize: 11,
                             ),
                       ),
-                      if (relay.location != null) ...[
+                      if (station.location != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -699,16 +699,16 @@ class _RelayCard extends StatelessWidget {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              relay.location!,
+                              station.location!,
                               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                     color: Theme.of(context).colorScheme.primary,
                                     fontWeight: FontWeight.w500,
                                   ),
                             ),
-                            if (relay.latitude != null && relay.longitude != null) ...[
+                            if (station.latitude != null && station.longitude != null) ...[
                               const SizedBox(width: 8),
                               Text(
-                                '(${relay.latitude!.toStringAsFixed(4)}, ${relay.longitude!.toStringAsFixed(4)})',
+                                '(${station.latitude!.toStringAsFixed(4)}, ${station.longitude!.toStringAsFixed(4)})',
                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                                       fontSize: 11,
@@ -768,7 +768,7 @@ class _RelayCard extends StatelessWidget {
             const SizedBox(height: 12),
 
             // Connection Status (hide for available relays)
-            if (relay.lastChecked != null && !isAvailableRelay)
+            if (station.lastChecked != null && !isAvailableRelay)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Column(
@@ -777,9 +777,9 @@ class _RelayCard extends StatelessWidget {
                     Row(
                       children: [
                         Icon(
-                          relay.isConnected ? Icons.check_circle : Icons.error,
+                          station.isConnected ? Icons.check_circle : Icons.error,
                           size: 16,
-                          color: relay.isConnected ? Colors.green : Colors.red,
+                          color: station.isConnected ? Colors.green : Colors.red,
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -788,7 +788,7 @@ class _RelayCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         Text(
-                          _i18n.translate('last_checked', params: [_formatTime(relay.lastChecked!)]),
+                          _i18n.translate('last_checked', params: [_formatTime(station.lastChecked!)]),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
@@ -796,7 +796,7 @@ class _RelayCard extends StatelessWidget {
                       ],
                     ),
                     // Show connected devices count if available
-                    if (relay.connectedDevices != null) ...[
+                    if (station.connectedDevices != null) ...[
                       const SizedBox(height: 4),
                       Row(
                         children: [
@@ -807,7 +807,7 @@ class _RelayCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            '${relay.connectedDevices} ${relay.connectedDevices == 1 ? _i18n.t("device") : _i18n.t("devices_connected")}',
+                            '${station.connectedDevices} ${station.connectedDevices == 1 ? _i18n.t("device") : _i18n.t("devices_connected")}',
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                   color: Theme.of(context).colorScheme.tertiary,
                                   fontWeight: FontWeight.w500,
@@ -826,7 +826,7 @@ class _RelayCard extends StatelessWidget {
               runSpacing: 8,
               children: [
                 // Only show Set Preferred if NOT already preferred
-                if (relay.status != 'preferred')
+                if (station.status != 'preferred')
                   OutlinedButton.icon(
                     onPressed: onSetPreferred,
                     icon: const Icon(Icons.star, size: 16),
@@ -835,7 +835,7 @@ class _RelayCard extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
-                if (relay.status != 'backup')
+                if (station.status != 'backup')
                   OutlinedButton.icon(
                     onPressed: onSetBackup,
                     icon: const Icon(Icons.check_circle_outline, size: 16),
@@ -892,7 +892,7 @@ class _RelayCard extends StatelessWidget {
   }
 }
 
-// Add Relay Dialog - simplified to just IP:port input
+// Add Station Dialog - simplified to just IP:port input
 class _AddRelayDialog extends StatefulWidget {
   const _AddRelayDialog();
 
@@ -962,8 +962,8 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
     });
 
     try {
-      // Try to fetch relay info from API first
-      Map<String, dynamic>? relayInfo;
+      // Try to fetch station info from API first
+      Map<String, dynamic>? stationInfo;
       String? workingProtocol;
       int? workingPort;
 
@@ -993,8 +993,8 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
 
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
-            if (data['service'] == 'Geogram Relay Server') {
-              relayInfo = data;
+            if (data['service'] == 'Geogram Station Server') {
+              stationInfo = data;
               workingProtocol = attempt.protocol == 'https' ? 'wss' : 'ws';
               workingPort = attempt.port;
               break;
@@ -1005,23 +1005,23 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
         }
       }
 
-      if (relayInfo == null || workingPort == null) {
+      if (stationInfo == null || workingPort == null) {
         final triedPorts = attempts.map((a) => '${a.protocol}:${a.port}').join(', ');
         setState(() {
-          _statusMessage = 'Could not connect to relay at $host (tried $triedPorts)';
+          _statusMessage = 'Could not connect to station at $host (tried $triedPorts)';
           _isError = true;
           _isConnecting = false;
         });
         return;
       }
 
-      // Extract relay details from API response
-      final name = relayInfo['name'] as String? ??
-                   relayInfo['callsign'] as String? ??
+      // Extract station details from API response
+      final name = stationInfo['name'] as String? ??
+                   stationInfo['callsign'] as String? ??
                    '$host:$workingPort';
-      final callsign = relayInfo['callsign'] as String?;
-      final description = relayInfo['description'] as String?;
-      final location = relayInfo['location'] as Map<String, dynamic>?;
+      final callsign = stationInfo['callsign'] as String?;
+      final description = stationInfo['description'] as String?;
+      final location = stationInfo['location'] as Map<String, dynamic>?;
 
       String? locationStr;
       double? latitude;
@@ -1042,7 +1042,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
       }
 
       setState(() {
-        _statusMessage = 'Connected! Found relay: $name';
+        _statusMessage = 'Connected! Found station: $name';
         _isError = false;
       });
 
@@ -1051,7 +1051,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
 
       if (!mounted) return;
 
-      // Return the relay info
+      // Return the station info
       Navigator.pop(context, {
         'name': name,
         'url': '$workingProtocol://$host:$workingPort',
@@ -1076,7 +1076,7 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
     final theme = Theme.of(context);
 
     return AlertDialog(
-      title: const Text('Add Relay'),
+      title: const Text('Add Station'),
       content: SizedBox(
         width: 350,
         child: Column(
@@ -1086,8 +1086,8 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
             TextField(
               controller: _addressController,
               decoration: const InputDecoration(
-                labelText: 'Relay Address',
-                hintText: 'e.g., 127.0.0.1:8080 or relay.example.com',
+                labelText: 'Station Address',
+                hintText: 'e.g., 127.0.0.1:8080 or station.example.com',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.dns),
               ),
@@ -1159,11 +1159,11 @@ class _AddRelayDialogState extends State<_AddRelayDialog> {
 
 // Network Scan Dialog
 class _NetworkScanDialog extends StatefulWidget {
-  final RelayService relayService;
+  final StationService stationService;
   final I18nService i18n;
 
   const _NetworkScanDialog({
-    required this.relayService,
+    required this.stationService,
     required this.i18n,
   });
 
@@ -1172,7 +1172,7 @@ class _NetworkScanDialog extends StatefulWidget {
 }
 
 class _NetworkScanDialogState extends State<_NetworkScanDialog> {
-  final RelayDiscoveryService _discoveryService = RelayDiscoveryService();
+  final StationDiscoveryService _discoveryService = StationDiscoveryService();
   List<NetworkScanResult> _results = [];
   String _statusMessage = 'Initializing scan...';
   int _scannedHosts = 0;
@@ -1211,8 +1211,8 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
       });
 
       // Auto-add found relays
-      for (var result in results.where((r) => r.type == 'relay')) {
-        await _addRelay(result);
+      for (var result in results.where((r) => r.type == 'station')) {
+        await _addStation(result);
       }
     }
   }
@@ -1224,23 +1224,23 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
     });
   }
 
-  Future<void> _addRelay(NetworkScanResult result) async {
+  Future<void> _addStation(NetworkScanResult result) async {
     try {
       // Build a good name: prefer callsign, then name, then description
-      String relayName;
+      String stationName;
       if (result.callsign != null && result.callsign!.isNotEmpty) {
-        relayName = result.callsign!;
+        stationName = result.callsign!;
       } else if (result.name != null && result.name!.isNotEmpty) {
-        relayName = result.name!;
+        stationName = result.name!;
       } else if (result.description != null && result.description!.isNotEmpty) {
-        relayName = result.description!;
+        stationName = result.description!;
       } else {
-        relayName = 'Relay at ${result.ip}';
+        stationName = 'Station at ${result.ip}';
       }
 
-      final relay = Relay(
+      final station = Station(
         url: result.wsUrl,
-        name: relayName,
+        name: stationName,
         callsign: result.callsign,
         status: 'available',
         location: result.location,
@@ -1249,18 +1249,18 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
         connectedDevices: result.connectedDevices,
       );
 
-      final added = await widget.relayService.addRelay(relay);
+      final added = await widget.stationService.addStation(station);
       if (added) {
-        LogService().log('Added relay from scan: ${relay.name}');
+        LogService().log('Added station from scan: ${station.name}');
       }
     } catch (e) {
-      LogService().log('Error adding relay from scan: $e');
+      LogService().log('Error adding station from scan: $e');
     }
   }
 
   IconData _getDeviceIcon(String type) {
     switch (type) {
-      case 'relay':
+      case 'station':
         return Icons.cloud;
       case 'desktop':
         return Icons.computer;
@@ -1273,7 +1273,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
 
   Color _getDeviceColor(String type) {
     switch (type) {
-      case 'relay':
+      case 'station':
         return Colors.blue;
       case 'desktop':
         return Colors.green;
@@ -1445,14 +1445,14 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
               ),
             ],
 
-            if (_scanComplete && _results.where((r) => r.type == 'relay').isNotEmpty) ...[
+            if (_scanComplete && _results.where((r) => r.type == 'station').isNotEmpty) ...[
               const SizedBox(height: 16),
               Row(
                 children: [
                   Icon(Icons.check_circle, color: Colors.green, size: 16),
                   const SizedBox(width: 8),
                   Text(
-                    'Found relays have been added automatically',
+                    'Found stations have been added automatically',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: Colors.green,
                       fontWeight: FontWeight.w500,

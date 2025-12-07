@@ -123,7 +123,7 @@ class AboutPage extends StatelessWidget {
               context,
               Icons.hub,
               'Mesh Networking',
-              'Automatic relay through nearby devices via BLE',
+              'Automatic station through nearby devices via BLE',
             ),
             _buildFeature(
               context,
@@ -173,7 +173,7 @@ class AboutPage extends StatelessWidget {
             _buildChannel(
               context,
               Icons.forward,
-              'Relay System',
+              'Station System',
               'Store-and-forward message delivery',
             ),
 

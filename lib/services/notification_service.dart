@@ -75,7 +75,7 @@ class NotificationService {
     bool? newMessages,
     bool? nearbyDevices,
     bool? collectionUpdates,
-    bool? relayStatus,
+    bool? stationStatus,
     bool? systemAlerts,
   }) async {
     if (_settings != null) {
@@ -83,7 +83,7 @@ class NotificationService {
         notifyNewMessages: newMessages,
         notifyNearbyDevices: nearbyDevices,
         notifyCollectionUpdates: collectionUpdates,
-        notifyRelayStatus: relayStatus,
+        notifyStationStatus: stationStatus,
         notifySystemAlerts: systemAlerts,
       );
       _saveSettings();

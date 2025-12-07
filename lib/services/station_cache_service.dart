@@ -7,7 +7,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
-import '../models/relay_chat_room.dart';
+import '../models/station_chat_room.dart';
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
 import 'log_service.dart';
@@ -67,8 +67,8 @@ class RelayCacheService {
   }
 
   /// Save chat rooms for a device
-  /// [relayUrl] is stored for offline retrieval when the device is unreachable
-  Future<void> saveChatRooms(String deviceCallsign, List<RelayChatRoom> rooms, {String? relayUrl}) async {
+  /// [stationUrl] is stored for offline retrieval when the device is unreachable
+  Future<void> saveChatRooms(String deviceCallsign, List<StationChatRoom> rooms, {String? stationUrl}) async {
     if (kIsWeb || _basePath == null) return;
 
     try {
@@ -80,12 +80,12 @@ class RelayCacheService {
         await chatDir.create(recursive: true);
       }
 
-      // Save rooms list with relay URL for offline use
+      // Save rooms list with station URL for offline use
       final roomsFile = File('${chatDir.path}/rooms.json');
       final data = {
         'updated': DateTime.now().toIso8601String(),
         'device': deviceCallsign,
-        'relayUrl': relayUrl ?? (rooms.isNotEmpty ? rooms.first.relayUrl : null),
+        'stationUrl': stationUrl ?? (rooms.isNotEmpty ? rooms.first.stationUrl : null),
         'rooms': rooms.map((r) => r.toJson()).toList(),
       };
 
@@ -100,8 +100,8 @@ class RelayCacheService {
   }
 
   /// Load cached chat rooms for a device
-  /// If [relayUrl] is empty, uses the stored relayUrl from the cache
-  Future<List<RelayChatRoom>> loadChatRooms(String deviceCallsign, String relayUrl) async {
+  /// If [stationUrl] is empty, uses the stored stationUrl from the cache
+  Future<List<StationChatRoom>> loadChatRooms(String deviceCallsign, String stationUrl) async {
     if (kIsWeb || _basePath == null) return [];
 
     try {
@@ -115,13 +115,13 @@ class RelayCacheService {
       final data = jsonDecode(content) as Map<String, dynamic>;
       final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
-      // Use stored relayUrl if provided relayUrl is empty
-      final effectiveRelayUrl = relayUrl.isNotEmpty
-          ? relayUrl
-          : (data['relayUrl'] as String? ?? '');
+      // Use stored stationUrl if provided stationUrl is empty
+      final effectiveRelayUrl = stationUrl.isNotEmpty
+          ? stationUrl
+          : (data['stationUrl'] as String? ?? '');
 
       return roomsData.map((r) {
-        return RelayChatRoom.fromJson(
+        return StationChatRoom.fromJson(
           r as Map<String, dynamic>,
           effectiveRelayUrl,
           deviceCallsign,
@@ -138,7 +138,7 @@ class RelayCacheService {
   Future<void> saveMessages(
     String deviceCallsign,
     String roomId,
-    List<RelayChatMessage> messages,
+    List<StationChatMessage> messages,
   ) async {
     if (kIsWeb || _basePath == null) return;
 
@@ -152,7 +152,7 @@ class RelayCacheService {
       }
 
       // Group messages by date
-      final messagesByDate = <String, List<RelayChatMessage>>{};
+      final messagesByDate = <String, List<StationChatMessage>>{};
       for (final msg in messages) {
         final dt = msg.dateTime;
         if (dt == null) continue;
@@ -184,7 +184,7 @@ class RelayCacheService {
 
         // Messages
         for (final msg in dayMessages) {
-          final chatMsg = _relayChatToChatMessage(msg);
+          final chatMsg = _stationChatToChatMessage(msg);
           buffer.writeln();
           buffer.write(chatMsg.exportAsText());
         }
@@ -315,7 +315,7 @@ class RelayCacheService {
   }
 
   /// Load cached messages for a chat room from year folders and daily files
-  Future<List<RelayChatMessage>> loadMessages(
+  Future<List<StationChatMessage>> loadMessages(
     String deviceCallsign,
     String roomId,
   ) async {
@@ -328,7 +328,7 @@ class RelayCacheService {
       final roomDir = Directory('${cacheDir.path}/chat/$roomId');
       if (!await roomDir.exists()) return [];
 
-      List<RelayChatMessage> allMessages = [];
+      List<StationChatMessage> allMessages = [];
 
       // Find all year folders
       final entities = await roomDir.list().toList();
@@ -366,9 +366,9 @@ class RelayCacheService {
     return RegExp(r'^\d{4}$').hasMatch(name);
   }
 
-  /// Convert RelayChatMessage to ChatMessage for export
-  ChatMessage _relayChatToChatMessage(RelayChatMessage msg) {
-    // RelayChatMessage timestamp is already in chat format: YYYY-MM-DD HH:MM_ss
+  /// Convert StationChatMessage to ChatMessage for export
+  ChatMessage _stationChatToChatMessage(StationChatMessage msg) {
+    // StationChatMessage timestamp is already in chat format: YYYY-MM-DD HH:MM_ss
     return ChatMessage(
       author: msg.callsign,
       timestamp: msg.timestamp,
@@ -376,9 +376,9 @@ class RelayCacheService {
     );
   }
 
-  /// Convert ChatMessage to RelayChatMessage for loading
+  /// Convert ChatMessage to StationChatMessage for loading
   /// Extracts NOSTR metadata (npub, signature, created_at) from ChatMessage.metadata
-  RelayChatMessage _chatMessageToRelayChat(ChatMessage msg, String roomId) {
+  StationChatMessage _chatMessageToRelayChat(ChatMessage msg, String roomId) {
     final metadata = msg.metadata ?? {};
 
     // Extract NOSTR fields from metadata
@@ -392,7 +392,7 @@ class RelayCacheService {
     // Messages with valid signature+npub are considered verified when loaded from trusted cache
     final verified = hasSignature && npub != null && npub.isNotEmpty;
 
-    return RelayChatMessage(
+    return StationChatMessage(
       roomId: roomId,
       callsign: msg.author,
       content: msg.content,
@@ -469,7 +469,7 @@ class RelayCacheService {
     }
   }
 
-  /// Get cached relay URL for a device
+  /// Get cached station URL for a device
   Future<String?> getCachedRelayUrl(String deviceCallsign) async {
     if (kIsWeb || _basePath == null) return null;
 
@@ -482,7 +482,7 @@ class RelayCacheService {
 
       final content = await roomsFile.readAsString();
       final data = jsonDecode(content) as Map<String, dynamic>;
-      return data['relayUrl'] as String?;
+      return data['stationUrl'] as String?;
     } catch (e) {
       return null;
     }

@@ -25,9 +25,9 @@ class NostrKeyGenerator {
     return _deriveCallsignFromNpub(npub, 'X1');
   }
 
-  /// Derive relay callsign from npub
+  /// Derive station callsign from npub
   /// Format: X3 + first 4 characters after 'npub1'
-  static String deriveRelayCallsign(String npub) {
+  static String deriveStationCallsign(String npub) {
     return _deriveCallsignFromNpub(npub, 'X3');
   }
 
@@ -108,13 +108,13 @@ class NostrKeys {
     String? callsign,
   }) : callsign = callsign ?? NostrKeyGenerator.deriveCallsign(npub);
 
-  /// Create a relay key pair with X3 callsign prefix
+  /// Create a station key pair with X3 callsign prefix
   factory NostrKeys.forRelay() {
     final keys = NostrKeyGenerator.generateKeyPair();
     return NostrKeys(
       npub: keys.npub,
       nsec: keys.nsec,
-      callsign: NostrKeyGenerator.deriveRelayCallsign(keys.npub),
+      callsign: NostrKeyGenerator.deriveStationCallsign(keys.npub),
     );
   }
 

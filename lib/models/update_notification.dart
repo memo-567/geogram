@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-/// Lightweight update notification from a relay
+/// Lightweight update notification from a station
 /// Format: UPDATE:{callsign}/{collectionType}/{path}
 /// Example: UPDATE:X3R5TR/chat/test
 class UpdateNotification {

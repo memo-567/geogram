@@ -14,7 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../lib/cli/pure_relay.dart';
+import '../lib/cli/pure_station.dart';
 import '../lib/cli/pure_storage_config.dart';
 import '../lib/util/nostr_event.dart';
 import '../lib/util/nostr_crypto.dart';
@@ -178,7 +178,7 @@ Future<void> main() async {
   final tempDir = await Directory.systemTemp.createTemp('geogram_alert_api_test_');
   print('Using temp directory: ${tempDir.path}');
 
-  PureRelayServer? relay;
+  PureStationServer? station;
   WebSocket? ws;
 
   try {
@@ -186,23 +186,23 @@ Future<void> main() async {
     PureStorageConfig().reset();
     await PureStorageConfig().init(customBaseDir: tempDir.path);
 
-    // Create and initialize the relay server
-    relay = PureRelayServer();
-    relay.quietMode = true;
-    await relay.initialize();
+    // Create and initialize the station server
+    station = PureStationServer();
+    station.quietMode = true;
+    await station.initialize();
 
-    relay.setSetting('httpPort', TEST_PORT);
-    relay.setSetting('description', 'Alert API Test Relay');
+    station.setSetting('httpPort', TEST_PORT);
+    station.setSetting('description', 'Alert API Test Station');
 
-    final relayCallsign = relay.settings.callsign;
-    print('Relay callsign: $relayCallsign');
+    final stationCallsign = station.settings.callsign;
+    print('Station callsign: $stationCallsign');
 
-    final started = await relay.start();
+    final started = await station.start();
     if (!started) {
-      print('ERROR: Failed to start relay server on port $TEST_PORT');
+      print('ERROR: Failed to start station server on port $TEST_PORT');
       exit(1);
     }
-    print('Relay server started on port $TEST_PORT');
+    print('Station server started on port $TEST_PORT');
     print('');
 
     await Future.delayed(const Duration(milliseconds: 500));
@@ -429,25 +429,25 @@ Future<void> main() async {
       fail('Timestamp in response', e.toString());
     }
 
-    // Test 7: Verify relay info in response
+    // Test 7: Verify station info in response
     print('');
-    print('Test 7: Response Contains Relay Info');
+    print('Test 7: Response Contains Station Info');
     try {
       final result = await fetchAlerts();
       if (result['success'] == true) {
-        final relayInfo = result['relay'] as Map<String, dynamic>?;
-        if (relayInfo != null &&
-            relayInfo['callsign'] != null &&
-            relayInfo['name'] != null) {
-          pass('Relay info present: ${relayInfo['callsign']} (${relayInfo['name']})');
+        final stationInfo = result['station'] as Map<String, dynamic>?;
+        if (stationInfo != null &&
+            stationInfo['callsign'] != null &&
+            stationInfo['name'] != null) {
+          pass('Station info present: ${stationInfo['callsign']} (${stationInfo['name']})');
         } else {
-          fail('Relay info', 'Missing relay info in response');
+          fail('Station info', 'Missing station info in response');
         }
       } else {
-        fail('Relay info', 'API returned success=false');
+        fail('Station info', 'API returned success=false');
       }
     } catch (e) {
-      fail('Relay info', e.toString());
+      fail('Station info', e.toString());
     }
 
     // Test 8: Filter count in response
@@ -563,7 +563,7 @@ Future<void> main() async {
     print(st);
   } finally {
     await ws?.close();
-    await relay?.stop();
+    await station?.stop();
 
     try {
       await tempDir.delete(recursive: true);

@@ -3,14 +3,14 @@
  * License: Apache-2.0
  */
 
-/// Relay node types
-enum RelayType {
+/// Station node types
+enum StationType {
   root,
   node,
 }
 
-/// Relay node status
-enum RelayNodeStatus {
+/// Station node status
+enum StationNodeStatus {
   stopped,
   starting,
   running,
@@ -18,7 +18,7 @@ enum RelayNodeStatus {
   error,
 }
 
-/// Power source types for relay
+/// Power source types for station
 enum PowerSource {
   grid,
   solar,
@@ -38,8 +38,8 @@ enum BinaryPolicy {
   fullCache,
 }
 
-/// Storage configuration for relay node
-class RelayStorageConfig {
+/// Storage configuration for station node
+class StationStorageConfig {
   final int allocatedMb;
   final BinaryPolicy binaryPolicy;
   final int thumbnailMaxKb;
@@ -47,7 +47,7 @@ class RelayStorageConfig {
   final int chatRetentionDays;
   final int resolvedReportRetentionDays;
 
-  const RelayStorageConfig({
+  const StationStorageConfig({
     this.allocatedMb = 500,
     this.binaryPolicy = BinaryPolicy.textOnly,
     this.thumbnailMaxKb = 10,
@@ -56,8 +56,8 @@ class RelayStorageConfig {
     this.resolvedReportRetentionDays = 180,
   });
 
-  factory RelayStorageConfig.fromJson(Map<String, dynamic> json) {
-    return RelayStorageConfig(
+  factory StationStorageConfig.fromJson(Map<String, dynamic> json) {
+    return StationStorageConfig(
       allocatedMb: json['allocatedMb'] as int? ?? 500,
       binaryPolicy: BinaryPolicy.values.firstWhere(
         (e) => e.name == json['binaryPolicy'],
@@ -81,7 +81,7 @@ class RelayStorageConfig {
     };
   }
 
-  RelayStorageConfig copyWith({
+  StationStorageConfig copyWith({
     int? allocatedMb,
     BinaryPolicy? binaryPolicy,
     int? thumbnailMaxKb,
@@ -89,7 +89,7 @@ class RelayStorageConfig {
     int? chatRetentionDays,
     int? resolvedReportRetentionDays,
   }) {
-    return RelayStorageConfig(
+    return StationStorageConfig(
       allocatedMb: allocatedMb ?? this.allocatedMb,
       binaryPolicy: binaryPolicy ?? this.binaryPolicy,
       thumbnailMaxKb: thumbnailMaxKb ?? this.thumbnailMaxKb,
@@ -147,7 +147,7 @@ class GeographicCoverage {
   }
 }
 
-/// Power configuration for relay
+/// Power configuration for station
 class PowerConfig {
   final PowerSource primarySource;
   final bool gridConnected;
@@ -220,9 +220,9 @@ class ChannelConfig {
   }
 }
 
-/// Relay node configuration
-class RelayNodeConfig {
-  final RelayStorageConfig storage;
+/// Station node configuration
+class StationNodeConfig {
+  final StationStorageConfig storage;
   final GeographicCoverage? coverage;
   final PowerConfig power;
   final List<ChannelConfig> channels;
@@ -230,8 +230,8 @@ class RelayNodeConfig {
   final bool acceptConnections;
   final int maxConnections;
 
-  const RelayNodeConfig({
-    this.storage = const RelayStorageConfig(),
+  const StationNodeConfig({
+    this.storage = const StationStorageConfig(),
     this.coverage,
     this.power = const PowerConfig(),
     this.channels = const [],
@@ -240,11 +240,11 @@ class RelayNodeConfig {
     this.maxConnections = 50,
   });
 
-  factory RelayNodeConfig.fromJson(Map<String, dynamic> json) {
-    return RelayNodeConfig(
+  factory StationNodeConfig.fromJson(Map<String, dynamic> json) {
+    return StationNodeConfig(
       storage: json['storage'] != null
-          ? RelayStorageConfig.fromJson(json['storage'] as Map<String, dynamic>)
-          : const RelayStorageConfig(),
+          ? StationStorageConfig.fromJson(json['storage'] as Map<String, dynamic>)
+          : const StationStorageConfig(),
       coverage: json['coverage'] != null
           ? GeographicCoverage.fromJson(json['coverage'] as Map<String, dynamic>)
           : null,
@@ -276,8 +276,8 @@ class RelayNodeConfig {
     };
   }
 
-  RelayNodeConfig copyWith({
-    RelayStorageConfig? storage,
+  StationNodeConfig copyWith({
+    StationStorageConfig? storage,
     GeographicCoverage? coverage,
     PowerConfig? power,
     List<ChannelConfig>? channels,
@@ -285,7 +285,7 @@ class RelayNodeConfig {
     bool? acceptConnections,
     int? maxConnections,
   }) {
-    return RelayNodeConfig(
+    return StationNodeConfig(
       storage: storage ?? this.storage,
       coverage: coverage ?? this.coverage,
       power: power ?? this.power,
@@ -297,8 +297,8 @@ class RelayNodeConfig {
   }
 }
 
-/// Statistics for relay node
-class RelayNodeStats {
+/// Statistics for station node
+class StationNodeStats {
   final int connectedDevices;
   final int messagesRelayed;
   final int collectionsServed;
@@ -306,7 +306,7 @@ class RelayNodeStats {
   final DateTime? lastActivity;
   final Duration uptime;
 
-  const RelayNodeStats({
+  const StationNodeStats({
     this.connectedDevices = 0,
     this.messagesRelayed = 0,
     this.collectionsServed = 0,
@@ -315,8 +315,8 @@ class RelayNodeStats {
     this.uptime = Duration.zero,
   });
 
-  factory RelayNodeStats.fromJson(Map<String, dynamic> json) {
-    return RelayNodeStats(
+  factory StationNodeStats.fromJson(Map<String, dynamic> json) {
+    return StationNodeStats(
       connectedDevices: json['connectedDevices'] as int? ?? 0,
       messagesRelayed: json['messagesRelayed'] as int? ?? 0,
       collectionsServed: json['collectionsServed'] as int? ?? 0,
@@ -340,38 +340,38 @@ class RelayNodeStats {
   }
 }
 
-/// Represents this device operating as a relay
-class RelayNode {
+/// Represents this device operating as a station
+class StationNode {
   final String id;
   final String name;
 
-  // Relay identity (X3 prefix) - the relay device's own keypair
-  final String relayCallsign;  // X3 callsign derived from relay npub
-  final String relayNpub;      // Relay's public key
-  final String relayNsec;      // Relay's private key (secret)
+  // Station identity (X3 prefix) - the station device's own keypair
+  final String stationCallsign;  // X3 callsign derived from station npub
+  final String stationNpub;      // Station's public key
+  final String stationNsec;      // Station's private key (secret)
 
-  // Operator identity (X1 prefix) - the human managing this relay
+  // Operator identity (X1 prefix) - the human managing this station
   final String operatorCallsign;  // X1 callsign of the operator
   final String operatorNpub;      // Operator's public key
 
-  final RelayType type;
+  final StationType type;
   final String? networkId;
   final String? networkName;
   final String? rootNpub;
   final String? rootCallsign;
-  final RelayNodeConfig config;
-  final RelayNodeStatus status;
-  final RelayNodeStats stats;
+  final StationNodeConfig config;
+  final StationNodeStatus status;
+  final StationNodeStats stats;
   final String? errorMessage;
   final DateTime created;
   final DateTime updated;
 
-  const RelayNode({
+  const StationNode({
     required this.id,
     required this.name,
-    required this.relayCallsign,
-    required this.relayNpub,
-    required this.relayNsec,
+    required this.stationCallsign,
+    required this.stationNpub,
+    required this.stationNsec,
     required this.operatorCallsign,
     required this.operatorNpub,
     required this.type,
@@ -379,41 +379,41 @@ class RelayNode {
     this.networkName,
     this.rootNpub,
     this.rootCallsign,
-    this.config = const RelayNodeConfig(),
-    this.status = RelayNodeStatus.stopped,
-    this.stats = const RelayNodeStats(),
+    this.config = const StationNodeConfig(),
+    this.status = StationNodeStatus.stopped,
+    this.stats = const StationNodeStats(),
     this.errorMessage,
     required this.created,
     required this.updated,
   });
 
-  /// Backwards compatibility: returns relay callsign
-  String get callsign => relayCallsign;
+  /// Backwards compatibility: returns station callsign
+  String get callsign => stationCallsign;
 
-  /// Backwards compatibility: returns relay npub
-  String get npub => relayNpub;
+  /// Backwards compatibility: returns station npub
+  String get npub => stationNpub;
 
-  /// Check if this is a root relay
-  bool get isRoot => type == RelayType.root;
+  /// Check if this is a root station
+  bool get isRoot => type == StationType.root;
 
-  /// Check if this is a node relay
-  bool get isNode => type == RelayType.node;
+  /// Check if this is a node station
+  bool get isNode => type == StationType.node;
 
-  /// Check if relay is running
-  bool get isRunning => status == RelayNodeStatus.running;
+  /// Check if station is running
+  bool get isRunning => status == StationNodeStatus.running;
 
   /// Get status display text
   String get statusDisplay {
     switch (status) {
-      case RelayNodeStatus.stopped:
+      case StationNodeStatus.stopped:
         return 'Stopped';
-      case RelayNodeStatus.starting:
+      case StationNodeStatus.starting:
         return 'Starting...';
-      case RelayNodeStatus.running:
+      case StationNodeStatus.running:
         return 'Running';
-      case RelayNodeStatus.stopping:
+      case StationNodeStatus.stopping:
         return 'Stopping...';
-      case RelayNodeStatus.error:
+      case StationNodeStatus.error:
         return 'Error';
     }
   }
@@ -421,47 +421,47 @@ class RelayNode {
   /// Get type display text
   String get typeDisplay {
     switch (type) {
-      case RelayType.root:
-        return 'Root Relay';
-      case RelayType.node:
-        return 'Node Relay';
+      case StationType.root:
+        return 'Root Station';
+      case StationType.node:
+        return 'Node Station';
     }
   }
 
-  factory RelayNode.fromJson(Map<String, dynamic> json) {
+  factory StationNode.fromJson(Map<String, dynamic> json) {
     // Handle backwards compatibility for old format
-    final relayCallsign = json['relayCallsign'] as String? ?? json['callsign'] as String;
-    final relayNpub = json['relayNpub'] as String? ?? json['npub'] as String;
-    final relayNsec = json['relayNsec'] as String? ?? '';
+    final stationCallsign = json['stationCallsign'] as String? ?? json['callsign'] as String;
+    final stationNpub = json['stationNpub'] as String? ?? json['npub'] as String;
+    final stationNsec = json['stationNsec'] as String? ?? '';
     final operatorCallsign = json['operatorCallsign'] as String? ?? json['callsign'] as String;
     final operatorNpub = json['operatorNpub'] as String? ?? json['npub'] as String;
 
-    return RelayNode(
+    return StationNode(
       id: json['id'] as String,
       name: json['name'] as String,
-      relayCallsign: relayCallsign,
-      relayNpub: relayNpub,
-      relayNsec: relayNsec,
+      stationCallsign: stationCallsign,
+      stationNpub: stationNpub,
+      stationNsec: stationNsec,
       operatorCallsign: operatorCallsign,
       operatorNpub: operatorNpub,
-      type: RelayType.values.firstWhere(
+      type: StationType.values.firstWhere(
         (e) => e.name == json['type'],
-        orElse: () => RelayType.node,
+        orElse: () => StationType.node,
       ),
       networkId: json['networkId'] as String?,
       networkName: json['networkName'] as String?,
       rootNpub: json['rootNpub'] as String?,
       rootCallsign: json['rootCallsign'] as String?,
       config: json['config'] != null
-          ? RelayNodeConfig.fromJson(json['config'] as Map<String, dynamic>)
-          : const RelayNodeConfig(),
-      status: RelayNodeStatus.values.firstWhere(
+          ? StationNodeConfig.fromJson(json['config'] as Map<String, dynamic>)
+          : const StationNodeConfig(),
+      status: StationNodeStatus.values.firstWhere(
         (e) => e.name == json['status'],
-        orElse: () => RelayNodeStatus.stopped,
+        orElse: () => StationNodeStatus.stopped,
       ),
       stats: json['stats'] != null
-          ? RelayNodeStats.fromJson(json['stats'] as Map<String, dynamic>)
-          : const RelayNodeStats(),
+          ? StationNodeStats.fromJson(json['stats'] as Map<String, dynamic>)
+          : const StationNodeStats(),
       errorMessage: json['errorMessage'] as String?,
       created: DateTime.parse(json['created'] as String),
       updated: DateTime.parse(json['updated'] as String),
@@ -472,9 +472,9 @@ class RelayNode {
     return {
       'id': id,
       'name': name,
-      'relayCallsign': relayCallsign,
-      'relayNpub': relayNpub,
-      'relayNsec': relayNsec,
+      'stationCallsign': stationCallsign,
+      'stationNpub': stationNpub,
+      'stationNsec': stationNsec,
       'operatorCallsign': operatorCallsign,
       'operatorNpub': operatorNpub,
       'type': type.name,
@@ -491,32 +491,32 @@ class RelayNode {
     };
   }
 
-  RelayNode copyWith({
+  StationNode copyWith({
     String? id,
     String? name,
-    String? relayCallsign,
-    String? relayNpub,
-    String? relayNsec,
+    String? stationCallsign,
+    String? stationNpub,
+    String? stationNsec,
     String? operatorCallsign,
     String? operatorNpub,
-    RelayType? type,
+    StationType? type,
     String? networkId,
     String? networkName,
     String? rootNpub,
     String? rootCallsign,
-    RelayNodeConfig? config,
-    RelayNodeStatus? status,
-    RelayNodeStats? stats,
+    StationNodeConfig? config,
+    StationNodeStatus? status,
+    StationNodeStats? stats,
     String? errorMessage,
     DateTime? created,
     DateTime? updated,
   }) {
-    return RelayNode(
+    return StationNode(
       id: id ?? this.id,
       name: name ?? this.name,
-      relayCallsign: relayCallsign ?? this.relayCallsign,
-      relayNpub: relayNpub ?? this.relayNpub,
-      relayNsec: relayNsec ?? this.relayNsec,
+      stationCallsign: stationCallsign ?? this.stationCallsign,
+      stationNpub: stationNpub ?? this.stationNpub,
+      stationNsec: stationNsec ?? this.stationNsec,
       operatorCallsign: operatorCallsign ?? this.operatorCallsign,
       operatorNpub: operatorNpub ?? this.operatorNpub,
       type: type ?? this.type,
