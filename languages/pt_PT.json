@@ -1236,5 +1236,11 @@
   "failed": "falhou",
   "my_alerts": "Meus Alertas",
   "relay_alerts": "Alertas Próximos",
-  "no_relay_alerts": "Sem alertas próximos do relay"
+  "no_relay_alerts": "Sem alertas próximos do relay",
+  "detecting_location": "A detectar localização...",
+  "location_unknown": "Localização desconhecida - toque para detectar",
+  "location_from_gps": "Localização via GPS",
+  "location_from_ip": "Localização via endereço IP",
+  "location_from_browser": "Localização via navegador",
+  "location_detected": "Localização detectada"
 }

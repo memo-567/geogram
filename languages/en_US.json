@@ -1242,5 +1242,11 @@
   "failed": "failed",
   "my_alerts": "My Alerts",
   "relay_alerts": "Nearby Alerts",
-  "no_relay_alerts": "No nearby alerts from relay"
+  "no_relay_alerts": "No nearby alerts from relay",
+  "detecting_location": "Detecting location...",
+  "location_unknown": "Location unknown - tap to detect",
+  "location_from_gps": "Location from GPS",
+  "location_from_ip": "Location from IP address",
+  "location_from_browser": "Location from browser",
+  "location_detected": "Location detected"
 }

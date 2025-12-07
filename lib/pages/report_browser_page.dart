@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import '../models/report.dart';
 import '../services/report_service.dart';
@@ -10,6 +12,7 @@ import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_sharing_service.dart';
 import '../services/relay_alert_service.dart';
+import '../services/user_location_service.dart';
 import '../services/log_service.dart';
 import 'report_detail_page.dart';
 import 'report_settings_page.dart';
@@ -33,12 +36,14 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
   final RelayAlertService _relayAlertService = RelayAlertService();
+  final UserLocationService _userLocationService = UserLocationService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Report> _allReports = [];
   List<Report> _filteredReports = [];
   List<Report> _relayAlerts = []; // Alerts fetched from relay
+  List<Report> _filteredRelayAlerts = []; // Relay alerts filtered by distance
   ReportSeverity? _filterSeverity;
   ReportStatus? _filterStatus;
   bool _isLoading = true;
@@ -52,22 +57,34 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   void initState() {
     super.initState();
     _searchController.addListener(_filterReports);
+    _userLocationService.addListener(_onLocationChanged);
     _initialize();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _userLocationService.removeListener(_onLocationChanged);
     super.dispose();
+  }
+
+  /// Called when user location changes
+  void _onLocationChanged() {
+    // Re-filter relay alerts when location updates
+    _filterRelayAlertsByDistance();
   }
 
   Future<void> _initialize() async {
     await _reportService.initializeCollection(widget.collectionPath);
     await _loadReports();
 
+    // Initialize user location service for automatic updates
+    await _userLocationService.initialize();
+
     // Load cached relay alerts and start polling
     await _relayAlertService.loadCachedAlerts();
     _relayAlerts = _relayAlertService.cachedAlerts;
+    _filterRelayAlertsByDistance();
     _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
     _relayAlertService.startPolling();
 
@@ -129,6 +146,54 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           break;
       }
     });
+  }
+
+  /// Filter relay alerts by distance from user's current location
+  void _filterRelayAlertsByDistance() {
+    if (!mounted) return;
+
+    final userLocation = _userLocationService.currentLocation;
+
+    setState(() {
+      if (userLocation == null || !userLocation.isValid || _radiusKm >= 500) {
+        // No location or unlimited radius - show all alerts
+        _filteredRelayAlerts = List.from(_relayAlerts);
+      } else {
+        // Filter alerts within the radius
+        _filteredRelayAlerts = _relayAlerts.where((alert) {
+          final distance = _calculateDistance(
+            userLocation.latitude,
+            userLocation.longitude,
+            alert.latitude,
+            alert.longitude,
+          );
+          return distance <= _radiusKm;
+        }).toList();
+      }
+
+      // Sort filtered relay alerts by date (newest first)
+      _filteredRelayAlerts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    });
+  }
+
+  /// Calculate distance between two coordinates in km (Haversine formula)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371.0; // Earth radius in kilometers
+    final dLat = _degreesToRadians(lat2 - lat1);
+    final dLon = _degreesToRadians(lon2 - lon1);
+
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_degreesToRadians(lat1)) *
+            cos(_degreesToRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * pi / 180;
   }
 
   String _getDisplayTitle() {
@@ -399,6 +464,40 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       radiusText = '${_radiusKm.toStringAsFixed(1)} km';
     }
 
+    // Get location status for indicator
+    final userLocation = _userLocationService.currentLocation;
+    final hasLocation = userLocation?.isValid ?? false;
+    final isUpdating = _userLocationService.isUpdating;
+
+    // Location source icon
+    IconData locationIcon;
+    String locationTooltip;
+    if (isUpdating) {
+      locationIcon = Icons.my_location;
+      locationTooltip = _i18n.t('detecting_location');
+    } else if (!hasLocation) {
+      locationIcon = Icons.location_off;
+      locationTooltip = _i18n.t('location_unknown');
+    } else {
+      switch (userLocation!.source) {
+        case 'gps':
+          locationIcon = Icons.gps_fixed;
+          locationTooltip = _i18n.t('location_from_gps');
+          break;
+        case 'ip':
+          locationIcon = Icons.public;
+          locationTooltip = _i18n.t('location_from_ip');
+          break;
+        case 'browser':
+          locationIcon = Icons.language;
+          locationTooltip = _i18n.t('location_from_browser');
+          break;
+        default:
+          locationIcon = Icons.location_on;
+          locationTooltip = userLocation.locationName ?? _i18n.t('location_detected');
+      }
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -409,7 +508,29 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       ),
       child: Row(
         children: [
-          Icon(Icons.radar, size: 18, color: theme.colorScheme.primary),
+          // Location indicator with refresh capability
+          GestureDetector(
+            onTap: isUpdating ? null : () => _userLocationService.refresh(),
+            child: Tooltip(
+              message: locationTooltip,
+              child: isUpdating
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    )
+                  : Icon(
+                      locationIcon,
+                      size: 18,
+                      color: hasLocation
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.error,
+                    ),
+            ),
+          ),
           const SizedBox(width: 8),
           Text(
             _i18n.t('radius'),
@@ -445,7 +566,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   });
                 },
                 onChangeEnd: (value) {
-                  // Could trigger filter update here
+                  // Filter relay alerts by the new radius
+                  _filterRelayAlertsByDistance();
                   _filterReports();
                 },
               ),
@@ -469,9 +591,9 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   /// Build the alerts list with sections
   Widget _buildAlertsList(ThemeData theme) {
-    // Separate my alerts and relay alerts
+    // Separate my alerts and relay alerts (filtered by distance)
     final myAlerts = _filteredReports;
-    final relayAlerts = _relayAlerts;
+    final relayAlerts = _filteredRelayAlerts;
 
     if (myAlerts.isEmpty && relayAlerts.isEmpty) {
       return Center(
@@ -629,16 +751,27 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     setState(() => _isLoadingRelayAlerts = true);
 
     try {
-      // Get user's location for distance filtering
-      final profile = _profileService.getProfile();
-      final lat = profile.latitude;
-      final lon = profile.longitude;
+      // Get user's current location for server-side filtering
+      final userLocation = _userLocationService.currentLocation;
+      double? lat;
+      double? lon;
 
-      // Fetch from relay with radius filter
+      if (userLocation != null && userLocation.isValid) {
+        lat = userLocation.latitude;
+        lon = userLocation.longitude;
+      } else {
+        // Fall back to profile location
+        final profile = _profileService.getProfile();
+        lat = profile.latitude != 0 ? profile.latitude : null;
+        lon = profile.longitude != 0 ? profile.longitude : null;
+      }
+
+      // Fetch from relay - get all alerts, we'll filter client-side
+      // Server-side filtering is optional but can reduce bandwidth
       final result = await _relayAlertService.fetchAlerts(
-        lat: lat != 0 ? lat : null,
-        lon: lon != 0 ? lon : null,
-        radiusKm: _radiusKm < 500 ? _radiusKm : null,
+        lat: lat,
+        lon: lon,
+        radiusKm: null, // Get all alerts, filter client-side for responsiveness
       );
 
       if (mounted) {
@@ -646,6 +779,8 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
           _relayAlerts = result.alerts;
           _lastFetchTime = _relayAlertService.getTimeSinceLastFetch();
         });
+        // Apply client-side distance filtering
+        _filterRelayAlertsByDistance();
       }
     } catch (e) {
       LogService().log('Error loading relay alerts: $e');
