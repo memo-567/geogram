@@ -458,6 +458,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         return Icons.cell_tower;
       case DeviceSourceType.direct:
         return Icons.wifi_tethering;
+      case DeviceSourceType.ble:
+        return Icons.bluetooth;
     }
   }
 }

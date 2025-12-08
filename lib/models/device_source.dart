@@ -126,6 +126,8 @@ class DeviceSource {
         return 'cell_tower';
       case DeviceSourceType.direct:
         return 'wifi_tethering';
+      case DeviceSourceType.ble:
+        return 'bluetooth';
     }
   }
 
@@ -154,4 +156,7 @@ enum DeviceSourceType {
 
   /// Direct P2P connection to another device (future)
   direct,
+
+  /// Device discovered via BLE (Bluetooth Low Energy)
+  ble,
 }

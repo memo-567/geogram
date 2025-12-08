@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
 import '../models/station.dart';
@@ -16,6 +17,7 @@ import 'station_service.dart';
 import 'station_discovery_service.dart';
 import 'direct_message_service.dart';
 import 'log_service.dart';
+import 'ble_discovery_service.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -26,6 +28,10 @@ class DevicesService {
   final RelayCacheService _cacheService = RelayCacheService();
   final StationService _stationService = StationService();
   final StationDiscoveryService _discoveryService = StationDiscoveryService();
+
+  /// BLE discovery service (null on web)
+  BLEDiscoveryService? _bleService;
+  StreamSubscription<List<BLEDevice>>? _bleSubscription;
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -42,6 +48,74 @@ class DevicesService {
   Future<void> initialize() async {
     await _cacheService.initialize();
     await _loadCachedDevices();
+    await _initializeBLE();
+  }
+
+  /// Initialize BLE discovery (not available on web)
+  Future<void> _initializeBLE() async {
+    if (kIsWeb) {
+      LogService().log('DevicesService: BLE not available on web platform');
+      return;
+    }
+
+    try {
+      _bleService = BLEDiscoveryService();
+
+      // Subscribe to BLE device discoveries
+      _bleSubscription = _bleService!.devicesStream.listen((bleDevices) {
+        _handleBLEDevices(bleDevices);
+      });
+
+      LogService().log('DevicesService: BLE discovery initialized');
+    } catch (e) {
+      LogService().log('DevicesService: Failed to initialize BLE: $e');
+      _bleService = null;
+    }
+  }
+
+  /// Handle BLE discovered devices
+  void _handleBLEDevices(List<BLEDevice> bleDevices) {
+    for (final bleDevice in bleDevices) {
+      // Use callsign if available, otherwise use BLE device ID
+      final callsign = bleDevice.callsign?.toUpperCase() ?? 'BLE-${bleDevice.deviceId}';
+
+      if (_devices.containsKey(callsign)) {
+        // Update existing device
+        final device = _devices[callsign]!;
+        if (!device.connectionMethods.contains('bluetooth')) {
+          device.connectionMethods = [...device.connectionMethods, 'bluetooth'];
+        }
+        device.isOnline = true;
+        device.lastSeen = bleDevice.lastSeen;
+        device.bleProximity = bleDevice.proximity;
+        device.bleRssi = bleDevice.rssi;
+        // Update location if available from BLE HELLO
+        if (bleDevice.latitude != null) device.latitude = bleDevice.latitude;
+        if (bleDevice.longitude != null) device.longitude = bleDevice.longitude;
+        if (bleDevice.nickname != null) device.nickname = bleDevice.nickname;
+      } else {
+        // Add new device discovered via BLE
+        _devices[callsign] = RemoteDevice(
+          callsign: callsign,
+          name: bleDevice.displayName,
+          nickname: bleDevice.nickname,
+          npub: bleDevice.npub,
+          isOnline: true,
+          hasCachedData: false,
+          collections: [],
+          latitude: bleDevice.latitude,
+          longitude: bleDevice.longitude,
+          connectionMethods: ['bluetooth'],
+          source: DeviceSourceType.ble,
+          lastSeen: bleDevice.lastSeen,
+          bleProximity: bleDevice.proximity,
+          bleRssi: bleDevice.rssi,
+        );
+        LogService().log('DevicesService: Added BLE device: $callsign (${bleDevice.proximity})');
+      }
+    }
+
+    _notifyListeners();
   }
 
   /// Load devices from cache
@@ -141,13 +215,29 @@ class DevicesService {
     bool directOk = false;
     bool proxyOk = false;
 
+    // Check if this device IS the connected station
+    // For the connected station, WebSocket state is the source of truth
+    final connectedStation = _stationService.getConnectedRelay();
+    final isConnectedStation = connectedStation != null &&
+        connectedStation.callsign != null &&
+        connectedStation.callsign!.toUpperCase() == callsign.toUpperCase();
+
     // Try direct connection first (local WiFi) if device has a URL
     if (device.url != null) {
       directOk = await _checkDirectConnection(device);
     }
 
-    // Always check via station proxy for internet connectivity
-    proxyOk = await _checkViaRelayProxy(device);
+    // For connected station, use WebSocket state instead of proxy check
+    // (you can't meaningfully check a station's connectivity through itself)
+    if (isConnectedStation) {
+      proxyOk = connectedStation!.isConnected;
+      if (proxyOk && !device.connectionMethods.contains('internet')) {
+        device.connectionMethods = [...device.connectionMethods, 'internet'];
+      }
+    } else {
+      // For other devices, check via station proxy
+      proxyOk = await _checkViaRelayProxy(device);
+    }
 
     // Device is online if ANY connection method works
     final isNowOnline = directOk || proxyOk;
@@ -182,8 +272,8 @@ class DevicesService {
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
     // Get connected station
     final station = _stationService.getConnectedRelay();
-    if (station == null) {
-      // No station connection - remove 'internet' from connectionMethods
+    if (station == null || !station.isConnected) {
+      // No active station WebSocket connection - remove 'internet' from connectionMethods
       device.connectionMethods = device.connectionMethods
           .where((m) => m != 'internet')
           .toList();
@@ -222,11 +312,10 @@ class DevicesService {
       LogService().log('DevicesService: Error checking device ${device.callsign}: $e');
     }
 
-    // Failed to check - remove 'internet' from connectionMethods
-    device.connectionMethods = device.connectionMethods
-        .where((m) => m != 'internet')
-        .toList();
-    device.isOnline = device.connectionMethods.isNotEmpty; // Online if other methods exist
+    // On HTTP failure/timeout, don't remove 'internet' tag
+    // The tag will only be removed when:
+    // - Station WebSocket disconnects (checked at method start)
+    // - A successful check returns connected: false (handled above)
     device.lastChecked = DateTime.now();
     _notifyListeners();
     return false;
@@ -325,11 +414,35 @@ class DevicesService {
     // Then discover devices on local WiFi network
     await _discoverLocalDevices();
 
+    // Discover devices via BLE (in parallel with other checks)
+    _discoverBLEDevices();
+
     // Finally check reachability for all known devices
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
     }
   }
+
+  /// Discover devices via BLE
+  Future<void> _discoverBLEDevices() async {
+    if (_bleService == null) return;
+
+    try {
+      if (await _bleService!.isAvailable()) {
+        LogService().log('DevicesService: Starting BLE discovery...');
+        // Start BLE scan (non-blocking, updates come via stream)
+        _bleService!.startScanning(timeout: const Duration(seconds: 10));
+      }
+    } catch (e) {
+      LogService().log('DevicesService: BLE discovery error: $e');
+    }
+  }
+
+  /// Check if BLE discovery is available
+  bool get isBLEAvailable => _bleService != null;
+
+  /// Check if BLE is currently scanning
+  bool get isBLEScanning => _bleService?.isScanning ?? false;
 
   /// Update the connected station as a device with 'internet' connection
   Future<void> _updateConnectedStation() async {
@@ -806,6 +919,8 @@ class DevicesService {
 
   /// Dispose resources
   void dispose() {
+    _bleSubscription?.cancel();
+    _bleService?.dispose();
     _devicesController.close();
   }
 }
@@ -829,6 +944,10 @@ class RemoteDevice {
   List<String> connectionMethods;
   DeviceSourceType source;
 
+  /// BLE-specific fields
+  String? bleProximity;  // "Very close", "Nearby", "In range", "Far"
+  int? bleRssi;          // Signal strength in dBm
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -846,6 +965,8 @@ class RemoteDevice {
     this.longitude,
     this.connectionMethods = const [],
     this.source = DeviceSourceType.local,
+    this.bleProximity,
+    this.bleRssi,
   });
 
   /// Get display name (nickname or callsign)

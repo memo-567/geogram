@@ -1,5 +1,7 @@
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../services/i18n_service.dart';
@@ -36,6 +38,16 @@ class _OnboardingPageState extends State<OnboardingPage> {
       }
     } catch (e) {
       // Continue even if permission request fails
+    }
+
+    // Request Bluetooth permissions (Android only)
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        // This will trigger the Bluetooth permission dialog on Android 12+
+        await FlutterBluePlus.turnOn();
+      }
+    } catch (e) {
+      // Continue even if Bluetooth permission request fails
     }
 
     // Complete onboarding regardless of permission result
@@ -128,6 +140,14 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 Icons.wifi,
                 _i18n.t('onboarding_permission_internet'),
                 _i18n.t('onboarding_permission_internet_short'),
+              ),
+
+              // Bluetooth permission
+              _buildPermissionItem(
+                theme,
+                Icons.bluetooth,
+                _i18n.t('onboarding_permission_bluetooth'),
+                _i18n.t('onboarding_permission_bluetooth_short'),
               ),
 
               // Install permission

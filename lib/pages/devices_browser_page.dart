@@ -487,6 +487,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 RemoteDevice.getConnectionMethodLabel(method),
                 _getConnectionMethodColor(method),
               )),
+              // BLE proximity tag
+              if (device.bleProximity != null)
+                _buildConnectionTag(
+                  theme,
+                  device.bleProximity!,
+                  _getBLEProximityColor(device.bleProximity!),
+                ),
               // Unreachable tag if offline
               if (!device.isOnline)
                 _buildConnectionTag(
@@ -628,6 +635,22 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         return Colors.cyan;
       case 'lan':
         return Colors.blueGrey;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  /// Get color for BLE proximity indicator
+  Color _getBLEProximityColor(String proximity) {
+    switch (proximity.toLowerCase()) {
+      case 'very close':
+        return Colors.green;
+      case 'nearby':
+        return Colors.lightGreen;
+      case 'in range':
+        return Colors.orange;
+      case 'far':
+        return Colors.red;
       default:
         return Colors.grey;
     }

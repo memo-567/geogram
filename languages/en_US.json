@@ -1227,6 +1227,8 @@
   "onboarding_permission_location_short": "For maps and geographic message routing",
   "onboarding_permission_internet": "Internet",
   "onboarding_permission_internet_short": "For NOSTR relays and map tiles",
+  "onboarding_permission_bluetooth": "Bluetooth",
+  "onboarding_permission_bluetooth_short": "To discover nearby Geogram devices",
   "onboarding_permission_install": "Install Updates",
   "onboarding_permission_install_short": "For in-app updates from GitHub",
   "onboarding_privacy_short": "Your data stays on your device. Location is only shared when you choose.",

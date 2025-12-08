@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Geogram uses Bluetooth to discover nearby devices for peer-to-peer communication</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Geogram uses Bluetooth to connect with nearby devices</string>
 </dict>
 </plist>
