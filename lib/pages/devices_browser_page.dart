@@ -409,7 +409,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final isSelected = _selectedDevice?.callsign == device.callsign;
     final profile = _profileService.getProfile();
     final distanceKm = device.calculateDistance(profile.latitude, profile.longitude);
-    final distanceStr = _formatDistance(distanceKm);
+    final distanceStr = _formatDistance(distanceKm, device.connectionMethods);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return ListTile(
@@ -559,7 +559,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Format distance with translations
-  String? _formatDistance(double? distanceKm) {
+  /// Shows "Same location" for devices on the same WiFi network
+  String? _formatDistance(double? distanceKm, List<String> connectionMethods) {
+    // If on same WiFi, show "Same location"
+    if (connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
+      return _i18n.t('same_location');
+    }
+
     if (distanceKm == null) return null;
 
     if (distanceKm < 1) {

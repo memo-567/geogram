@@ -112,10 +112,13 @@ class NostrEvent {
   }
 
   /// Create hello event for WebSocket connection
+  /// Optionally includes location coordinates for distance calculation
   factory NostrEvent.createHello({
     required String npub,
     required String callsign,
     String? nickname,
+    double? latitude,
+    double? longitude,
   }) {
     // Convert npub to pubkey hex
     final pubkeyHex = NostrCrypto.decodeNpub(npub);
@@ -126,6 +129,11 @@ class NostrEvent {
     // Include nickname if provided and not empty (for friendly URL support)
     if (nickname != null && nickname.isNotEmpty) {
       tags.add(['nickname', nickname]);
+    }
+    // Include location if both coordinates are provided
+    if (latitude != null && longitude != null) {
+      tags.add(['latitude', latitude.toString()]);
+      tags.add(['longitude', longitude.toString()]);
     }
     return NostrEvent(
       pubkey: pubkeyHex,

@@ -534,8 +534,8 @@ class _UpdatePageState extends State<UpdatePage> {
 
               const SizedBox(height: 32),
 
-              // Backups Section
-              if (!kIsWeb) ...[
+              // Backups Section (Android only)
+              if (!kIsWeb && Platform.isAndroid) ...[
                 Text(
                   _i18n.t('rollback_backups'),
                   style: Theme.of(context).textTheme.headlineSmall,
@@ -758,7 +758,17 @@ class _UpdatePageState extends State<UpdatePage> {
       cardColor = Theme.of(context).colorScheme.primaryContainer;
       icon = Icons.system_update;
       title = _i18n.t('update_available_title');
-      subtitle = _i18n.t('tap_to_download_install', params: [_latestRelease!.version]);
+      // Format release date from ISO 8601 to "YYYY-MM-DD HH:MM"
+      String releaseDateStr = '';
+      if (_latestRelease!.publishedAt != null) {
+        try {
+          final releaseDate = DateTime.parse(_latestRelease!.publishedAt!).toLocal();
+          releaseDateStr = '${releaseDate.year}-${releaseDate.month.toString().padLeft(2, '0')}-${releaseDate.day.toString().padLeft(2, '0')} ${releaseDate.hour.toString().padLeft(2, '0')}:${releaseDate.minute.toString().padLeft(2, '0')}';
+        } catch (e) {
+          releaseDateStr = _latestRelease!.publishedAt!;
+        }
+      }
+      subtitle = _i18n.t('tap_to_download_install', params: [_latestRelease!.version, releaseDateStr]);
     } else if (_latestRelease != null) {
       cardColor = Theme.of(context).colorScheme.secondaryContainer;
       icon = Icons.check_circle_outline;

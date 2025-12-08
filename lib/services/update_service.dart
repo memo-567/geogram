@@ -265,7 +265,9 @@ class UpdateService {
 
       final backups = <BackupInfo>[];
       await for (final entity in backupDir.list()) {
-        if (entity is File && entity.path.endsWith('.backup')) {
+        // Accept both .backup (desktop) and .apk (Android) files
+        if (entity is File &&
+            (entity.path.endsWith('.backup') || entity.path.endsWith('.apk'))) {
           final stat = await entity.stat();
           final filename = entity.path.split(Platform.pathSeparator).last;
 
@@ -308,14 +310,23 @@ class UpdateService {
     }
   }
 
-  /// Create backup of current binary
+  /// Create backup of current binary or APK
   Future<BackupInfo?> createBackup() async {
     if (kIsWeb) return null;
 
     try {
-      final currentBinary = await _getCurrentBinaryPath();
-      if (currentBinary == null || !await File(currentBinary).exists()) {
-        LogService().log('Current binary not found for backup');
+      String? sourceFile;
+
+      if (Platform.isAndroid) {
+        // On Android, backup the currently installed APK
+        sourceFile = await _getCurrentApkPath();
+      } else {
+        // On desktop, backup the current binary
+        sourceFile = await _getCurrentBinaryPath();
+      }
+
+      if (sourceFile == null || !await File(sourceFile).exists()) {
+        LogService().log('Source file not found for backup');
         return null;
       }
 
@@ -324,12 +335,14 @@ class UpdateService {
           .toIso8601String()
           .replaceAll(':', '-')
           .split('.')[0];
-      final binaryName = currentBinary.split(Platform.pathSeparator).last;
-      final backupName = '$binaryName.$appVersion.$timestamp.backup';
+
+      // Use .apk extension for Android, .backup for desktop
+      final extension = Platform.isAndroid ? '.apk' : '.backup';
+      final backupName = 'geogram-desktop.$appVersion.$timestamp$extension';
       final backupFile = File('$backupPath${Platform.pathSeparator}$backupName');
 
-      LogService().log('Creating backup: $currentBinary -> ${backupFile.path}');
-      await File(currentBinary).copy(backupFile.path);
+      LogService().log('Creating backup: $sourceFile -> ${backupFile.path}');
+      await File(sourceFile).copy(backupFile.path);
 
       // Cleanup old backups
       await _cleanupOldBackups();
@@ -400,6 +413,20 @@ class UpdateService {
     }
 
     return null;
+  }
+
+  /// Get the path to the currently installed APK (Android only)
+  Future<String?> _getCurrentApkPath() async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+
+    try {
+      final result = await _updateChannel.invokeMethod<String>('getCurrentApkPath');
+      LogService().log('Current APK path: $result');
+      return result;
+    } catch (e) {
+      LogService().log('Error getting current APK path: $e');
+      return null;
+    }
   }
 
   /// Download update to temporary file with resume support
@@ -727,12 +754,6 @@ class UpdateService {
     if (kIsWeb) return false;
 
     try {
-      final currentBinary = await _getCurrentBinaryPath();
-      if (currentBinary == null) {
-        LogService().log('Current binary not found for rollback');
-        return false;
-      }
-
       if (!await File(backup.path).exists()) {
         LogService().log('Backup file not found: ${backup.path}');
         return false;
@@ -740,16 +761,31 @@ class UpdateService {
 
       LogService().log('Rolling back to: ${backup.filename}');
 
-      // Copy backup to current binary location
-      await File(backup.path).copy(currentBinary);
+      if (Platform.isAndroid) {
+        // On Android, reinstall the backup APK via system installer
+        final canInstall = await canInstallPackages();
+        if (!canInstall) {
+          LogService().log('Install permission not granted for rollback');
+          return false;
+        }
 
-      // Make executable on Unix systems
-      if (Platform.isLinux || Platform.isMacOS) {
-        await Process.run('chmod', ['+x', currentBinary]);
+        final result = await _updateChannel.invokeMethod<bool>(
+          'installApk',
+          {'filePath': backup.path},
+        );
+
+        if (result == true) {
+          LogService().log('Rollback APK installer launched');
+          return true;
+        } else {
+          LogService().log('Failed to launch rollback APK installer');
+          return false;
+        }
       }
 
-      LogService().log('Rollback complete. Restart required.');
-      return true;
+      // Desktop platforms: rollback not supported (feature should be hidden)
+      LogService().log('Rollback not supported on this platform');
+      return false;
     } catch (e) {
       LogService().log('Error during rollback: $e');
       return false;
@@ -868,6 +904,10 @@ class UpdateService {
           await openInstallPermissionSettings();
           return false;
         }
+
+        // Create backup of current APK before installing new one
+        LogService().log('Creating backup before update...');
+        await createBackup();
 
         // On Android, launch the APK installer via method channel
         LogService().log('Launching APK installer for: $updateFilePath');

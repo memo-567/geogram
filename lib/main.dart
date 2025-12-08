@@ -489,26 +489,37 @@ class _HomePageState extends State<HomePage> {
         // If already on Collections, do nothing (stay there)
       },
       child: Scaffold(
-        appBar: AppBar(
+        // Show AppBar only on Apps panel (index 0) for full-screen Map/Devices
+        appBar: _selectedIndex == 0 ? AppBar(
           automaticallyImplyLeading: false,
           title: const ProfileSwitcher(),
           actions: [
             // Show station indicator if current profile is a station
             if (_profileService.getProfile().isRelay)
+              IconButton(
+                icon: const Icon(Icons.cell_tower),
+                tooltip: _i18n.t('station_dashboard'),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const StationDashboardPage(),
+                    ),
+                  );
+                },
+              ),
+            // Settings icon
             IconButton(
-              icon: const Icon(Icons.cell_tower),
-              tooltip: _i18n.t('station_dashboard'),
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: _i18n.t('settings'),
               onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const StationDashboardPage(),
-                  ),
-                );
+                setState(() {
+                  _selectedIndex = 3; // Navigate to Settings
+                });
               },
             ),
-        ],
-      ),
+          ],
+        ) : null,
       drawer: NavigationDrawer(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (int index) {
@@ -555,7 +566,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: _pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex < 4 ? _selectedIndex : 0,
+        selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
         onDestinationSelected: (int index) {
           setState(() {
             _selectedIndex = index;
@@ -576,11 +587,6 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.devices_outlined),
             selectedIcon: const Icon(Icons.devices),
             label: _i18n.t('devices'),
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.settings_outlined),
-            selectedIcon: const Icon(Icons.settings),
-            label: _i18n.t('settings'),
           ),
         ],
       ),

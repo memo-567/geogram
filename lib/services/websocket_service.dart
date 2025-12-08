@@ -78,11 +78,13 @@ class WebSocketService {
       LogService().log('User callsign: ${profile.callsign}');
       LogService().log('User npub: ${profile.npub.substring(0, 20)}...');
 
-      // Create hello event (include nickname for friendly URL support)
+      // Create hello event (include nickname for friendly URL support, location for distance)
       final event = NostrEvent.createHello(
         npub: profile.npub,
         callsign: profile.callsign,
         nickname: profile.nickname,
+        latitude: profile.latitude,
+        longitude: profile.longitude,
       );
       event.calculateId();
 

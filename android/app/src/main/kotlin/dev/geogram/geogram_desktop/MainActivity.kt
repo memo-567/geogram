@@ -34,6 +34,11 @@ class MainActivity : FlutterActivity() {
                     openInstallPermissionSettings()
                     result.success(true)
                 }
+                "getCurrentApkPath" -> {
+                    val apkPath = applicationContext.applicationInfo.sourceDir
+                    android.util.Log.d("GeogramUpdate", "Current APK path: $apkPath")
+                    result.success(apkPath)
+                }
                 else -> result.notImplemented()
             }
         }
