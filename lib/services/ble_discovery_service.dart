@@ -161,9 +161,15 @@ class BLEDiscoveryService {
       return;
     }
 
-    // BLE advertising not available on web or desktop (Linux/Windows/macOS)
+    // BLE advertising only available on Android and iOS
     if (kIsWeb) {
       LogService().log('BLEDiscovery: Advertising not available on web');
+      return;
+    }
+
+    // Check platform - ble_peripheral only works on Android/iOS
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      LogService().log('BLEDiscovery: Advertising not available on this platform');
       return;
     }
 
@@ -191,8 +197,8 @@ class BLEDiscoveryService {
 
       _isAdvertising = true;
       LogService().log('BLEDiscovery: Started advertising as $callsign');
-    } catch (e) {
-      LogService().log('BLEDiscovery: Error starting advertising: $e');
+    } catch (e, stackTrace) {
+      LogService().log('BLEDiscovery: Error starting advertising: $e\n$stackTrace');
       _isAdvertising = false;
     }
   }
@@ -201,12 +207,19 @@ class BLEDiscoveryService {
   Future<void> stopAdvertising() async {
     if (!_isAdvertising) return;
 
+    // Only try to stop on platforms that support it
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      _isAdvertising = false;
+      return;
+    }
+
     try {
       await BlePeripheral.stopAdvertising();
       _isAdvertising = false;
       LogService().log('BLEDiscovery: Stopped advertising');
     } catch (e) {
       LogService().log('BLEDiscovery: Error stopping advertising: $e');
+      _isAdvertising = false;
     }
   }
 

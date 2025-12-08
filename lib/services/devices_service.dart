@@ -67,16 +67,28 @@ class DevicesService {
         _handleBLEDevices(bleDevices);
       });
 
-      // Start advertising so other Geogram devices can discover us
+      LogService().log('DevicesService: BLE discovery initialized');
+
+      // Start advertising in background (don't block initialization)
+      _startBLEAdvertising();
+    } catch (e, stackTrace) {
+      LogService().log('DevicesService: Failed to initialize BLE: $e\n$stackTrace');
+      _bleService = null;
+    }
+  }
+
+  /// Start BLE advertising (separate from initialization to avoid crashes)
+  Future<void> _startBLEAdvertising() async {
+    if (_bleService == null) return;
+
+    try {
       final profile = ProfileService().getProfile();
       if (profile.callsign != null) {
         await _bleService!.startAdvertising(profile.callsign!);
       }
-
-      LogService().log('DevicesService: BLE discovery initialized');
     } catch (e) {
-      LogService().log('DevicesService: Failed to initialize BLE: $e');
-      _bleService = null;
+      LogService().log('DevicesService: Failed to start BLE advertising: $e');
+      // Don't crash - advertising is optional
     }
   }
 
