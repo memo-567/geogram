@@ -52,13 +52,25 @@ class UpdateService {
       _initialized = true;
       LogService().log('UpdateService initialized');
 
-      // Auto-check for updates if enabled
+      // Auto-check for updates if enabled - always check on startup
       if (_settings?.autoCheckUpdates == true) {
-        // Check if we haven't checked in the last 24 hours
-        final lastCheck = _settings?.lastCheckTime;
-        if (lastCheck == null ||
-            DateTime.now().difference(lastCheck).inHours >= 24) {
-          checkForUpdates();
+        // Check for updates immediately on startup
+        checkForUpdates();
+      } else {
+        // If auto-check is disabled, still restore last known state for display
+        final lastCheckedVersion = _settings?.lastCheckedVersion;
+        if (lastCheckedVersion != null && lastCheckedVersion.isNotEmpty) {
+          final wasUpdateAvailable = isNewerVersion(getCurrentVersion(), lastCheckedVersion);
+          if (wasUpdateAvailable) {
+            // Create a minimal ReleaseInfo so the banner can show the version
+            _latestRelease = ReleaseInfo(
+              version: lastCheckedVersion,
+              tagName: 'v$lastCheckedVersion',
+              name: 'Version $lastCheckedVersion',
+            );
+            updateAvailable.value = true;
+            LogService().log('Restored update available state: $lastCheckedVersion > ${getCurrentVersion()}');
+          }
         }
       }
     } catch (e) {
