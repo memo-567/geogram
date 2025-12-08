@@ -544,9 +544,9 @@ class StationServerService {
               callsign = tag[1] as String;
             } else if (tagName == 'nickname' && tag.length > 1) {
               nickname = tag[1] as String;
-            } else if (tagName == 'lat' && tag.length > 1) {
+            } else if ((tagName == 'latitude' || tagName == 'lat') && tag.length > 1) {
               latitude = double.tryParse(tag[1].toString());
-            } else if (tagName == 'lon' && tag.length > 1) {
+            } else if ((tagName == 'longitude' || tagName == 'lon') && tag.length > 1) {
               longitude = double.tryParse(tag[1].toString());
             }
           }
