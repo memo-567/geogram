@@ -242,24 +242,42 @@ class DevicesService {
   Future<void> _fetchStationClients() async {
     try {
       final station = _stationService.getConnectedRelay();
-      if (station == null) return;
+      if (station == null) {
+        LogService().log('DevicesService: No connected station to fetch clients from');
+        return;
+      }
 
-      final baseUrl = station.url
+      // Convert WebSocket URL to HTTP and extract base (remove path like /ws)
+      var baseUrl = station.url
           .replaceFirst('ws://', 'http://')
           .replaceFirst('wss://', 'https://');
 
+      // Remove any path component (e.g., /ws) to get the base URL
+      final uri = Uri.parse(baseUrl);
+      baseUrl = '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
+
+      final clientsUrl = '$baseUrl/api/clients';
+      LogService().log('DevicesService: Fetching clients from: $clientsUrl');
+
       final response = await http.get(
-        Uri.parse('$baseUrl/api/clients'),
+        Uri.parse(clientsUrl),
       ).timeout(const Duration(seconds: 10));
+
+      LogService().log('DevicesService: Station clients response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final clients = data['clients'] as List<dynamic>?;
 
+        LogService().log('DevicesService: Received ${clients?.length ?? 0} clients from station');
+
         if (clients != null) {
           for (final clientData in clients) {
             final callsign = clientData['callsign'] as String?;
-            if (callsign == null) continue;
+            if (callsign == null || callsign.isEmpty) {
+              LogService().log('DevicesService: Skipping client with no callsign');
+              continue;
+            }
 
             final normalizedCallsign = callsign.toUpperCase();
 
@@ -288,6 +306,7 @@ class DevicesService {
               }
               device.source = DeviceSourceType.station;
               device.lastSeen = DateTime.now();
+              LogService().log('DevicesService: Updated device: $normalizedCallsign');
             } else {
               // Create new device from station client
               _devices[normalizedCallsign] = RemoteDevice(
@@ -304,12 +323,15 @@ class DevicesService {
                 source: DeviceSourceType.station,
                 lastSeen: DateTime.now(),
               );
+              LogService().log('DevicesService: Added new device from station: $normalizedCallsign');
             }
           }
 
           _notifyListeners();
-          LogService().log('DevicesService: Fetched ${clients.length} clients from station');
+          LogService().log('DevicesService: Fetched ${clients.length} clients from station ${station.name}');
         }
+      } else {
+        LogService().log('DevicesService: Failed to fetch clients: HTTP ${response.statusCode}');
       }
     } catch (e) {
       LogService().log('DevicesService: Error fetching station clients: $e');

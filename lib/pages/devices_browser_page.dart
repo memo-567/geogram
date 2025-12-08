@@ -116,10 +116,52 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   Future<void> _refreshDevices() async {
-    setState(() => _isLoading = true);
+    // Don't show loading indicator for background refresh
+    // Only update UI if there are actual changes
+    final oldDevices = List<RemoteDevice>.from(_devices);
+
     await _devicesService.refreshAllDevices();
-    _devices = _filterRemoteDevices(_devicesService.getAllDevices());
-    setState(() => _isLoading = false);
+    final newDevices = _filterRemoteDevices(_devicesService.getAllDevices());
+
+    // Only update state if devices changed
+    if (_devicesChanged(oldDevices, newDevices)) {
+      if (mounted) {
+        setState(() {
+          _devices = newDevices;
+        });
+      }
+    }
+  }
+
+  /// Check if devices list has changed
+  bool _devicesChanged(List<RemoteDevice> oldDevices, List<RemoteDevice> newDevices) {
+    if (oldDevices.length != newDevices.length) return true;
+
+    for (int i = 0; i < oldDevices.length; i++) {
+      final oldDevice = oldDevices[i];
+      final newDevice = newDevices.firstWhere(
+        (d) => d.callsign == oldDevice.callsign,
+        orElse: () => oldDevice,
+      );
+
+      // Check if key properties changed
+      if (oldDevice.callsign != newDevice.callsign ||
+          oldDevice.isOnline != newDevice.isOnline ||
+          oldDevice.displayName != newDevice.displayName ||
+          oldDevice.latitude != newDevice.latitude ||
+          oldDevice.longitude != newDevice.longitude) {
+        return true;
+      }
+    }
+
+    // Check for new devices
+    for (final newDevice in newDevices) {
+      if (!oldDevices.any((d) => d.callsign == newDevice.callsign)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
