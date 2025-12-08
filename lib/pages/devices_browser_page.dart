@@ -81,18 +81,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       await _devicesService.initialize();
       await _cacheService.initialize();
 
-      // Listen to device updates
+      // Listen to device updates - UI will update automatically as devices are discovered
       _devicesService.devicesStream.listen((devices) {
         if (mounted) {
           setState(() => _devices = _filterRemoteDevices(devices));
         }
       });
 
-      // Initial load
+      // Initial load from cache (instant)
       _devices = _filterRemoteDevices(_devicesService.getAllDevices());
 
-      // Check reachability for all devices
-      await _devicesService.refreshAllDevices();
+      // Start discovery in background - don't await, UI updates via stream
+      // This allows the UI to show immediately with cached data
+      _devicesService.refreshAllDevices();
     } catch (e) {
       LogService().log('DevicesBrowserPage: Error initializing: $e');
       _error = e.toString();
@@ -289,10 +290,48 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     // Handle system back button on mobile when viewing device detail
     final shouldInterceptBack = isNarrow && _selectedDevice != null;
 
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    return PopScope(
+      canPop: !shouldInterceptBack,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && shouldInterceptBack) {
+          _handleBackButton();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_selectedDevice != null && isNarrow
+              ? _selectedDevice!.displayName
+              : _i18n.t('devices')),
+          leading: _selectedDevice != null && isNarrow
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => setState(() => _selectedDevice = null),
+                )
+              : null,
+          actions: [
+            if (_isLoading)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _refreshDevices,
+                tooltip: _i18n.t('refresh'),
+              ),
+          ],
+        ),
+        body: _buildBody(theme),
+      ),
+    );
+  }
 
+  Widget _buildBody(ThemeData theme) {
     if (_error != null) {
       return Center(
         child: Column(
@@ -311,14 +350,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       );
     }
 
-    return PopScope(
-      canPop: !shouldInterceptBack,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && shouldInterceptBack) {
-          _handleBackButton();
-        }
-      },
-      child: LayoutBuilder(
+    return LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 600;
 
@@ -346,62 +378,25 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ],
         );
       },
-      ),
     );
   }
 
   Widget _buildDeviceList(ThemeData theme) {
-    return Column(
-      children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: theme.colorScheme.outline.withValues(alpha: 0.2),
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.devices, color: theme.colorScheme.primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  _i18n.t('devices'),
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _refreshDevices,
-                tooltip: _i18n.t('refresh'),
-              ),
-            ],
-          ),
-        ),
+    // Device list with pull-to-refresh (header moved to AppBar)
+    if (_devices.isEmpty) {
+      return _buildNoDevices(theme);
+    }
 
-        // Device list with pull-to-refresh
-        Expanded(
-          child: _devices.isEmpty
-              ? _buildNoDevices(theme)
-              : RefreshIndicator(
-                  onRefresh: _refreshDevices,
-                  child: ListView.builder(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: _devices.length,
-                    itemBuilder: (context, index) {
-                      final device = _devices[index];
-                      return _buildDeviceListTile(theme, device);
-                    },
-                  ),
-                ),
-        ),
-      ],
+    return RefreshIndicator(
+      onRefresh: _refreshDevices,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: _devices.length,
+        itemBuilder: (context, index) {
+          final device = _devices[index];
+          return _buildDeviceListTile(theme, device);
+        },
+      ),
     );
   }
 
@@ -538,6 +533,39 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     );
   }
 
+  /// Build online/offline status indicator
+  Widget _buildOnlineStatus(ThemeData theme, RemoteDevice device) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: device.isOnline
+            ? Colors.green.withValues(alpha: 0.1)
+            : Colors.grey.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: device.isOnline ? Colors.green : Colors.grey,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            device.isOnline ? _i18n.t('online') : _i18n.t('offline'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: device.isOnline ? Colors.green : Colors.grey,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Build a small tag widget for connection methods
   Widget _buildConnectionTag(ThemeData theme, String label, Color color) {
     return Container(
@@ -652,107 +680,105 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   Widget _buildDeviceDetail(ThemeData theme) {
     final device = _selectedDevice!;
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
+    final isNarrow = MediaQuery.of(context).size.width < 600;
 
     return Column(
       children: [
-        // Device header
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: theme.colorScheme.outline.withValues(alpha: 0.2),
+        // Device header - only show in desktop mode (AppBar handles narrow mode)
+        if (!isNarrow)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface,
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.colorScheme.outline.withValues(alpha: 0.2),
+                ),
               ),
             ),
-          ),
-          child: Row(
-            children: [
-              // Back button for narrow screens
-              if (MediaQuery.of(context).size.width < 600)
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => setState(() => _selectedDevice = null),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: isStation
+                      ? theme.colorScheme.tertiaryContainer
+                      : theme.colorScheme.primaryContainer,
+                  child: Icon(
+                    isStation ? Icons.cell_tower : Icons.smartphone,
+                    color: isStation
+                        ? theme.colorScheme.tertiary
+                        : theme.colorScheme.primary,
+                    size: 28,
+                  ),
                 ),
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: isStation
-                    ? theme.colorScheme.tertiaryContainer
-                    : theme.colorScheme.primaryContainer,
-                child: Icon(
-                  isStation ? Icons.cell_tower : Icons.smartphone,
-                  color: isStation
-                      ? theme.colorScheme.tertiary
-                      : theme.colorScheme.primary,
-                  size: 28,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      device.displayName,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.displayName,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    Row(
-                      children: [
-                        Text(
-                          device.callsign,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontFamily: 'monospace',
-                            color: theme.colorScheme.onSurfaceVariant,
+                      Row(
+                        children: [
+                          Text(
+                            device.callsign,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontFamily: 'monospace',
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: device.isOnline
-                                ? Colors.green.withValues(alpha: 0.1)
-                                : Colors.grey.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: device.isOnline ? Colors.green : Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                device.isOnline ? _i18n.t('online') : _i18n.t('offline'),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: device.isOnline ? Colors.green : Colors.grey,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                          const SizedBox(width: 12),
+                          _buildOnlineStatus(theme, device),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: () => _selectDevice(device),
-                tooltip: _i18n.t('refresh'),
-              ),
-            ],
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => _selectDevice(device),
+                  tooltip: _i18n.t('refresh'),
+                ),
+              ],
+            ),
           ),
-        ),
+
+        // Device info bar for narrow mode (since AppBar only shows name)
+        if (isNarrow)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: isStation
+                      ? theme.colorScheme.tertiaryContainer
+                      : theme.colorScheme.primaryContainer,
+                  child: Icon(
+                    isStation ? Icons.cell_tower : Icons.smartphone,
+                    color: isStation
+                        ? theme.colorScheme.tertiary
+                        : theme.colorScheme.primary,
+                    size: 18,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  device.callsign,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                _buildOnlineStatus(theme, device),
+              ],
+            ),
+          ),
 
         // Collections grid
         Expanded(

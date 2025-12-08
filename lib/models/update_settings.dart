@@ -1,6 +1,86 @@
 /// Update settings and release information model
 
-/// Platform types for binary selection
+/// Asset types available in releases
+enum UpdateAssetType {
+  androidApk,
+  androidAab,
+  linuxDesktop,
+  linuxCli,
+  windowsDesktop,
+  macosDesktop,
+  iosUnsigned,
+  web,
+  unknown;
+
+  String get name {
+    switch (this) {
+      case UpdateAssetType.androidApk:
+        return 'android-apk';
+      case UpdateAssetType.androidAab:
+        return 'android-aab';
+      case UpdateAssetType.linuxDesktop:
+        return 'linux-desktop';
+      case UpdateAssetType.linuxCli:
+        return 'linux-cli';
+      case UpdateAssetType.windowsDesktop:
+        return 'windows-desktop';
+      case UpdateAssetType.macosDesktop:
+        return 'macos-desktop';
+      case UpdateAssetType.iosUnsigned:
+        return 'ios-unsigned';
+      case UpdateAssetType.web:
+        return 'web';
+      case UpdateAssetType.unknown:
+        return 'unknown';
+    }
+  }
+
+  String get displayName {
+    switch (this) {
+      case UpdateAssetType.androidApk:
+        return 'Android APK';
+      case UpdateAssetType.androidAab:
+        return 'Android App Bundle';
+      case UpdateAssetType.linuxDesktop:
+        return 'Linux Desktop';
+      case UpdateAssetType.linuxCli:
+        return 'Linux CLI';
+      case UpdateAssetType.windowsDesktop:
+        return 'Windows Desktop';
+      case UpdateAssetType.macosDesktop:
+        return 'macOS Desktop';
+      case UpdateAssetType.iosUnsigned:
+        return 'iOS (unsigned)';
+      case UpdateAssetType.web:
+        return 'Web';
+      case UpdateAssetType.unknown:
+        return 'Unknown';
+    }
+  }
+
+  /// Pattern to match asset filename from GitHub releases
+  static UpdateAssetType fromFilename(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower == 'geogram.apk') return UpdateAssetType.androidApk;
+    if (lower == 'app-release.aab') return UpdateAssetType.androidAab;
+    if (lower.contains('linux') && lower.contains('cli')) return UpdateAssetType.linuxCli;
+    if (lower.contains('linux')) return UpdateAssetType.linuxDesktop;
+    if (lower.contains('windows')) return UpdateAssetType.windowsDesktop;
+    if (lower.contains('macos')) return UpdateAssetType.macosDesktop;
+    if (lower.contains('ios') && lower.endsWith('.ipa')) return UpdateAssetType.iosUnsigned;
+    if (lower.contains('web')) return UpdateAssetType.web;
+    return UpdateAssetType.unknown;
+  }
+
+  static UpdateAssetType fromString(String value) {
+    for (final type in UpdateAssetType.values) {
+      if (type.name == value) return type;
+    }
+    return UpdateAssetType.unknown;
+  }
+}
+
+/// Legacy platform enum for backward compatibility
 enum UpdatePlatform {
   linux,
   windows,
@@ -26,15 +106,31 @@ enum UpdatePlatform {
   String get binaryPattern {
     switch (this) {
       case UpdatePlatform.linux:
-        return 'geogram-desktop-linux';
+        return 'geogram-linux-x64.tar.gz';
       case UpdatePlatform.windows:
-        return 'geogram-desktop-windows.exe';
+        return 'geogram-windows-x64.zip';
       case UpdatePlatform.android:
-        return 'geogram-desktop.apk';
+        return 'geogram.apk';
       case UpdatePlatform.macos:
-        return 'geogram-desktop-macos';
+        return 'geogram-macos-x64.zip';
       case UpdatePlatform.unknown:
         return '';
+    }
+  }
+
+  /// Get the corresponding asset type for this platform
+  UpdateAssetType get assetType {
+    switch (this) {
+      case UpdatePlatform.linux:
+        return UpdateAssetType.linuxDesktop;
+      case UpdatePlatform.windows:
+        return UpdateAssetType.windowsDesktop;
+      case UpdatePlatform.android:
+        return UpdateAssetType.androidApk;
+      case UpdatePlatform.macos:
+        return UpdateAssetType.macosDesktop;
+      case UpdatePlatform.unknown:
+        return UpdateAssetType.unknown;
     }
   }
 
@@ -58,6 +154,7 @@ enum UpdatePlatform {
 class UpdateSettings {
   bool autoCheckUpdates;
   bool notifyOnUpdate;
+  bool useStationForUpdates; // Default: true (offgrid-first)
   String updateUrl;
   String downloadUrlPattern;
   int maxBackups;
@@ -67,6 +164,7 @@ class UpdateSettings {
   UpdateSettings({
     this.autoCheckUpdates = true,
     this.notifyOnUpdate = true,
+    this.useStationForUpdates = true,
     this.updateUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
     this.downloadUrlPattern = '',
     this.maxBackups = 5,
@@ -78,6 +176,7 @@ class UpdateSettings {
     return UpdateSettings(
       autoCheckUpdates: json['autoCheckUpdates'] as bool? ?? true,
       notifyOnUpdate: json['notifyOnUpdate'] as bool? ?? true,
+      useStationForUpdates: json['useStationForUpdates'] as bool? ?? true,
       updateUrl: json['updateUrl'] as String? ??
           'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
       downloadUrlPattern: json['downloadUrlPattern'] as String? ?? '',
@@ -93,6 +192,7 @@ class UpdateSettings {
     return {
       'autoCheckUpdates': autoCheckUpdates,
       'notifyOnUpdate': notifyOnUpdate,
+      'useStationForUpdates': useStationForUpdates,
       'updateUrl': updateUrl,
       'downloadUrlPattern': downloadUrlPattern,
       'maxBackups': maxBackups,
@@ -104,6 +204,7 @@ class UpdateSettings {
   UpdateSettings copyWith({
     bool? autoCheckUpdates,
     bool? notifyOnUpdate,
+    bool? useStationForUpdates,
     String? updateUrl,
     String? downloadUrlPattern,
     int? maxBackups,
@@ -113,6 +214,7 @@ class UpdateSettings {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
       notifyOnUpdate: notifyOnUpdate ?? this.notifyOnUpdate,
+      useStationForUpdates: useStationForUpdates ?? this.useStationForUpdates,
       updateUrl: updateUrl ?? this.updateUrl,
       downloadUrlPattern: downloadUrlPattern ?? this.downloadUrlPattern,
       maxBackups: maxBackups ?? this.maxBackups,
@@ -130,7 +232,9 @@ class ReleaseInfo {
   final String? body;
   final String? publishedAt;
   final String? htmlUrl;
-  final Map<String, String> assets; // platform -> download URL
+  final Map<String, String> assets; // assetType.name -> download URL
+  final Map<String, String> assetFilenames; // assetType.name -> original filename
+  final String? stationBaseUrl; // If fetched from station, the base URL
 
   ReleaseInfo({
     required this.version,
@@ -140,29 +244,29 @@ class ReleaseInfo {
     this.publishedAt,
     this.htmlUrl,
     Map<String, String>? assets,
-  }) : assets = assets ?? {};
+    Map<String, String>? assetFilenames,
+    this.stationBaseUrl,
+  })  : assets = assets ?? {},
+        assetFilenames = assetFilenames ?? {};
 
   factory ReleaseInfo.fromGitHubJson(Map<String, dynamic> json) {
     final tagName = json['tag_name'] as String? ?? '';
     final version = tagName.replaceFirst(RegExp(r'^v'), '');
 
     final assets = <String, String>{};
+    final assetFilenames = <String, String>{};
     final assetsList = json['assets'] as List<dynamic>?;
     if (assetsList != null) {
       for (final asset in assetsList) {
         final assetMap = asset as Map<String, dynamic>;
-        final name = (assetMap['name'] as String? ?? '').toLowerCase();
+        final filename = assetMap['name'] as String? ?? '';
         final downloadUrl = assetMap['browser_download_url'] as String?;
 
-        if (downloadUrl != null) {
-          if (name.contains('linux') || name == 'geogram-desktop-linux') {
-            assets['linux'] = downloadUrl;
-          } else if (name.contains('windows') || name.endsWith('.exe')) {
-            assets['windows'] = downloadUrl;
-          } else if (name.contains('android') || name.endsWith('.apk')) {
-            assets['android'] = downloadUrl;
-          } else if (name.contains('macos') || name.contains('darwin')) {
-            assets['macos'] = downloadUrl;
+        if (downloadUrl != null && filename.isNotEmpty) {
+          final assetType = UpdateAssetType.fromFilename(filename);
+          if (assetType != UpdateAssetType.unknown) {
+            assets[assetType.name] = downloadUrl;
+            assetFilenames[assetType.name] = filename;
           }
         }
       }
@@ -176,6 +280,39 @@ class ReleaseInfo {
       publishedAt: json['published_at'] as String?,
       htmlUrl: json['html_url'] as String?,
       assets: assets,
+      assetFilenames: assetFilenames,
+    );
+  }
+
+  /// Create from station API response
+  factory ReleaseInfo.fromStationJson(Map<String, dynamic> json, String stationBaseUrl) {
+    final assets = <String, String>{};
+    final assetFilenames = <String, String>{};
+
+    final assetsJson = json['assets'] as Map<String, dynamic>?;
+    if (assetsJson != null) {
+      for (final entry in assetsJson.entries) {
+        assets[entry.key] = '$stationBaseUrl${entry.value}';
+      }
+    }
+
+    final filenamesJson = json['assetFilenames'] as Map<String, dynamic>?;
+    if (filenamesJson != null) {
+      for (final entry in filenamesJson.entries) {
+        assetFilenames[entry.key] = entry.value as String;
+      }
+    }
+
+    return ReleaseInfo(
+      version: json['version'] as String? ?? '',
+      tagName: json['tagName'] as String? ?? '',
+      name: json['name'] as String?,
+      body: json['body'] as String?,
+      publishedAt: json['publishedAt'] as String?,
+      htmlUrl: json['htmlUrl'] as String?,
+      assets: assets,
+      assetFilenames: assetFilenames,
+      stationBaseUrl: stationBaseUrl,
     );
   }
 
@@ -188,7 +325,19 @@ class ReleaseInfo {
       'publishedAt': publishedAt,
       'htmlUrl': htmlUrl,
       'assets': assets,
+      'assetFilenames': assetFilenames,
     };
+  }
+
+  /// Get download URL for a specific asset type
+  String? getAssetUrl(UpdateAssetType type) => assets[type.name];
+
+  /// Get filename for a specific asset type
+  String? getAssetFilename(UpdateAssetType type) => assetFilenames[type.name];
+
+  /// Legacy getter for backward compatibility
+  String? getDownloadUrlForPlatform(UpdatePlatform platform) {
+    return assets[platform.assetType.name];
   }
 
   @override

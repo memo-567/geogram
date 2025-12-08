@@ -693,6 +693,20 @@ class _UpdatePageState extends State<UpdatePage> {
                     ),
                     const Divider(height: 1),
                     SwitchListTile(
+                      title: Text(_i18n.t('update_from_station')),
+                      subtitle: Text(settings.useStationForUpdates
+                          ? _i18n.t('update_from_station_enabled')
+                          : _i18n.t('update_from_station_disabled')),
+                      value: settings.useStationForUpdates,
+                      onChanged: (value) async {
+                        await _updateService.updateSettings(
+                          settings.copyWith(useStationForUpdates: value),
+                        );
+                        setState(() {});
+                      },
+                    ),
+                    const Divider(height: 1),
+                    SwitchListTile(
                       title: Text(_i18n.t('update_notifications')),
                       subtitle: Text(_i18n.t('update_notifications_desc')),
                       value: settings.notifyOnUpdate,

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/update_settings.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
+import '../services/station_service.dart';
 import '../version.dart';
 
 /// Service for managing application updates with rollback support
@@ -139,16 +140,87 @@ class UpdateService {
     return appVersion;
   }
 
-  /// Check for updates from configured URL
+  /// Check for updates - tries station first if enabled, then falls back to GitHub
   Future<ReleaseInfo?> checkForUpdates() async {
     if (_isChecking || kIsWeb) return null;
 
     _isChecking = true;
     try {
+      // Try station first if enabled (offgrid-first)
+      if (_settings?.useStationForUpdates == true) {
+        final stationRelease = await _checkStationForUpdates();
+        if (stationRelease != null) {
+          _latestRelease = stationRelease;
+          _updateCheckResult(stationRelease);
+          return stationRelease;
+        }
+        LogService().log('Station update check failed or unavailable, falling back to GitHub');
+      }
+
+      // Fall back to GitHub (or use directly if station disabled)
+      return await _checkGitHubForUpdates();
+    } catch (e) {
+      LogService().log('Error checking for updates: $e');
+      return null;
+    } finally {
+      _isChecking = false;
+    }
+  }
+
+  /// Check for updates from connected station
+  Future<ReleaseInfo?> _checkStationForUpdates() async {
+    try {
+      final station = StationService().getPreferredStation();
+      if (station == null || station.url.isEmpty) {
+        LogService().log('No station connected for update check');
+        return null;
+      }
+
+      // Convert WebSocket URL to HTTP
+      final httpUrl = _wsToHttpUrl(station.url);
+      final updateUrl = '$httpUrl/api/updates/latest';
+
+      LogService().log('Checking station for updates: $updateUrl');
+
+      final response = await http.get(
+        Uri.parse(updateUrl),
+        headers: {'User-Agent': 'Geogram-Desktop-Updater'},
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) {
+        LogService().log('Station update check failed: HTTP ${response.statusCode}');
+        return null;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+
+      // Check if station has updates cached
+      if (json['status'] == 'no_updates_cached') {
+        LogService().log('Station has no updates cached');
+        return null;
+      }
+
+      if (json['status'] != 'available') {
+        LogService().log('Station update status: ${json['status']}');
+        return null;
+      }
+
+      final release = ReleaseInfo.fromStationJson(json, httpUrl);
+      LogService().log('Got update info from station: v${release.version} with ${release.assets.length} assets');
+      return release;
+    } catch (e) {
+      LogService().log('Error checking station for updates: $e');
+      return null;
+    }
+  }
+
+  /// Check for updates from GitHub
+  Future<ReleaseInfo?> _checkGitHubForUpdates() async {
+    try {
       final url = _settings?.updateUrl ??
           'https://api.github.com/repos/geograms/geogram-desktop/releases/latest';
 
-      LogService().log('Checking for updates from: $url');
+      LogService().log('Checking GitHub for updates: $url');
 
       final response = await http.get(
         Uri.parse(url),
@@ -165,27 +237,34 @@ class UpdateService {
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       _latestRelease = ReleaseInfo.fromGitHubJson(json);
 
-      // Update last check time
-      _settings = _settings?.copyWith(
-        lastCheckTime: DateTime.now(),
-        lastCheckedVersion: _latestRelease?.version,
-      );
-      _saveSettings();
-
-      // Check if update is available
-      final isNewer = isNewerVersion(getCurrentVersion(), _latestRelease!.version);
-      updateAvailable.value = isNewer;
-
-      LogService().log(
-          'Update check complete: current=$appVersion, latest=${_latestRelease?.version}, updateAvailable=$isNewer');
-
+      _updateCheckResult(_latestRelease!);
       return _latestRelease;
     } catch (e) {
-      LogService().log('Error checking for updates: $e');
+      LogService().log('Error checking GitHub for updates: $e');
       return null;
-    } finally {
-      _isChecking = false;
     }
+  }
+
+  /// Update settings and notify after successful check
+  void _updateCheckResult(ReleaseInfo release) {
+    _settings = _settings?.copyWith(
+      lastCheckTime: DateTime.now(),
+      lastCheckedVersion: release.version,
+    );
+    _saveSettings();
+
+    final isNewer = isNewerVersion(getCurrentVersion(), release.version);
+    updateAvailable.value = isNewer;
+
+    LogService().log(
+        'Update check complete: current=$appVersion, latest=${release.version}, updateAvailable=$isNewer');
+  }
+
+  /// Convert WebSocket URL to HTTP URL
+  String _wsToHttpUrl(String wsUrl) {
+    return wsUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
   }
 
   /// Get latest release info (from cache or fetch)
@@ -222,6 +301,7 @@ class UpdateService {
   /// Get download URL for current platform
   String? getDownloadUrl(ReleaseInfo release) {
     final platform = detectPlatform();
+    final assetType = platform.assetType;
 
     // Check for custom download URL pattern
     if (_settings?.downloadUrlPattern.isNotEmpty == true) {
@@ -231,8 +311,8 @@ class UpdateService {
           .replaceAll('{binary}', platform.binaryPattern);
     }
 
-    // Use GitHub release asset
-    return release.assets[platform.name];
+    // Use asset URL (works for both station and GitHub releases)
+    return release.getAssetUrl(assetType);
   }
 
   /// Get backup directory path

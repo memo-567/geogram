@@ -15,6 +15,7 @@ import '../services/storage_config.dart';
 import '../services/direct_message_service.dart';
 import '../models/blog_post.dart';
 import '../models/chat_message.dart';
+import '../models/update_settings.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/event_bus.dart';
@@ -32,6 +33,10 @@ class RelayServerSettings {
   String? location;
   double? latitude;
   double? longitude;
+  // Update mirror settings
+  bool updateMirrorEnabled;      // Enable/disable update mirroring from GitHub
+  int updateCheckInterval;       // Polling interval in seconds (default: 120 = 2 min)
+  String? lastMirroredVersion;   // Track what version has been downloaded
 
   RelayServerSettings({
     this.port = 8080,
@@ -44,6 +49,9 @@ class RelayServerSettings {
     this.location,
     this.latitude,
     this.longitude,
+    this.updateMirrorEnabled = true,
+    this.updateCheckInterval = 120,
+    this.lastMirroredVersion,
   });
 
   factory RelayServerSettings.fromJson(Map<String, dynamic> json) {
@@ -58,6 +66,9 @@ class RelayServerSettings {
       location: json['location'] as String?,
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
+      updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
+      updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
+      lastMirroredVersion: json['lastMirroredVersion'] as String?,
     );
   }
 
@@ -72,6 +83,9 @@ class RelayServerSettings {
         'location': location,
         'latitude': latitude,
         'longitude': longitude,
+        'updateMirrorEnabled': updateMirrorEnabled,
+        'updateCheckInterval': updateCheckInterval,
+        'lastMirroredVersion': lastMirroredVersion,
       };
 
   RelayServerSettings copyWith({
@@ -85,6 +99,9 @@ class RelayServerSettings {
     String? location,
     double? latitude,
     double? longitude,
+    bool? updateMirrorEnabled,
+    int? updateCheckInterval,
+    String? lastMirroredVersion,
   }) {
     return RelayServerSettings(
       port: port ?? this.port,
@@ -97,6 +114,9 @@ class RelayServerSettings {
       location: location ?? this.location,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      updateMirrorEnabled: updateMirrorEnabled ?? this.updateMirrorEnabled,
+      updateCheckInterval: updateCheckInterval ?? this.updateCheckInterval,
+      lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
     );
   }
 }
@@ -314,6 +334,12 @@ class StationServerService {
   DateTime? _startTime;
   String? _tilesDirectory;
 
+  // Update mirror state
+  Timer? _updatePollTimer;
+  Map<String, dynamic>? _cachedRelease;
+  String? _updatesDirectory;
+  bool _isDownloadingUpdates = false;
+
   bool get isRunning => _running;
   int get connectedDevices => _clients.length;
   RelayServerSettings get settings => _settings;
@@ -327,6 +353,13 @@ class StationServerService {
     final appDir = await getApplicationSupportDirectory();
     _tilesDirectory = '${appDir.path}/tiles';
     await Directory(_tilesDirectory!).create(recursive: true);
+
+    // Create updates directory
+    _updatesDirectory = '${appDir.path}/updates';
+    await Directory(_updatesDirectory!).create(recursive: true);
+
+    // Load cached release info if exists
+    await _loadCachedRelease();
 
     LogService().log('StationServerService initialized');
   }
@@ -384,6 +417,9 @@ class StationServerService {
         LogService().log('Server error: $error');
       });
 
+      // Start update polling if enabled
+      _startUpdatePolling();
+
       return true;
     } catch (e) {
       LogService().log('Failed to start station server: $e');
@@ -394,6 +430,10 @@ class StationServerService {
   /// Stop the station server
   Future<void> stop() async {
     if (!_running) return;
+
+    // Stop update polling
+    _updatePollTimer?.cancel();
+    _updatePollTimer = null;
 
     // Close all WebSocket connections
     for (final client in _clients.values) {
@@ -442,6 +482,10 @@ class StationServerService {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
         await _handleRoomMessages(request);
+      } else if (path == '/api/updates/latest') {
+        await _handleUpdatesLatest(request);
+      } else if (path.startsWith('/updates/')) {
+        await _handleUpdateDownload(request);
       } else if (path.startsWith('/tiles/')) {
         await _handleTileRequest(request);
       } else if (_isBlogPath(path)) {
@@ -1446,4 +1490,281 @@ class StationServerService {
     _tileCache.clear();
     LogService().log('Tile cache cleared');
   }
+
+  // ========== Update Mirror Methods ==========
+
+  /// Load cached release info from disk
+  Future<void> _loadCachedRelease() async {
+    if (_updatesDirectory == null) return;
+
+    try {
+      final releaseFile = File('$_updatesDirectory/release.json');
+      if (await releaseFile.exists()) {
+        final content = await releaseFile.readAsString();
+        _cachedRelease = jsonDecode(content) as Map<String, dynamic>;
+        LogService().log('Loaded cached release: ${_cachedRelease?['version']}');
+      }
+    } catch (e) {
+      LogService().log('Error loading cached release: $e');
+    }
+  }
+
+  /// Save release info to disk
+  Future<void> _saveCachedRelease() async {
+    if (_updatesDirectory == null || _cachedRelease == null) return;
+
+    try {
+      final releaseFile = File('$_updatesDirectory/release.json');
+      await releaseFile.writeAsString(jsonEncode(_cachedRelease));
+    } catch (e) {
+      LogService().log('Error saving cached release: $e');
+    }
+  }
+
+  /// Start polling GitHub for updates
+  void _startUpdatePolling() {
+    if (!_settings.updateMirrorEnabled) {
+      LogService().log('Update mirroring disabled');
+      return;
+    }
+
+    LogService().log('Starting update polling (interval: ${_settings.updateCheckInterval}s)');
+
+    // Poll immediately on start
+    _pollAndDownloadUpdates();
+
+    // Then poll periodically
+    _updatePollTimer = Timer.periodic(
+      Duration(seconds: _settings.updateCheckInterval),
+      (_) => _pollAndDownloadUpdates(),
+    );
+  }
+
+  /// Poll GitHub and download new releases
+  Future<void> _pollAndDownloadUpdates() async {
+    if (_isDownloadingUpdates) return;
+
+    try {
+      _isDownloadingUpdates = true;
+      LogService().log('Checking GitHub for updates...');
+
+      const url = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest';
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'Geogram-Station-Updater',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        LogService().log('GitHub API error: ${response.statusCode}');
+        return;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final tagName = json['tag_name'] as String? ?? '';
+      final version = tagName.replaceFirst(RegExp(r'^v'), '');
+
+      // Check if we already have this version
+      if (_settings.lastMirroredVersion == version) {
+        LogService().log('Already have version $version cached');
+        return;
+      }
+
+      LogService().log('New version available: $version (current: ${_settings.lastMirroredVersion})');
+
+      // Download all platform binaries
+      await _downloadAllPlatformBinaries(json);
+
+      // Update cached release info
+      _cachedRelease = {
+        'status': 'available',
+        'version': version,
+        'tagName': tagName,
+        'name': json['name'] as String?,
+        'body': json['body'] as String?,
+        'publishedAt': json['published_at'] as String?,
+        'htmlUrl': json['html_url'] as String?,
+        'assets': _buildAssetUrls(),
+        'assetFilenames': _buildAssetFilenames(),
+      };
+      await _saveCachedRelease();
+
+      // Update settings with new version
+      _settings = _settings.copyWith(lastMirroredVersion: version);
+      _saveSettings();
+
+      LogService().log('Update mirror complete: version $version');
+    } catch (e) {
+      LogService().log('Error polling for updates: $e');
+    } finally {
+      _isDownloadingUpdates = false;
+    }
+  }
+
+  /// Store downloaded asset filenames for API responses
+  Map<String, String> _downloadedAssets = {};
+  Map<String, String> _assetFilenames = {};
+
+  /// Download all assets from GitHub release
+  Future<void> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
+    final assets = releaseJson['assets'] as List<dynamic>?;
+    if (assets == null) return;
+
+    _downloadedAssets.clear();
+    _assetFilenames.clear();
+
+    // Download all assets
+    for (final asset in assets) {
+      final assetMap = asset as Map<String, dynamic>;
+      final filename = assetMap['name'] as String? ?? '';
+      final downloadUrl = assetMap['browser_download_url'] as String?;
+
+      if (downloadUrl == null || filename.isEmpty) continue;
+
+      final assetType = UpdateAssetType.fromFilename(filename);
+      if (assetType != UpdateAssetType.unknown) {
+        final success = await _downloadBinary(assetType, filename, downloadUrl);
+        if (success) {
+          _downloadedAssets[assetType.name] = '/updates/${assetType.name}/$filename';
+          _assetFilenames[assetType.name] = filename;
+        }
+      }
+    }
+  }
+
+  /// Download a single binary file
+  Future<bool> _downloadBinary(UpdateAssetType assetType, String filename, String url) async {
+    if (_updatesDirectory == null) return false;
+
+    try {
+      LogService().log('Downloading ${assetType.displayName} ($filename)...');
+
+      // Create asset type subdirectory
+      final assetDir = Directory('$_updatesDirectory/${assetType.name}');
+      if (!await assetDir.exists()) {
+        await assetDir.create(recursive: true);
+      }
+
+      final targetPath = '${assetDir.path}/$filename';
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Geogram-Station-Updater'},
+      ).timeout(const Duration(minutes: 10));
+
+      if (response.statusCode == 200) {
+        await File(targetPath).writeAsBytes(response.bodyBytes);
+        final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
+        LogService().log('Downloaded ${assetType.displayName}: ${sizeMb}MB');
+        return true;
+      } else {
+        LogService().log('Failed to download ${assetType.displayName}: ${response.statusCode}');
+        return false;
+      }
+    } catch (e) {
+      LogService().log('Error downloading ${assetType.displayName} binary: $e');
+      return false;
+    }
+  }
+
+  /// Build asset URLs pointing to this station
+  Map<String, String> _buildAssetUrls() => _downloadedAssets;
+
+  /// Build asset filenames map
+  Map<String, String> _buildAssetFilenames() => _assetFilenames;
+
+  /// Handle GET /api/updates/latest - Return latest release info
+  Future<void> _handleUpdatesLatest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method Not Allowed');
+      return;
+    }
+
+    request.response.headers.contentType = ContentType.json;
+
+    if (_cachedRelease == null) {
+      // No updates cached yet
+      request.response.write(jsonEncode({
+        'status': 'no_updates_cached',
+        'message': 'Station has not downloaded any updates yet',
+      }));
+    } else {
+      request.response.write(jsonEncode(_cachedRelease));
+    }
+  }
+
+  /// Handle GET /updates/{assetType}/{filename} - Serve binary file
+  Future<void> _handleUpdateDownload(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method Not Allowed');
+      return;
+    }
+
+    final path = request.uri.path;
+    // Expected format: /updates/{assetType}/{filename}
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+
+    if (parts.length < 3) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path format. Expected: /updates/{assetType}/{filename}');
+      return;
+    }
+
+    final assetTypeName = parts[1];
+    final filename = parts.sublist(2).join('/');
+
+    if (_updatesDirectory == null) {
+      request.response.statusCode = 503;
+      request.response.write('Updates directory not initialized');
+      return;
+    }
+
+    final filePath = '$_updatesDirectory/$assetTypeName/$filename';
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.write('File not found: $filename');
+      LogService().log('Update file not found: $filePath');
+      return;
+    }
+
+    try {
+      final fileLength = await file.length();
+
+      // Set appropriate content type based on file extension
+      String contentType = 'application/octet-stream';
+      if (filename.endsWith('.apk')) {
+        contentType = 'application/vnd.android.package-archive';
+      } else if (filename.endsWith('.aab')) {
+        contentType = 'application/x-authorware-bin';
+      } else if (filename.endsWith('.zip')) {
+        contentType = 'application/zip';
+      } else if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
+        contentType = 'application/gzip';
+      } else if (filename.endsWith('.ipa')) {
+        contentType = 'application/octet-stream';
+      }
+
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', fileLength.toString());
+      request.response.headers.set('Content-Disposition', 'attachment; filename="$filename"');
+
+      // Stream the file to the response
+      await request.response.addStream(file.openRead());
+      LogService().log('Served update file: $filename (${(fileLength / (1024 * 1024)).toStringAsFixed(1)}MB)');
+    } catch (e) {
+      LogService().log('Error serving update file: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error reading file');
+    }
+  }
+
+  /// Get cached release info for API response
+  Map<String, dynamic>? getCachedRelease() => _cachedRelease;
 }
