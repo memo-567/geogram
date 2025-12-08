@@ -80,10 +80,18 @@ class BLEDiscoveryService {
   /// Check if BLE is supported and available
   Future<bool> isAvailable() async {
     try {
+      // Log platform for debugging
+      if (Platform.isLinux) {
+        LogService().log('BLEDiscovery: Running on Linux - requires BlueZ');
+      }
+
       // Check if Bluetooth adapter is available
       final isSupported = await FlutterBluePlus.isSupported;
       if (!isSupported) {
         LogService().log('BLEDiscovery: Bluetooth not supported on this device');
+        if (Platform.isLinux) {
+          LogService().log('BLEDiscovery: On Linux, ensure BlueZ is installed and bluetooth service is running');
+        }
         return false;
       }
 
@@ -91,12 +99,19 @@ class BLEDiscoveryService {
       final state = await FlutterBluePlus.adapterState.first;
       if (state != BluetoothAdapterState.on) {
         LogService().log('BLEDiscovery: Bluetooth is not enabled (state: $state)');
+        if (Platform.isLinux && state == BluetoothAdapterState.off) {
+          LogService().log('BLEDiscovery: Try: sudo systemctl start bluetooth');
+        }
         return false;
       }
 
+      LogService().log('BLEDiscovery: Bluetooth adapter available and enabled');
       return true;
     } catch (e) {
       LogService().log('BLEDiscovery: Error checking availability: $e');
+      if (Platform.isLinux) {
+        LogService().log('BLEDiscovery: Linux BLE error - check: 1) BlueZ installed, 2) bluetooth service running, 3) user in bluetooth group');
+      }
       return false;
     }
   }
@@ -168,8 +183,13 @@ class BLEDiscoveryService {
     }
 
     // Check platform - ble_peripheral only works on Android/iOS
+    // Linux/macOS/Windows can scan but not advertise
     if (!Platform.isAndroid && !Platform.isIOS) {
-      LogService().log('BLEDiscovery: Advertising not available on this platform');
+      if (Platform.isLinux) {
+        LogService().log('BLEDiscovery: BLE advertising not supported on Linux (scanning works)');
+      } else {
+        LogService().log('BLEDiscovery: Advertising not available on this platform');
+      }
       return;
     }
 
