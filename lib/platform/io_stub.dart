@@ -823,20 +823,21 @@ class WebSocketTransformer {
   }
 }
 
-/// Stub for HttpRequest
-abstract class HttpRequest {
+/// Stub for HttpRequest - implements Stream<List<int>> for utf8.decoder.bind() compatibility
+abstract class HttpRequest implements Stream<List<int>> {
   Uri get uri;
   String get method;
   HttpHeaders get headers;
   HttpResponse get response;
   HttpSession get session;
   String get protocolVersion;
-  InternetAddress get connectionInfo;
+  HttpConnectionInfo? get connectionInfo;
   List<Cookie> get cookies;
   int get contentLength;
   bool get persistentConnection;
   X509Certificate? get certificate;
 
+  @override
   StreamSubscription<List<int>> listen(void Function(List<int> event)? onData,
       {Function? onError, void Function()? onDone, bool? cancelOnError});
 }
