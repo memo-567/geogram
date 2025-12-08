@@ -404,7 +404,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     final isSelected = _selectedDevice?.callsign == device.callsign;
     final profile = _profileService.getProfile();
     final distanceKm = device.calculateDistance(profile.latitude, profile.longitude);
-    final distanceStr = _formatDistance(distanceKm, device.connectionMethods);
+    final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 
     return ListTile(
@@ -485,13 +485,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 RemoteDevice.getConnectionMethodLabel(method),
                 _getConnectionMethodColor(method),
               )),
-              // BLE proximity tag
-              if (device.bleProximity != null)
-                _buildConnectionTag(
-                  theme,
-                  device.bleProximity!,
-                  _getBLEProximityColor(device.bleProximity!),
-                ),
               // Unreachable tag if offline
               if (!device.isOnline)
                 _buildConnectionTag(
@@ -592,11 +585,16 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Format distance with translations
-  /// Shows "Same location" for devices on the same WiFi network
-  String? _formatDistance(double? distanceKm, List<String> connectionMethods) {
-    // If on same WiFi, show "Same location"
-    if (connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
+  /// Shows "Same network" for LAN devices, BLE proximity for Bluetooth devices
+  String? _formatDistance(RemoteDevice device, double? distanceKm) {
+    // If on same LAN, show "Same network"
+    if (device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
       return _i18n.t('same_location');
+    }
+
+    // If BLE proximity is available, show it
+    if (device.bleProximity != null) {
+      return device.bleProximity;
     }
 
     if (distanceKm == null) return null;
@@ -633,22 +631,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         return Colors.cyan;
       case 'lan':
         return Colors.blueGrey;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  /// Get color for BLE proximity indicator
-  Color _getBLEProximityColor(String proximity) {
-    switch (proximity.toLowerCase()) {
-      case 'very close':
-        return Colors.green;
-      case 'nearby':
-        return Colors.lightGreen;
-      case 'in range':
-        return Colors.orange;
-      case 'far':
-        return Colors.red;
       default:
         return Colors.grey;
     }
