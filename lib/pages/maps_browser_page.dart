@@ -668,6 +668,9 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Widget _buildTopBar() {
+    // Get safe area padding for status bar
+    final topPadding = MediaQuery.of(context).padding.top;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 550;
@@ -679,7 +682,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               color: Theme.of(context).colorScheme.surface,
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: EdgeInsets.fromLTRB(16, topPadding + 8, 16, 8),
               child: TabBar(
                 controller: _tabController,
                 tabs: [
@@ -693,7 +696,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
 
         // Wide mode: just tabs
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: EdgeInsets.fromLTRB(16, topPadding + 8, 16, 8),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
           ),
