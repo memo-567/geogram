@@ -232,9 +232,20 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     );
   }
 
+  /// Handle system back button - return to device list if viewing detail
+  void _handleBackButton() {
+    if (_selectedDevice != null) {
+      setState(() => _selectedDevice = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isNarrow = MediaQuery.of(context).size.width < 600;
+
+    // Handle system back button on mobile when viewing device detail
+    final shouldInterceptBack = isNarrow && _selectedDevice != null;
 
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -258,7 +269,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       );
     }
 
-    return LayoutBuilder(
+    return PopScope(
+      canPop: !shouldInterceptBack,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && shouldInterceptBack) {
+          _handleBackButton();
+        }
+      },
+      child: LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 600;
 
@@ -286,6 +304,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           ],
         );
       },
+      ),
     );
   }
 
