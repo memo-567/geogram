@@ -1258,5 +1258,9 @@
   "profiles_imported": "{0} perfil(s) importado(s) com sucesso",
   "profiles_imported_with_skipped": "{0} perfil(s) importado(s), {1} ignorado(s) (duplicados)",
   "no_new_profiles_imported": "Nenhum perfil novo importado (todos duplicados)",
-  "import_failed": "Falha ao importar perfis"
+  "import_failed": "Falha ao importar perfis",
+
+  "update_available": "Atualização Disponível",
+  "update_available_version": "A versão {0} está disponível para download",
+  "view_update": "Ver Atualização"
 }

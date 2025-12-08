@@ -1264,5 +1264,9 @@
   "profiles_imported": "{0} profile(s) imported successfully",
   "profiles_imported_with_skipped": "{0} profile(s) imported, {1} skipped (duplicates)",
   "no_new_profiles_imported": "No new profiles imported (all duplicates)",
-  "import_failed": "Failed to import profiles"
+  "import_failed": "Failed to import profiles",
+
+  "update_available": "Update Available",
+  "update_available_version": "Version {0} is available for download",
+  "view_update": "View Update"
 }

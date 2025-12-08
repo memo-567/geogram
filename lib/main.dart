@@ -238,6 +238,8 @@ class _HomePageState extends State<HomePage> {
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     // Listen to profile changes to update title
     _profileService.profileNotifier.addListener(_onProfileChanged);
+    // Listen for update availability notifications
+    UpdateService().updateAvailable.addListener(_onUpdateAvailable);
 
     // Check for first launch and show profile setup
     _checkFirstLaunch();
@@ -392,6 +394,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.profileNotifier.removeListener(_onProfileChanged);
+    UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
     super.dispose();
   }
 
@@ -401,6 +404,70 @@ class _HomePageState extends State<HomePage> {
 
   void _onProfileChanged() {
     setState(() {});
+  }
+
+  /// Called when UpdateService detects an available update
+  void _onUpdateAvailable() {
+    final updateService = UpdateService();
+    final settings = updateService.getSettings();
+
+    // Only show notification if enabled in settings and update is actually available
+    if (!updateService.updateAvailable.value || !settings.notifyOnUpdate) {
+      return;
+    }
+
+    final latestRelease = updateService.getLatestRelease();
+    if (latestRelease == null || !mounted) return;
+
+    // Show a MaterialBanner at the top of the screen
+    ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        padding: const EdgeInsets.all(16),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _i18n.t('update_available'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _i18n.t('update_available_version', params: [latestRelease.version]),
+            ),
+          ],
+        ),
+        leading: const Icon(Icons.system_update, color: Colors.blue),
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+        actions: [
+          TextButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+            },
+            child: Text(_i18n.t('later')),
+          ),
+          FilledButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              // Navigate to Updates page
+              setState(() {
+                _selectedIndex = 3; // Settings tab
+              });
+              // After settings page loads, navigate to Updates
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const UpdatePage()),
+                  );
+                }
+              });
+            },
+            child: Text(_i18n.t('view_update')),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
