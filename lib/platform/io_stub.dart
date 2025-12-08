@@ -197,6 +197,10 @@ class File implements FileSystemEntity {
     throw UnsupportedError('File operations are not supported on web');
   }
 
+  Stream<List<int>> openRead([int? start, int? end]) {
+    throw UnsupportedError('File operations are not supported on web');
+  }
+
   Future<int> length() async => 0;
 
   int lengthSync() => 0;
