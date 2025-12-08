@@ -174,8 +174,25 @@ class BLEDiscoveryService {
     }
 
     try {
+      // On Android 12+, check if BLUETOOTH_ADVERTISE permission is granted
+      if (Platform.isAndroid) {
+        // Check Bluetooth state first - this also checks basic permissions
+        final state = await FlutterBluePlus.adapterState.first;
+        if (state != BluetoothAdapterState.on) {
+          LogService().log('BLEDiscovery: Bluetooth not enabled, skipping advertising');
+          return;
+        }
+      }
+
       // Initialize BLE peripheral
       await BlePeripheral.initialize();
+
+      // Request BLE advertise permission (Android 12+ requires BLUETOOTH_ADVERTISE)
+      final hasPermission = await BlePeripheral.askBlePermission();
+      if (!hasPermission) {
+        LogService().log('BLEDiscovery: BLE advertise permission not granted');
+        return;
+      }
 
       // Build advertising data: [marker][callsign]
       final List<int> serviceData = [geogramMarker, ...utf8.encode(callsign)];
@@ -198,7 +215,13 @@ class BLEDiscoveryService {
       _isAdvertising = true;
       LogService().log('BLEDiscovery: Started advertising as $callsign');
     } catch (e, stackTrace) {
-      LogService().log('BLEDiscovery: Error starting advertising: $e\n$stackTrace');
+      // SecurityException on Android means BLUETOOTH_ADVERTISE permission not granted
+      final errorStr = e.toString();
+      if (errorStr.contains('SecurityException') || errorStr.contains('BLUETOOTH_ADVERTISE')) {
+        LogService().log('BLEDiscovery: BLUETOOTH_ADVERTISE permission not granted, advertising disabled');
+      } else {
+        LogService().log('BLEDiscovery: Error starting advertising: $e\n$stackTrace');
+      }
       _isAdvertising = false;
     }
   }

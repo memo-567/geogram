@@ -81,6 +81,9 @@ class DevicesService {
   Future<void> _startBLEAdvertising() async {
     if (_bleService == null) return;
 
+    // Delay advertising start to allow permission dialogs to complete
+    await Future.delayed(const Duration(seconds: 2));
+
     try {
       final profile = ProfileService().getProfile();
       if (profile.callsign != null) {
