@@ -63,7 +63,7 @@ class StationDiscoveryService {
 
   Timer? _discoveryTimer;
   bool _isScanning = false;
-  final List<int> _ports = [8080, 80, 8081, 45678, 3000, 5000]; // Common station/app ports (8080 first as most common)
+  final List<int> _ports = [3456, 8080, 80, 8081, 3000, 5000]; // Standard geogram port (3456) first, then common station ports
   final Duration _scanInterval = const Duration(minutes: 5);
   final Duration _requestTimeout = const Duration(milliseconds: 1500); // Increased timeout for reliability
   final Duration _startupDelay = const Duration(seconds: 5);

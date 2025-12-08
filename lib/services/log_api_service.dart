@@ -16,7 +16,7 @@ class LogApiService {
 
   // Use dynamic to avoid type conflicts between stub and real dart:io
   dynamic _server;
-  final int port = 45678;
+  final int port = 3456; // Standard geogram peer discovery port
 
   Future<void> start() async {
     // HTTP server not supported on web

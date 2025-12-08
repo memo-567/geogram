@@ -177,9 +177,9 @@ void main() async {
       StationDiscoveryService().start();
       LogService().log('StationDiscoveryService started (deferred)');
 
-      // Start log API service (only needed for debugging)
+      // Start peer discovery API service (port 3456 for local device discovery)
       await LogApiService().start();
-      LogService().log('LogApiService started on port 45678 (deferred)');
+      LogService().log('Peer discovery API started on port 3456 (deferred)');
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');

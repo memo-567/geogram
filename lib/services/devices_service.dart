@@ -229,12 +229,80 @@ class DevicesService {
 
   /// Check all devices reachability
   Future<void> refreshAllDevices() async {
-    // First, fetch connected clients from connected station
+    // First, fetch connected clients from connected station (internet)
     await _fetchStationClients();
 
-    // Then check reachability for all known devices
+    // Then discover devices on local WiFi network
+    await _discoverLocalDevices();
+
+    // Finally check reachability for all known devices
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
+    }
+  }
+
+  /// Discover devices on local WiFi network (both clients and stations)
+  Future<void> _discoverLocalDevices() async {
+    try {
+      LogService().log('DevicesService: Scanning local network for devices...');
+
+      // Use quick scan (500ms timeout) for faster discovery
+      final results = await _discoveryService.scanWithProgress(
+        timeoutMs: 500,
+      );
+
+      LogService().log('DevicesService: Found ${results.length} devices on local network');
+
+      for (final result in results) {
+        // Skip if no callsign
+        if (result.callsign == null || result.callsign!.isEmpty) continue;
+
+        final normalizedCallsign = result.callsign!.toUpperCase();
+
+        // Build local URL for direct connection
+        final localUrl = 'http://${result.ip}:${result.port}';
+
+        // Determine connection type based on discovery type
+        final connectionType = result.type == 'station' ? 'lan' : 'wifi_local';
+
+        // Update existing device or create new one
+        if (_devices.containsKey(normalizedCallsign)) {
+          final device = _devices[normalizedCallsign]!;
+
+          // Add connection type if not already present
+          if (!device.connectionMethods.contains(connectionType)) {
+            device.connectionMethods = [...device.connectionMethods, connectionType];
+          }
+
+          // Store local URL for direct connection (prefer local over internet)
+          device.url = localUrl;
+          device.isOnline = true;
+          device.lastSeen = DateTime.now();
+
+          LogService().log('DevicesService: Updated ${result.type} $normalizedCallsign with local network ($localUrl)');
+        } else {
+          // Create new device discovered on local network
+          _devices[normalizedCallsign] = RemoteDevice(
+            callsign: normalizedCallsign,
+            name: result.name ?? normalizedCallsign,
+            nickname: result.name,
+            url: localUrl,
+            isOnline: true,
+            hasCachedData: false,
+            collections: [],
+            latitude: result.latitude,
+            longitude: result.longitude,
+            connectionMethods: [connectionType],
+            source: DeviceSourceType.local,
+            lastSeen: DateTime.now(),
+          );
+          LogService().log('DevicesService: Added new ${result.type} from local network: $normalizedCallsign at $localUrl');
+        }
+      }
+
+      _notifyListeners();
+    } catch (e) {
+      LogService().log('DevicesService: Error discovering local devices: $e');
     }
   }
 
