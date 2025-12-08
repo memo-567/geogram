@@ -985,7 +985,7 @@ class RemoteDevice {
       case 'wifi':
       case 'wifi_local':
       case 'wifi-local':
-        return 'Wi-Fi Local';
+        return 'LAN';
       case 'internet':
         return 'Internet';
       case 'bluetooth':
