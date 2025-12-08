@@ -238,13 +238,12 @@ class DevicesService {
     }
   }
 
-  /// Fetch connected clients from the connected station
-  /// Tries /api/devices first (CLI station), then /api/clients (GUI station)
+  /// Fetch connected devices from the connected station
   Future<void> _fetchStationClients() async {
     try {
       final station = _stationService.getConnectedRelay();
       if (station == null) {
-        LogService().log('DevicesService: No connected station to fetch clients from');
+        LogService().log('DevicesService: No connected station to fetch devices from');
         return;
       }
 
@@ -257,50 +256,41 @@ class DevicesService {
       final uri = Uri.parse(baseUrl);
       baseUrl = '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
 
-      // Try /api/devices first (CLI station format), then /api/clients (GUI station format)
-      List<dynamic>? clients;
-      String? successEndpoint;
+      final url = '$baseUrl/api/devices';
+      LogService().log('DevicesService: Fetching devices from: $url');
 
-      for (final endpoint in ['/api/devices', '/api/clients']) {
-        final url = '$baseUrl$endpoint';
-        LogService().log('DevicesService: Trying: $url');
+      List<dynamic>? devices;
 
-        try {
-          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      try {
+        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
 
-          if (response.statusCode == 200) {
-            final data = json.decode(response.body);
-            // Try both 'devices' and 'clients' keys
-            clients = data['devices'] as List<dynamic>? ?? data['clients'] as List<dynamic>?;
-            if (clients != null) {
-              successEndpoint = endpoint;
-              break;
-            }
-          }
-        } catch (e) {
-          LogService().log('DevicesService: $endpoint failed: $e');
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          devices = data['devices'] as List<dynamic>?;
         }
+      } catch (e) {
+        LogService().log('DevicesService: Failed to fetch devices: $e');
       }
 
-      if (clients == null) {
-        LogService().log('DevicesService: No clients endpoint available on station');
+      if (devices == null) {
+        LogService().log('DevicesService: No devices endpoint available on station');
         return;
       }
 
-      LogService().log('DevicesService: Received ${clients.length} devices from $successEndpoint');
+      LogService().log('DevicesService: Received ${devices.length} devices from /api/devices');
 
-      for (final clientData in clients) {
-        final callsign = clientData['callsign'] as String?;
+      for (final deviceData in devices) {
+        final callsign = deviceData['callsign'] as String?;
         if (callsign == null || callsign.isEmpty || callsign == 'Unknown') {
-          LogService().log('DevicesService: Skipping client with no callsign');
+          LogService().log('DevicesService: Skipping device with no callsign');
           continue;
         }
 
         final normalizedCallsign = callsign.toUpperCase();
 
-        // Parse connection types (GUI station format)
+        // Parse connection types
         final connectionTypes = <String>[];
-        final rawTypes = clientData['connection_types'] as List<dynamic>?;
+        final rawTypes = deviceData['connection_types'] as List<dynamic>?;
         if (rawTypes != null) {
           for (final t in rawTypes) {
             connectionTypes.add(t.toString());
@@ -311,10 +301,10 @@ class DevicesService {
         if (_devices.containsKey(normalizedCallsign)) {
           final device = _devices[normalizedCallsign]!;
           device.isOnline = true;
-          device.nickname = clientData['nickname'] as String?;
-          device.npub = clientData['npub'] as String?;
-          device.latitude = clientData['latitude'] as double?;
-          device.longitude = clientData['longitude'] as double?;
+          device.nickname = deviceData['nickname'] as String?;
+          device.npub = deviceData['npub'] as String?;
+          device.latitude = deviceData['latitude'] as double?;
+          device.longitude = deviceData['longitude'] as double?;
           // Merge connection methods
           for (final method in connectionTypes) {
             if (!device.connectionMethods.contains(method)) {
@@ -325,17 +315,17 @@ class DevicesService {
           device.lastSeen = DateTime.now();
           LogService().log('DevicesService: Updated device: $normalizedCallsign');
         } else {
-          // Create new device from station client
+          // Create new device from station
           _devices[normalizedCallsign] = RemoteDevice(
             callsign: normalizedCallsign,
-            name: clientData['nickname'] as String? ?? normalizedCallsign,
-            nickname: clientData['nickname'] as String?,
-            npub: clientData['npub'] as String?,
+            name: deviceData['nickname'] as String? ?? normalizedCallsign,
+            nickname: deviceData['nickname'] as String?,
+            npub: deviceData['npub'] as String?,
             isOnline: true,
             hasCachedData: false,
             collections: [],
-            latitude: clientData['latitude'] as double?,
-            longitude: clientData['longitude'] as double?,
+            latitude: deviceData['latitude'] as double?,
+            longitude: deviceData['longitude'] as double?,
             connectionMethods: connectionTypes,
             source: DeviceSourceType.station,
             lastSeen: DateTime.now(),
@@ -345,7 +335,7 @@ class DevicesService {
       }
 
       _notifyListeners();
-      LogService().log('DevicesService: Fetched ${clients.length} devices from station ${station.name}');
+      LogService().log('DevicesService: Fetched ${devices.length} devices from station ${station.name}');
     } catch (e) {
       LogService().log('DevicesService: Error fetching station clients: $e');
     }
