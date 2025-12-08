@@ -58,6 +58,7 @@ dependencies:
   fs_shim: ^2.3.0              # Virtual file system abstraction (IndexedDB on web)
   dart_console: ^4.1.2       # Terminal input/output for CLI mode
   ensemble_ts_interpreter: ^1.0.3  # JavaScript interpreter for game scripting
+  flutter_svg: ^2.0.10+1     # SVG rendering for icons
 
 dev_dependencies:
   flutter_test:
@@ -96,6 +97,7 @@ flutter:
     - languages/pt_PT.json
     - assets/worldcities.csv
     - assets/default_profile.png
+    - assets/geogram-icon-dark.svg
     - games/
     # Web themes for HTML/CSS customization
     - themes/default/

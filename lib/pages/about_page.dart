@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../version.dart';
 
@@ -37,14 +38,17 @@ class AboutPage extends StatelessWidget {
             Center(
               child: Column(
                 children: [
-                  Icon(
-                    Icons.radio,
-                    size: 80,
-                    color: Theme.of(context).colorScheme.primary,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: SvgPicture.asset(
+                      'assets/geogram-icon-dark.svg',
+                      width: 100,
+                      height: 100,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Geogram Desktop',
+                    'Geogram: connected together',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
