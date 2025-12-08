@@ -621,7 +621,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'internet':
         return Colors.green;
       case 'bluetooth':
-        return Colors.indigo;
+        return Colors.lightBlue;
       case 'lora':
         return Colors.orange;
       case 'radio':
