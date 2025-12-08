@@ -137,7 +137,13 @@ class DevicesService {
       // Try to find via station proxy
       isNowOnline = await _checkViaRelayProxy(device);
     } else {
+      // Try direct connection first (local WiFi)
       isNowOnline = await _checkDirectConnection(device);
+
+      // If direct connection fails, fallback to station proxy
+      if (!isNowOnline) {
+        isNowOnline = await _checkViaRelayProxy(device);
+      }
     }
 
     // Trigger DM sync when device becomes reachable
@@ -433,21 +439,38 @@ class DevicesService {
 
   /// Fetch collections from online device
   Future<List<RemoteCollection>> _fetchCollectionsOnline(RemoteDevice device) async {
+    List<RemoteCollection> collections = [];
+
+    // Try direct connection first if URL is set
+    if (device.url != null) {
+      final directUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+      collections = await _fetchCollectionsFromUrl(device, directUrl);
+    }
+
+    // Fallback to station proxy if direct failed or no URL
+    if (collections.isEmpty) {
+      final station = _stationService.getConnectedRelay();
+      if (station != null) {
+        final proxyUrl = '${station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
+        collections = await _fetchCollectionsFromUrl(device, proxyUrl);
+      }
+    }
+
+    // Update device and cache if we got collections
+    if (collections.isNotEmpty) {
+      await _updateDeviceCollections(device, collections);
+      return collections;
+    }
+
+    // Fall back to cached collections
+    return await _loadCachedCollections(device.callsign);
+  }
+
+  /// Fetch collections from a specific URL
+  Future<List<RemoteCollection>> _fetchCollectionsFromUrl(RemoteDevice device, String baseUrl) async {
     final collections = <RemoteCollection>[];
 
     try {
-      String baseUrl;
-
-      if (device.url != null) {
-        // Direct connection to device or station
-        baseUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-      } else {
-        // Via station proxy
-        final station = _stationService.getConnectedRelay();
-        if (station == null) return [];
-        baseUrl = '${station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
-      }
-
       LogService().log('DevicesService: Fetching collections from $baseUrl');
 
       // Fetch collection folders from /files endpoint
@@ -512,22 +535,25 @@ class DevicesService {
         }
       }
 
-      // Update device
-      device.collections = collections;
-      device.lastFetched = DateTime.now();
-
-      // Cache the collections if we got any
-      if (collections.isNotEmpty) {
-        await _cacheCollections(device.callsign, collections);
-      }
-
-      _notifyListeners();
       return collections;
     } catch (e) {
-      LogService().log('DevicesService: Error fetching collections from ${device.callsign}: $e');
+      LogService().log('DevicesService: Error fetching collections from $baseUrl: $e');
     }
 
-    return await _loadCachedCollections(device.callsign);
+    return [];
+  }
+
+  /// Update device with fetched collections and cache them
+  Future<void> _updateDeviceCollections(RemoteDevice device, List<RemoteCollection> collections) async {
+    device.collections = collections;
+    device.lastFetched = DateTime.now();
+
+    // Cache the collections if we got any
+    if (collections.isNotEmpty) {
+      await _cacheCollections(device.callsign, collections);
+    }
+
+    _notifyListeners();
   }
 
   /// Check if folder name is a known collection type
