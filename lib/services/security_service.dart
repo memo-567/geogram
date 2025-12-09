@@ -29,8 +29,10 @@ class SecurityService {
   static const bool _defaultHttpApiEnabled = true;
   static const double _defaultLocationGranularity = 25000.0; // 25 km default (middle of slider, city level)
 
-  // Location granularity bounds (logarithmic scale from 5m to 100km)
+  // Location granularity bounds
+  // Uses bilinear-log scale: 5m - 25km - 100km with 25km at slider center (0.5)
   static const double minGranularityMeters = 5.0;
+  static const double centerGranularityMeters = 25000.0; // 25 km at slider 0.5
   static const double maxGranularityMeters = 100000.0; // 100 km
 
   /// Check if debug API is enabled
@@ -73,24 +75,41 @@ class SecurityService {
   }
 
   /// Get location granularity as a normalized slider value (0.0 to 1.0)
-  /// Uses logarithmic scale for better UX
+  /// Uses bilinear-log scale: 0.0-0.5 maps to 5m-25km, 0.5-1.0 maps to 25km-100km
+  /// This ensures 25km (city level) is exactly at the slider center
   double get locationGranularitySliderValue {
     final meters = locationGranularityMeters;
-    // Logarithmic scale: log(meters) mapped to 0-1
-    final logMin = log(minGranularityMeters);
-    final logMax = log(maxGranularityMeters);
-    final logCurrent = log(meters);
-    return (logCurrent - logMin) / (logMax - logMin);
+    if (meters <= centerGranularityMeters) {
+      // Map min-center to 0.0-0.5
+      final logMin = log(minGranularityMeters);
+      final logCenter = log(centerGranularityMeters);
+      final t = (log(meters) - logMin) / (logCenter - logMin);
+      return t * 0.5;
+    } else {
+      // Map center-max to 0.5-1.0
+      final logCenter = log(centerGranularityMeters);
+      final logMax = log(maxGranularityMeters);
+      final t = (log(meters) - logCenter) / (logMax - logCenter);
+      return 0.5 + t * 0.5;
+    }
   }
 
   /// Set location granularity from a normalized slider value (0.0 to 1.0)
   set locationGranularitySliderValue(double sliderValue) {
     final clampedSlider = sliderValue.clamp(0.0, 1.0);
-    // Convert from logarithmic scale
-    final logMin = log(minGranularityMeters);
-    final logMax = log(maxGranularityMeters);
-    final logValue = logMin + clampedSlider * (logMax - logMin);
-    locationGranularityMeters = exp(logValue);
+    if (clampedSlider <= 0.5) {
+      // Map 0.0-0.5 to min-center (log scale)
+      final t = clampedSlider * 2.0; // Normalize to 0-1
+      final logMin = log(minGranularityMeters);
+      final logCenter = log(centerGranularityMeters);
+      locationGranularityMeters = exp(logMin + t * (logCenter - logMin));
+    } else {
+      // Map 0.5-1.0 to center-max (log scale)
+      final t = (clampedSlider - 0.5) * 2.0; // Normalize to 0-1
+      final logCenter = log(centerGranularityMeters);
+      final logMax = log(maxGranularityMeters);
+      locationGranularityMeters = exp(logCenter + t * (logMax - logCenter));
+    }
   }
 
   /// Apply location granularity to coordinates

@@ -68,7 +68,7 @@ Controls how precisely location data is shared with other devices. This is a pri
 - **Minimum**: `5.0` meters (very precise)
 - **Maximum**: `100000.0` meters (100 km, very private)
 
-The slider in the UI uses a logarithmic scale for better UX across the wide range.
+The slider in the UI uses a bilinear-logarithmic scale with 25km at the center position (0.5). This ensures the default city-level privacy is exactly at the middle of the slider.
 
 **Privacy levels:**
 | Distance | Privacy Level | Description |
@@ -101,7 +101,7 @@ final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(
 
 // For slider UI (0.0 to 1.0)
 final sliderValue = SecurityService().locationGranularitySliderValue;
-SecurityService().locationGranularitySliderValue = 0.5; // Sets to ~700m (logarithmic scale middle)
+SecurityService().locationGranularitySliderValue = 0.5; // Sets to exactly 25km (slider center)
 
 // Get human-readable display
 final display = SecurityService().locationGranularityDisplay; // e.g., "25 km"
@@ -194,4 +194,5 @@ SecurityService().settingsNotifier.addListener(() {
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `minGranularityMeters` | 5.0 | Minimum granularity (most precise) |
+| `centerGranularityMeters` | 25000.0 | Center granularity at slider 0.5 (city level) |
 | `maxGranularityMeters` | 100000.0 | Maximum granularity (most private) |
