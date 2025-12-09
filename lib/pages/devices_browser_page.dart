@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'dart:math' show pow;
 import 'package:flutter/material.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
@@ -586,26 +587,66 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Format distance with translations
-  /// Shows "Same network" for LAN devices, BLE proximity for Bluetooth devices
+  /// Shows distance when available, with BLE proximity as additional info
   String? _formatDistance(RemoteDevice device, double? distanceKm) {
-    // If on same LAN, show "Same network"
-    if (device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
-      return _i18n.t('same_location');
+    // Build distance string if coordinates are available
+    String? distanceText;
+    if (distanceKm != null) {
+      if (distanceKm < 1) {
+        final meters = (distanceKm * 1000).round();
+        distanceText = _i18n.t('meters_away', params: [meters.toString()]);
+      } else {
+        distanceText = _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
+      }
     }
 
-    // If BLE proximity is available, show it
+    // If BLE RSSI is available, estimate distance from signal strength
+    if (device.bleRssi != null) {
+      final bleDistanceMeters = _estimateBleDistance(device.bleRssi!);
+      final bleDistanceText = '~${bleDistanceMeters}m (BLE)';
+
+      if (distanceText != null) {
+        // If we have GPS distance, show BLE estimate as additional info
+        return '$distanceText · $bleDistanceText';
+      }
+      return bleDistanceText;
+    }
+
+    // If BLE proximity is available but no RSSI, use it as fallback
     if (device.bleProximity != null) {
+      if (distanceText != null) {
+        return '$distanceText (${device.bleProximity})';
+      }
       return device.bleProximity;
     }
 
-    if (distanceKm == null) return null;
-
-    if (distanceKm < 1) {
-      final meters = (distanceKm * 1000).round();
-      return _i18n.t('meters_away', params: [meters.toString()]);
-    } else {
-      return _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
+    // If on same LAN but no coordinates, show "Same network"
+    if (distanceText == null &&
+        device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
+      return _i18n.t('same_location');
     }
+
+    return distanceText;
+  }
+
+  /// Estimate distance in meters from BLE RSSI value
+  /// Uses log-distance path loss model: distance = 10^((TxPower - RSSI) / (10 * n))
+  /// TxPower: measured RSSI at 1 meter (typically -59 to -65 dBm for BLE)
+  /// n: path loss exponent (2-4, using 2.5 for indoor environments)
+  int _estimateBleDistance(int rssi) {
+    const int txPower = -59; // Typical BLE transmit power at 1 meter
+    const double pathLossExponent = 2.5; // Indoor environment
+
+    if (rssi >= txPower) {
+      return 1; // Very close, less than 1 meter
+    }
+
+    // Calculate distance using log-distance path loss model
+    final ratio = (txPower - rssi) / (10 * pathLossExponent);
+    final distance = pow(10, ratio).toDouble();
+
+    // Clamp to reasonable BLE range (1-100 meters)
+    return distance.clamp(1, 100).round();
   }
 
   /// Get color for connection method

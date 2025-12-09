@@ -716,6 +716,37 @@ class DevicesService {
         device.latency = stopwatch.elapsedMilliseconds;
         device.lastChecked = DateTime.now();
 
+        // Parse status response to extract location and other info
+        try {
+          final data = json.decode(response.body) as Map<String, dynamic>;
+
+          // Extract location from response
+          final location = data['location'] as Map<String, dynamic>?;
+          if (location != null) {
+            final lat = location['latitude'];
+            final lon = location['longitude'];
+            if (lat != null) device.latitude = (lat is int) ? lat.toDouble() : lat as double?;
+            if (lon != null) device.longitude = (lon is int) ? lon.toDouble() : lon as double?;
+          }
+
+          // Also check top-level latitude/longitude (some APIs return it this way)
+          if (device.latitude == null && data['latitude'] != null) {
+            final lat = data['latitude'];
+            device.latitude = (lat is int) ? lat.toDouble() : lat as double?;
+          }
+          if (device.longitude == null && data['longitude'] != null) {
+            final lon = data['longitude'];
+            device.longitude = (lon is int) ? lon.toDouble() : lon as double?;
+          }
+
+          // Extract nickname if available
+          if (data['nickname'] != null) {
+            device.nickname = data['nickname'] as String?;
+          }
+        } catch (e) {
+          // Ignore JSON parsing errors - location is optional
+        }
+
         // Add appropriate connection method based on IP type
         if (isLocalIP) {
           if (!device.connectionMethods.contains('wifi_local') &&
