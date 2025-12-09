@@ -116,12 +116,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     return devices.where((d) => d.callsign != _myCallsign).toList();
   }
 
-  Future<void> _refreshDevices() async {
+  /// Refresh devices - force=true for user-initiated refresh (pull-to-refresh, button)
+  Future<void> _refreshDevices({bool force = false}) async {
     // Don't show loading indicator for background refresh
     // Only update UI if there are actual changes
     final oldDevices = List<RemoteDevice>.from(_devices);
 
-    await _devicesService.refreshAllDevices();
+    await _devicesService.refreshAllDevices(force: force);
     final newDevices = _filterRemoteDevices(_devicesService.getAllDevices());
 
     // Only update state if devices changed
@@ -321,7 +322,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             else
               IconButton(
                 icon: const Icon(Icons.refresh),
-                onPressed: _refreshDevices,
+                onPressed: () => _refreshDevices(force: true),
                 tooltip: _i18n.t('refresh'),
               ),
           ],
@@ -388,7 +389,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
 
     return RefreshIndicator(
-      onRefresh: _refreshDevices,
+      onRefresh: () => _refreshDevices(force: true),
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         itemCount: _devices.length,

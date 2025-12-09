@@ -62,6 +62,10 @@ class DevicesService {
   DateTime? _lastLocalScanTime;
   static const _localScanInterval = Duration(minutes: 5);
 
+  /// Track when last full refresh was performed (for UI caching)
+  DateTime? _lastFullRefreshTime;
+  static const _fullRefreshCooldown = Duration(minutes: 1);
+
   /// Initialize the service
   /// [skipBLE] - If true, skip BLE initialization (used for first-time Android users
   /// who need to see onboarding screen before permission dialogs)
@@ -743,7 +747,22 @@ class DevicesService {
   }
 
   /// Check all devices reachability
-  Future<void> refreshAllDevices() async {
+  /// Refresh all devices, optionally forcing a full refresh even if within cooldown
+  /// Returns true if a full refresh was performed, false if cached data was used
+  Future<bool> refreshAllDevices({bool force = false}) async {
+    // Check if we're within the cooldown period
+    if (!force && _lastFullRefreshTime != null) {
+      final elapsed = DateTime.now().difference(_lastFullRefreshTime!);
+      if (elapsed < _fullRefreshCooldown) {
+        LogService().log('DevicesService: Using cached devices (${elapsed.inSeconds}s since last refresh)');
+        // Still notify listeners with current data so UI updates
+        _notifyListeners();
+        return false;
+      }
+    }
+
+    LogService().log('DevicesService: Performing full device refresh');
+
     // First, ensure connected station is in device list with 'internet' tag
     await _updateConnectedStation();
 
@@ -760,6 +779,10 @@ class DevicesService {
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
     }
+
+    // Update last refresh time
+    _lastFullRefreshTime = DateTime.now();
+    return true;
   }
 
   /// Discover devices via BLE
