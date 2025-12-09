@@ -10,6 +10,7 @@ import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/collection_service.dart';
 import '../services/signing_service.dart';
+import '../services/app_args.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
 
@@ -38,6 +39,15 @@ class ProfileService {
     if (_initialized) return;
 
     try {
+      // Check if --new-identity flag was passed
+      final appArgs = AppArgs();
+      if (appArgs.newIdentity) {
+        await _createNewIdentityFromArgs();
+        _initialized = true;
+        LogService().log('ProfileService initialized with new identity from command line');
+        return;
+      }
+
       await _loadProfiles();
       _initialized = true;
       LogService().log('ProfileService initialized with ${_profiles.length} profile(s)');
@@ -52,6 +62,25 @@ class ProfileService {
       }
       _initialized = true;
     }
+  }
+
+  /// Create a new identity based on command line arguments
+  Future<void> _createNewIdentityFromArgs() async {
+    final appArgs = AppArgs();
+    final profileType = appArgs.isStation ? ProfileType.station : ProfileType.client;
+
+    final newProfile = Profile(
+      type: profileType,
+      nickname: appArgs.nickname ?? (appArgs.isStation ? 'Station' : 'User'),
+    );
+
+    await _generateIdentityForProfile(newProfile, type: profileType);
+
+    _profiles = [newProfile];
+    _activeProfileId = newProfile.id;
+    _saveAllProfiles();
+
+    LogService().log('Created new ${profileType.name} identity: ${newProfile.callsign} (${newProfile.nickname})');
   }
 
   /// Load profiles from config (supports both legacy single profile and new multi-profile format)

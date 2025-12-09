@@ -107,105 +107,21 @@ cleanup() {
 # Set up trap for cleanup on exit
 trap cleanup EXIT
 
-# Generate unique test callsigns
-CALLSIGN_A="X1TEST$(date +%S)"
-CALLSIGN_B="X2TEST$(date +%S)"
+# Using --new-identity flag to create temporary identities
 echo ""
-echo -e "${BLUE}Instance A callsign: $CALLSIGN_A${NC}"
-echo -e "${BLUE}Instance B callsign: $CALLSIGN_B${NC}"
+echo -e "${BLUE}Creating new identities via --new-identity flag${NC}"
 echo ""
 
-# Create test environment for Instance A
-echo "Creating test environment for Instance A..."
-mkdir -p "$TEMP_DIR_A/devices"
-
-# Generate test NOSTR keys for Instance A (deterministic for testing)
-TEST_NSEC_A="nsec1qy93g5tznv0a0hzfn5j4v4z0m7lwy2c5rx6tykum2e4kf6vfn0mqqp96j0"
-TEST_NPUB_A="npub1test000000000000000000000000000000000000000000000000testa"
-
-cat > "$TEMP_DIR_A/config.json" << EOF
-{
-  "version": "1.0",
-  "activeProfileId": "test_a",
-  "language": "en_US",
-  "firstLaunchComplete": true,
-  "profiles": [
-    {
-      "id": "test_a",
-      "type": "client",
-      "callsign": "$CALLSIGN_A",
-      "nickname": "Test User A",
-      "description": "Test profile A for DM testing",
-      "npub": "$TEST_NPUB_A",
-      "nsec": "$TEST_NSEC_A",
-      "useExtension": false,
-      "preferredColor": "blue",
-      "createdAt": "$(date -Iseconds)",
-      "isActive": true
-    }
-  ]
-}
-EOF
-
-cat > "$TEMP_DIR_A/station_config.json" << EOF
-{
-  "version": "1.0",
-  "stations": []
-}
-EOF
-
-# Create test environment for Instance B
-echo "Creating test environment for Instance B..."
-mkdir -p "$TEMP_DIR_B/devices"
-
-# Generate test NOSTR keys for Instance B (different from A)
-TEST_NSEC_B="nsec1py93g5tznv0a0hzfn5j4v4z0m7lwy2c5rx6tykum2e4kf6vfn0mqqp96j1"
-TEST_NPUB_B="npub1test111111111111111111111111111111111111111111111111testb"
-
-cat > "$TEMP_DIR_B/config.json" << EOF
-{
-  "version": "1.0",
-  "activeProfileId": "test_b",
-  "language": "en_US",
-  "firstLaunchComplete": true,
-  "profiles": [
-    {
-      "id": "test_b",
-      "type": "client",
-      "callsign": "$CALLSIGN_B",
-      "nickname": "Test User B",
-      "description": "Test profile B for DM testing",
-      "npub": "$TEST_NPUB_B",
-      "nsec": "$TEST_NSEC_B",
-      "useExtension": false,
-      "preferredColor": "green",
-      "createdAt": "$(date -Iseconds)",
-      "isActive": true
-    }
-  ]
-}
-EOF
-
-cat > "$TEMP_DIR_B/station_config.json" << EOF
-{
-  "version": "1.0",
-  "stations": []
-}
-EOF
-
-echo "Test environments created"
-echo ""
-
-# Start Instance A
+# Start Instance A with new client identity
 cd "$PROJECT_DIR/build/linux/x64/release/bundle"
-echo -e "${YELLOW}Starting Instance A on port $PORT_A...${NC}"
-./geogram_desktop --port=$PORT_A --data-dir="$TEMP_DIR_A" --http-api --debug-api &
+echo -e "${YELLOW}Starting Instance A (client) on port $PORT_A...${NC}"
+./geogram_desktop --port=$PORT_A --data-dir="$TEMP_DIR_A" --http-api --debug-api --new-identity --identity-type=client --nickname="Test Client A" &
 GEOGRAM_PID_A=$!
 echo "Instance A PID: $GEOGRAM_PID_A"
 
-# Start Instance B
-echo -e "${YELLOW}Starting Instance B on port $PORT_B...${NC}"
-./geogram_desktop --port=$PORT_B --data-dir="$TEMP_DIR_B" --http-api --debug-api &
+# Start Instance B with new client identity
+echo -e "${YELLOW}Starting Instance B (client) on port $PORT_B...${NC}"
+./geogram_desktop --port=$PORT_B --data-dir="$TEMP_DIR_B" --http-api --debug-api --new-identity --identity-type=client --nickname="Test Client B" &
 GEOGRAM_PID_B=$!
 echo "Instance B PID: $GEOGRAM_PID_B"
 
@@ -253,7 +169,7 @@ echo ""
 echo "Waiting for full initialization..."
 sleep 5
 
-# Check API status for both instances
+# Check API status for both instances and get callsigns
 echo ""
 echo "=============================================="
 echo "API Status Check"
@@ -261,14 +177,26 @@ echo "=============================================="
 echo ""
 
 echo -e "${BLUE}Instance A status:${NC}"
-curl -s "http://localhost:$PORT_A/api/status" | head -c 500
+STATUS_A=$(curl -s "http://localhost:$PORT_A/api/status")
+echo "$STATUS_A" | head -c 500
 echo ""
+CALLSIGN_A=$(echo "$STATUS_A" | grep -o '"callsign":"[^"]*"' | cut -d'"' -f4)
+echo -e "${GREEN}Instance A callsign: $CALLSIGN_A${NC}"
 echo ""
 
 echo -e "${BLUE}Instance B status:${NC}"
-curl -s "http://localhost:$PORT_B/api/status" | head -c 500
+STATUS_B=$(curl -s "http://localhost:$PORT_B/api/status")
+echo "$STATUS_B" | head -c 500
 echo ""
+CALLSIGN_B=$(echo "$STATUS_B" | grep -o '"callsign":"[^"]*"' | cut -d'"' -f4)
+echo -e "${GREEN}Instance B callsign: $CALLSIGN_B${NC}"
 echo ""
+
+# Verify we got valid callsigns
+if [ -z "$CALLSIGN_A" ] || [ -z "$CALLSIGN_B" ]; then
+    echo -e "${RED}Error: Could not get callsigns from instances${NC}"
+    exit 1
+fi
 
 # Run the DM tests
 echo "=============================================="

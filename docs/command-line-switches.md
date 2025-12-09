@@ -15,6 +15,9 @@ Options:
   --cli                      Run in CLI mode (no GUI)
   --http-api                 Enable HTTP API on startup
   --debug-api                Enable Debug API on startup
+  --new-identity             Create a new identity on startup
+  --identity-type=TYPE       Identity type: 'client' (default) or 'station'
+  --nickname=NAME            Nickname for the new identity
   --verbose                  Enable verbose logging
   --help, -h                 Show help message
   --version, -v              Show version information
@@ -118,6 +121,56 @@ geogram_desktop --http-api --debug-api
 ```
 
 **Security note:** The Debug API should only be enabled in trusted environments as it allows remote control of the application.
+
+### --new-identity
+
+Create a new identity on startup. This clears any existing profile and generates a new NOSTR keypair and callsign. Useful for testing scenarios where you need fresh, temporary identities.
+
+```bash
+# Create a new client identity (default)
+geogram_desktop --new-identity
+
+# Create with a custom nickname
+geogram_desktop --new-identity --nickname="Test User"
+
+# Create a new station identity
+geogram_desktop --new-identity --identity-type=station --nickname="Test Station"
+```
+
+**Use cases:**
+- Automated testing with temporary identities
+- Running multiple instances with different identities
+- CI/CD pipelines that need fresh state
+- Testing device-to-device communication
+
+### --identity-type
+
+Specifies the type of identity to create when using `--new-identity`.
+
+**Values:**
+- `client` (default): Creates a client identity with X1 prefix callsign
+- `station`: Creates a station identity with X3 prefix callsign
+
+```bash
+# Client identity (X1 prefix)
+geogram_desktop --new-identity --identity-type=client
+
+# Station identity (X3 prefix)
+geogram_desktop --new-identity --identity-type=station
+```
+
+**Differences between client and station:**
+- **Client (X1)**: Regular user device, connects to stations, participates in chat
+- **Station (X3)**: Server mode, can host connections, relay messages, cache tiles
+
+### --nickname
+
+Sets the nickname for the new identity when using `--new-identity`.
+
+```bash
+geogram_desktop --new-identity --nickname="Alice"
+geogram_desktop --new-identity --identity-type=station --nickname="HQ Station"
+```
 
 ### --verbose
 

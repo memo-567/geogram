@@ -17,6 +17,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 ///   --cli                      Run in CLI mode (no GUI)
 ///   --http-api                 Enable HTTP API on startup
 ///   --debug-api                Enable Debug API on startup
+///   --new-identity             Create a new identity on startup (useful for testing)
+///   --identity-type=TYPE       Identity type: 'client' (default) or 'station'
+///   --nickname=NAME            Nickname for the new identity
 ///   --help, -h                 Show help and exit
 ///   --version, -v              Show version and exit
 ///   --verbose                  Enable verbose logging
@@ -28,6 +31,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 /// Example usage:
 ///   geogram_desktop --port=3457 --data-dir=/tmp/geogram-test
 ///   geogram_desktop -p 3457 -d /tmp/geogram-test
+///   geogram_desktop --new-identity --identity-type=station --nickname="Test Station"
 class AppArgs {
   static final AppArgs _instance = AppArgs._internal();
   factory AppArgs() => _instance;
@@ -45,6 +49,9 @@ class AppArgs {
   bool _cliMode = false;
   bool _httpApi = false;
   bool _debugApi = false;
+  bool _newIdentity = false;
+  String _identityType = 'client'; // 'client' or 'station'
+  String? _nickname;
   bool _showHelp = false;
   bool _showVersion = false;
   bool _verbose = false;
@@ -63,6 +70,18 @@ class AppArgs {
 
   /// Whether to enable Debug API on startup
   bool get debugApi => _debugApi;
+
+  /// Whether to create a new identity on startup
+  bool get newIdentity => _newIdentity;
+
+  /// Identity type for new identity: 'client' or 'station'
+  String get identityType => _identityType;
+
+  /// Whether the identity type is station
+  bool get isStation => _identityType == 'station';
+
+  /// Nickname for the new identity
+  String? get nickname => _nickname;
 
   /// Whether to show help and exit
   bool get showHelp => _showHelp;
@@ -192,6 +211,26 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--new-identity') {
+        _newIdentity = true;
+        continue;
+      }
+
+      // --identity-type=TYPE format
+      if (arg.startsWith('--identity-type=')) {
+        final value = arg.substring('--identity-type='.length).toLowerCase();
+        if (value == 'station' || value == 'client') {
+          _identityType = value;
+        }
+        continue;
+      }
+
+      // --nickname=NAME format
+      if (arg.startsWith('--nickname=')) {
+        _nickname = arg.substring('--nickname='.length);
+        continue;
+      }
+
       if (arg == '--help' || arg == '-h') {
         _showHelp = true;
         continue;
@@ -217,6 +256,9 @@ class AppArgs {
     _cliMode = false;
     _httpApi = false;
     _debugApi = false;
+    _newIdentity = false;
+    _identityType = 'client';
+    _nickname = null;
     _showHelp = false;
     _showVersion = false;
     _verbose = false;
@@ -236,6 +278,9 @@ Options:
   --cli                      Run in CLI mode (no GUI)
   --http-api                 Enable HTTP API on startup
   --debug-api                Enable Debug API on startup
+  --new-identity             Create a new identity on startup
+  --identity-type=TYPE       Identity type: 'client' (default) or 'station'
+  --nickname=NAME            Nickname for the new identity
   --verbose                  Enable verbose logging
   --help, -h                 Show this help message
   --version, -v              Show version information
@@ -258,6 +303,12 @@ Examples:
   geogram_desktop --port=3456 --data-dir=~/.geogram-instance1
   geogram_desktop --port=3457 --data-dir=~/.geogram-instance2
 
+  # Create a new client identity for testing
+  geogram_desktop --new-identity --nickname="Test Client" --data-dir=/tmp/test
+
+  # Create a new station identity for testing
+  geogram_desktop --new-identity --identity-type=station --nickname="Test Station"
+
   # CLI mode
   geogram_desktop --cli
 ''';
@@ -271,6 +322,9 @@ Examples:
       'cliMode': _cliMode,
       'httpApi': _httpApi,
       'debugApi': _debugApi,
+      'newIdentity': _newIdentity,
+      'identityType': _identityType,
+      'nickname': _nickname,
       'verbose': _verbose,
       'initialized': _initialized,
     };
@@ -278,6 +332,6 @@ Examples:
 
   @override
   String toString() {
-    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, verbose: $_verbose)';
+    return 'AppArgs(port: $_port, dataDir: $_dataDir, cliMode: $_cliMode, httpApi: $_httpApi, debugApi: $_debugApi, newIdentity: $_newIdentity, identityType: $_identityType, nickname: $_nickname, verbose: $_verbose)';
   }
 }
