@@ -1349,5 +1349,21 @@
   "up_to_date": "Atualizado",
   "tap_to_check_updates": "Toque para verificar atualizações",
   "check_for_updates": "Verificar Atualizações",
-  "tap_to_check_new_versions": "Toque para verificar novas versões"
+  "tap_to_check_new_versions": "Toque para verificar novas versões",
+  "security": "Segurança",
+  "security_and_privacy": "Definições de segurança e privacidade",
+  "api_access": "Acesso API",
+  "http_api": "API HTTP",
+  "http_api_description": "Permitir que outros dispositivos na rede se liguem a este dispositivo via HTTP",
+  "debug_api": "API de Depuração",
+  "debug_api_description": "Ativar endpoints de depuração para testes e desenvolvimento. Ativar apenas se souber o que está a fazer.",
+  "advanced": "Avançado",
+  "not_connected_to_network": "Não ligado à rede local",
+  "copy": "Copiar",
+  "location_privacy": "Privacidade da Localização",
+  "location_granularity": "Granularidade da Localização",
+  "location_granularity_description": "Controle a precisão com que a sua localização é partilhada com outros dispositivos. Um valor maior significa mais privacidade mas localização menos precisa.",
+  "precise": "Preciso",
+  "city": "Cidade",
+  "region": "Região"
 }

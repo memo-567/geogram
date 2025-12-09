@@ -8,6 +8,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'debug_controller.dart';
+import 'security_service.dart';
 import 'app_args.dart';
 import '../version.dart';
 
@@ -92,8 +93,14 @@ class LogApiService {
       return _handleFileContentRequest(request, headers);
     }
 
-    // Debug API endpoint
+    // Debug API endpoint (only if enabled in security settings)
     if (request.url.path == 'api/debug') {
+      if (!SecurityService().debugApiEnabled) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Debug API is disabled', 'code': 'DEBUG_API_DISABLED'}),
+          headers: headers,
+        );
+      }
       if (request.method == 'GET') {
         return _handleDebugGetRequest(headers);
       } else if (request.method == 'POST') {
@@ -138,24 +145,54 @@ class LogApiService {
   /// Handle /api/status and /station/status for discovery compatibility
   shelf.Response _handleStatusRequest(Map<String, String> headers) {
     String callsign = '';
+    double? latitude;
+    double? longitude;
+    String? nickname;
+
     try {
       final profile = ProfileService().getProfile();
       callsign = profile.callsign;
+      nickname = profile.nickname;
+
+      // Apply location granularity from security settings
+      final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(
+        profile.latitude,
+        profile.longitude,
+      );
+      latitude = roundedLat;
+      longitude = roundedLon;
     } catch (e) {
       // Profile service not initialized
     }
 
+    final response = <String, dynamic>{
+      'service': 'Geogram Desktop',
+      'version': appVersion,
+      'type': 'desktop',
+      'status': 'online',
+      'callsign': callsign,
+      'name': callsign.isNotEmpty ? callsign : 'Geogram Desktop',
+      'hostname': io.Platform.localHostname,
+      'port': port,
+    };
+
+    // Add location if available
+    if (latitude != null && longitude != null) {
+      response['location'] = {
+        'latitude': latitude,
+        'longitude': longitude,
+      };
+      response['latitude'] = latitude;
+      response['longitude'] = longitude;
+    }
+
+    // Add nickname if available
+    if (nickname != null && nickname.isNotEmpty) {
+      response['nickname'] = nickname;
+    }
+
     return shelf.Response.ok(
-      jsonEncode({
-        'service': 'Geogram Desktop',
-        'version': appVersion,
-        'type': 'desktop',
-        'status': 'online',
-        'callsign': callsign,
-        'name': callsign.isNotEmpty ? callsign : 'Geogram Desktop',
-        'hostname': io.Platform.localHostname,
-        'port': port,
-      }),
+      jsonEncode(response),
       headers: headers,
     );
   }

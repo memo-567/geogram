@@ -23,6 +23,7 @@ import 'services/ble_permission_service.dart';
 import 'services/storage_config.dart';
 import 'services/web_theme_service.dart';
 import 'services/app_args.dart';
+import 'services/security_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
@@ -49,6 +50,7 @@ import 'pages/devices_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
+import 'pages/security_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
@@ -209,8 +211,13 @@ void main() async {
       LogService().log('StationDiscoveryService started (deferred)');
 
       // Start peer discovery API service (port 3456 for local device discovery)
-      await LogApiService().start();
-      LogService().log('Peer discovery API started on port 3456 (deferred)');
+      // Only start if HTTP API is enabled in security settings
+      if (SecurityService().httpApiEnabled) {
+        await LogApiService().start();
+        LogService().log('Peer discovery API started on port ${LogApiService().port} (deferred)');
+      } else {
+        LogService().log('Peer discovery API disabled by security settings');
+      }
 
       // Check if first launch is complete (user has seen onboarding screen)
       final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
@@ -1979,6 +1986,18 @@ class _SettingsPageState extends State<SettingsPage> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const LocationPage()),
+            );
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.security_outlined),
+          title: Text(_i18n.t('security')),
+          subtitle: Text(_i18n.t('security_and_privacy')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const SecuritySettingsPage()),
             );
           },
         ),

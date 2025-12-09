@@ -1355,5 +1355,21 @@
   "up_to_date": "Up to Date",
   "tap_to_check_updates": "Tap to check for updates",
   "check_for_updates": "Check for Updates",
-  "tap_to_check_new_versions": "Tap to check for new versions"
+  "tap_to_check_new_versions": "Tap to check for new versions",
+  "security": "Security",
+  "security_and_privacy": "Security and privacy settings",
+  "api_access": "API Access",
+  "http_api": "HTTP API",
+  "http_api_description": "Allow other devices on the network to connect to this device via HTTP",
+  "debug_api": "Debug API",
+  "debug_api_description": "Enable debug endpoints for testing and development. Only enable if you know what you're doing.",
+  "advanced": "Advanced",
+  "not_connected_to_network": "Not connected to local network",
+  "copy": "Copy",
+  "location_privacy": "Location Privacy",
+  "location_granularity": "Location Granularity",
+  "location_granularity_description": "Control how precisely your location is shared with other devices. A larger value means more privacy but less precise location.",
+  "precise": "Precise",
+  "city": "City",
+  "region": "Region"
 }
