@@ -1,0 +1,347 @@
+# Chat API
+
+This document describes the Chat API endpoints available in Geogram Desktop.
+
+## Overview
+
+The Chat API allows external applications to:
+- List available chat rooms
+- Read messages from chat rooms
+- Post messages (as device owner or as authenticated users via NOSTR-signed events)
+- List files attached to chat rooms
+
+All endpoints are available under `/api/chat/` and require the HTTP API to be enabled in Security settings.
+
+## Authentication
+
+### Public Access
+Public chat rooms (`visibility: PUBLIC`) can be accessed without authentication.
+
+### NOSTR Authentication
+For private or restricted rooms, authentication is required using NOSTR-signed events.
+
+**Header format:**
+```
+Authorization: Nostr <base64_encoded_signed_event>
+```
+
+**Creating an auth event:**
+```javascript
+// Create a text note event for authentication
+const event = {
+  pubkey: "<your_pubkey_hex>",
+  created_at: Math.floor(Date.now() / 1000),
+  kind: 1,
+  tags: [["t", "auth"]],
+  content: "Authentication request",
+  // ... calculate id and sign
+};
+
+// Base64 encode the JSON
+const authHeader = "Nostr " + btoa(JSON.stringify(event));
+```
+
+**Requirements:**
+- Event must be signed with a valid BIP-340 Schnorr signature
+- Event `created_at` must be within 5 minutes of current time (prevents replay attacks)
+- The `npub` derived from the event's `pubkey` is used for access control
+
+## Endpoints
+
+### GET /api/chat/
+
+List available chat rooms based on authorization level.
+
+**Query Parameters:**
+- None required
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (optional): For accessing private rooms
+
+**Response:**
+```json
+{
+  "rooms": [
+    {
+      "id": "main",
+      "name": "Public Chat",
+      "description": "Main chat room",
+      "type": "main",
+      "visibility": "PUBLIC",
+      "participants": ["*"],
+      "lastMessage": "2025-12-09T10:30:00Z",
+      "folder": "main"
+    }
+  ],
+  "total": 1,
+  "authenticated": false
+}
+```
+
+**Room Types:**
+- `main`: Primary chat room (daily message files)
+- `direct`: Direct message channel
+- `group`: Custom group channel
+
+**Visibility Levels:**
+- `PUBLIC`: Anyone can access
+- `PRIVATE`: Only device owner (admin) can access
+- `RESTRICTED`: Only listed participants can access
+
+---
+
+### GET /api/chat/{roomId}/messages
+
+Get messages from a chat room.
+
+**Path Parameters:**
+- `roomId`: The channel ID (e.g., "main", "direct-CR7BBQ")
+
+**Query Parameters:**
+- `limit` (optional, default 50, max 500): Number of messages to return
+- `before` (optional): ISO timestamp - get messages before this time
+- `after` (optional): ISO timestamp - get messages after this time
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (required for non-public rooms)
+
+**Response:**
+```json
+{
+  "roomId": "main",
+  "messages": [
+    {
+      "author": "CR7BBQ",
+      "timestamp": "2025-12-09 10:30_15",
+      "content": "Hello everyone!",
+      "npub": "npub1abc...",
+      "signature": "abc123...",
+      "verified": true,
+      "hasFile": false,
+      "file": null,
+      "hasLocation": true,
+      "latitude": 38.7223,
+      "longitude": -9.1393,
+      "metadata": {}
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 50
+}
+```
+
+**Error Responses:**
+- `403 Forbidden`: Access denied (includes hint for authentication)
+- `404 Not Found`: Room doesn't exist or chat service not initialized
+
+---
+
+### POST /api/chat/{roomId}/messages
+
+Post a new message to a chat room.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+
+#### Option A: As Device Owner (Simple)
+
+Post a message as the device's own identity:
+
+```json
+{
+  "content": "Hello from the API!"
+}
+```
+
+This uses the device's callsign and npub automatically.
+
+#### Option B: As External User (NOSTR-signed)
+
+Post a message with a NOSTR-signed event:
+
+```json
+{
+  "event": {
+    "id": "abc123...",
+    "pubkey": "def456...",
+    "created_at": 1733745015,
+    "kind": 1,
+    "tags": [
+      ["t", "chat"],
+      ["room", "main"],
+      ["callsign", "X1ABCD"]
+    ],
+    "content": "Hello from NOSTR!",
+    "sig": "789xyz..."
+  }
+}
+```
+
+**Event Requirements:**
+- `kind` must be `1` (text note)
+- `sig` must be a valid BIP-340 Schnorr signature
+- Optional `room` tag should match the roomId
+- Optional `callsign` tag sets the author name (otherwise derived from npub)
+
+**Response:**
+```json
+{
+  "success": true,
+  "timestamp": "2025-12-09 10:30_15",
+  "author": "X1ABCD",
+  "eventId": "abc123..."
+}
+```
+
+**Error Responses:**
+- `400 Bad Request`: Missing content/event, content too long, invalid event kind
+- `403 Forbidden`: Invalid signature, author not authorized, room is read-only
+- `404 Not Found`: Room doesn't exist
+
+---
+
+### GET /api/chat/{roomId}/files
+
+List files attached to messages in a chat room.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (required for non-public rooms)
+
+**Response:**
+```json
+{
+  "roomId": "main",
+  "files": [
+    {
+      "name": "abc123def456_photo.jpg",
+      "size": 12345,
+      "year": "2025",
+      "modified": "2025-12-09T10:30:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+**Note:** Files are stored with a SHA1 prefix for deduplication: `{sha1}_{originalname}`
+
+---
+
+## Access Control
+
+### Room Visibility
+
+| Visibility | Who Can Access |
+|------------|----------------|
+| PUBLIC | Anyone |
+| PRIVATE | Admin (device owner) only |
+| RESTRICTED | Admin + listed participants |
+
+### Participants
+
+The `participants` field in channel config determines who can access restricted rooms:
+- `["*"]` - Open to all authenticated users
+- `["CR7BBQ", "X1ABCD"]` - Only listed callsigns
+
+Participant callsigns are mapped to npubs via the `extra/participants.json` file.
+
+### Admin Access
+
+The admin npub (stored in `extra/security.json`) has full access to all rooms.
+
+---
+
+## Examples
+
+### curl: List Public Rooms
+```bash
+curl http://localhost:3456/api/chat/
+```
+
+### curl: Get Messages with Limit
+```bash
+curl "http://localhost:3456/api/chat/main/messages?limit=100"
+```
+
+### curl: Post Message as Device
+```bash
+curl -X POST http://localhost:3456/api/chat/main/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello from curl!"}'
+```
+
+### JavaScript: Authenticated Request
+```javascript
+// Create and sign a NOSTR event for authentication
+const event = createNostrEvent({
+  kind: 1,
+  content: "auth",
+  tags: [["t", "auth"]],
+  createdAt: Math.floor(Date.now() / 1000)
+});
+signEvent(event, privateKey);
+
+// Make authenticated request
+fetch("http://localhost:3456/api/chat/", {
+  headers: {
+    "Authorization": "Nostr " + btoa(JSON.stringify(event))
+  }
+});
+```
+
+### JavaScript: Post NOSTR-signed Message
+```javascript
+const messageEvent = createNostrEvent({
+  kind: 1,
+  content: "Hello from JavaScript!",
+  tags: [
+    ["t", "chat"],
+    ["room", "main"],
+    ["callsign", "X1ABCD"]
+  ],
+  createdAt: Math.floor(Date.now() / 1000)
+});
+signEvent(messageEvent, privateKey);
+
+fetch("http://localhost:3456/api/chat/main/messages", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ event: messageEvent })
+});
+```
+
+---
+
+## Message Format
+
+Messages are stored in the Geogram chat format:
+
+```
+> 2025-12-09 10:30_15 -- CR7BBQ
+Hello everyone!
+--> npub: npub1abc...
+--> signature: abc123...
+```
+
+See [Chat Format Specification](../../central/docs/collections/types/chat-format-specification.md) for details.
+
+---
+
+## Security Considerations
+
+1. **Signature Verification**: All NOSTR events are verified before trusting the identity
+2. **Replay Prevention**: Auth events must be within 5 minutes of current time
+3. **Path Traversal**: Room IDs are validated to prevent directory traversal attacks
+4. **Content Limits**: Message content length is limited by channel config (`maxSizeText`)
+5. **Read-Only Rooms**: Some rooms may be configured as read-only
+
+---
+
+## Related Documentation
+
+- [Security Settings](security-settings.md) - HTTP API and Debug API configuration
+- [API Documentation](api/API.md) - General API overview
