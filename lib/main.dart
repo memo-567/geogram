@@ -434,20 +434,25 @@ class _HomePageState extends State<HomePage> {
     final collectionService = CollectionService();
     final defaultTypes = ['chat', 'blog', 'alerts'];
 
+    LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
+
     for (final type in defaultTypes) {
       try {
+        final title = _i18n.t('collection_type_$type');
+        LogService().log('Creating default collection: $type (title: $title)');
         await collectionService.createCollection(
-          title: _i18n.t('collection_type_$type'),
+          title: title,
           type: type,
         );
         LogService().log('Created default collection: $type');
-      } catch (e) {
+      } catch (e, stackTrace) {
         // Collection might already exist, skip
-        LogService().log('Skipped creating $type collection: $e');
+        LogService().log('Failed creating $type collection: $e');
+        LogService().log('Stack trace: $stackTrace');
       }
     }
 
-    // Collections will be loaded by CollectionsPage when it initializes
+    LogService().log('Default collections creation complete');
   }
 
   /// Show welcome dialog with generated callsign
@@ -759,7 +764,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.addListener(_onProfileChanged);
     _collectionService.collectionsNotifier.addListener(_onCollectionsChanged);
-    LogService().log('Collections page opened');
+    LogService().log('CollectionsPage: initState - setting up listeners');
     _loadCollections();
     _subscribeToUnreadCounts();
   }
@@ -772,7 +777,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
 
   void _onCollectionsChanged() {
     // Collections were created/updated/deleted, reload the list
-    LogService().log('Collections changed, reloading collections');
+    LogService().log('CollectionsPage: collectionsNotifier triggered, reloading');
     _loadCollections();
   }
 
@@ -825,7 +830,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
       // Final update with all collections
       _updateCollectionsList(collections, isComplete: true);
 
-      LogService().log('Loaded ${collections.length} collections');
+      final types = collections.map((c) => c.type).toList();
+      LogService().log('CollectionsPage: Loaded ${collections.length} collections: $types');
     } catch (e) {
       LogService().log('Error loading collections: $e');
       setState(() => _isLoading = false);
@@ -2106,7 +2112,7 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const AboutPage()),
+              MaterialPageRoute(builder: (context) => AboutPage()),
             );
           },
         ),
