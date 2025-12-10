@@ -556,6 +556,7 @@ class DevicesService {
           callsign: callsign,
           name: statusCache?['nickname'] as String? ?? matchingRelay?.name ?? callsign,
           nickname: statusCache?['nickname'] as String?,
+          description: statusCache?['description'] as String?,
           url: statusCache?['url'] as String? ?? deviceUrl,
           npub: statusCache?['npub'] as String?,
           isOnline: false,
@@ -1217,6 +1218,11 @@ class DevicesService {
             device.preferredColor = data['color'] as String?;
           }
 
+          // Extract description if available
+          if (data['description'] != null) {
+            device.description = data['description'] as String?;
+          }
+
           // Update fetch timestamp
           device.lastFetched = DateTime.now();
         } catch (e) {
@@ -1829,6 +1835,7 @@ class DevicesService {
       final data = {
         'callsign': device.callsign,
         'nickname': device.nickname,
+        'description': device.description,
         'color': device.preferredColor,
         'latitude': device.latitude,
         'longitude': device.longitude,
@@ -1985,6 +1992,9 @@ class RemoteDevice {
   /// User's preferred color from profile
   String? preferredColor;
 
+  /// User's profile description
+  String? description;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -2005,6 +2015,7 @@ class RemoteDevice {
     this.bleProximity,
     this.bleRssi,
     this.preferredColor,
+    this.description,
     this.isPinned = false,
     this.folderId,
   });

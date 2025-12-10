@@ -27,6 +27,9 @@ class LogApiService {
   // Use dynamic to avoid type conflicts between stub and real dart:io
   dynamic _server;
 
+  /// Track when the service started for uptime calculation
+  DateTime? _startTime;
+
   /// Get the configured port from AppArgs (defaults to 3456)
   int get port => AppArgs().port;
 
@@ -53,6 +56,7 @@ class LogApiService {
         port,
       );
 
+      _startTime = DateTime.now();
       LogService().log('LogApiService: Started on http://0.0.0.0:$port (accessible from network)');
 
       // Auto-initialize ChatService if a chat collection exists
@@ -294,12 +298,14 @@ class LogApiService {
     double? longitude;
     String? nickname;
     String? color;
+    String? description;
 
     try {
       final profile = ProfileService().getProfile();
       callsign = profile.callsign;
       nickname = profile.nickname;
       color = profile.preferredColor;
+      description = profile.description;
 
       // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
       double? rawLat = profile.latitude;
@@ -356,6 +362,16 @@ class LogApiService {
     // Add preferred color if set
     if (color != null && color.isNotEmpty) {
       response['color'] = color;
+    }
+
+    // Add description if set
+    if (description != null && description.isNotEmpty) {
+      response['description'] = description;
+    }
+
+    // Add uptime in seconds
+    if (_startTime != null) {
+      response['uptime'] = DateTime.now().difference(_startTime!).inSeconds;
     }
 
     return shelf.Response.ok(
