@@ -441,9 +441,58 @@ class _UpdatePageState extends State<UpdatePage> {
                         );
                       },
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
                   ],
                 ),
+
+              // Changelog - show when update is available (so users can read while downloading)
+              if (_latestRelease != null && hasUpdate && _latestRelease!.body != null && _latestRelease!.body!.isNotEmpty)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.article_outlined,
+                              size: 20,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _i18n.t('whats_new_in_version', params: [_latestRelease!.version]),
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          _latestRelease!.body!,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        if (_latestRelease!.htmlUrl != null) ...[
+                          const SizedBox(height: 12),
+                          TextButton.icon(
+                            onPressed: () => _launchURL(_latestRelease!.htmlUrl!),
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: Text(_i18n.t('view_on_github')),
+                            style: TextButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+              if (_latestRelease != null && hasUpdate && _latestRelease!.body != null && _latestRelease!.body!.isNotEmpty)
+                const SizedBox(height: 16),
 
               // Error display
               if (_error != null)

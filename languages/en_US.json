@@ -1302,6 +1302,7 @@
   "released": "Released",
   "available_for": "Available for",
   "release_notes": "Release Notes:",
+  "whats_new_in_version": "What's new in v{0}",
   "view_on_github": "View on GitHub",
   "rollback_backups": "Rollback Backups",
   "rollback_backups_desc": "Previous versions are saved automatically before updates.",
