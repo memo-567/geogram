@@ -730,7 +730,12 @@ class DirectMessageService {
         // Verify signatures and check npub matches file identity
         for (final msg in messages) {
           if (msg.isSigned) {
-            final verified = verifySignature(msg, roomId: normalizedCallsign);
+            // For DMs: roomId used in signing is the RECIPIENT's callsign
+            // If message is FROM me, recipient was other party (normalizedCallsign)
+            // If message is FROM them, recipient was me (_myCallsign)
+            final isFromMe = msg.author.toUpperCase() == _myCallsign.toUpperCase();
+            final roomIdForVerification = isFromMe ? normalizedCallsign : _myCallsign;
+            final verified = verifySignature(msg, roomId: roomIdForVerification);
 
             // For messages from the other party in npub-specific files,
             // verify the message's npub matches the file's npub
@@ -891,8 +896,12 @@ class DirectMessageService {
       final id = '${msg.timestamp}|${msg.author}';
       if (!existing.contains(id)) {
         // Verify signature if present
-        // For DMs, the roomId is the other device's callsign
-        if (verifySignature(msg, roomId: otherCallsign)) {
+        // For DMs: roomId used in signing is the RECIPIENT's callsign
+        // If message is FROM me, recipient was other party (otherCallsign)
+        // If message is FROM them, recipient was me (_myCallsign)
+        final isFromMe = msg.author.toUpperCase() == _myCallsign.toUpperCase();
+        final roomIdForVerification = isFromMe ? otherCallsign : _myCallsign;
+        if (verifySignature(msg, roomId: roomIdForVerification)) {
           newMessages.add(msg);
         }
       }
