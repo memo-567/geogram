@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../services/i18n_service.dart';
 import '../version.dart';
 
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key});
+  AboutPage({super.key});
+
+  final I18nService _i18n = I18nService();
 
   void _launchURL(BuildContext context, String url) async {
     final uri = Uri.parse(url);
@@ -13,7 +16,7 @@ class AboutPage extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Could not open $url'),
+            content: Text(_i18n.t('could_not_open_url', params: [url])),
             backgroundColor: Colors.red,
           ),
         );
@@ -25,7 +28,7 @@ class AboutPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('About Geogram'),
+        title: Text(_i18n.t('about_geogram')),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -46,14 +49,14 @@ class AboutPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Connected, together',
+                    _i18n.t('connected_together'),
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Version $appVersion',
+                    _i18n.t('version_number', params: [appVersion]),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -73,7 +76,7 @@ class AboutPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  'True P2P Privacy • No Servers Required',
+                  _i18n.t('about_tagline'),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -87,17 +90,17 @@ class AboutPage extends StatelessWidget {
 
             // Description
             Text(
-              'About',
+              _i18n.t('about'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
             Text(
-              'Geogram is a privacy-first communication platform that connects devices directly—no central servers, no data collection, no compromise.',
+              _i18n.t('about_description_1'),
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 16),
             Text(
-              'Using WebRTC for direct peer-to-peer connections, Bluetooth mesh networking, and cryptographically signed messages, Geogram ensures your conversations stay between you and your contacts.',
+              _i18n.t('about_description_2'),
               style: Theme.of(context).textTheme.bodyLarge,
             ),
 
@@ -105,129 +108,128 @@ class AboutPage extends StatelessWidget {
 
             // Features
             Text(
-              'Key Features',
+              _i18n.t('key_features'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 16),
             _buildFeature(
               context,
               Icons.link,
-              'Direct P2P via WebRTC',
-              'Connect directly to other devices—no relay servers',
+              _i18n.t('feature_p2p_title'),
+              _i18n.t('feature_p2p_desc'),
             ),
             _buildFeature(
               context,
               Icons.lock,
-              'End-to-End Encryption',
-              'Messages cryptographically signed with NOSTR keys',
+              _i18n.t('feature_encryption_title'),
+              _i18n.t('feature_encryption_desc'),
             ),
             _buildFeature(
               context,
               Icons.offline_bolt,
-              'Offline-First Design',
-              'Works without internet via Bluetooth mesh',
+              _i18n.t('feature_offline_title'),
+              _i18n.t('feature_offline_desc'),
             ),
             _buildFeature(
               context,
               Icons.devices,
-              'Multi-Platform',
-              'Android, Desktop, Web, and embedded devices',
+              _i18n.t('feature_multiplatform_title'),
+              _i18n.t('feature_multiplatform_desc'),
             ),
             _buildFeature(
               context,
               Icons.hub,
-              'Smart Routing',
-              'Automatic fallback: LAN → WebRTC → Station → Bluetooth',
+              _i18n.t('feature_routing_title'),
+              _i18n.t('feature_routing_desc'),
             ),
             _buildFeature(
               context,
               Icons.verified_user,
-              'Verified Messages',
-              'Every message signed and verified—no spoofing',
+              _i18n.t('feature_verified_title'),
+              _i18n.t('feature_verified_desc'),
             ),
 
             const SizedBox(height: 32),
 
             // Communication Channels
             Text(
-              'Connection Methods',
+              _i18n.t('connection_methods'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 16),
             _buildChannel(
               context,
               Icons.wifi,
-              'Local Network (LAN)',
-              'Fastest—direct HTTP on same WiFi network',
+              _i18n.t('channel_lan_title'),
+              _i18n.t('channel_lan_desc'),
             ),
             _buildChannel(
               context,
               Icons.link,
-              'WebRTC P2P',
-              'Direct connection via NAT traversal—true privacy',
+              _i18n.t('channel_webrtc_title'),
+              _i18n.t('channel_webrtc_desc'),
             ),
             _buildChannel(
               context,
               Icons.cloud_outlined,
-              'Station Relay',
-              'Fallback relay when P2P unavailable',
+              _i18n.t('channel_station_title'),
+              _i18n.t('channel_station_desc'),
             ),
             _buildChannel(
               context,
               Icons.bluetooth,
-              'Bluetooth Mesh',
-              'Offline communication—no internet needed',
+              _i18n.t('channel_bluetooth_title'),
+              _i18n.t('channel_bluetooth_desc'),
             ),
 
             const SizedBox(height: 32),
 
             // Collections Feature
             Text(
-              'Collections',
+              _i18n.t('collections'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
             Text(
-              'Geogram Desktop includes a powerful Collections feature for sharing files and folders offline:',
+              _i18n.t('collections_description'),
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 12),
             _buildFeature(
               context,
               Icons.folder,
-              'File Sharing',
-              'Create collections of files to share with others',
+              _i18n.t('collection_sharing_title'),
+              _i18n.t('collection_sharing_desc'),
             ),
             _buildFeature(
               context,
               Icons.vpn_key,
-              'NOSTR-Based IDs',
-              'Collections identified by npub keys',
+              _i18n.t('collection_nostr_title'),
+              _i18n.t('collection_nostr_desc'),
             ),
             _buildFeature(
               context,
               Icons.security,
-              'Access Control',
-              'Public, private, or restricted visibility',
+              _i18n.t('collection_access_title'),
+              _i18n.t('collection_access_desc'),
             ),
             _buildFeature(
               context,
               Icons.sync,
-              'Offline Sync',
-              'Share collections via BLE or local network',
+              _i18n.t('collection_sync_title'),
+              _i18n.t('collection_sync_desc'),
             ),
 
             const SizedBox(height: 32),
 
             // License
             Text(
-              'License',
+              _i18n.t('license'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
             Text(
-              'Copyright 2025 Geogram Contributors\n\n'
-              'Licensed under the Apache License, Version 2.0',
+              _i18n.t('license_text'),
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 16),
@@ -237,39 +239,39 @@ class AboutPage extends StatelessWidget {
                 'https://www.apache.org/licenses/LICENSE-2.0',
               ),
               icon: const Icon(Icons.open_in_new),
-              label: const Text('View License'),
+              label: Text(_i18n.t('view_license')),
             ),
 
             const SizedBox(height: 32),
 
             // Links
             Text(
-              'Links',
+              _i18n.t('links'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 16),
             _buildLink(
               context,
               Icons.code,
-              'GitHub Repository',
+              _i18n.t('github_repository'),
               'https://github.com/geograms/central',
             ),
             _buildLink(
               context,
               Icons.bug_report,
-              'Report Issues',
+              _i18n.t('report_issues'),
               'https://github.com/geograms/central/issues',
             ),
             _buildLink(
               context,
               Icons.description,
-              'Documentation',
+              _i18n.t('documentation'),
               'https://github.com/geograms/central/blob/main/docs/README.md',
             ),
             _buildLink(
               context,
               Icons.forum,
-              'Discussions',
+              _i18n.t('discussions'),
               'https://github.com/geograms/central/discussions',
             ),
 
@@ -278,7 +280,7 @@ class AboutPage extends StatelessWidget {
             // Attribution
             Center(
               child: Text(
-                'Your data, your devices, your privacy.',
+                _i18n.t('about_footer'),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
@@ -350,7 +352,7 @@ class AboutPage extends StatelessWidget {
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+            color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
           ),
         ),
         child: Row(

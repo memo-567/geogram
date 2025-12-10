@@ -625,7 +625,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    folder.name,
+                    folder.isDefault ? _i18n.t('discovered_folder') : folder.name,
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
