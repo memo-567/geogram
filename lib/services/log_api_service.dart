@@ -10,6 +10,7 @@ import 'profile_service.dart';
 import 'collection_service.dart';
 import 'debug_controller.dart';
 import 'security_service.dart';
+import 'user_location_service.dart';
 import 'chat_service.dart';
 import 'direct_message_service.dart';
 import 'devices_service.dart';
@@ -298,10 +299,23 @@ class LogApiService {
       callsign = profile.callsign;
       nickname = profile.nickname;
 
+      // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
+      double? rawLat = profile.latitude;
+      double? rawLon = profile.longitude;
+
+      // If profile has no location, try UserLocationService
+      if (rawLat == null || rawLon == null) {
+        final userLocation = UserLocationService().currentLocation;
+        if (userLocation != null && userLocation.isValid) {
+          rawLat = userLocation.latitude;
+          rawLon = userLocation.longitude;
+        }
+      }
+
       // Apply location granularity from security settings
       final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(
-        profile.latitude,
-        profile.longitude,
+        rawLat,
+        rawLon,
       );
       latitude = roundedLat;
       longitude = roundedLon;
@@ -320,11 +334,13 @@ class LogApiService {
       'port': port,
     };
 
-    // Add location if available
+    // Add location if available (with privacy precision indicator)
     if (latitude != null && longitude != null) {
+      final precisionKm = SecurityService().locationGranularityMeters / 1000;
       response['location'] = {
         'latitude': latitude,
         'longitude': longitude,
+        'precision_km': precisionKm.round(),
       };
       response['latitude'] = latitude;
       response['longitude'] = longitude;

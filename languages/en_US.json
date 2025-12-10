@@ -178,7 +178,6 @@
   "cyan": "Cyan",
   "about_geogram": "About Geogram",
   "geogram_desktop": "Geogram Desktop",
-  "version_number": "Version 1.0.0",
   "resilient_decentralized": "Resilient, Decentralized Communication",
   "about_description_1": "Geogram is a comprehensive offline-first communication ecosystem designed for environments with limited or no internet connectivity.",
   "about_description_2": "It integrates radio communications (APRS/FM), BLE beacons, NOSTR-based messaging, and hybrid online/offline apps to enable proximity-based and radio-aware communication without internet dependency.",

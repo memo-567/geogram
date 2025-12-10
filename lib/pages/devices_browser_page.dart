@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:math' show pow;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -90,28 +91,31 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     });
   }
 
-  /// Subscribe to BLE status events to show snackbars
+  /// Subscribe to BLE status events (only show errors, not routine scan messages)
   void _subscribeToBLEStatus() {
     _bleStatusSubscription = EventBus().on<BLEStatusEvent>((event) {
       if (!mounted) return;
 
-      // Show snackbar for BLE events
-      final message = event.message ?? _getBLEStatusMessage(event.status);
-      final icon = _getBLEStatusIcon(event.status);
+      // Only show snackbar for errors - routine scan messages are too noisy
+      if (event.status == BLEStatusType.error) {
+        final message = event.message ?? _getBLEStatusMessage(event.status);
+        final icon = _getBLEStatusIcon(event.status);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(icon, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text(message)),
-            ],
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(icon, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text(message)),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red,
           ),
-          duration: const Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+        );
+      }
     });
   }
 
@@ -852,8 +856,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               setState(() {});
             },
             builder: (context, candidateData, rejectedData) {
-              return Draggable<String>(
+              return LongPressDraggable<String>(
                 data: device.callsign,
+                delay: const Duration(milliseconds: 300),
+                onDragStarted: () {
+                  // Haptic feedback when drag starts (works on Android/iOS)
+                  HapticFeedback.mediumImpact();
+                },
                 feedback: Material(
                   elevation: 4,
                   borderRadius: BorderRadius.circular(8),

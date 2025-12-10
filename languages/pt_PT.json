@@ -100,7 +100,7 @@
   "cyan": "Ciano",
   "about_geogram": "Acerca do Geogram",
   "geogram_desktop": "Geogram Desktop",
-  "version_number": "Versão 1.0.0",
+  "version_number": "Versão {0}",
   "resilient_decentralized": "Comunicação Resiliente e Descentralizada",
   "about_description_1": "Geogram é um ecossistema abrangente de comunicação offline-first desenhado para ambientes com conectividade de internet limitada ou inexistente.",
   "about_description_2": "Integra comunicações de rádio (APRS/FM), beacons BLE, mensagens baseadas em NOSTR, e aplicações híbridas online/offline para permitir comunicação baseada em proximidade e ciente de rádio sem dependência de internet.",

@@ -13,6 +13,8 @@ import '../services/log_api_service.dart';
 import '../services/profile_service.dart';
 import '../services/collection_service.dart';
 import '../services/signing_service.dart';
+import '../services/user_location_service.dart';
+import '../services/security_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -106,13 +108,30 @@ class WebSocketService {
         platform = 'Desktop';
       }
 
+      // Get location: prefer profile, fallback to UserLocationService (GPS/IP-based)
+      double? latitude = profile.latitude;
+      double? longitude = profile.longitude;
+
+      // If profile has no location, try UserLocationService
+      if (latitude == null || longitude == null) {
+        final userLocation = UserLocationService().currentLocation;
+        if (userLocation != null && userLocation.isValid) {
+          latitude = userLocation.latitude;
+          longitude = userLocation.longitude;
+          LogService().log('HELLO: Using ${userLocation.source} location: $latitude, $longitude');
+        }
+      }
+
+      // Apply location granularity from Security settings before sharing
+      final (roundedLat, roundedLon) = SecurityService().applyLocationGranularity(latitude, longitude);
+
       // Create hello event (include nickname for friendly URL support, location for distance)
       final event = NostrEvent.createHello(
         npub: profile.npub,
         callsign: profile.callsign,
         nickname: profile.nickname,
-        latitude: profile.latitude,
-        longitude: profile.longitude,
+        latitude: roundedLat,
+        longitude: roundedLon,
         platform: platform,
       );
       event.calculateId();

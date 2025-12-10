@@ -13,6 +13,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 import '../util/event_bus.dart';
+import '../models/update_settings.dart' show UpdateAssetType;
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -59,6 +60,12 @@ class PureRelaySettings {
   String? sslKeyPath;
   int httpsPort;
 
+  // Update mirror configuration
+  bool updateMirrorEnabled;
+  int updateCheckIntervalSeconds;
+  String? lastMirroredVersion;
+  String updateMirrorUrl;
+
   PureRelaySettings({
     this.httpPort = 8080,
     this.enabled = false,
@@ -88,6 +95,10 @@ class PureRelaySettings {
     this.sslCertPath,
     this.sslKeyPath,
     this.httpsPort = 8443,
+    this.updateMirrorEnabled = true,
+    this.updateCheckIntervalSeconds = 120,
+    this.lastMirroredVersion,
+    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -129,6 +140,10 @@ class PureRelaySettings {
       sslKeyPath: json['sslKeyPath'] as String?,
       // Support both old 'sslPort' and new 'httpsPort' keys
       httpsPort: json['httpsPort'] as int? ?? json['sslPort'] as int? ?? 8443,
+      updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
+      updateCheckIntervalSeconds: json['updateCheckIntervalSeconds'] as int? ?? 120,
+      lastMirroredVersion: json['lastMirroredVersion'] as String?,
+      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
     );
   }
 
@@ -163,6 +178,10 @@ class PureRelaySettings {
         'sslCertPath': sslCertPath,
         'sslKeyPath': sslKeyPath,
         'httpsPort': httpsPort,
+        'updateMirrorEnabled': updateMirrorEnabled,
+        'updateCheckIntervalSeconds': updateCheckIntervalSeconds,
+        'lastMirroredVersion': lastMirroredVersion,
+        'updateMirrorUrl': updateMirrorUrl,
       };
 
   PureRelaySettings copyWith({
@@ -194,6 +213,10 @@ class PureRelaySettings {
     String? sslCertPath,
     String? sslKeyPath,
     int? httpsPort,
+    bool? updateMirrorEnabled,
+    int? updateCheckIntervalSeconds,
+    String? lastMirroredVersion,
+    String? updateMirrorUrl,
   }) {
     return PureRelaySettings(
       httpPort: httpPort ?? this.httpPort,
@@ -224,6 +247,10 @@ class PureRelaySettings {
       sslCertPath: sslCertPath ?? this.sslCertPath,
       sslKeyPath: sslKeyPath ?? this.sslKeyPath,
       httpsPort: httpsPort ?? this.httpsPort,
+      updateMirrorEnabled: updateMirrorEnabled ?? this.updateMirrorEnabled,
+      updateCheckIntervalSeconds: updateCheckIntervalSeconds ?? this.updateCheckIntervalSeconds,
+      lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
+      updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
     );
   }
 
@@ -384,6 +411,8 @@ class PureConnectedClient {
   String? platform;
   String? version;
   String? address;
+  double? latitude;
+  double? longitude;
   DateTime connectedAt;
   DateTime lastActivity;
 
@@ -396,6 +425,8 @@ class PureConnectedClient {
     this.platform,
     this.version,
     this.address,
+    this.latitude,
+    this.longitude,
   })  : connectedAt = DateTime.now(),
         lastActivity = DateTime.now();
 
@@ -407,6 +438,8 @@ class PureConnectedClient {
         'platform': platform,
         'version': version,
         'address': address,
+        'latitude': latitude,
+        'longitude': longitude,
         'connected_at': connectedAt.toIso8601String(),
         'last_activity': lastActivity.toIso8601String(),
       };
@@ -526,6 +559,15 @@ class PureStationServer {
   String? _configPath;
   String? _dataDir;
 
+  // Update mirror state
+  Map<String, dynamic>? _cachedRelease;
+  String? _updatesDirectory;
+  bool _isDownloadingUpdates = false;
+  Timer? _updatePollTimer;
+  Map<String, String> _downloadedAssets = {};
+  Map<String, String> _assetFilenames = {};
+  String? _currentDownloadVersion;
+
   static const int maxLogEntries = 1000;
 
   /// Access to the event bus for subscribing to station events
@@ -563,7 +605,14 @@ class PureStationServer {
     // PureStorageConfig already creates directories, but ensure tiles exists
     await Directory(_tilesDirectory!).create(recursive: true);
 
+    // Initialize updates directory
+    _updatesDirectory = '$_dataDir/updates';
+    await Directory(_updatesDirectory!).create(recursive: true);
+
     await _loadSettings();
+
+    // Load cached release info if exists
+    await _loadCachedRelease();
 
     // Load persisted chat data
     await _loadChatData();
@@ -1211,6 +1260,9 @@ class PureStationServer {
         _log('ERROR', 'HTTP server error: $error');
       });
 
+      // Start update mirror polling
+      _startUpdatePolling();
+
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
         // Check if we need to request certificates first
@@ -1651,6 +1703,10 @@ class PureStationServer {
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
+      } else if (path == '/api/updates/latest') {
+        await _handleUpdatesLatest(request);
+      } else if (path.startsWith('/updates/')) {
+        await _handleUpdateDownload(request);
       } else if (path == '/api/devices' || path == '/api/clients') {
         await _handleDevices(request);
       } else if (path.startsWith('/device/')) {
@@ -1760,8 +1816,10 @@ class PureStationServer {
 
             // Check for Nostr event format (used by desktop/mobile clients)
             final event = message['event'] as Map<String, dynamic>?;
+            double? latitude;
+            double? longitude;
             if (event != null) {
-              // Extract callsign, nickname, and platform from event tags
+              // Extract callsign, nickname, platform, and coordinates from event tags
               final tags = event['tags'] as List<dynamic>?;
               String? platform;
               if (tags != null) {
@@ -1773,6 +1831,10 @@ class PureStationServer {
                       nickname = tag[1] as String?;
                     } else if (tag[0] == 'platform') {
                       platform = tag[1] as String?;
+                    } else if (tag[0] == 'latitude') {
+                      latitude = double.tryParse(tag[1].toString());
+                    } else if (tag[0] == 'longitude') {
+                      longitude = double.tryParse(tag[1].toString());
                     }
                   }
                 }
@@ -1806,6 +1868,8 @@ class PureStationServer {
             client.nickname = nickname;
             client.deviceType = deviceType;
             client.version = version;
+            client.latitude = latitude;
+            client.longitude = longitude;
 
             // Send hello_ack (expected by desktop/mobile clients)
             final response = {
@@ -4200,6 +4264,289 @@ class PureStationServer {
     }
     if (!_quietMode) {
       stderr.writeln(entry.toString());
+    }
+  }
+
+  // ============================================
+  // Update Mirror Methods
+  // ============================================
+
+  /// Load cached release info from file
+  Future<void> _loadCachedRelease() async {
+    if (_updatesDirectory == null) return;
+    try {
+      final releaseFile = File('$_updatesDirectory/release.json');
+      if (await releaseFile.exists()) {
+        final content = await releaseFile.readAsString();
+        _cachedRelease = jsonDecode(content) as Map<String, dynamic>;
+        _log('INFO', 'Loaded cached release: ${_cachedRelease?['version']}');
+      }
+    } catch (e) {
+      _log('ERROR', 'Error loading cached release: $e');
+    }
+  }
+
+  /// Save cached release info to file
+  Future<void> _saveCachedRelease() async {
+    if (_updatesDirectory == null || _cachedRelease == null) return;
+    try {
+      final releaseFile = File('$_updatesDirectory/release.json');
+      await releaseFile.writeAsString(jsonEncode(_cachedRelease));
+      _log('INFO', 'Saved cached release: ${_cachedRelease?['version']}');
+    } catch (e) {
+      _log('ERROR', 'Error saving cached release: $e');
+    }
+  }
+
+  /// Start polling for updates
+  void _startUpdatePolling() {
+    if (!_settings.updateMirrorEnabled) {
+      _log('INFO', 'Update mirroring disabled');
+      return;
+    }
+
+    _log('INFO', 'Starting update polling (interval: ${_settings.updateCheckIntervalSeconds}s)');
+
+    // Poll immediately on start
+    _pollAndDownloadUpdates();
+
+    // Then poll periodically
+    _updatePollTimer = Timer.periodic(
+      Duration(seconds: _settings.updateCheckIntervalSeconds),
+      (_) => _pollAndDownloadUpdates(),
+    );
+  }
+
+  /// Poll GitHub and download new releases
+  Future<void> _pollAndDownloadUpdates() async {
+    if (_isDownloadingUpdates) return;
+
+    try {
+      _isDownloadingUpdates = true;
+      _log('INFO', 'Checking for updates from: ${_settings.updateMirrorUrl}');
+
+      final response = await http.get(
+        Uri.parse(_settings.updateMirrorUrl),
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'Geogram-Station-Updater',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        _log('ERROR', 'GitHub API error: ${response.statusCode}');
+        return;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final tagName = json['tag_name'] as String? ?? '';
+      final version = tagName.replaceFirst(RegExp(r'^v'), '');
+
+      // Check if we already have this version
+      if (_settings.lastMirroredVersion == version) {
+        _log('INFO', 'Already have version $version cached');
+        return;
+      }
+
+      _log('INFO', 'New version available: $version (current: ${_settings.lastMirroredVersion})');
+
+      // Download all platform binaries
+      await _downloadAllPlatformBinaries(json);
+
+      // Update cached release info
+      _cachedRelease = {
+        'status': 'available',
+        'version': version,
+        'tagName': tagName,
+        'name': json['name'] as String?,
+        'body': json['body'] as String?,
+        'publishedAt': json['published_at'] as String?,
+        'htmlUrl': json['html_url'] as String?,
+        'assets': _buildAssetUrls(),
+        'assetFilenames': _buildAssetFilenames(),
+      };
+      await _saveCachedRelease();
+
+      // Update settings with new version
+      _settings = _settings.copyWith(lastMirroredVersion: version);
+      await saveSettings();
+
+      _log('INFO', 'Update mirror complete: version $version');
+    } catch (e) {
+      _log('ERROR', 'Error polling for updates: $e');
+    } finally {
+      _isDownloadingUpdates = false;
+    }
+  }
+
+  /// Download all assets from GitHub release
+  Future<void> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
+    final assets = releaseJson['assets'] as List<dynamic>?;
+    if (assets == null) return;
+
+    final tagName = releaseJson['tag_name'] as String? ?? '';
+    final version = tagName.replaceFirst(RegExp(r'^v'), '');
+    _currentDownloadVersion = version;
+
+    _downloadedAssets.clear();
+    _assetFilenames.clear();
+
+    // Download all assets to version-specific folder
+    for (final asset in assets) {
+      final assetMap = asset as Map<String, dynamic>;
+      final filename = assetMap['name'] as String? ?? '';
+      final downloadUrl = assetMap['browser_download_url'] as String?;
+
+      if (downloadUrl == null || filename.isEmpty) continue;
+
+      final assetType = UpdateAssetType.fromFilename(filename);
+      if (assetType != UpdateAssetType.unknown) {
+        final success = await _downloadBinary(version, filename, downloadUrl);
+        if (success) {
+          _downloadedAssets[assetType.name] = '/updates/$version/$filename';
+          _assetFilenames[assetType.name] = filename;
+        }
+      }
+    }
+  }
+
+  /// Download a single binary file to version folder
+  Future<bool> _downloadBinary(String version, String filename, String url) async {
+    if (_updatesDirectory == null) return false;
+
+    try {
+      _log('INFO', 'Downloading $filename for v$version...');
+
+      // Create version subdirectory: updates/{version}/
+      final versionDir = Directory('$_updatesDirectory/$version');
+      if (!await versionDir.exists()) {
+        await versionDir.create(recursive: true);
+      }
+
+      final targetPath = '${versionDir.path}/$filename';
+
+      // Check if file already exists
+      final existingFile = File(targetPath);
+      if (await existingFile.exists()) {
+        final existingSize = await existingFile.length();
+        if (existingSize > 1000) {
+          _log('INFO', 'File already exists: $filename (${(existingSize / (1024 * 1024)).toStringAsFixed(1)}MB)');
+          return true;
+        }
+      }
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Geogram-Station-Updater'},
+      ).timeout(const Duration(minutes: 10));
+
+      if (response.statusCode == 200) {
+        await File(targetPath).writeAsBytes(response.bodyBytes);
+        final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
+        _log('INFO', 'Downloaded $filename: ${sizeMb}MB');
+        return true;
+      } else {
+        _log('ERROR', 'Failed to download $filename: ${response.statusCode}');
+        return false;
+      }
+    } catch (e) {
+      _log('ERROR', 'Error downloading $filename: $e');
+      return false;
+    }
+  }
+
+  /// Build asset URLs pointing to this station
+  Map<String, String> _buildAssetUrls() => _downloadedAssets;
+
+  /// Build asset filenames map
+  Map<String, String> _buildAssetFilenames() => _assetFilenames;
+
+  /// Handle GET /api/updates/latest - Return latest release info
+  Future<void> _handleUpdatesLatest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method Not Allowed');
+      return;
+    }
+
+    request.response.headers.contentType = ContentType.json;
+
+    if (_cachedRelease == null) {
+      // No updates cached yet
+      request.response.write(jsonEncode({
+        'status': 'no_updates_cached',
+        'message': 'Station has not downloaded any updates yet',
+      }));
+    } else {
+      request.response.write(jsonEncode(_cachedRelease));
+    }
+  }
+
+  /// Handle GET /updates/{version}/{filename} - Serve binary file
+  Future<void> _handleUpdateDownload(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method Not Allowed');
+      return;
+    }
+
+    final path = request.uri.path;
+    // Expected format: /updates/{version}/{filename}
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+
+    if (parts.length < 3) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path format. Expected: /updates/{version}/{filename}');
+      return;
+    }
+
+    final version = parts[1];
+    final filename = parts.sublist(2).join('/');
+
+    if (_updatesDirectory == null) {
+      request.response.statusCode = 503;
+      request.response.write('Updates directory not initialized');
+      return;
+    }
+
+    final filePath = '$_updatesDirectory/$version/$filename';
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.write('File not found: $filename');
+      _log('WARN', 'Update file not found: $filePath');
+      return;
+    }
+
+    try {
+      final fileLength = await file.length();
+
+      // Set appropriate content type based on file extension
+      String contentType = 'application/octet-stream';
+      if (filename.endsWith('.apk')) {
+        contentType = 'application/vnd.android.package-archive';
+      } else if (filename.endsWith('.aab')) {
+        contentType = 'application/x-authorware-bin';
+      } else if (filename.endsWith('.zip')) {
+        contentType = 'application/zip';
+      } else if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) {
+        contentType = 'application/gzip';
+      } else if (filename.endsWith('.ipa')) {
+        contentType = 'application/octet-stream';
+      }
+
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', fileLength.toString());
+      request.response.headers.set('Content-Disposition', 'attachment; filename="$filename"');
+
+      // Stream the file to the response
+      await request.response.addStream(file.openRead());
+      _log('INFO', 'Served update file: $filename (${(fileLength / (1024 * 1024)).toStringAsFixed(1)}MB)');
+    } catch (e) {
+      _log('ERROR', 'Error serving update file: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error reading file');
     }
   }
 }

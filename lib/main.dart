@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart' if (dart.library.html) 'platform/window_manager_stub.dart';
 import 'services/log_service.dart';
 import 'services/log_api_service.dart';
+import 'version.dart';
 import 'services/debug_controller.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
@@ -25,6 +26,7 @@ import 'services/web_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
+import 'services/user_location_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -88,7 +90,7 @@ void main() async {
 
     // Handle --version flag
     if (AppArgs().showVersion) {
-      print('Geogram Desktop v1.0.0'); // TODO: Use version.dart
+      print('Geogram Desktop v$appVersion');
       exit(0);
     }
 
@@ -203,6 +205,11 @@ void main() async {
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
+      // Initialize location service (GPS on mobile, IP-based on desktop/web)
+      // Must run after ProfileService to load saved location
+      await UserLocationService().initialize();
+      LogService().log('UserLocationService initialized (deferred)');
+
       // StationService can involve network calls - defer it
       await StationService().initialize();
       LogService().log('StationService initialized (deferred)');
