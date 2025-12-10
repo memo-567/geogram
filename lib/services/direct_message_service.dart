@@ -32,6 +32,15 @@ class DMMustBeReachableException implements Exception {
   String toString() => message;
 }
 
+/// Exception thrown when DM delivery fails
+class DMDeliveryFailedException implements Exception {
+  final String message;
+  DMDeliveryFailedException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Service for managing 1:1 direct message conversations
 class DirectMessageService {
   static final DirectMessageService _instance = DirectMessageService._internal();
@@ -454,12 +463,11 @@ class DirectMessageService {
     // 2. Get or create conversation
     final conversation = await getOrCreateConversation(normalizedCallsign);
 
-    // 3. Create the message with PENDING status
+    // 3. Create the message
     final message = ChatMessage.now(
       author: profile.callsign,
       content: content,
     );
-    message.setDeliveryStatus(MessageStatus.pending);
 
     // 4. Sign the message per chat-format-specification.md
     // Tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
@@ -491,7 +499,18 @@ class DirectMessageService {
       }
     }
 
-    // 5. Save locally with pending status
+    // 5. Push to remote device's chat API FIRST
+    // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
+    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+
+    // 6. Only save locally if delivered successfully
+    if (!delivered) {
+      throw DMDeliveryFailedException(
+        'Failed to deliver message to $normalizedCallsign',
+      );
+    }
+
+    // 7. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
     // Update conversation metadata
@@ -499,23 +518,7 @@ class DirectMessageService {
     conversation.lastMessagePreview = content;
     conversation.lastMessageAuthor = profile.callsign;
 
-    // 6. Fire event (UI shows pending status)
-    _fireMessageEvent(message, otherCallsign, fromSync: false);
-    _notifyListeners();
-
-    // 7. Push to remote device's chat API and get delivery status
-    // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
-    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
-
-    // 8. Update status based on result
-    if (delivered) {
-      message.setDeliveryStatus(MessageStatus.delivered);
-    } else {
-      message.setDeliveryStatus(MessageStatus.failed);
-    }
-
-    // 9. Update status in file and fire status change event
-    await _updateMessageStatus(conversation.path, message);
+    // 8. Fire event and notify listeners
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
   }
@@ -566,15 +569,6 @@ class DirectMessageService {
       LogService().log('DM: Chat API push error: $e');
       return false;
     }
-  }
-
-  /// Update message status in the messages file
-  Future<void> _updateMessageStatus(String conversationPath, ChatMessage message) async {
-    // For simplicity, we don't rewrite the file to update status.
-    // Status is tracked in memory and in newly written messages.
-    // A more complete implementation would read the file, find the message by timestamp+author,
-    // update the status line, and write back. For now, new messages get status on write.
-    LogService().log('DM: Message status updated to ${message.deliveryStatus?.name ?? "unknown"}');
   }
 
   /// Save an incoming/synced message without re-signing
