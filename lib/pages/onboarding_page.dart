@@ -68,8 +68,11 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      body: SafeArea(
+    // Prevent back gesture/button from skipping onboarding
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -228,6 +231,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
