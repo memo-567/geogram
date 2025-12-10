@@ -334,8 +334,9 @@ Fired when a connection type becomes available or unavailable. This enables apps
 
 ```dart
 enum ConnectionType {
-  station,    // Station relay (internet) connection
-  lan,        // Local network connection
+  internet,   // General internet connectivity (can reach external hosts)
+  station,    // Station relay connection (WebSocket to p2p.radio)
+  lan,        // Local network connection (WiFi/Ethernet with private IP)
   bluetooth,  // Bluetooth Low Energy connection
 }
 
@@ -351,24 +352,58 @@ class ConnectionStateChangedEvent extends AppEvent {
 
 | Service | Event | Trigger |
 |---------|-------|---------|
+| `NetworkMonitorService` | internet available | Can reach external hosts (Google, Cloudflare, Apple) |
+| `NetworkMonitorService` | internet unavailable | Cannot reach any external hosts |
+| `NetworkMonitorService` | lan available | Private IP detected (192.168.x.x, 10.x.x.x, etc.) |
+| `NetworkMonitorService` | lan unavailable | No private IP addresses found |
 | `WebSocketService` | station connected | Receives `hello_ack` with `success: true` |
 | `WebSocketService` | station disconnected | Connection loss or explicit disconnect |
 | `BLEDiscoveryService` | bluetooth available | Bluetooth adapter turns on |
 | `BLEDiscoveryService` | bluetooth unavailable | Bluetooth adapter turns off |
+
+**NetworkMonitorService:**
+
+A singleton service that monitors network connectivity by:
+- Checking for private IP addresses (LAN detection) every 10 seconds
+- Testing reachability to external hosts (Internet detection) every 10 seconds
+- Firing events only when state changes (avoids duplicate events)
+
+```dart
+// Access current state directly
+final networkMonitor = NetworkMonitorService();
+if (networkMonitor.hasInternet) {
+  // Internet is available
+}
+if (networkMonitor.hasLan) {
+  // Local network is available
+}
+
+// Force a check now
+await networkMonitor.checkNow();
+```
 
 **Usage Example:**
 
 ```dart
 // Subscribe to connection changes
 EventBus().on<ConnectionStateChangedEvent>((event) {
-  if (event.connectionType == ConnectionType.station) {
-    if (event.isConnected) {
-      print('Connected to station: ${event.stationCallsign}');
-    } else {
-      print('Disconnected from station');
-    }
-  } else if (event.connectionType == ConnectionType.bluetooth) {
-    print('Bluetooth is now ${event.isConnected ? "available" : "unavailable"}');
+  switch (event.connectionType) {
+    case ConnectionType.internet:
+      print('Internet is ${event.isConnected ? "available" : "unavailable"}');
+      break;
+    case ConnectionType.lan:
+      print('LAN is ${event.isConnected ? "available" : "unavailable"}');
+      break;
+    case ConnectionType.station:
+      if (event.isConnected) {
+        print('Connected to station: ${event.stationCallsign}');
+      } else {
+        print('Disconnected from station');
+      }
+      break;
+    case ConnectionType.bluetooth:
+      print('Bluetooth is ${event.isConnected ? "on" : "off"}');
+      break;
   }
 });
 

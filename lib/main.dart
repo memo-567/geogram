@@ -24,6 +24,7 @@ import 'services/storage_config.dart';
 import 'services/web_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
+import 'services/network_monitor_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -263,6 +264,10 @@ void main() async {
         await DevicesService().initialize();
         LogService().log('DevicesService initialized (deferred)');
       }
+
+      // Initialize NetworkMonitorService to track LAN/Internet connectivity
+      await NetworkMonitorService().initialize();
+      LogService().log('NetworkMonitorService initialized');
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');

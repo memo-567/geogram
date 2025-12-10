@@ -277,8 +277,9 @@ class DirectMessageSyncEvent extends AppEvent {
 
 /// Connection type for ConnectionStateChangedEvent
 enum ConnectionType {
-  station,    // Station relay (internet) connection
-  lan,        // Local network connection
+  internet,   // General internet connectivity (can reach external hosts)
+  station,    // Station relay connection (WebSocket to p2p.radio)
+  lan,        // Local network connection (WiFi/Ethernet with private IP)
   bluetooth,  // Bluetooth Low Energy connection
 }
 

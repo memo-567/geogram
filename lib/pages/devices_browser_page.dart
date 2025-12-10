@@ -17,6 +17,7 @@ import '../services/direct_message_service.dart';
 import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
 import '../services/websocket_service.dart';
+import '../services/network_monitor_service.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
@@ -39,6 +40,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final StationDiscoveryService _discoveryService = StationDiscoveryService();
   final StationService _stationService = StationService();
   final WebSocketService _wsService = WebSocketService();
+  final NetworkMonitorService _networkMonitor = NetworkMonitorService();
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
@@ -1319,17 +1321,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Filter connection methods to only show those currently available
-  /// - 'internet' and 'lan'/'wifi' require network connectivity (WebSocket connected)
-  /// - 'bluetooth' is always shown if present (BLE doesn't require internet)
+  /// Uses NetworkMonitorService for LAN/Internet, WebSocketService for station
+  /// - 'internet' requires general internet connectivity
+  /// - 'lan'/'wifi' requires local network interface
+  /// - 'bluetooth' is always shown if present
   List<String> _filterAvailableConnectionMethods(List<String> methods) {
-    final hasNetwork = _wsService.isConnected;
+    final hasInternet = _networkMonitor.hasInternet;
+    final hasLan = _networkMonitor.hasLan;
+    final hasStation = _wsService.isConnected;
 
     return methods.where((method) {
       final m = method.toLowerCase();
-      // Network-dependent methods: only show if we have connectivity
-      if (m == 'internet' || m == 'lan' || m == 'wifi' ||
-          m == 'wifi_local' || m == 'wifi-local') {
-        return hasNetwork;
+      // Internet-dependent methods
+      if (m == 'internet') {
+        return hasInternet || hasStation; // Station connection implies internet
+      }
+      // LAN/WiFi methods - need local network interface
+      if (m == 'lan' || m == 'wifi' || m == 'wifi_local' || m == 'wifi-local') {
+        return hasLan;
       }
       // BLE and other methods are always shown if present
       return true;
