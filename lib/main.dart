@@ -29,6 +29,7 @@ import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
 import 'connection/transports/ble_transport.dart';
+import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
 import 'models/collection.dart';
@@ -205,14 +206,15 @@ void main() async {
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
-      // Transport priority: LAN (10) > WebRTC (15) > Station (30) > BLE (40)
+      // Transport priority: LAN (10) > WebRTC (15) > Station (30) > BT Classic (35) > BLE (40)
       final connectionManager = ConnectionManager();
       connectionManager.registerTransport(LanTransport());
       connectionManager.registerTransport(WebRTCTransport());
       connectionManager.registerTransport(StationTransport());
+      connectionManager.registerTransport(BluetoothClassicTransport());
       connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
-      LogService().log('ConnectionManager initialized with LAN + WebRTC + Station + BLE transports (deferred)');
+      LogService().log('ConnectionManager initialized with LAN + WebRTC + Station + BT Classic + BLE transports (deferred)');
 
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();

@@ -161,11 +161,16 @@ class BLEHelloAckPayload {
   final List<String> capabilities;
   final String? message;
 
+  /// Bluetooth Classic MAC address for BLE+ support (Android servers only)
+  /// When present, indicates the device supports faster Bluetooth Classic transfers
+  final String? classicMac;
+
   BLEHelloAckPayload({
     required this.success,
     this.event,
     this.capabilities = const ['chat'],
     this.message,
+    this.classicMac,
   });
 
   factory BLEHelloAckPayload.fromJson(Map<String, dynamic> json) {
@@ -177,6 +182,7 @@ class BLEHelloAckPayload {
               .toList() ??
           ['chat'],
       message: json['message'] as String?,
+      classicMac: json['classic_mac'] as String?,
     );
   }
 
@@ -187,8 +193,13 @@ class BLEHelloAckPayload {
     };
     if (event != null) result['event'] = event;
     if (message != null) result['message'] = message;
+    if (classicMac != null) result['classic_mac'] = classicMac;
     return result;
   }
+
+  /// Check if this device supports Bluetooth Classic (BLE+)
+  bool get supportsBLEPlus =>
+      classicMac != null && capabilities.contains('bluetooth_classic:spp');
 }
 
 /// Chat message payload
@@ -320,6 +331,7 @@ class BLEMessageBuilder {
     Map<String, dynamic>? event,
     List<String> capabilities = const ['chat'],
     String? message,
+    String? classicMac,
   }) {
     return BLEMessage(
       id: requestId,
@@ -329,6 +341,7 @@ class BLEMessageBuilder {
         event: event,
         capabilities: capabilities,
         message: message,
+        classicMac: classicMac,
       ).toJson(),
     );
   }

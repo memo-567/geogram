@@ -12,9 +12,14 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "dev.geogram/updates"
+    private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Initialize Bluetooth Classic plugin for BLE+ functionality
+        bluetoothClassicPlugin = BluetoothClassicPlugin(this, flutterEngine)
+        bluetoothClassicPlugin?.initialize()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -129,5 +134,11 @@ class MainActivity : FlutterActivity() {
             e.printStackTrace()
             false
         }
+    }
+
+    override fun onDestroy() {
+        bluetoothClassicPlugin?.dispose()
+        bluetoothClassicPlugin = null
+        super.onDestroy()
     }
 }

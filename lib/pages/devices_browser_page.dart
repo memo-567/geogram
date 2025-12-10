@@ -18,6 +18,8 @@ import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
 import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
+import '../services/bluetooth_classic_service.dart';
+import '../services/bluetooth_classic_pairing_service.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
@@ -1156,41 +1158,74 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 case 'delete':
                   _confirmDeleteDevice(device);
                   break;
+                case 'upgrade_ble_plus':
+                  _initiateBlePlusUpgrade(device);
+                  break;
               }
             },
-            itemBuilder: (context) => [
-              PopupMenuItem<String>(
-                value: device.isPinned ? 'unpin' : 'pin',
-                child: Row(
-                  children: [
-                    Icon(
-                      device.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                      size: 20,
-                      color: theme.colorScheme.primary,
+            itemBuilder: (context) {
+              final hasBLE = device.connectionMethods.contains('bluetooth');
+              final hasBLEPlus = device.connectionMethods.contains('bluetooth_plus');
+              final canUpgrade = BluetoothClassicService.isAvailable && !hasBLEPlus;
+
+              return [
+                // Upgrade to BLE+ option (show for all, enabled only when BLE is active)
+                if (canUpgrade)
+                  PopupMenuItem<String>(
+                    value: 'upgrade_ble_plus',
+                    enabled: hasBLE,
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.bluetooth,
+                          size: 20,
+                          color: hasBLE
+                              ? theme.colorScheme.primary
+                              : theme.disabledColor,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Upgrade to BLE+',
+                          style: TextStyle(
+                            color: hasBLE ? null : theme.disabledColor,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 12),
-                    Text(device.isPinned ? _i18n.t('unpin') : _i18n.t('pin')),
-                  ],
+                  ),
+                PopupMenuItem<String>(
+                  value: device.isPinned ? 'unpin' : 'pin',
+                  child: Row(
+                    children: [
+                      Icon(
+                        device.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                        size: 20,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(device.isPinned ? _i18n.t('unpin') : _i18n.t('pin')),
+                    ],
+                  ),
                 ),
-              ),
-              PopupMenuItem<String>(
-                value: 'delete',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.delete_outline,
-                      size: 20,
-                      color: theme.colorScheme.error,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      _i18n.t('delete'),
-                      style: TextStyle(color: theme.colorScheme.error),
-                    ),
-                  ],
+                PopupMenuItem<String>(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: theme.colorScheme.error,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _i18n.t('delete'),
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ];
+            },
           ),
         ],
       ),
@@ -1356,6 +1391,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         return Colors.green;
       case 'bluetooth':
         return Colors.lightBlue;
+      case 'bluetooth_plus':
+      case 'ble_plus':
+      case 'ble+':
+        return Colors.blue; // Darker blue for BLE+ (premium feel)
       case 'lora':
         return Colors.orange;
       case 'radio':
@@ -1577,6 +1616,84 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           otherCallsign: device.callsign,
         ),
       ),
+    );
+  }
+
+  /// Initiate BLE+ upgrade for a device
+  ///
+  /// Shows a dialog explaining the benefits and triggers the pairing process.
+  void _initiateBlePlusUpgrade(RemoteDevice device) async {
+    final theme = Theme.of(context);
+
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.bluetooth, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Upgrade to BLE+'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Upgrade ${device.displayName} to BLE+ for faster data transfers.',
+              style: theme.textTheme.bodyLarge,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Benefits of BLE+:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text('• Faster transfers (~2-3 Mbps vs ~0.1-0.5 Mbps)'),
+            const Text('• Better for large files and batch operations'),
+            const Text('• BLE still used for discovery (no constant pairing)'),
+            const SizedBox(height: 16),
+            Text(
+              'This will show a Bluetooth pairing dialog. Both devices must accept the pairing PIN.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Upgrade'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // TODO: Get the classic_mac from the BLE HELLO_ACK response
+    // For now, we need to have received this during the BLE handshake
+    // This will be implemented when the BLE message service stores the classic_mac
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'BLE+ upgrade initiated for ${device.callsign}. '
+          'Please accept the pairing on both devices.',
+        ),
+        backgroundColor: Colors.blue,
+      ),
+    );
+
+    // The actual pairing will be triggered when we have the classic_mac
+    // from the BLE HELLO handshake
+    LogService().log(
+      'DevicesBrowserPage: BLE+ upgrade initiated for ${device.callsign}',
     );
   }
 

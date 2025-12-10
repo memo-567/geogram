@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "bluetooth_classic_plugin.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -19,8 +20,20 @@ apply_standard_settings(${BINARY_NAME})
 # Add preprocessor definitions for the application ID.
 add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 
+# Find BlueZ/Bluetooth library for Bluetooth Classic support
+pkg_check_modules(BLUEZ IMPORTED_TARGET bluez)
+
 # Add dependency libraries. Add any application-specific dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
+
+# Link Bluetooth library if available
+if(BLUEZ_FOUND)
+  target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::BLUEZ)
+  target_compile_definitions(${BINARY_NAME} PRIVATE HAVE_BLUETOOTH=1)
+else()
+  message(WARNING "BlueZ dev library not found - Bluetooth Classic support will be limited. Install libbluetooth-dev for full support.")
+  # Plugin will use DBus-only mode without direct RFCOMM socket support
+endif()
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

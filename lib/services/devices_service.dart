@@ -24,6 +24,7 @@ import 'signing_service.dart';
 import 'debug_controller.dart';
 import 'config_service.dart';
 import 'app_args.dart';
+import 'bluetooth_classic_pairing_service.dart';
 import '../util/nostr_event.dart';
 import '../models/profile.dart';
 import '../connection/connection_manager.dart';
@@ -456,15 +457,30 @@ class DevicesService {
 
   /// Handle BLE discovered devices
   void _handleBLEDevices(List<BLEDevice> bleDevices) {
+    final pairingService = BluetoothClassicPairingService();
+
     for (final bleDevice in bleDevices) {
       // Use callsign if available, otherwise use BLE device ID
       final callsign = bleDevice.callsign?.toUpperCase() ?? 'BLE-${bleDevice.deviceId}';
+
+      // Check if this device is BLE+ paired
+      final isBLEPlus = pairingService.isBLEPlus(callsign);
 
       if (_devices.containsKey(callsign)) {
         // Update existing device
         final device = _devices[callsign]!;
         if (!device.connectionMethods.contains('bluetooth')) {
           device.connectionMethods = [...device.connectionMethods, 'bluetooth'];
+        }
+        // Add bluetooth_plus if device is BLE+ paired
+        if (isBLEPlus && !device.connectionMethods.contains('bluetooth_plus')) {
+          device.connectionMethods = [...device.connectionMethods, 'bluetooth_plus'];
+        }
+        // Remove bluetooth_plus if no longer paired
+        if (!isBLEPlus && device.connectionMethods.contains('bluetooth_plus')) {
+          device.connectionMethods = device.connectionMethods
+              .where((m) => m != 'bluetooth_plus')
+              .toList();
         }
         device.isOnline = true;
         device.lastSeen = bleDevice.lastSeen;
@@ -476,6 +492,10 @@ class DevicesService {
         if (bleDevice.nickname != null) device.nickname = bleDevice.nickname;
       } else {
         // Add new device discovered via BLE
+        final connectionMethods = isBLEPlus
+            ? ['bluetooth', 'bluetooth_plus']
+            : ['bluetooth'];
+
         _devices[callsign] = RemoteDevice(
           callsign: callsign,
           name: bleDevice.displayName,
@@ -486,13 +506,14 @@ class DevicesService {
           collections: [],
           latitude: bleDevice.latitude,
           longitude: bleDevice.longitude,
-          connectionMethods: ['bluetooth'],
+          connectionMethods: connectionMethods,
           source: DeviceSourceType.ble,
           lastSeen: bleDevice.lastSeen,
           bleProximity: bleDevice.proximity,
           bleRssi: bleDevice.rssi,
         );
-        LogService().log('DevicesService: Added BLE device: $callsign (${bleDevice.proximity})');
+        final plusLabel = isBLEPlus ? ' [BLE+]' : '';
+        LogService().log('DevicesService: Added BLE device: $callsign (${bleDevice.proximity})$plusLabel');
       }
     }
 
@@ -1914,7 +1935,11 @@ class RemoteDevice {
       case 'internet':
         return 'Internet';
       case 'bluetooth':
-        return 'Bluetooth';
+        return 'BLE';
+      case 'bluetooth_plus':
+      case 'ble_plus':
+      case 'ble+':
+        return 'BLE+';
       case 'lora':
         return 'LoRa';
       case 'radio':

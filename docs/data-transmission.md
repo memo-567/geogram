@@ -13,6 +13,7 @@ This document explains how Geogram handles device-to-device data transmission th
   - [LAN Transport](#lan-transport)
   - [WebRTC Transport](#webrtc-transport)
   - [Station Transport](#station-transport)
+  - [Bluetooth Classic Transport (BLE+)](#bluetooth-classic-transport-ble)
   - [BLE Transport](#ble-transport)
 - [Priority-Based Routing](#priority-based-routing)
 - [Message Flow](#message-flow)
@@ -46,10 +47,10 @@ Geogram uses a **transport-agnostic** approach to device-to-device communication
 │                                  │                                       │
 │      ┌───────────┬───────────────┼───────────────┬───────────┐          │
 │      ▼           ▼               ▼               ▼           ▼          │
-│  ┌───────┐  ┌─────────┐    ┌─────────┐    ┌─────────┐  ┌─────────┐     │
-│  │  LAN  │  │ WebRTC  │    │ Station │    │   BLE   │  │ Future  │     │
-│  │  (10) │  │  (15)   │    │  (30)   │    │  (40)   │  │  LoRa   │     │
-│  └───┬───┘  └────┬────┘    └────┬────┘    └────┬────┘  └─────────┘     │
+│  ┌───────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────┐  ┌───────┐│
+│  │  LAN  │  │ WebRTC  │  │ Station │  │  BLE+   │  │  BLE  │  │Future ││
+│  │  (10) │  │  (15)   │  │  (30)   │  │  (35)   │  │  (40) │  │ LoRa  ││
+│  └───┬───┘  └────┬────┘  └────┬────┘  └────┬────┘  └───┬───┘  └───────┘│
 │      │           │              │              │                        │
 ├──────┼───────────┼──────────────┼──────────────┼────────────────────────┤
 │      │           │              │              │                        │
@@ -345,6 +346,152 @@ StationTransport(
 
 ---
 
+### Bluetooth Classic Transport (BLE+)
+
+**Priority: 35**
+
+Bluetooth Classic (SPP/RFCOMM) for faster offline data transfers. When a device has both BLE and Bluetooth Classic paired, it's labeled "BLE+" in the UI. BLE is used for discovery (no pairing needed), while Bluetooth Classic is used for high-speed bulk data transfers.
+
+```
+┌─────────────────┐     Bluetooth Classic     ┌─────────────────┐
+│    Desktop      │◄═══════════════════════════►│    Android      │
+│  RFCOMM Client  │      SPP (~2-3 Mbps)        │   SPP Server    │
+│ (Linux/macOS)   │                             │                 │
+└─────────────────┘                             └─────────────────┘
+```
+
+**How it works:**
+1. **Discovery**: Device is first discovered via BLE (no pairing needed)
+2. **Upgrade**: User clicks "Upgrade to BLE+" in device menu
+3. **Pairing**: System Bluetooth pairing dialog appears (PIN confirmation)
+4. **Storage**: Pairing info stored locally (callsign → classic_mac mapping)
+5. **Routing**: Large transfers (>10KB) automatically use Bluetooth Classic
+
+**Architecture:**
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                        BLE+ Flow                                       │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                        │
+│   1. BLE Discovery (no pairing)                                        │
+│      └─► Device appears with "BLE" label                               │
+│                                                                        │
+│   2. User initiates "Upgrade to BLE+"                                  │
+│      └─► System pairing dialog (PIN confirmation on both devices)      │
+│                                                                        │
+│   3. After pairing                                                     │
+│      └─► Device label changes to "BLE+"                                │
+│      └─► classic_mac stored in BluetoothClassicPairingService          │
+│                                                                        │
+│   4. Data transfer routing                                             │
+│      ├─► Small data (<10KB): Uses BLE transport                        │
+│      └─► Large data (≥10KB): Uses Bluetooth Classic transport          │
+│                                                                        │
+│   5. Batch operations (TransferSession)                                │
+│      └─► Apps declare expected total bytes                             │
+│      └─► Connection kept open for duration                             │
+│                                                                        │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Platform Support:**
+
+| Platform | BLE Client | BLE Server | BT Classic Client | BT Classic Server |
+|----------|------------|------------|-------------------|-------------------|
+| Android  | ✅ Yes     | ✅ Yes     | ✅ Yes            | ✅ Yes (SPP)      |
+| Linux    | ✅ Yes     | ❌ No      | ✅ Yes (BlueZ)    | ❌ No             |
+| macOS    | ✅ Yes     | ❌ No      | ⏳ Planned        | ❌ No             |
+| Windows  | ✅ Yes     | ❌ No      | ⏳ Planned        | ❌ No             |
+| iOS      | ✅ Yes     | ✅ Yes     | ❌ Not supported  | ❌ Not supported  |
+
+**Implementation Status:**
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Dart Service | ✅ Complete | `lib/services/bluetooth_classic_service.dart` |
+| Pairing Service | ✅ Complete | `lib/services/bluetooth_classic_pairing_service.dart` |
+| Device Model | ✅ Complete | `lib/models/bluetooth_classic_device.dart` |
+| Transport | ✅ Complete | `lib/connection/transports/bluetooth_classic_transport.dart` |
+| Transfer Session | ✅ Complete | `lib/connection/transfer_session.dart` |
+| Android Native | ✅ Complete | `android/.../BluetoothClassicPlugin.kt` |
+| Linux Native | ✅ Complete | `linux/runner/bluetooth_classic_plugin.cc` |
+| macOS Native | ⏳ Planned | - |
+| Windows Native | ⏳ Planned | - |
+| UI Integration | ✅ Complete | `lib/pages/devices_browser_page.dart` |
+
+**Capabilities:**
+- ✅ Fast transfers (~2-3 Mbps vs ~0.1-0.5 Mbps for BLE)
+- ✅ Works offline (no internet)
+- ✅ Automatic size-based routing
+- ✅ Batch operation support (TransferSession)
+
+**Limitations:**
+- Requires one-time Bluetooth pairing (PIN confirmation)
+- iOS does not support Bluetooth Classic SPP
+- Desktop platforms can only be clients (not servers)
+- Range similar to BLE (~10-100m)
+
+**SPP UUID:**
+```
+00001101-0000-1000-8000-00805f9b34fb
+```
+
+**TransferSession (Batch Operations):**
+
+Apps can declare expected total bytes for multi-request operations:
+
+```dart
+// App knows it will sync 50 small files (~100KB total)
+final session = await TransferSession.start(
+  callsign: 'X1ABCD',
+  expectedTotalBytes: 100 * 1024,  // 100KB expected
+);
+
+try {
+  // Multiple small requests - all use BLE+ since session declared 100KB
+  for (final file in files) {
+    await connectionManager.send(callsign: 'X1ABCD', data: file.bytes);
+  }
+} finally {
+  await session.end();  // Disconnect BLE+
+}
+```
+
+**Native Implementation Notes:**
+
+*Android (BluetoothClassicPlugin.kt):*
+- SPP server using `BluetoothServerSocket`
+- Client connections via `BluetoothSocket`
+- Pairing via `BluetoothDevice.createBond()`
+- Full send/receive via socket streams
+
+*Linux (bluetooth_classic_plugin.cc):*
+- BlueZ DBus integration for device discovery and pairing
+- RFCOMM socket client (requires `libbluetooth-dev` for full support)
+- Graceful degradation when Bluetooth headers not available
+
+**Configuration:**
+```dart
+BluetoothClassicTransport(
+  sizeThresholdBytes: 10240,  // 10KB threshold for automatic switching
+)
+```
+
+**HELLO Protocol Extension:**
+
+The BLE HELLO_ACK message includes `classic_mac` when the device supports BLE+:
+
+```json
+{
+  "callsign": "X1ABCD",
+  "capabilities": ["bluetooth_classic:spp", ...],
+  "classic_mac": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+---
+
 ### BLE Transport
 
 **Priority: 40 (Lowest)**
@@ -399,7 +546,7 @@ The ConnectionManager uses a **priority-based routing strategy**. When sending a
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  1. Sort transports by priority (lower = preferred)               │
-│     [LAN:10, WebRTC:15, Station:30, BLE:40]                      │
+│     [LAN:10, WebRTC:15, Station:30, BLE+:35, BLE:40]             │
 │                                                                   │
 │  2. For each transport:                                           │
 │     ├─ Can this transport reach the target? (canReach)            │
@@ -519,6 +666,7 @@ When a transport fails, the ConnectionManager automatically tries the next one:
 | LAN | Different networks, firewall, device offline |
 | WebRTC | Symmetric NAT, timeout, ICE failure |
 | Station | No internet, station down, device not connected |
+| BLE+ | Not paired, out of range, unsupported platform (iOS) |
 | BLE | Out of range, BLE disabled, platform limitation |
 
 ---
@@ -588,11 +736,12 @@ await connectionManager.initialize();
 ### Transport Registration (main.dart)
 
 ```dart
-// Transport priority: LAN (10) > WebRTC (15) > Station (30) > BLE (40)
+// Transport priority: LAN (10) > WebRTC (15) > Station (30) > BLE+ (35) > BLE (40)
 final connectionManager = ConnectionManager();
 connectionManager.registerTransport(LanTransport());
 connectionManager.registerTransport(WebRTCTransport());
 connectionManager.registerTransport(StationTransport());
+connectionManager.registerTransport(BluetoothClassicTransport());
 connectionManager.registerTransport(BleTransport());
 await connectionManager.initialize();
 ```
@@ -679,7 +828,14 @@ For full NAT traversal testing, run instances on different networks:
 | `lib/connection/transports/lan_transport.dart` | LAN (priority 10) |
 | `lib/connection/transports/webrtc_transport.dart` | WebRTC (priority 15) |
 | `lib/connection/transports/station_transport.dart` | Station (priority 30) |
+| `lib/connection/transports/bluetooth_classic_transport.dart` | BLE+ / Bluetooth Classic (priority 35) |
 | `lib/connection/transports/ble_transport.dart` | BLE (priority 40) |
+| `lib/connection/transfer_session.dart` | TransferSession for batch operations |
+| `lib/services/bluetooth_classic_service.dart` | Bluetooth Classic service (method channel) |
+| `lib/services/bluetooth_classic_pairing_service.dart` | BLE+ pairing storage and management |
+| `lib/models/bluetooth_classic_device.dart` | Paired device model |
+| `android/.../BluetoothClassicPlugin.kt` | Android SPP server/client native code |
+| `linux/runner/bluetooth_classic_plugin.cc` | Linux BlueZ RFCOMM client native code |
 | `lib/services/webrtc_config.dart` | WebRTC STUN/TURN configuration |
 | `lib/services/webrtc_signaling_service.dart` | WebRTC signaling via WebSocket |
 | `lib/services/webrtc_peer_manager.dart` | WebRTC peer connection management |
