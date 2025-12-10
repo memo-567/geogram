@@ -25,6 +25,10 @@ import 'services/web_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
 import 'cli/pure_storage_config.dart';
+import 'connection/connection_manager.dart';
+import 'connection/transports/lan_transport.dart';
+import 'connection/transports/ble_transport.dart';
+import 'connection/transports/station_transport.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -197,6 +201,16 @@ void main() async {
       await StationService().initialize();
       LogService().log('StationService initialized (deferred)');
 
+      // Initialize ConnectionManager with transports after StationService
+      // This is needed for DevicesService to route requests properly
+      // Transport priority: LAN (10) > BLE (20) > Station (30)
+      final connectionManager = ConnectionManager();
+      connectionManager.registerTransport(LanTransport());
+      connectionManager.registerTransport(BleTransport());
+      connectionManager.registerTransport(StationTransport());
+      await connectionManager.initialize();
+      LogService().log('ConnectionManager initialized with LAN + BLE + Station transports (deferred)');
+
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();
       LogService().log('UpdateService initialized (deferred)');
@@ -236,7 +250,8 @@ void main() async {
         LogService().log('DevicesService initialized (deferred, BLE skipped for onboarding)');
       } else {
         // For returning users on Android, request any missing permissions first
-        if (!kIsWeb && Platform.isAndroid && firstLaunchComplete) {
+        // Skip BLE permissions in internet-only mode
+        if (!kIsWeb && Platform.isAndroid && firstLaunchComplete && !AppArgs().internetOnly) {
           LogService().log('Requesting BLE permissions on Android (returning user)...');
           final granted = await BLEPermissionService().requestAllPermissions();
           LogService().log('BLE permissions request completed: granted=$granted');

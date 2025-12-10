@@ -5,6 +5,7 @@ This document describes the HTTP API endpoints available on Geogram radio statio
 ## Table of Contents
 
 - [Overview](#overview)
+- [Connection Manager](#connection-manager)
 - [Base URL](#base-url)
 - [Endpoints](#endpoints)
   - [Status](#status)
@@ -28,6 +29,315 @@ Geogram stations provide a local HTTP API that enables:
 - **Chat & Messaging**: Room-based chat and direct messages
 - **Blog Publishing**: Serves user blog posts as HTML
 - **Device Status**: Information about connected devices
+
+---
+
+## Connection Manager
+
+The Connection Manager provides transport-agnostic device-to-device communication. It automatically selects the best transport based on availability and priority, allowing apps to send messages without knowing the underlying connection method.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ConnectionManager                         │
+│                      (Singleton)                             │
+├─────────────────────────────────────────────────────────────┤
+│  send(message) → tries transports in priority order         │
+│  apiRequest(callsign, method, path) → convenience method    │
+│  sendDM(callsign, signedEvent) → direct message             │
+│  isReachable(callsign) → check if device is reachable       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         ▼                    ▼                    ▼
+┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐
+│  LAN Transport  │  │ Station Transport │  │  BLE Transport  │
+│  (priority: 10) │  │  (priority: 30)   │  │  (priority: 40) │
+│                 │  │                   │  │                 │
+│ Direct HTTP on  │  │ WebSocket relay   │  │ Bluetooth Low   │
+│ local network   │  │ via p2p.radio     │  │ Energy (offline)│
+└─────────────────┘  └───────────────────┘  └─────────────────┘
+```
+
+### Transport Priority
+
+| Transport | Priority | Description | Use Case |
+|-----------|----------|-------------|----------|
+| LAN | 10 | Direct HTTP on local network | Fastest, same WiFi/LAN |
+| Station | 30 | Internet relay via station | Global reach, requires internet |
+| BLE | 40 | Bluetooth Low Energy | Offline fallback, slow but works without internet |
+
+Lower priority values are preferred. The Connection Manager tries transports in order until one succeeds.
+
+### Usage
+
+```dart
+// Get the singleton instance
+final cm = ConnectionManager();
+
+// Make an API request (transport is selected automatically)
+final result = await cm.apiRequest(
+  callsign: 'X1ABCD',
+  method: 'GET',
+  path: '/api/status',
+);
+
+if (result.success) {
+  print('Response via ${result.transportUsed}: ${result.responseData}');
+  print('Latency: ${result.latency?.inMilliseconds}ms');
+} else {
+  print('Failed: ${result.error}');
+}
+
+// Send a direct message with optional queueing
+final dmResult = await cm.sendDM(
+  callsign: 'X1ABCD',
+  signedEvent: nostrSignedEvent,
+  queueIfOffline: true,  // Queue if device unreachable
+  ttl: Duration(hours: 24),  // Expire after 24 hours
+);
+
+// Check if a device is reachable via any transport
+final reachable = await cm.isReachable('X1ABCD');
+
+// Get available transports for a device
+final transports = await cm.getAvailableTransports('X1ABCD');
+// Returns: ['lan', 'station'] or ['ble'] etc.
+```
+
+### TransportMessage
+
+All messages are wrapped in a `TransportMessage`:
+
+```dart
+class TransportMessage {
+  final String id;                    // Unique message ID
+  final String targetCallsign;        // Target device callsign
+  final TransportMessageType type;    // Message type
+  final String? method;               // HTTP method (GET, POST, etc.)
+  final String? path;                 // API path (/api/status)
+  final Map<String, String>? headers; // HTTP headers
+  final dynamic payload;              // Message body
+  final Map<String, dynamic>? signedEvent; // NOSTR signed event
+  final bool queueIfOffline;          // Queue if unreachable (default: false)
+  final Duration? ttl;                // Time-to-live for queued messages
+}
+
+enum TransportMessageType {
+  apiRequest,     // HTTP-style API request
+  directMessage,  // 1-to-1 DM
+  chatMessage,    // Room chat message
+  sync,           // Sync request
+  hello,          // Connection handshake
+  ping,           // Heartbeat
+}
+```
+
+### TransportResult
+
+Send operations return a `TransportResult`:
+
+```dart
+class TransportResult {
+  final bool success;           // Whether send succeeded
+  final String? error;          // Error message if failed
+  final int? statusCode;        // HTTP status code
+  final dynamic responseData;   // Response body
+  final String? transportUsed;  // Which transport delivered ('lan', 'ble', 'station')
+  final Duration? latency;      // Round-trip time
+  final bool wasQueued;         // True if message was queued for later
+}
+```
+
+### Transports
+
+#### LAN Transport
+
+Direct HTTP communication with devices on the local network.
+
+**File:** `lib/connection/transports/lan_transport.dart`
+
+**Features:**
+- Detects local IP addresses (192.168.x, 10.x, 172.16-31.x)
+- Fastest transport when available
+- No internet dependency
+- Automatic device URL registration
+
+**Configuration:**
+```dart
+LanTransport(
+  timeout: Duration(seconds: 30),
+  reachabilityTimeout: Duration(seconds: 3),
+)
+```
+
+#### BLE Transport
+
+Bluetooth Low Energy communication using GATT protocol.
+
+**File:** `lib/connection/transports/ble_transport.dart`
+
+**Features:**
+- Works offline (no internet or LAN required)
+- Short range (~10-100 meters)
+- Uses BLEMessageService for message exchange
+- GATT server on Android/iOS, client-only on desktop
+
+**Platform Support:**
+| Platform | GATT Server | GATT Client |
+|----------|-------------|-------------|
+| Android | Yes | Yes |
+| iOS | Yes | Yes |
+| Linux | No | Yes |
+| macOS | No | Yes |
+| Windows | No | Yes |
+| Web | No | No |
+
+#### Station Transport
+
+Internet relay via WebSocket connection to a station (e.g., p2p.radio).
+
+**File:** `lib/connection/transports/station_transport.dart`
+
+**Features:**
+- Global reach (works across networks)
+- HTTP proxy via `/{callsign}/api/*` format
+- WebSocket relay for signed events
+- Connection status caching
+
+**Proxy Format:**
+```
+https://p2p.radio/{callsign}/api/status
+https://p2p.radio/{callsign}/api/dm/conversations
+```
+
+### Routing Strategies
+
+The Connection Manager supports pluggable routing strategies:
+
+#### PriorityRoutingStrategy (Default)
+
+Selects transports by priority (lower = better):
+
+```dart
+ConnectionManager().setRoutingStrategy(
+  PriorityRoutingStrategy(
+    filterUnreachable: true,  // Only try reachable transports
+    reachabilityTimeout: Duration(seconds: 2),
+  ),
+);
+```
+
+#### QualityRoutingStrategy
+
+Selects transports based on historical metrics:
+
+```dart
+ConnectionManager().setRoutingStrategy(
+  QualityRoutingStrategy(
+    latencyWeight: 0.3,
+    successRateWeight: 0.4,
+    qualityWeight: 0.3,
+  ),
+);
+```
+
+#### FailoverRoutingStrategy
+
+Uses explicit transport order:
+
+```dart
+ConnectionManager().setRoutingStrategy(
+  FailoverRoutingStrategy(
+    transportOrder: ['lan', 'ble', 'station'],
+  ),
+);
+```
+
+### Message Queueing
+
+By default, messages fail immediately if no transport can reach the device. Enable queueing for store-and-forward:
+
+```dart
+final result = await cm.apiRequest(
+  callsign: 'X1ABCD',
+  method: 'POST',
+  path: '/api/chat/room1/messages',
+  body: messageBody,
+  queueIfOffline: true,  // Queue if unreachable
+);
+
+if (result.wasQueued) {
+  print('Message queued for later delivery');
+}
+
+// Check pending queue
+print('Pending messages: ${cm.pendingCount}');
+
+// Manually retry pending messages
+await cm.retryPending();
+```
+
+### Adding New Transports
+
+To add a new transport (e.g., LoRa, Meshtastic):
+
+1. Create a new transport class implementing `Transport`:
+
+```dart
+class LoRaTransport extends Transport with TransportMixin {
+  @override
+  String get id => 'lora';
+
+  @override
+  String get name => 'LoRa Radio';
+
+  @override
+  int get priority => 25;  // Between BLE and Station
+
+  @override
+  bool get isAvailable => Platform.isLinux;  // Hardware requirement
+
+  @override
+  Future<bool> canReach(String callsign) async {
+    // Check if device is in LoRa range
+  }
+
+  @override
+  Future<TransportResult> send(TransportMessage message, {Duration? timeout}) async {
+    // Send via LoRa radio
+  }
+
+  // ... implement other methods
+}
+```
+
+2. Register the transport in `main.dart`:
+
+```dart
+final cm = ConnectionManager();
+cm.registerTransport(LanTransport());
+cm.registerTransport(BleTransport());
+cm.registerTransport(LoRaTransport());  // New transport
+cm.registerTransport(StationTransport());
+await cm.initialize();
+```
+
+### Metrics
+
+Each transport tracks performance metrics:
+
+```dart
+final metrics = cm.allMetrics;
+for (final entry in metrics.entries) {
+  print('${entry.key}: '
+      'latency=${entry.value.averageLatencyMs.toStringAsFixed(1)}ms, '
+      'success=${(entry.value.successRate * 100).toStringAsFixed(1)}%');
+}
+```
+
+---
 
 ## Base URL
 
@@ -128,6 +438,119 @@ Returns list of connected clients, grouped by callsign.
 | `connected_at` | string | ISO 8601 connection timestamp |
 | `last_activity` | string | ISO 8601 last activity timestamp |
 | `is_online` | bool | Online status |
+
+---
+
+### Device Proxy
+
+The station can proxy API requests to connected devices via WebSocket. This allows you to query a remote device's status or API through the station.
+
+**Two URL formats are supported:**
+- `/{callsign}/api/{endpoint}` - Recommended format
+- `/device/{callsign}/{endpoint}` - Alternative format
+
+#### GET /{callsign}/api/status
+
+Returns the status of a connected device by forwarding the request to the device via WebSocket.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | The callsign of the connected device (case-insensitive) |
+
+**Response - Device Connected (200 OK):**
+```json
+{
+  "service": "Geogram Desktop",
+  "version": "1.6.2",
+  "type": "desktop",
+  "status": "online",
+  "callsign": "X1ABCD",
+  "name": "X1ABCD",
+  "hostname": "my-laptop",
+  "port": 3456,
+  "location": {
+    "latitude": 38.72,
+    "longitude": -9.14
+  },
+  "nickname": "Alice"
+}
+```
+
+**Response - Device Not Connected (404 Not Found):**
+```json
+{
+  "error": "Device not connected",
+  "callsign": "X1ABCD",
+  "message": "The device X1ABCD is not currently connected to this station"
+}
+```
+
+**Response - Gateway Timeout (504):**
+```json
+{
+  "error": "Gateway Timeout",
+  "message": "Device X1ABCD did not respond in time"
+}
+```
+
+#### GET /device/{callsign}
+
+Returns connection info for a device (without proxying to the device).
+
+**Response - Device Connected (200 OK):**
+```json
+{
+  "callsign": "X1ABCD",
+  "connected": true,
+  "uptime": 3600,
+  "idleTime": 30,
+  "deviceType": "Linux",
+  "version": "1.6.2",
+  "address": "192.168.1.100"
+}
+```
+
+**Response - Device Not Connected (404 Not Found):**
+```json
+{
+  "callsign": "X1ABCD",
+  "connected": false,
+  "error": "Device not connected"
+}
+```
+
+#### GET /{callsign}/api/{endpoint}
+
+Proxies any API request to a connected device. All `/api/*` endpoints available on a device can be accessed through the station proxy.
+
+**Available Proxied Endpoints:**
+| Endpoint | Description |
+|----------|-------------|
+| `/{callsign}/api/status` | Device status |
+| `/{callsign}/api/log` | Device logs |
+| `/{callsign}/api/dm/conversations` | DM conversations |
+| `/{callsign}/api/dm/{target}/messages` | DM messages with a target |
+| `/{callsign}/api/chat/{roomId}/messages` | Chat messages |
+| `/{callsign}/api/devices` | Discovered devices (if debug API enabled) |
+
+**Example Usage:**
+```bash
+# Get status of connected device X1ABCD (recommended format)
+curl https://p2p.radio/X1ABCD/api/status
+
+# Alternative format using /device/ prefix
+curl https://p2p.radio/device/X1ABCD/api/status
+
+# Get logs from a connected device
+curl "https://p2p.radio/X1ABCD/api/log?limit=50"
+
+# List DM conversations on a device
+curl https://p2p.radio/X1ABCD/api/dm/conversations
+
+# Check if a device is connected (without proxying)
+curl https://p2p.radio/device/X1ABCD
+```
 
 ---
 
@@ -804,6 +1227,8 @@ Returns list of discovered devices. **Requires Debug API to be enabled.**
 
 The station accepts WebSocket connections for real-time messaging.
 
+### Connection Example
+
 ```javascript
 const ws = new WebSocket('ws://192.168.1.100:8080');
 
@@ -815,6 +1240,101 @@ ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   console.log('Received:', message);
 };
+```
+
+### HELLO Protocol
+
+After connecting, clients must send a HELLO message to register with the station. The station responds with a `hello_ack` message.
+
+**Client sends HELLO:**
+```json
+{
+  "type": "hello",
+  "event": {
+    "pubkey": "abc123...",
+    "kind": 0,
+    "created_at": 1702000000,
+    "tags": [
+      ["callsign", "X1ABCD"],
+      ["nickname", "Alice"],
+      ["platform", "Linux"],
+      ["latitude", "38.72"],
+      ["longitude", "-9.14"]
+    ],
+    "content": "Geogram Desktop v1.6.2 on Linux",
+    "id": "event_id_here",
+    "sig": "signature_here"
+  }
+}
+```
+
+| Tag | Description |
+|-----|-------------|
+| `callsign` | Device's unique identifier (e.g., X1ABCD) |
+| `nickname` | User's display name |
+| `platform` | Platform: Android, iOS, Web, Linux, Windows, macOS |
+| `latitude` | Device's latitude (optional) |
+| `longitude` | Device's longitude (optional) |
+
+**Station responds with hello_ack:**
+```json
+{
+  "type": "hello_ack",
+  "success": true,
+  "station_id": "X3WFE4",
+  "message": "Welcome to p2p.radio",
+  "version": "1.6.2"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always "hello_ack" |
+| `success` | boolean | Whether the hello was accepted |
+| `station_id` | string | Station's callsign |
+| `message` | string | Welcome message or rejection reason |
+| `version` | string | Station software version |
+
+### Heartbeat (PING/PONG)
+
+Clients should send periodic PING messages to keep the connection alive:
+
+**Client sends:**
+```json
+{"type": "PING"}
+```
+
+**Station responds:**
+```json
+{"type": "PONG", "timestamp": 1702000000000}
+```
+
+### HTTP Request Proxying
+
+The station can forward HTTP requests to connected devices. This is used by the `/{callsign}/api/*` proxy endpoints.
+
+**Station sends to device:**
+```json
+{
+  "type": "HTTP_REQUEST",
+  "requestId": "1702000000000-12345",
+  "method": "GET",
+  "path": "/api/status",
+  "headers": "{}",
+  "body": null
+}
+```
+
+**Device responds:**
+```json
+{
+  "type": "HTTP_RESPONSE",
+  "requestId": "1702000000000-12345",
+  "statusCode": 200,
+  "responseHeaders": "{\"Content-Type\": \"application/json\"}",
+  "responseBody": "{\"callsign\": \"X1ABCD\", ...}",
+  "isBase64": false
+}
 ```
 
 ---

@@ -1,0 +1,473 @@
+/// Connection Manager - Main entry point for transport-agnostic messaging
+library;
+
+import 'dart:async';
+import 'dart:collection';
+import 'package:async/async.dart';
+import '../services/log_service.dart';
+import 'transport.dart';
+import 'transport_message.dart';
+import 'routing_strategy.dart';
+
+/// Connection Manager singleton
+///
+/// Provides transport-agnostic device-to-device communication.
+/// Automatically selects the best transport based on availability and priority.
+///
+/// Usage:
+/// ```dart
+/// // Initialize on app startup
+/// await ConnectionManager().initialize();
+///
+/// // Send an API request
+/// final result = await ConnectionManager().apiRequest(
+///   callsign: 'X1ABCD',
+///   method: 'GET',
+///   path: '/api/status',
+/// );
+///
+/// // Send a direct message
+/// final dmResult = await ConnectionManager().sendDM(
+///   callsign: 'X1ABCD',
+///   signedEvent: signedNostrEvent,
+/// );
+/// ```
+class ConnectionManager {
+  static final ConnectionManager _instance = ConnectionManager._internal();
+  factory ConnectionManager() => _instance;
+  ConnectionManager._internal();
+
+  /// Registered transports (id -> transport)
+  final Map<String, Transport> _transports = {};
+
+  /// Routing strategy for transport selection
+  RoutingStrategy _routingStrategy = const PriorityRoutingStrategy();
+
+  /// Message queue for store-and-forward
+  final Queue<TransportMessage> _messageQueue = Queue();
+
+  /// Maximum queue size
+  static const int _maxQueueSize = 1000;
+
+  /// Whether the manager has been initialized
+  bool _initialized = false;
+
+  /// Stream controller for incoming messages
+  StreamGroup<TransportMessage>? _incomingGroup;
+  final _incomingController = StreamController<TransportMessage>.broadcast();
+
+  /// Timer for processing queued messages
+  Timer? _queueProcessTimer;
+
+  // ============================================================
+  // Initialization
+  // ============================================================
+
+  /// Initialize the connection manager
+  ///
+  /// This must be called before using the manager.
+  /// Transports should be registered before calling initialize.
+  Future<void> initialize() async {
+    if (_initialized) return;
+
+    LogService().log('ConnectionManager: Initializing...');
+
+    // Initialize all registered transports
+    for (final transport in _transports.values) {
+      try {
+        await transport.initialize();
+        LogService().log('ConnectionManager: Initialized transport: ${transport.id}');
+      } catch (e) {
+        LogService().log('ConnectionManager: Failed to initialize ${transport.id}: $e');
+      }
+    }
+
+    // Set up incoming message stream
+    _setupIncomingStream();
+
+    // Start queue processor
+    _startQueueProcessor();
+
+    _initialized = true;
+    LogService().log('ConnectionManager: Initialized with ${_transports.length} transports');
+  }
+
+  /// Dispose the connection manager
+  Future<void> dispose() async {
+    _queueProcessTimer?.cancel();
+    _queueProcessTimer = null;
+
+    for (final transport in _transports.values) {
+      try {
+        await transport.dispose();
+      } catch (e) {
+        LogService().log('ConnectionManager: Error disposing ${transport.id}: $e');
+      }
+    }
+
+    await _incomingGroup?.close();
+    await _incomingController.close();
+
+    _transports.clear();
+    _messageQueue.clear();
+    _initialized = false;
+  }
+
+  /// Check if initialized
+  bool get isInitialized => _initialized;
+
+  // ============================================================
+  // Transport Management
+  // ============================================================
+
+  /// Register a transport
+  ///
+  /// Should be called before [initialize].
+  void registerTransport(Transport transport) {
+    _transports[transport.id] = transport;
+    LogService().log('ConnectionManager: Registered transport: ${transport.id} '
+        '(priority: ${transport.priority}, available: ${transport.isAvailable})');
+
+    // If already initialized, initialize the new transport
+    if (_initialized && !transport.isInitialized) {
+      transport.initialize().then((_) {
+        _setupIncomingStream(); // Rebuild stream with new transport
+      });
+    }
+  }
+
+  /// Unregister a transport
+  void unregisterTransport(String transportId) {
+    final transport = _transports.remove(transportId);
+    if (transport != null) {
+      transport.dispose();
+      _setupIncomingStream();
+      LogService().log('ConnectionManager: Unregistered transport: $transportId');
+    }
+  }
+
+  /// Get a transport by ID
+  Transport? getTransport(String id) => _transports[id];
+
+  /// Get all registered transports
+  List<Transport> get transports => _transports.values.toList();
+
+  /// Get available transports (on this platform)
+  List<Transport> get availableTransports =>
+      _transports.values.where((t) => t.isAvailable).toList();
+
+  /// Set the routing strategy
+  void setRoutingStrategy(RoutingStrategy strategy) {
+    _routingStrategy = strategy;
+    LogService().log('ConnectionManager: Routing strategy set to ${strategy.runtimeType}');
+  }
+
+  // ============================================================
+  // Core Messaging API
+  // ============================================================
+
+  /// Send a message to a device
+  ///
+  /// Automatically selects the best transport based on routing strategy.
+  /// If [queueIfOffline] is true on the message, queues for later delivery.
+  Future<TransportResult> send(TransportMessage message) async {
+    if (!_initialized) {
+      return TransportResult.failure(error: 'ConnectionManager not initialized');
+    }
+
+    LogService().log('ConnectionManager: Sending ${message.type} to ${message.targetCallsign}');
+
+    // Get ordered list of transports to try
+    final transportsToTry = await _routingStrategy.selectTransports(
+      callsign: message.targetCallsign,
+      messageType: message.type,
+      availableTransports: availableTransports,
+    );
+
+    if (transportsToTry.isEmpty) {
+      if (message.queueIfOffline) {
+        _enqueueMessage(message);
+        return TransportResult.queued(transportUsed: 'queue');
+      }
+      return TransportResult.failure(
+        error: 'No transport available for ${message.targetCallsign}',
+      );
+    }
+
+    // Try each transport in order
+    for (final transport in transportsToTry) {
+      try {
+        LogService().log('ConnectionManager: Trying ${transport.id}...');
+        final result = await transport.send(message);
+
+        if (result.success) {
+          LogService().log('ConnectionManager: Success via ${transport.id} '
+              '(${result.latency?.inMilliseconds ?? "?"}ms)');
+          return result;
+        }
+
+        LogService().log('ConnectionManager: ${transport.id} failed: ${result.error}');
+      } catch (e) {
+        LogService().log('ConnectionManager: ${transport.id} exception: $e');
+      }
+    }
+
+    // All transports failed
+    if (message.queueIfOffline) {
+      _enqueueMessage(message);
+      return TransportResult.queued(transportUsed: 'queue');
+    }
+
+    return TransportResult.failure(
+      error: 'All transports failed for ${message.targetCallsign}',
+    );
+  }
+
+  /// Make an API request to a device
+  ///
+  /// Convenience method for HTTP-style requests.
+  Future<TransportResult> apiRequest({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    dynamic body,
+    bool queueIfOffline = false,
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    final message = TransportMessage.apiRequest(
+      targetCallsign: callsign,
+      method: method,
+      path: path,
+      headers: headers,
+      body: body,
+      queueIfOffline: queueIfOffline,
+    );
+
+    return send(message);
+  }
+
+  /// Send a direct message
+  ///
+  /// Convenience method for sending NOSTR-signed DMs.
+  Future<TransportResult> sendDM({
+    required String callsign,
+    required Map<String, dynamic> signedEvent,
+    bool queueIfOffline = false,
+    Duration? ttl,
+  }) {
+    final message = TransportMessage.directMessage(
+      targetCallsign: callsign,
+      signedEvent: signedEvent,
+      queueIfOffline: queueIfOffline,
+      ttl: ttl,
+    );
+
+    return send(message);
+  }
+
+  /// Send a chat message
+  ///
+  /// Convenience method for room-based chat.
+  Future<TransportResult> sendChat({
+    required String callsign,
+    required String roomId,
+    required Map<String, dynamic> signedEvent,
+    bool queueIfOffline = false,
+  }) {
+    final message = TransportMessage.chatMessage(
+      targetCallsign: callsign,
+      roomId: roomId,
+      signedEvent: signedEvent,
+      queueIfOffline: queueIfOffline,
+    );
+
+    return send(message);
+  }
+
+  // ============================================================
+  // Reachability
+  // ============================================================
+
+  /// Check if a device is reachable via any transport
+  Future<bool> isReachable(String callsign) async {
+    if (!_initialized) return false;
+
+    for (final transport in availableTransports) {
+      try {
+        if (await transport.canReach(callsign).timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => false,
+        )) {
+          return true;
+        }
+      } catch (_) {
+        // Continue to next transport
+      }
+    }
+
+    return false;
+  }
+
+  /// Get list of transports that can reach a device
+  Future<List<String>> getAvailableTransports(String callsign) async {
+    if (!_initialized) return [];
+
+    final result = <String>[];
+
+    for (final transport in availableTransports) {
+      try {
+        if (await transport.canReach(callsign).timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => false,
+        )) {
+          result.add(transport.id);
+        }
+      } catch (_) {
+        // Continue to next transport
+      }
+    }
+
+    return result;
+  }
+
+  // ============================================================
+  // Incoming Messages
+  // ============================================================
+
+  /// Stream of incoming messages from all transports
+  Stream<TransportMessage> get incomingMessages => _incomingController.stream;
+
+  void _setupIncomingStream() {
+    // Close existing group
+    _incomingGroup?.close();
+
+    // Create new group with all transport streams
+    final streams = _transports.values
+        .where((t) => t.isAvailable && t.isInitialized)
+        .map((t) => t.incomingMessages)
+        .toList();
+
+    if (streams.isEmpty) return;
+
+    _incomingGroup = StreamGroup<TransportMessage>();
+    for (final stream in streams) {
+      _incomingGroup!.add(stream);
+    }
+
+    _incomingGroup!.stream.listen(
+      (message) {
+        if (!_incomingController.isClosed) {
+          _incomingController.add(message);
+        }
+      },
+      onError: (e) {
+        LogService().log('ConnectionManager: Incoming stream error: $e');
+      },
+    );
+  }
+
+  // ============================================================
+  // Message Queue (Store-and-Forward)
+  // ============================================================
+
+  /// Get pending messages in the queue
+  List<TransportMessage> get pendingMessages => _messageQueue.toList();
+
+  /// Number of pending messages
+  int get pendingCount => _messageQueue.length;
+
+  /// Manually retry sending queued messages
+  Future<void> retryPending() async {
+    if (_messageQueue.isEmpty) return;
+
+    LogService().log('ConnectionManager: Retrying ${_messageQueue.length} queued messages');
+
+    final toRetry = _messageQueue.toList();
+    _messageQueue.clear();
+
+    for (final message in toRetry) {
+      // Skip expired messages
+      if (message.isExpired) {
+        LogService().log('ConnectionManager: Dropping expired message ${message.id}');
+        continue;
+      }
+
+      // Re-send (without queueIfOffline to avoid infinite loop)
+      final nonQueuedMessage = message.copyWith(queueIfOffline: false);
+      final result = await send(nonQueuedMessage);
+
+      if (!result.success && !result.wasQueued) {
+        // Re-queue if still failing and not expired
+        if (!message.isExpired) {
+          _messageQueue.add(message);
+        }
+      }
+    }
+  }
+
+  void _enqueueMessage(TransportMessage message) {
+    // Enforce max queue size (drop oldest)
+    while (_messageQueue.length >= _maxQueueSize) {
+      final dropped = _messageQueue.removeFirst();
+      LogService().log('ConnectionManager: Queue full, dropping ${dropped.id}');
+    }
+
+    _messageQueue.add(message);
+    LogService().log('ConnectionManager: Queued message ${message.id} '
+        '(queue size: ${_messageQueue.length})');
+  }
+
+  void _startQueueProcessor() {
+    _queueProcessTimer?.cancel();
+
+    // Process queue every 30 seconds
+    _queueProcessTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _processQueue(),
+    );
+  }
+
+  Future<void> _processQueue() async {
+    if (_messageQueue.isEmpty) return;
+
+    // Remove expired messages
+    _messageQueue.removeWhere((m) {
+      if (m.isExpired) {
+        LogService().log('ConnectionManager: Removing expired message ${m.id}');
+        return true;
+      }
+      return false;
+    });
+
+    // Try to send queued messages
+    if (_messageQueue.isNotEmpty) {
+      await retryPending();
+    }
+  }
+
+  // ============================================================
+  // Utility
+  // ============================================================
+
+  /// Get metrics summary for all transports
+  Map<String, TransportMetrics> get allMetrics {
+    return Map.fromEntries(
+      _transports.entries.map((e) => MapEntry(e.key, e.value.metrics)),
+    );
+  }
+
+  /// Log current state
+  void logStatus() {
+    LogService().log('ConnectionManager Status:');
+    LogService().log('  Initialized: $_initialized');
+    LogService().log('  Transports: ${_transports.length}');
+    for (final transport in _transports.values) {
+      LogService().log('    - ${transport.id}: '
+          'available=${transport.isAvailable}, '
+          'initialized=${transport.isInitialized}, '
+          'priority=${transport.priority}');
+    }
+    LogService().log('  Queue size: ${_messageQueue.length}');
+  }
+}

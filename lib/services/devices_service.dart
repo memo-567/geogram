@@ -12,7 +12,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
 import '../models/station.dart';
-import '../util/chat_api.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'station_discovery_service.dart';
@@ -23,8 +22,11 @@ import 'ble_message_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'debug_controller.dart';
+import 'app_args.dart';
 import '../util/nostr_event.dart';
 import '../models/profile.dart';
+import '../connection/connection_manager.dart';
+import '../connection/transports/lan_transport.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -72,7 +74,12 @@ class DevicesService {
   Future<void> initialize({bool skipBLE = false}) async {
     await _cacheService.initialize();
     await _loadCachedDevices();
-    if (!skipBLE) {
+
+    // Skip BLE in internet-only mode
+    final internetOnly = AppArgs().internetOnly;
+    if (internetOnly) {
+      LogService().log('DevicesService: Internet-only mode - skipping BLE initialization');
+    } else if (!skipBLE) {
       await _initializeBLE();
     } else {
       LogService().log('DevicesService: BLE initialization skipped');
@@ -82,6 +89,12 @@ class DevicesService {
 
   /// Initialize BLE after onboarding (for first-time Android users)
   Future<void> initializeBLEAfterOnboarding() async {
+    // Don't initialize BLE in internet-only mode
+    if (AppArgs().internetOnly) {
+      LogService().log('DevicesService: Internet-only mode - BLE not available');
+      return;
+    }
+
     if (_bleService == null) {
       LogService().log('DevicesService: Initializing BLE after onboarding');
       await _initializeBLE();
@@ -568,6 +581,144 @@ class DevicesService {
     return _devices[callsign.toUpperCase()];
   }
 
+  /// Make an API request to a remote device, using ConnectionManager for routing
+  /// This enables device-to-device communication using the best available transport
+  /// Returns null if no route is available
+  Future<http.Response?> makeDeviceApiRequest({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    String? body,
+  }) async {
+    final normalizedCallsign = callsign.toUpperCase();
+
+    // Sync device info to ConnectionManager before request
+    _syncDeviceToConnectionManager(normalizedCallsign);
+
+    // Use ConnectionManager for routing
+    final connectionManager = ConnectionManager();
+    if (!connectionManager.isInitialized) {
+      // Fallback to legacy routing if ConnectionManager not ready
+      return _makeDeviceApiRequestLegacy(
+        callsign: normalizedCallsign,
+        method: method,
+        path: path,
+        headers: headers,
+        body: body,
+      );
+    }
+
+    final result = await connectionManager.apiRequest(
+      callsign: normalizedCallsign,
+      method: method,
+      path: path,
+      headers: headers,
+      body: body,
+    );
+
+    if (result.success) {
+      LogService().log('DevicesService: Request to $normalizedCallsign succeeded via ${result.transportUsed} '
+          '(${result.latency?.inMilliseconds ?? "?"}ms)');
+      // Convert TransportResult to http.Response for backward compatibility
+      return http.Response(
+        result.responseData?.toString() ?? '',
+        result.statusCode ?? 200,
+      );
+    } else {
+      LogService().log('DevicesService: Request to $normalizedCallsign failed: ${result.error}');
+      return null;
+    }
+  }
+
+  /// Legacy API request method (fallback when ConnectionManager not initialized)
+  Future<http.Response?> _makeDeviceApiRequestLegacy({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    String? body,
+  }) async {
+    final normalizedCallsign = callsign.toUpperCase();
+    final device = getDevice(normalizedCallsign);
+    final internetOnly = AppArgs().internetOnly;
+
+    // Try direct connection first if device has a URL and appears online
+    // Skip direct connection in internet-only mode (force station proxy)
+    if (!internetOnly && device?.url != null && device!.isOnline) {
+      try {
+        final uri = Uri.parse('${device.url}$path');
+        LogService().log('DevicesService: Direct request to $normalizedCallsign: $method $path');
+        final response = await _makeHttpRequest(method, uri, headers, body);
+        if (response.statusCode < 500) {
+          return response; // Success or client error - don't retry via station
+        }
+      } catch (e) {
+        LogService().log('DevicesService: Direct request to $normalizedCallsign failed: $e');
+      }
+    }
+
+    // Fall back to station proxy (or go directly to station proxy in internet-only mode)
+    final station = _stationService.getConnectedRelay();
+    if (station == null) {
+      LogService().log('DevicesService: No station connected for proxy to $normalizedCallsign');
+      return null;
+    }
+
+    try {
+      // Use station proxy: {stationHttpUrl}/device/{callsign}/{path}
+      final stationHttpUrl = station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
+      final proxyUri = Uri.parse('$stationHttpUrl/device/$normalizedCallsign$path');
+
+      LogService().log('DevicesService: Proxying via station to $normalizedCallsign: $method $path');
+      return await _makeHttpRequest(method, proxyUri, headers, body);
+    } catch (e) {
+      LogService().log('DevicesService: Station proxy request failed: $e');
+      return null;
+    }
+  }
+
+  /// Sync device info to ConnectionManager transports
+  void _syncDeviceToConnectionManager(String callsign) {
+    final device = getDevice(callsign);
+    if (device == null) return;
+
+    final connectionManager = ConnectionManager();
+    if (!connectionManager.isInitialized) return;
+
+    // Register device URL with LAN transport if available
+    if (device.url != null) {
+      final lanTransport = connectionManager.getTransport('lan') as LanTransport?;
+      if (lanTransport != null) {
+        lanTransport.registerLocalDevice(callsign, device.url!);
+      }
+    }
+
+    // Station transport doesn't need device registration - it uses station proxy
+  }
+
+  /// Internal HTTP request helper
+  Future<http.Response> _makeHttpRequest(
+    String method,
+    Uri uri,
+    Map<String, String>? headers,
+    String? body,
+  ) async {
+    final h = headers ?? {'Content-Type': 'application/json'};
+    switch (method.toUpperCase()) {
+      case 'GET':
+        return await http.get(uri, headers: h).timeout(const Duration(seconds: 30));
+      case 'POST':
+        return await http.post(uri, headers: h, body: body).timeout(const Duration(seconds: 30));
+      case 'PUT':
+        return await http.put(uri, headers: h, body: body).timeout(const Duration(seconds: 30));
+      case 'DELETE':
+        return await http.delete(uri, headers: h).timeout(const Duration(seconds: 30));
+      default:
+        return await http.get(uri, headers: h).timeout(const Duration(seconds: 30));
+    }
+  }
+
   /// Check reachability of a device
   Future<bool> checkReachability(String callsign) async {
     final device = _devices[callsign.toUpperCase()];
@@ -575,6 +726,7 @@ class DevicesService {
 
     // Store previous online state to detect transitions
     final wasOnline = device.isOnline;
+    final internetOnly = AppArgs().internetOnly;
 
     bool directOk = false;
     bool proxyOk = false;
@@ -587,7 +739,8 @@ class DevicesService {
         connectedStation.callsign!.toUpperCase() == callsign.toUpperCase();
 
     // Try direct connection first (local WiFi) if device has a URL
-    if (device.url != null) {
+    // Skip direct connection check in internet-only mode
+    if (!internetOnly && device.url != null) {
       directOk = await _checkDirectConnection(device);
     }
 
@@ -609,15 +762,17 @@ class DevicesService {
     _notifyListeners();
 
     // Trigger DM sync when device becomes reachable
-    if (!wasOnline && isNowOnline && device.url != null) {
-      _triggerDMSync(device.callsign, device.url!);
+    // In internet-only mode, sync happens via station proxy
+    if (!wasOnline && isNowOnline) {
+      _triggerDMSync(device.callsign, device.url);
     }
 
     return isNowOnline;
   }
 
   /// Trigger DM sync with a device that just came online
-  void _triggerDMSync(String callsign, String deviceUrl) {
+  /// deviceUrl can be null if using station proxy exclusively
+  void _triggerDMSync(String callsign, String? deviceUrl) {
     LogService().log('DevicesService: Device $callsign came online, triggering DM sync');
 
     // Run sync in background (don't await)
@@ -813,7 +968,12 @@ class DevicesService {
       }
     }
 
-    LogService().log('DevicesService: Performing full device refresh');
+    final internetOnly = AppArgs().internetOnly;
+    if (internetOnly) {
+      LogService().log('DevicesService: Performing internet-only device refresh (no LAN/BLE)');
+    } else {
+      LogService().log('DevicesService: Performing full device refresh');
+    }
 
     // First, ensure connected station is in device list with 'internet' tag
     await _updateConnectedStation();
@@ -821,13 +981,16 @@ class DevicesService {
     // Then, fetch connected clients from connected station (internet)
     await _fetchStationClients();
 
-    // Then discover devices on local WiFi network
-    await _discoverLocalDevices();
+    // Skip local network and BLE discovery in internet-only mode
+    if (!internetOnly) {
+      // Discover devices on local WiFi network
+      await _discoverLocalDevices();
 
-    // Discover devices via BLE (in parallel with other checks)
-    _discoverBLEDevices();
+      // Discover devices via BLE (in parallel with other checks)
+      _discoverBLEDevices();
+    }
 
-    // Finally check reachability for all known devices
+    // Check reachability for all known devices
     for (final device in _devices.values) {
       await checkReachability(device.callsign);
     }
@@ -1206,22 +1369,72 @@ class DevicesService {
     }
   }
 
-  /// Fetch collections from online device
+  /// Fetch collections from online device using ConnectionManager
   Future<List<RemoteCollection>> _fetchCollectionsOnline(RemoteDevice device) async {
-    List<RemoteCollection> collections = [];
+    final collections = <RemoteCollection>[];
 
-    // Try direct connection first if URL is set
-    if (device.url != null) {
-      final directUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-      collections = await _fetchCollectionsFromUrl(device, directUrl);
+    // Sync device to ConnectionManager first
+    _syncDeviceToConnectionManager(device.callsign);
+
+    // Fetch collection folders from /files endpoint via ConnectionManager
+    try {
+      final filesResponse = await makeDeviceApiRequest(
+        callsign: device.callsign,
+        method: 'GET',
+        path: '/files',
+      );
+
+      if (filesResponse != null && filesResponse.statusCode == 200) {
+        final data = json.decode(filesResponse.body);
+        LogService().log('DevicesService: Files data: $data');
+
+        if (data['entries'] is List) {
+          for (final entry in data['entries']) {
+            if (entry['isDirectory'] == true || entry['type'] == 'directory') {
+              final name = entry['name'] as String;
+              final lowerName = name.toLowerCase();
+
+              // Only include known collection types (same as local collections)
+              if (_isKnownCollectionType(lowerName)) {
+                collections.add(RemoteCollection(
+                  name: name,
+                  deviceCallsign: device.callsign,
+                  type: lowerName,
+                  fileCount: entry['size'] is int ? entry['size'] : null,
+                ));
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Error fetching files: $e');
     }
 
-    // Fallback to station proxy if direct failed or no URL
+    // If no collections found via /files, check if it's a station with chat
     if (collections.isEmpty) {
-      final station = _stationService.getConnectedRelay();
-      if (station != null) {
-        final proxyUrl = '${station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://')}/device/${device.callsign}';
-        collections = await _fetchCollectionsFromUrl(device, proxyUrl);
+      try {
+        final chatResponse = await makeDeviceApiRequest(
+          callsign: device.callsign,
+          method: 'GET',
+          path: '/api/chat/rooms',
+        );
+
+        if (chatResponse != null && chatResponse.statusCode == 200) {
+          final data = json.decode(chatResponse.body);
+          if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
+            // This station has chat rooms, add a chat collection
+            collections.add(RemoteCollection(
+              name: 'Chat',
+              deviceCallsign: device.callsign,
+              type: 'chat',
+              description: '${(data['rooms'] as List).length} rooms',
+              fileCount: (data['rooms'] as List).length,
+            ));
+          }
+        }
+      } catch (e) {
+        LogService().log('DevicesService: Error fetching chat rooms: $e');
       }
     }
 
@@ -1233,83 +1446,6 @@ class DevicesService {
 
     // Fall back to cached collections
     return await _loadCachedCollections(device.callsign);
-  }
-
-  /// Fetch collections from a specific URL
-  Future<List<RemoteCollection>> _fetchCollectionsFromUrl(RemoteDevice device, String baseUrl) async {
-    final collections = <RemoteCollection>[];
-
-    try {
-      LogService().log('DevicesService: Fetching collections from $baseUrl');
-
-      // Fetch collection folders from /files endpoint
-      try {
-        final filesResponse = await http.get(
-          Uri.parse('$baseUrl/files'),
-        ).timeout(const Duration(seconds: 10));
-
-        LogService().log('DevicesService: Files response: ${filesResponse.statusCode}');
-
-        if (filesResponse.statusCode == 200) {
-          final data = json.decode(filesResponse.body);
-          LogService().log('DevicesService: Files data: $data');
-
-          if (data['entries'] is List) {
-            for (final entry in data['entries']) {
-              if (entry['isDirectory'] == true || entry['type'] == 'directory') {
-                final name = entry['name'] as String;
-                final lowerName = name.toLowerCase();
-
-                // Only include known collection types (same as local collections)
-                if (_isKnownCollectionType(lowerName)) {
-                  collections.add(RemoteCollection(
-                    name: name,
-                    deviceCallsign: device.callsign,
-                    type: lowerName,
-                    fileCount: entry['size'] is int ? entry['size'] : null,
-                  ));
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        LogService().log('DevicesService: Error fetching files: $e');
-      }
-
-      // If no collections found via /files, check if it's a station with chat
-      if (collections.isEmpty) {
-        try {
-          // Use callsign-scoped API: /{callsign}/api/chat/rooms
-          final chatUrl = ChatApi.roomsUrl(baseUrl, device.callsign);
-          final chatResponse = await http.get(
-            Uri.parse(chatUrl),
-          ).timeout(const Duration(seconds: 10));
-
-          if (chatResponse.statusCode == 200) {
-            final data = json.decode(chatResponse.body);
-            if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
-              // This station has chat rooms, add a chat collection
-              collections.add(RemoteCollection(
-                name: 'Chat',
-                deviceCallsign: device.callsign,
-                type: 'chat',
-                description: '${(data['rooms'] as List).length} rooms',
-                fileCount: (data['rooms'] as List).length,
-              ));
-            }
-          }
-        } catch (e) {
-          LogService().log('DevicesService: Error fetching chat rooms: $e');
-        }
-      }
-
-      return collections;
-    } catch (e) {
-      LogService().log('DevicesService: Error fetching collections from $baseUrl: $e');
-    }
-
-    return [];
   }
 
   /// Update device with fetched collections and cache them
