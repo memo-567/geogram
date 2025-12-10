@@ -22,6 +22,7 @@ import 'ble_message_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'debug_controller.dart';
+import 'config_service.dart';
 import 'app_args.dart';
 import '../util/nostr_event.dart';
 import '../models/profile.dart';
@@ -563,11 +564,22 @@ class DevicesService {
   }
 
   /// Get all known devices
-  /// Sorted: Online first, then by name, unreachable at bottom
+  /// Sorted: Pinned first, then online, then by name
   List<RemoteDevice> getAllDevices() {
+    final pinnedCallsigns = _getPinnedDevices();
+
+    // Update isPinned flag for each device
+    for (final device in _devices.values) {
+      device.isPinned = pinnedCallsigns.contains(device.callsign);
+    }
+
     return _devices.values.toList()
       ..sort((a, b) {
-        // Online devices first, then by name
+        // Pinned devices first
+        if (a.isPinned != b.isPinned) {
+          return a.isPinned ? -1 : 1;
+        }
+        // Then online devices
         if (a.isOnline != b.isOnline) {
           return a.isOnline ? -1 : 1;
         }
@@ -578,7 +590,57 @@ class DevicesService {
 
   /// Get a specific device by callsign
   RemoteDevice? getDevice(String callsign) {
-    return _devices[callsign.toUpperCase()];
+    final device = _devices[callsign.toUpperCase()];
+    if (device != null) {
+      device.isPinned = _getPinnedDevices().contains(device.callsign);
+    }
+    return device;
+  }
+
+  /// Get list of pinned device callsigns from config
+  Set<String> _getPinnedDevices() {
+    final config = ConfigService();
+    final pinned = config.get('pinnedDevices', <dynamic>[]) as List<dynamic>;
+    return pinned.map((e) => e.toString()).toSet();
+  }
+
+  /// Pin a device (appears at top of list)
+  void pinDevice(String callsign) {
+    final normalized = callsign.toUpperCase();
+    final pinned = _getPinnedDevices();
+    pinned.add(normalized);
+    ConfigService().set('pinnedDevices', pinned.toList());
+
+    // Update the device's isPinned flag
+    final device = _devices[normalized];
+    if (device != null) {
+      device.isPinned = true;
+    }
+
+    _devicesController.add(getAllDevices());
+    LogService().log('DevicesService: Pinned device $normalized');
+  }
+
+  /// Unpin a device
+  void unpinDevice(String callsign) {
+    final normalized = callsign.toUpperCase();
+    final pinned = _getPinnedDevices();
+    pinned.remove(normalized);
+    ConfigService().set('pinnedDevices', pinned.toList());
+
+    // Update the device's isPinned flag
+    final device = _devices[normalized];
+    if (device != null) {
+      device.isPinned = false;
+    }
+
+    _devicesController.add(getAllDevices());
+    LogService().log('DevicesService: Unpinned device $normalized');
+  }
+
+  /// Check if a device is pinned
+  bool isDevicePinned(String callsign) {
+    return _getPinnedDevices().contains(callsign.toUpperCase());
   }
 
   /// Make an API request to a remote device, using ConnectionManager for routing
@@ -1618,6 +1680,7 @@ class RemoteDevice {
   double? longitude;
   List<String> connectionMethods;
   DeviceSourceType source;
+  bool isPinned;
 
   /// BLE-specific fields
   String? bleProximity;  // "Very close", "Nearby", "In range", "Far"
@@ -1642,6 +1705,7 @@ class RemoteDevice {
     this.source = DeviceSourceType.local,
     this.bleProximity,
     this.bleRssi,
+    this.isPinned = false,
   });
 
   /// Get display name (nickname or callsign)

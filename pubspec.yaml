@@ -86,6 +86,12 @@ flutter_native_splash:
   ios: false
   web: false
 
+  # Android 12+ uses a different splash mechanism with better scaling
+  android_12:
+    color: "#0a0f1c"
+    image: assets/splash_icon.png
+    icon_background_color: "#0a0f1c"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -104,6 +110,7 @@ flutter:
     - assets/worldcities.csv
     - assets/default_profile.png
     - assets/geogram-icon-dark.svg
+    - assets/geogram_icon_transparent.png
     - games/
     # Web themes for HTML/CSS customization
     - themes/default/

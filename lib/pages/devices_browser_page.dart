@@ -510,6 +510,29 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               ),
             ),
           ),
+          // Pin indicator
+          if (device.isPinned)
+            Positioned(
+              left: 0,
+              top: 0,
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: theme.colorScheme.primary,
+                  border: Border.all(
+                    color: theme.colorScheme.surface,
+                    width: 1.5,
+                  ),
+                ),
+                child: Icon(
+                  Icons.push_pin,
+                  size: 8,
+                  color: theme.colorScheme.onPrimary,
+                ),
+              ),
+            ),
         ],
       ),
       title: Text(
@@ -594,14 +617,60 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               tooltip: _i18n.t('send_message'),
             ),
           ),
-          IconButton(
+          // Menu button with pin and delete options
+          PopupMenuButton<String>(
             icon: Icon(
-              Icons.delete_outline,
-              color: theme.colorScheme.error,
+              Icons.more_vert,
+              color: theme.colorScheme.onSurfaceVariant,
               size: 20,
             ),
-            onPressed: () => _confirmDeleteDevice(device),
-            tooltip: _i18n.t('delete'),
+            tooltip: _i18n.t('more_options'),
+            onSelected: (value) {
+              switch (value) {
+                case 'pin':
+                  _devicesService.pinDevice(device.callsign);
+                  break;
+                case 'unpin':
+                  _devicesService.unpinDevice(device.callsign);
+                  break;
+                case 'delete':
+                  _confirmDeleteDevice(device);
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem<String>(
+                value: device.isPinned ? 'unpin' : 'pin',
+                child: Row(
+                  children: [
+                    Icon(
+                      device.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                      size: 20,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(device.isPinned ? _i18n.t('unpin') : _i18n.t('pin')),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.delete_outline,
+                      size: 20,
+                      color: theme.colorScheme.error,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      _i18n.t('delete'),
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
