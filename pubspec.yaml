@@ -64,6 +64,7 @@ dependencies:
   flutter_blue_plus: ^1.32.0 # BLE scanning for device discovery
   ble_peripheral: ^2.4.0    # BLE advertising for being discoverable
   archive: ^3.6.1           # Compression for BLE parcel protocol
+  flutter_webrtc: ^0.12.4   # WebRTC for P2P NAT traversal
 
 dev_dependencies:
   flutter_test:

@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   ble_peripheral
+  flutter_webrtc
   geolocator_windows
   objectbox_flutter_libs
   permission_handler_windows

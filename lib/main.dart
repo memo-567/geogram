@@ -29,6 +29,7 @@ import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
 import 'connection/transports/ble_transport.dart';
 import 'connection/transports/station_transport.dart';
+import 'connection/transports/webrtc_transport.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'pages/profile_page.dart';
@@ -203,13 +204,14 @@ void main() async {
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
-      // Transport priority: LAN (10) > BLE (20) > Station (30)
+      // Transport priority: LAN (10) > WebRTC (15) > Station (30) > BLE (40)
       final connectionManager = ConnectionManager();
       connectionManager.registerTransport(LanTransport());
-      connectionManager.registerTransport(BleTransport());
+      connectionManager.registerTransport(WebRTCTransport());
       connectionManager.registerTransport(StationTransport());
+      connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
-      LogService().log('ConnectionManager initialized with LAN + BLE + Station transports (deferred)');
+      LogService().log('ConnectionManager initialized with LAN + WebRTC + Station + BLE transports (deferred)');
 
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();

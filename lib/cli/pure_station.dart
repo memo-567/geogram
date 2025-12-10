@@ -1999,6 +1999,14 @@ class PureStationServer {
             }
             break;
 
+          // WebRTC signaling relay - forward offers, answers, and ICE candidates
+          case 'webrtc_offer':
+          case 'webrtc_answer':
+          case 'webrtc_ice':
+          case 'webrtc_bye':
+            _handleWebRTCSignaling(client, message);
+            break;
+
           default:
             // Check for NOSTR event format (used by desktop/mobile clients)
             // Format: {"nostr_event": ["EVENT", {...event object...}]}
@@ -2012,6 +2020,43 @@ class PureStationServer {
     } catch (e) {
       _log('ERROR', 'WebSocket message error: $e');
     }
+  }
+
+  /// Handle WebRTC signaling messages (offer, answer, ICE candidates)
+  /// Simply forwards the message to the target device identified by to_callsign
+  void _handleWebRTCSignaling(PureConnectedClient client, Map<String, dynamic> message) {
+    final type = message['type'] as String?;
+    final toCallsign = message['to_callsign'] as String?;
+    final fromCallsign = message['from_callsign'] as String?;
+    final sessionId = message['session_id'] as String?;
+
+    if (toCallsign == null || toCallsign.isEmpty) {
+      _log('WARN', 'WebRTC signal missing to_callsign');
+      return;
+    }
+
+    // Find target client by callsign
+    final target = _clients.values.firstWhere(
+      (c) => c.callsign?.toLowerCase() == toCallsign.toLowerCase(),
+      orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
+    );
+
+    if (target.id.isEmpty) {
+      // Target not connected - send error back to sender
+      final errorResponse = {
+        'type': 'webrtc_error',
+        'error': 'target_not_connected',
+        'to_callsign': toCallsign,
+        'session_id': sessionId,
+      };
+      client.socket.add(jsonEncode(errorResponse));
+      _log('WARN', 'WebRTC $type: target $toCallsign not connected');
+      return;
+    }
+
+    // Forward the message to target (unchanged)
+    target.socket.add(jsonEncode(message));
+    _log('INFO', 'WebRTC $type: ${fromCallsign ?? client.callsign} -> $toCallsign (session: $sessionId)');
   }
 
   /// Handle incoming NOSTR event from WebSocket

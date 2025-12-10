@@ -363,6 +363,23 @@ class WebSocketService {
     }
   }
 
+  /// Send a WebRTC signaling message (offer, answer, ICE candidate)
+  /// These are forwarded by the station to the target device
+  void sendWebRTCSignal(Map<String, dynamic> signal) {
+    if (_channel == null) {
+      LogService().log('Cannot send WebRTC signal: not connected');
+      return;
+    }
+
+    try {
+      final json = jsonEncode(signal);
+      LogService().log('Sending WebRTC signal: ${signal['type']} to ${signal['to_callsign']}');
+      _channel!.sink.add(json);
+    } catch (e) {
+      LogService().log('Error sending WebRTC signal: $e');
+    }
+  }
+
   // Pending OK responses keyed by event ID
   final Map<String, Completer<({bool success, String? message})>> _pendingOkResponses = {};
 
