@@ -1069,14 +1069,16 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           : Stack(
         children: [
           CircleAvatar(
-            backgroundColor: isStation
-                ? theme.colorScheme.tertiaryContainer
-                : theme.colorScheme.primaryContainer,
+            backgroundColor: _getDeviceIconBackgroundColor(device.preferredColor) ??
+                (isStation
+                    ? theme.colorScheme.tertiaryContainer
+                    : theme.colorScheme.primaryContainer),
             child: Icon(
               isStation ? Icons.cell_tower : Icons.smartphone,
-              color: isStation
-                  ? theme.colorScheme.tertiary
-                  : theme.colorScheme.primary,
+              color: _getDeviceIconColor(device.preferredColor) ??
+                  (isStation
+                      ? theme.colorScheme.tertiary
+                      : theme.colorScheme.primary),
             ),
           ),
           // Online indicator
@@ -1438,6 +1440,64 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       // BLE and other methods are always shown if present
       return true;
     }).toList();
+  }
+
+  /// Get background color for device icon based on preferred color
+  /// Returns null if no preferred color, so caller can use default theme colors
+  Color? _getDeviceIconBackgroundColor(String? colorName) {
+    if (colorName == null || colorName.isEmpty) {
+      return null;  // Use default theme colors
+    }
+
+    switch (colorName.toLowerCase()) {
+      case 'red':
+        return Colors.red.shade100;
+      case 'green':
+        return Colors.green.shade100;
+      case 'yellow':
+        return Colors.amber.shade100;
+      case 'purple':
+        return Colors.purple.shade100;
+      case 'orange':
+        return Colors.orange.shade100;
+      case 'pink':
+        return Colors.pink.shade100;
+      case 'cyan':
+        return Colors.cyan.shade100;
+      case 'blue':
+        return Colors.blue.shade100;
+      default:
+        return null;  // Use default theme colors
+    }
+  }
+
+  /// Get icon color for device based on preferred color
+  /// Returns null if no preferred color, so caller can use default theme colors
+  Color? _getDeviceIconColor(String? colorName) {
+    if (colorName == null || colorName.isEmpty) {
+      return null;  // Use default theme colors
+    }
+
+    switch (colorName.toLowerCase()) {
+      case 'red':
+        return Colors.red.shade700;
+      case 'green':
+        return Colors.green.shade700;
+      case 'yellow':
+        return Colors.amber.shade700;
+      case 'purple':
+        return Colors.purple.shade700;
+      case 'orange':
+        return Colors.orange.shade700;
+      case 'pink':
+        return Colors.pink.shade700;
+      case 'cyan':
+        return Colors.cyan.shade700;
+      case 'blue':
+        return Colors.blue.shade700;
+      default:
+        return null;  // Use default theme colors
+    }
   }
 
   /// Get color for connection method
