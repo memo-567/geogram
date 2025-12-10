@@ -16,6 +16,7 @@ import '../services/callsign_generator.dart';
 import '../services/direct_message_service.dart';
 import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
+import '../services/websocket_service.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
 
@@ -36,6 +37,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   final DirectMessageService _dmService = DirectMessageService();
   final StationDiscoveryService _discoveryService = StationDiscoveryService();
   final StationService _stationService = StationService();
+  final WebSocketService _wsService = WebSocketService();
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
@@ -1070,8 +1072,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             spacing: 4,
             runSpacing: 4,
             children: [
-              // Connection method tags
-              ...device.connectionMethods.map((method) => _buildConnectionTag(
+              // Connection method tags (filtered by current availability)
+              ..._filterAvailableConnectionMethods(device.connectionMethods).map((method) => _buildConnectionTag(
                 theme,
                 RemoteDevice.getConnectionMethodLabel(method),
                 _getConnectionMethodColor(method),
@@ -1296,6 +1298,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
     // Clamp to reasonable BLE range (1-100 meters)
     return distance.clamp(1, 100).round();
+  }
+
+  /// Filter connection methods to only show those currently available
+  /// - 'internet' and 'lan'/'wifi' require network connectivity (WebSocket connected)
+  /// - 'bluetooth' is always shown if present (BLE doesn't require internet)
+  List<String> _filterAvailableConnectionMethods(List<String> methods) {
+    final hasNetwork = _wsService.isConnected;
+
+    return methods.where((method) {
+      final m = method.toLowerCase();
+      // Network-dependent methods: only show if we have connectivity
+      if (m == 'internet' || m == 'lan' || m == 'wifi' ||
+          m == 'wifi_local' || m == 'wifi-local') {
+        return hasNetwork;
+      }
+      // BLE and other methods are always shown if present
+      return true;
+    }).toList();
   }
 
   /// Get color for connection method
