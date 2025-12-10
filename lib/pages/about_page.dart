@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../version.dart';
 
@@ -40,15 +38,15 @@ class AboutPage extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: SvgPicture.asset(
-                      'assets/geogram-icon-dark.svg',
+                    child: Image.asset(
+                      'assets/geogram_icon_transparent.png',
                       width: 100,
                       height: 100,
                     ),
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Geogram: connected together',
+                    'Connected, together',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -75,7 +73,7 @@ class AboutPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  'Resilient, Decentralized Communication',
+                  'True P2P Privacy • No Servers Required',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -94,12 +92,12 @@ class AboutPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Geogram is a comprehensive offline-first communication ecosystem designed for environments with limited or no internet connectivity.',
+              'Geogram is a privacy-first communication platform that connects devices directly—no central servers, no data collection, no compromise.',
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 16),
             Text(
-              'It integrates radio communications (APRS/FM), BLE beacons, NOSTR-based messaging, and hybrid online/offline apps to enable proximity-based and radio-aware communication without internet dependency.',
+              'Using WebRTC for direct peer-to-peer connections, Bluetooth mesh networking, and cryptographically signed messages, Geogram ensures your conversations stay between you and your contacts.',
               style: Theme.of(context).textTheme.bodyLarge,
             ),
 
@@ -113,9 +111,21 @@ class AboutPage extends StatelessWidget {
             const SizedBox(height: 16),
             _buildFeature(
               context,
+              Icons.link,
+              'Direct P2P via WebRTC',
+              'Connect directly to other devices—no relay servers',
+            ),
+            _buildFeature(
+              context,
+              Icons.lock,
+              'End-to-End Encryption',
+              'Messages cryptographically signed with NOSTR keys',
+            ),
+            _buildFeature(
+              context,
               Icons.offline_bolt,
               'Offline-First Design',
-              'Core functionality works without internet',
+              'Works without internet via Bluetooth mesh',
             ),
             _buildFeature(
               context,
@@ -126,59 +136,47 @@ class AboutPage extends StatelessWidget {
             _buildFeature(
               context,
               Icons.hub,
-              'Mesh Networking',
-              'Automatic station through nearby devices via BLE',
+              'Smart Routing',
+              'Automatic fallback: LAN → WebRTC → Station → Bluetooth',
             ),
             _buildFeature(
               context,
-              Icons.lock,
-              'End-to-End Encryption',
-              'Messages secured with NOSTR cryptography',
-            ),
-            _buildFeature(
-              context,
-              Icons.location_on,
-              'Geographic Routing',
-              'Grid-based message delivery to specific locations',
-            ),
-            _buildFeature(
-              context,
-              Icons.compare_arrows,
-              'Interoperability',
-              'Compatible with existing APRS infrastructure',
+              Icons.verified_user,
+              'Verified Messages',
+              'Every message signed and verified—no spoofing',
             ),
 
             const SizedBox(height: 32),
 
             // Communication Channels
             Text(
-              'Communication Channels',
+              'Connection Methods',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 16),
             _buildChannel(
               context,
-              Icons.radio,
-              'Radio (APRS/FM)',
-              'Long-range voice and data transmission',
+              Icons.wifi,
+              'Local Network (LAN)',
+              'Fastest—direct HTTP on same WiFi network',
+            ),
+            _buildChannel(
+              context,
+              Icons.link,
+              'WebRTC P2P',
+              'Direct connection via NAT traversal—true privacy',
+            ),
+            _buildChannel(
+              context,
+              Icons.cloud_outlined,
+              'Station Relay',
+              'Fallback relay when P2P unavailable',
             ),
             _buildChannel(
               context,
               Icons.bluetooth,
-              'Bluetooth Low Energy',
-              'Short-range mesh networking',
-            ),
-            _buildChannel(
-              context,
-              Icons.language,
-              'NOSTR Protocol',
-              'Decentralized, censorship-resistant messaging',
-            ),
-            _buildChannel(
-              context,
-              Icons.forward,
-              'Station System',
-              'Store-and-forward message delivery',
+              'Bluetooth Mesh',
+              'Offline communication—no internet needed',
             ),
 
             const SizedBox(height: 32),
@@ -280,7 +278,7 @@ class AboutPage extends StatelessWidget {
             // Attribution
             Center(
               child: Text(
-                'Built with ❤️ for resilient,\ndecentralized communication',
+                'Your data, your devices, your privacy.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
