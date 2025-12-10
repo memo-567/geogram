@@ -388,6 +388,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                         Text(_i18n.t('devices')),
                         const SizedBox(width: 8),
                         Text(
+                          '(',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        Text(
                           '$activeDeviceCount',
                           style: TextStyle(
                             color: activeDeviceCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
@@ -395,7 +401,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                           ),
                         ),
                         Text(
-                          '/$totalDeviceCount',
+                          '/$totalDeviceCount)',
                           style: TextStyle(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
