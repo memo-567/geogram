@@ -618,15 +618,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 ),
                 // Device count badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     '$deviceCount',
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
