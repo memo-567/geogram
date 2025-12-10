@@ -107,6 +107,9 @@ void main() async {
 
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Apply Android intent extras (test mode, etc.)
+  await AppArgs().applyAndroidExtras();
+
   // Initialize window manager for desktop platforms (not web or mobile)
   if (!kIsWeb) {
     try {

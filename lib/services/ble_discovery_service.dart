@@ -206,6 +206,9 @@ class BLEDiscoveryService {
       _isScanning = true;
       LogService().log('BLEDiscovery: Starting BLE scan...');
 
+      // Fire UI status event
+      _eventBus.fire(BLEStatusEvent(status: BLEStatusType.scanning, message: 'Scanning for nearby devices...'));
+
       // Listen for scan results
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (final result in results) {
@@ -248,6 +251,12 @@ class BLEDiscoveryService {
       _scanSubscription = null;
       _isScanning = false;
       LogService().log('BLEDiscovery: Scan stopped. Found ${_discoveredDevices.length} devices');
+
+      // Fire UI status event
+      _eventBus.fire(BLEStatusEvent(
+        status: BLEStatusType.scanComplete,
+        message: 'Found ${_discoveredDevices.length} nearby devices',
+      ));
     } catch (e) {
       LogService().log('BLEDiscovery: Error stopping scan: $e');
     }
@@ -326,6 +335,13 @@ class BLEDiscoveryService {
 
       _isAdvertising = true;
       LogService().log('BLEDiscovery: Started advertising as ${identityService.fullIdentity}');
+
+      // Fire UI status event
+      _eventBus.fire(BLEStatusEvent(
+        status: BLEStatusType.advertising,
+        message: 'Broadcasting as ${identityService.fullIdentity}',
+        deviceCallsign: callsign,
+      ));
     } catch (e, stackTrace) {
       // SecurityException on Android means BLUETOOTH_ADVERTISE permission not granted
       final errorStr = e.toString();
@@ -464,6 +480,13 @@ class BLEDiscoveryService {
       LogService().log('BLEDiscovery: Found new device: $deviceId '
           '(identity: ${newDevice.fullIdentity ?? "unknown"}, '
           'RSSI: $rssi, proximity: $proximity)');
+
+      // Fire UI status event for new device
+      _eventBus.fire(BLEStatusEvent(
+        status: BLEStatusType.deviceFound,
+        message: 'Found: ${newDevice.fullIdentity ?? deviceId}',
+        deviceCallsign: callsign,
+      ));
     }
 
     // Update identity service with MAC-to-identity mapping
@@ -653,7 +676,8 @@ class BLEDiscoveryService {
           final chunk = bytes.sublist(i, end);
 
           try {
-            await char.write(chunk, withoutResponse: true);
+            // Use withResponse to ensure GATT server receives the write callback
+            await char.write(chunk, withoutResponse: false);
             // Small delay between chunks within a parcel
             await Future.delayed(const Duration(milliseconds: 30));
           } catch (e) {

@@ -18,6 +18,7 @@ import 'station_discovery_service.dart';
 import 'direct_message_service.dart';
 import 'log_service.dart';
 import 'ble_discovery_service.dart';
+import 'ble_foreground_service.dart';
 import 'ble_message_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
@@ -384,6 +385,9 @@ class DevicesService {
       });
 
       LogService().log('DevicesService: BLE messaging initialized successfully (isInitialized: ${_bleMessageService!.isInitialized})');
+
+      // Start BLE foreground service on Android to keep BLE alive in background
+      await BLEForegroundService().start();
     } catch (e, stackTrace) {
       LogService().log('DevicesService: Failed to initialize BLE messaging: $e');
       LogService().log('DevicesService: Stack trace: $stackTrace');

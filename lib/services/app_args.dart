@@ -5,6 +5,7 @@
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 
 /// Centralized command line arguments parsing for Geogram Desktop
 ///
@@ -60,6 +61,7 @@ class AppArgs {
   String? _scanLocalhostRange; // e.g., "5000-6000" for scanning localhost ports
   bool _internetOnly = false; // Disable local network and BLE, use station proxy only
   bool _noUpdate = false; // Disable automatic update checks on startup
+  bool _testMode = false; // Test mode: enables debug API, http API, skips intro
   bool _showHelp = false;
   bool _showVersion = false;
   bool _verbose = false;
@@ -107,6 +109,9 @@ class AppArgs {
   /// Whether automatic update checks are disabled
   bool get noUpdate => _noUpdate;
 
+  /// Whether test mode is enabled (auto-enables debug API, http API, skips intro)
+  bool get testMode => _testMode;
+
   /// Get the localhost port range as start/end integers
   /// Returns null if not set or invalid format
   (int, int)? get scanLocalhostPorts {
@@ -151,6 +156,40 @@ class AppArgs {
     _parseArgs(args);
 
     _initialized = true;
+  }
+
+  /// Apply Android intent extras (call this after parse() on Android)
+  /// This allows launching with: adb shell am start -n PKG/.MainActivity --ez test_mode true
+  Future<void> applyAndroidExtras() async {
+    if (kIsWeb) return;
+
+    try {
+      // Check if we're on Android
+      if (!Platform.isAndroid) return;
+
+      const channel = MethodChannel('dev.geogram/args');
+      final extras = await channel.invokeMethod<Map<Object?, Object?>>('getIntentExtras');
+
+      if (extras == null) return;
+
+      // Apply test_mode (enables all test flags)
+      if (extras['test_mode'] == true) {
+        _testMode = true;
+        _debugApi = true;
+        _httpApi = true;
+        _skipIntro = true;
+        _newIdentity = true;
+      }
+
+      // Individual flags can override
+      if (extras['debug_api'] == true) _debugApi = true;
+      if (extras['http_api'] == true) _httpApi = true;
+      if (extras['skip_intro'] == true) _skipIntro = true;
+      if (extras['new_identity'] == true) _newIdentity = true;
+
+    } catch (e) {
+      // Ignore - not on Android or channel not available
+    }
   }
 
   /// Parse environment variables
@@ -289,6 +328,16 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--test-mode') {
+        _testMode = true;
+        // Test mode implies: debug API, http API, skip intro, new identity
+        _debugApi = true;
+        _httpApi = true;
+        _skipIntro = true;
+        _newIdentity = true;
+        continue;
+      }
+
       if (arg == '--help' || arg == '-h') {
         _showHelp = true;
         continue;
@@ -321,6 +370,7 @@ class AppArgs {
     _scanLocalhostRange = null;
     _internetOnly = false;
     _noUpdate = false;
+    _testMode = false;
     _showHelp = false;
     _showVersion = false;
     _verbose = false;

@@ -301,3 +301,36 @@ class ConnectionStateChangedEvent extends AppEvent {
   @override
   String toString() => 'ConnectionStateChangedEvent(type: $connectionType, connected: $isConnected)';
 }
+
+/// BLE status types for UI notifications
+enum BLEStatusType {
+  scanning,       // BLE scan started
+  scanComplete,   // BLE scan completed
+  deviceFound,    // New BLE device discovered
+  advertising,    // BLE advertising started
+  connecting,     // Connecting to a BLE device
+  connected,      // Connected to a BLE device
+  disconnected,   // Disconnected from a BLE device
+  sending,        // Sending data via BLE
+  received,       // Received data via BLE
+  error,          // BLE error occurred
+}
+
+/// BLE status event for UI notifications
+/// Use this to show snackbars/toasts when BLE events occur
+class BLEStatusEvent extends AppEvent {
+  final BLEStatusType status;
+  final String? message;
+  final String? deviceCallsign;
+  final String? errorDetail;
+
+  BLEStatusEvent({
+    required this.status,
+    this.message,
+    this.deviceCallsign,
+    this.errorDetail,
+  });
+
+  @override
+  String toString() => 'BLEStatusEvent(status: $status, message: $message)';
+}

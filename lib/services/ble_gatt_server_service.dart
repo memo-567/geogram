@@ -414,6 +414,7 @@ class BLEGattServerService {
   }
 
   /// Send notification to a specific client
+  /// Chunks large messages to stay under BLE's 512-byte attribute limit
   Future<void> sendNotification(String deviceId, Map<String, dynamic> message) async {
     LogService().log('BLEGattServer: sendNotification called for $deviceId');
 
@@ -435,12 +436,39 @@ class BLEGattServerService {
 
       LogService().log('BLEGattServer: Sending notification (${bytes.length} bytes) to $deviceId on $notifyCharUUID');
 
-      // Send data (chunked if necessary by the platform)
-      await BlePeripheral.updateCharacteristic(
-        characteristicId: notifyCharUUID,
-        value: Uint8List.fromList(bytes),
-        deviceId: deviceId,
-      );
+      // BLE GATT notifications have max 512 byte limit on some Android versions
+      // Use 480 bytes to leave room for headers
+      const maxChunkSize = 480;
+
+      if (bytes.length <= maxChunkSize) {
+        // Small message - send directly
+        await BlePeripheral.updateCharacteristic(
+          characteristicId: notifyCharUUID,
+          value: Uint8List.fromList(bytes),
+          deviceId: deviceId,
+        );
+      } else {
+        // Large message - send in chunks with parcel protocol
+        final totalChunks = (bytes.length / maxChunkSize).ceil();
+        LogService().log('BLEGattServer: Message too large, sending in $totalChunks chunks');
+
+        for (int i = 0; i < bytes.length; i += maxChunkSize) {
+          final end = (i + maxChunkSize < bytes.length) ? i + maxChunkSize : bytes.length;
+          final chunk = bytes.sublist(i, end);
+          final chunkNum = (i / maxChunkSize).floor() + 1;
+
+          await BlePeripheral.updateCharacteristic(
+            characteristicId: notifyCharUUID,
+            value: Uint8List.fromList(chunk),
+            deviceId: deviceId,
+          );
+
+          // Small delay between chunks
+          if (end < bytes.length) {
+            await Future.delayed(const Duration(milliseconds: 50));
+          }
+        }
+      }
 
       LogService().log('BLEGattServer: Notification sent successfully to $deviceId');
     } catch (e, stackTrace) {

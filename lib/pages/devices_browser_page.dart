@@ -64,6 +64,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   // Connection state subscription
   EventSubscription<ConnectionStateChangedEvent>? _connectionStateSubscription;
+  EventSubscription<BLEStatusEvent>? _bleStatusSubscription;
 
   static const Duration _refreshInterval = Duration(seconds: 30);
 
@@ -73,6 +74,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _initialize();
     _subscribeToUnreadCounts();
     _subscribeToConnectionStateChanges();
+    _subscribeToBLEStatus();
     _startAutoRefresh();
   }
 
@@ -86,6 +88,61 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         });
       }
     });
+  }
+
+  /// Subscribe to BLE status events to show snackbars
+  void _subscribeToBLEStatus() {
+    _bleStatusSubscription = EventBus().on<BLEStatusEvent>((event) {
+      if (!mounted) return;
+
+      // Show snackbar for BLE events
+      final message = event.message ?? _getBLEStatusMessage(event.status);
+      final icon = _getBLEStatusIcon(event.status);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text(message)),
+            ],
+          ),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    });
+  }
+
+  String _getBLEStatusMessage(BLEStatusType status) {
+    switch (status) {
+      case BLEStatusType.scanning: return 'Scanning for nearby devices...';
+      case BLEStatusType.scanComplete: return 'Scan complete';
+      case BLEStatusType.deviceFound: return 'Found new device';
+      case BLEStatusType.advertising: return 'Broadcasting...';
+      case BLEStatusType.connecting: return 'Connecting...';
+      case BLEStatusType.connected: return 'Connected';
+      case BLEStatusType.disconnected: return 'Disconnected';
+      case BLEStatusType.sending: return 'Sending data...';
+      case BLEStatusType.received: return 'Data received';
+      case BLEStatusType.error: return 'BLE error';
+    }
+  }
+
+  IconData _getBLEStatusIcon(BLEStatusType status) {
+    switch (status) {
+      case BLEStatusType.scanning: return Icons.bluetooth_searching;
+      case BLEStatusType.scanComplete: return Icons.bluetooth_connected;
+      case BLEStatusType.deviceFound: return Icons.devices;
+      case BLEStatusType.advertising: return Icons.broadcast_on_personal;
+      case BLEStatusType.connecting: return Icons.bluetooth;
+      case BLEStatusType.connected: return Icons.bluetooth_connected;
+      case BLEStatusType.disconnected: return Icons.bluetooth_disabled;
+      case BLEStatusType.sending: return Icons.upload;
+      case BLEStatusType.received: return Icons.download;
+      case BLEStatusType.error: return Icons.error_outline;
+    }
   }
 
   void _startAutoRefresh() {
@@ -157,6 +214,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _unreadSubscription?.cancel();
     _dmUnreadSubscription?.cancel();
     _connectionStateSubscription?.cancel();
+    _bleStatusSubscription?.cancel();
     super.dispose();
   }
 

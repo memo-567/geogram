@@ -12,6 +12,8 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "dev.geogram/updates"
+    private val ARGS_CHANNEL = "dev.geogram/args"
+    private val BLE_CHANNEL = "dev.geogram/ble_service"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -20,6 +22,40 @@ class MainActivity : FlutterActivity() {
         // Initialize Bluetooth Classic plugin for BLE+ functionality
         bluetoothClassicPlugin = BluetoothClassicPlugin(this, flutterEngine)
         bluetoothClassicPlugin?.initialize()
+
+        // BLE foreground service channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startBLEService" -> {
+                    BLEForegroundService.start(this)
+                    result.success(true)
+                }
+                "stopBLEService" -> {
+                    BLEForegroundService.stop(this)
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Args channel for getting intent extras (test mode support)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ARGS_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getIntentExtras" -> {
+                    val extras = mutableMapOf<String, Any?>()
+                    intent?.extras?.let { bundle ->
+                        extras["test_mode"] = bundle.getBoolean("test_mode", false)
+                        extras["debug_api"] = bundle.getBoolean("debug_api", false)
+                        extras["http_api"] = bundle.getBoolean("http_api", false)
+                        extras["skip_intro"] = bundle.getBoolean("skip_intro", false)
+                        extras["new_identity"] = bundle.getBoolean("new_identity", false)
+                    }
+                    android.util.Log.d("GeogramArgs", "Intent extras: $extras")
+                    result.success(extras)
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
