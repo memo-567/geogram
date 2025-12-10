@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.6
+
+### Changes
+- Fix splash screen cropping and update About page
+
+
 ## 2025-12-10 - v1.6.5
 
 ### Changes
