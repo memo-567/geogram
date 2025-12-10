@@ -1371,7 +1371,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     // If BLE RSSI is available, estimate distance from signal strength
     if (device.bleRssi != null) {
       final bleDistanceMeters = _estimateBleDistance(device.bleRssi!);
-      final bleDistanceText = '~${bleDistanceMeters}m (BLE)';
+      final bleDistanceText = '~$bleDistanceMeters meters';
 
       if (distanceText != null) {
         // If we have GPS distance, show BLE estimate as additional info
