@@ -1000,10 +1000,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           // Callsign and distance
           Row(
             children: [
-              Text(
-                device.callsign,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontFamily: 'monospace',
+              Flexible(
+                child: Text(
+                  device.callsign,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (distanceStr != null)
