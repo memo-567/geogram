@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.8
+
+### Changes
+- Add multi-select mode to Devices panel
+
+
 ## 2025-12-10 - v1.6.7
 
 ### Changes
