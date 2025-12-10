@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.7
+
+### Changes
+- Show changelog when update is available
+
+
 ## 2025-12-10 - v1.6.6
 
 ### Changes
