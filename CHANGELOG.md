@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-10 - v1.6.10
+
+### Changes
+- Change folder device count badge to grey square
+
+
 ## 2025-12-10 - v1.6.9
 
 ### Changes
