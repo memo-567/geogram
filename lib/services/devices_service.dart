@@ -185,6 +185,12 @@ class DevicesService {
         // Handled directly by DebugController.executeAction()
         // which calls DevicesService().addDevice() directly
         break;
+
+      case DebugAction.voiceRecord:
+      case DebugAction.voiceStop:
+      case DebugAction.voiceStatus:
+        // Voice actions are handled directly by LogApiService
+        break;
     }
   }
 
@@ -1306,8 +1312,10 @@ class DevicesService {
     }
 
     // Check reachability for all known devices
-    for (final device in _devices.values) {
-      await checkReachability(device.callsign);
+    // Create a copy of callsigns to avoid concurrent modification
+    final callsigns = _devices.keys.toList();
+    for (final callsign in callsigns) {
+      await checkReachability(callsign);
     }
 
     // Update last refresh time
@@ -1562,10 +1570,17 @@ class DevicesService {
   /// Fetch connected devices from the connected station
   Future<void> _fetchStationClients() async {
     try {
-      final station = _stationService.getConnectedRelay();
+      // Try connected station first, fall back to preferred station
+      var station = _stationService.getConnectedRelay();
       if (station == null) {
-        LogService().log('DevicesService: No connected station to fetch devices from');
-        return;
+        // No connected station - try preferred station for device list
+        // This allows showing station devices even before WebSocket connects
+        station = _stationService.getPreferredStation();
+        if (station == null) {
+          LogService().log('DevicesService: No station available to fetch devices from');
+          return;
+        }
+        LogService().log('DevicesService: Using preferred station for device list (not yet connected)');
       }
 
       // Convert WebSocket URL to HTTP and extract base (remove path like /ws)

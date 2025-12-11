@@ -3,8 +3,11 @@ library;
 
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'package:async/async.dart';
+import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
+import '../services/log_api_service.dart';
 import 'transport.dart';
 import 'transport_message.dart';
 import 'routing_strategy.dart';
@@ -357,6 +360,9 @@ class ConnectionManager {
 
     _incomingGroup!.stream.listen(
       (message) {
+        // Handle incoming messages (e.g., forward API requests to local server)
+        _handleIncomingMessage(message);
+
         if (!_incomingController.isClosed) {
           _incomingController.add(message);
         }
@@ -365,6 +371,90 @@ class ConnectionManager {
         LogService().log('ConnectionManager: Incoming stream error: $e');
       },
     );
+  }
+
+  /// Handle incoming message from a transport
+  ///
+  /// Processes incoming API requests by forwarding them to the local HTTP server.
+  /// This enables P2P communication (WebRTC, BLE) to work with the same API
+  /// as station-proxied requests.
+  Future<void> _handleIncomingMessage(TransportMessage message) async {
+    LogService().log('ConnectionManager: Received ${message.type.name} from ${message.targetCallsign}');
+
+    switch (message.type) {
+      case TransportMessageType.apiRequest:
+        await _handleApiRequest(message);
+        break;
+      case TransportMessageType.directMessage:
+        // DM handling - forward to local chat API
+        await _handleDirectMessage(message);
+        break;
+      default:
+        // Other message types are handled by subscribers to incomingMessages
+        break;
+    }
+  }
+
+  /// Handle incoming API request by forwarding to local HTTP server
+  Future<void> _handleApiRequest(TransportMessage message) async {
+    final method = message.method ?? 'GET';
+    final path = message.path ?? '/';
+
+    // Only process /api/* requests
+    if (!path.startsWith('/api/')) {
+      LogService().log('ConnectionManager: Ignoring non-API request: $path');
+      return;
+    }
+
+    try {
+      final localPort = LogApiService().port;
+      final uri = Uri.parse('http://localhost:$localPort$path');
+
+      // Prepare headers
+      Map<String, String> headers = {'Content-Type': 'application/json'};
+      if (message.headers != null) {
+        headers.addAll(message.headers!);
+      }
+
+      // Prepare body
+      String? body;
+      if (message.payload != null) {
+        body = message.payload is String
+            ? message.payload as String
+            : jsonEncode(message.payload);
+      }
+
+      // Make request to local server
+      http.Response response;
+      switch (method.toUpperCase()) {
+        case 'GET':
+          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+          break;
+        case 'POST':
+          response = await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          break;
+        case 'PUT':
+          response = await http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
+          break;
+        case 'DELETE':
+          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 25));
+          break;
+        default:
+          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
+      }
+
+      LogService().log('ConnectionManager: Forwarded P2P request $method $path -> ${response.statusCode}');
+    } catch (e) {
+      LogService().log('ConnectionManager: Error forwarding P2P API request: $e');
+    }
+  }
+
+  /// Handle incoming direct message
+  Future<void> _handleDirectMessage(TransportMessage message) async {
+    // DMs come via apiRequest with signed_event in the body
+    // The apiRequest handler will forward POST /api/chat/{callsign}/messages to local server
+    // This method is for future direct DM handling if needed
+    LogService().log('ConnectionManager: Received DM from ${message.targetCallsign}');
   }
 
   // ============================================================
