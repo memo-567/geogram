@@ -1355,46 +1355,35 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Format distance with translations
-  /// Shows distance when available, with BLE proximity as additional info
+  /// BLE distance takes priority over IP-based distance (more accurate for nearby devices)
   String? _formatDistance(RemoteDevice device, double? distanceKm) {
-    // Build distance string if coordinates are available
-    String? distanceText;
-    if (distanceKm != null) {
-      if (distanceKm < 1) {
-        final meters = (distanceKm * 1000).round();
-        distanceText = _i18n.t('meters_away', params: [meters.toString()]);
-      } else {
-        distanceText = _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
-      }
-    }
-
-    // If BLE RSSI is available, estimate distance from signal strength
+    // If BLE RSSI is available, use it exclusively (most accurate for nearby devices)
     if (device.bleRssi != null) {
       final bleDistanceMeters = _estimateBleDistance(device.bleRssi!);
-      final bleDistanceText = '~$bleDistanceMeters meters';
-
-      if (distanceText != null) {
-        // If we have GPS distance, show BLE estimate as additional info
-        return '$distanceText · $bleDistanceText';
-      }
-      return bleDistanceText;
+      return '~$bleDistanceMeters meters';
     }
 
-    // If BLE proximity is available but no RSSI, use it as fallback
+    // If BLE proximity is available but no RSSI, use it
     if (device.bleProximity != null) {
-      if (distanceText != null) {
-        return '$distanceText (${device.bleProximity})';
-      }
       return device.bleProximity;
     }
 
+    // Fall back to GPS/IP-based distance if no BLE info
+    if (distanceKm != null) {
+      if (distanceKm < 1) {
+        final meters = (distanceKm * 1000).round();
+        return _i18n.t('meters_away', params: [meters.toString()]);
+      } else {
+        return _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
+      }
+    }
+
     // If on same LAN but no coordinates, show "Same network"
-    if (distanceText == null &&
-        device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
+    if (device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
       return _i18n.t('same_location');
     }
 
-    return distanceText;
+    return null;
   }
 
   /// Estimate distance in meters from BLE RSSI value

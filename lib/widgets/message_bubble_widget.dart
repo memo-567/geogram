@@ -44,11 +44,14 @@ class MessageBubbleWidget extends StatelessWidget {
 
     // Get sender's preferred color from cached device status
     final Color bubbleColor;
+    final Color textColor;
     if (isOwnMessage) {
       bubbleColor = theme.colorScheme.primaryContainer;
+      textColor = theme.colorScheme.onPrimaryContainer;
     } else {
       final device = DevicesService().getDevice(message.author);
       bubbleColor = _getBubbleColor(device?.preferredColor, theme);
+      textColor = _getTextColor(device?.preferredColor, theme);
     }
 
     return Align(
@@ -94,9 +97,7 @@ class MessageBubbleWidget extends StatelessWidget {
                       SelectableText(
                         message.content,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: isOwnMessage
-                              ? theme.colorScheme.onPrimaryContainer
-                              : theme.colorScheme.onSurfaceVariant,
+                          color: textColor,
                         ),
                       ),
                     // Metadata chips (file, location, poll - but NOT signature)
@@ -114,11 +115,7 @@ class MessageBubbleWidget extends StatelessWidget {
                           Text(
                             message.displayTime,
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: isOwnMessage
-                                  ? theme.colorScheme.onPrimaryContainer
-                                      .withOpacity(0.7)
-                                  : theme.colorScheme.onSurfaceVariant
-                                      .withOpacity(0.7),
+                              color: textColor.withOpacity(0.7),
                               fontSize: 11,
                             ),
                           ),
@@ -472,5 +469,34 @@ class MessageBubbleWidget extends StatelessWidget {
 
     // Use shade100 for a subtle bubble background
     return baseColor.shade100;
+  }
+
+  /// Get high-contrast text color for bubble based on preferred color
+  Color _getTextColor(String? colorName, ThemeData theme) {
+    if (colorName == null || colorName.isEmpty) {
+      return theme.colorScheme.onSurfaceVariant;
+    }
+
+    // Use shade900 (very dark) for high contrast on shade100 backgrounds
+    switch (colorName.toLowerCase()) {
+      case 'red':
+        return Colors.red.shade900;
+      case 'green':
+        return Colors.green.shade900;
+      case 'yellow':
+        return Colors.amber.shade900;
+      case 'purple':
+        return Colors.purple.shade900;
+      case 'orange':
+        return Colors.orange.shade900;
+      case 'pink':
+        return Colors.pink.shade900;
+      case 'cyan':
+        return Colors.cyan.shade900;
+      case 'blue':
+        return Colors.blue.shade900;
+      default:
+        return theme.colorScheme.onSurfaceVariant;
+    }
   }
 }

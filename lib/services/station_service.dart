@@ -395,6 +395,8 @@ class StationService {
         String? stationCallsign;
         String? stationName;
         String? stationDescription;
+        double? stationLatitude;
+        double? stationLongitude;
         try {
           final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
           final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
@@ -405,6 +407,17 @@ class StationService {
             stationCallsign = data['callsign'] as String?;
             stationName = data['name'] as String?;
             stationDescription = data['description'] as String?;
+
+            // Extract location from response
+            final location = data['location'] as Map<String, dynamic>?;
+            if (location != null) {
+              stationLatitude = (location['latitude'] as num?)?.toDouble();
+              stationLongitude = (location['longitude'] as num?)?.toDouble();
+            }
+            // Also check top-level latitude/longitude
+            stationLatitude ??= (data['latitude'] as num?)?.toDouble();
+            stationLongitude ??= (data['longitude'] as num?)?.toDouble();
+
             LogService().log('Fetched station status: $connectedDevices devices connected');
             if (stationCallsign != null && stationCallsign.isNotEmpty) {
               LogService().log('Station callsign: $stationCallsign');
@@ -428,6 +441,8 @@ class StationService {
             callsign: stationCallsign,
             name: stationName ?? _stations[index].name,
             description: stationDescription,
+            latitude: stationLatitude,
+            longitude: stationLongitude,
           );
           _saveStations();
 
