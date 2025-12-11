@@ -4349,16 +4349,16 @@ class PureStationServer {
       final tagName = json['tag_name'] as String? ?? '';
       final version = tagName.replaceFirst(RegExp(r'^v'), '');
 
-      // Check if we already have this version
-      if (_settings.lastMirroredVersion == version) {
-        _log('INFO', 'Already have version $version cached');
-        return;
+      final isNewVersion = _settings.lastMirroredVersion != version;
+      if (isNewVersion) {
+        _log('INFO', 'New version available: $version (current: ${_settings.lastMirroredVersion})');
+      } else {
+        _log('INFO', 'Checking for missing binaries in version $version');
       }
 
-      _log('INFO', 'New version available: $version (current: ${_settings.lastMirroredVersion})');
-
-      // Download all platform binaries
-      await _downloadAllPlatformBinaries(json);
+      // Download all platform binaries (will skip existing files)
+      // This ensures we eventually get all binaries even if GitHub Actions is still building
+      final downloadedCount = await _downloadAllPlatformBinaries(json);
 
       // Update cached release info
       _cachedRelease = {
@@ -4378,7 +4378,11 @@ class PureStationServer {
       _settings = _settings.copyWith(lastMirroredVersion: version);
       await saveSettings();
 
-      _log('INFO', 'Update mirror complete: version $version');
+      if (downloadedCount > 0) {
+        _log('INFO', 'Update mirror complete: version $version ($downloadedCount new binaries)');
+      } else if (isNewVersion) {
+        _log('INFO', 'Update mirror complete: version $version (no binaries available yet)');
+      }
     } catch (e) {
       _log('ERROR', 'Error polling for updates: $e');
     } finally {
@@ -4387,9 +4391,10 @@ class PureStationServer {
   }
 
   /// Download all assets from GitHub release
-  Future<void> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
+  /// Returns the number of newly downloaded binaries
+  Future<int> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
     final assets = releaseJson['assets'] as List<dynamic>?;
-    if (assets == null) return;
+    if (assets == null) return 0;
 
     final tagName = releaseJson['tag_name'] as String? ?? '';
     final version = tagName.replaceFirst(RegExp(r'^v'), '');
@@ -4397,6 +4402,9 @@ class PureStationServer {
 
     _downloadedAssets.clear();
     _assetFilenames.clear();
+
+    int newlyDownloaded = 0;
+    int alreadyExisted = 0;
 
     // Download all assets to version-specific folder
     for (final asset in assets) {
@@ -4408,13 +4416,27 @@ class PureStationServer {
 
       final assetType = UpdateAssetType.fromFilename(filename);
       if (assetType != UpdateAssetType.unknown) {
+        // Check if file already exists before downloading
+        final versionDir = Directory('$_updatesDirectory/$version');
+        final targetPath = '${versionDir.path}/$filename';
+        final existingFile = File(targetPath);
+        final existed = await existingFile.exists() && await existingFile.length() > 1000;
+
         final success = await _downloadBinary(version, filename, downloadUrl);
         if (success) {
           _downloadedAssets[assetType.name] = '/updates/$version/$filename';
           _assetFilenames[assetType.name] = filename;
+          if (existed) {
+            alreadyExisted++;
+          } else {
+            newlyDownloaded++;
+          }
         }
       }
     }
+
+    _log('INFO', 'Binary sync: $newlyDownloaded new, $alreadyExisted existing, ${_downloadedAssets.length} total');
+    return newlyDownloaded;
   }
 
   /// Download a single binary file to version folder
