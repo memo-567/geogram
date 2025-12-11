@@ -58,6 +58,12 @@ class UpdateService {
       _initialized = true;
       LogService().log('UpdateService initialized');
 
+      // Migrate from old rollback folder to new updates structure (one-time)
+      await _migrateFromOldRollbackFolder();
+
+      // Backup current version on startup if not already archived
+      await _backupCurrentVersionOnStartup();
+
       // Skip update checks if --no-update flag is set
       if (AppArgs().noUpdate) {
         LogService().log('UpdateService: Update checks disabled via --no-update flag');
@@ -334,73 +340,234 @@ class UpdateService {
     return release.getAssetUrl(assetType);
   }
 
-  /// Get backup directory path
-  Future<String> getBackupDirectory() async {
+  /// Get updates directory path (unified with station structure)
+  Future<String> getUpdatesDirectory() async {
     if (kIsWeb) {
-      throw UnsupportedError('Backups not supported on web');
+      throw UnsupportedError('Updates not supported on web');
     }
 
     final appDir = await getApplicationSupportDirectory();
-    final backupDir = Directory('${appDir.path}/rollback');
+    final updatesDir = Directory('${appDir.path}/updates');
 
-    if (!await backupDir.exists()) {
-      await backupDir.create(recursive: true);
+    if (!await updatesDir.exists()) {
+      await updatesDir.create(recursive: true);
     }
 
-    return backupDir.path;
+    return updatesDir.path;
   }
 
-  /// List available backups
+  /// Get version-specific directory path
+  Future<String> getVersionDirectory(String version) async {
+    final updatesDir = await getUpdatesDirectory();
+    final versionDir = Directory('$updatesDir/$version');
+
+    if (!await versionDir.exists()) {
+      await versionDir.create(recursive: true);
+    }
+
+    return versionDir.path;
+  }
+
+  /// Get platform-specific binary name
+  String _getPlatformBinaryName() {
+    if (!kIsWeb && Platform.isAndroid) return 'geogram.apk';
+    if (!kIsWeb && Platform.isWindows) return 'geogram-desktop.exe';
+    return 'geogram-desktop'; // Linux, macOS
+  }
+
+  /// Find binary file inside a version directory
+  Future<String?> _findBinaryInVersionDir(String versionDirPath) async {
+    final dir = Directory(versionDirPath);
+    if (!await dir.exists()) return null;
+
+    // Look for platform-appropriate binary
+    final expectedName = _getPlatformBinaryName();
+    final expectedFile = File('$versionDirPath${Platform.pathSeparator}$expectedName');
+    if (await expectedFile.exists()) {
+      return expectedFile.path;
+    }
+
+    // Fallback: find any executable-like file
+    await for (final entity in dir.list()) {
+      if (entity is File) {
+        final name = entity.path.split(Platform.pathSeparator).last;
+        if (name.endsWith('.apk') || name.endsWith('.exe') ||
+            name == 'geogram-desktop' || name.startsWith('geogram')) {
+          return entity.path;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Backup current version on startup if not already archived
+  Future<void> _backupCurrentVersionOnStartup() async {
+    if (kIsWeb) return;
+
+    try {
+      final updatesDir = await getUpdatesDirectory();
+      final versionDir = Directory('$updatesDir/$appVersion');
+
+      // Check if this version is already archived
+      if (await versionDir.exists()) {
+        final binaryPath = await _findBinaryInVersionDir(versionDir.path);
+        if (binaryPath != null) {
+          LogService().log('Version $appVersion already archived');
+          return;
+        }
+      }
+
+      LogService().log('Backing up current version $appVersion on startup');
+      await createBackup();
+    } catch (e) {
+      LogService().log('Error backing up on startup: $e');
+    }
+  }
+
+  /// Migrate old rollback folder to new updates structure
+  Future<void> _migrateFromOldRollbackFolder() async {
+    if (kIsWeb) return;
+
+    try {
+      final appDir = await getApplicationSupportDirectory();
+      final oldRollbackDir = Directory('${appDir.path}/rollback');
+
+      if (!await oldRollbackDir.exists()) return;
+
+      LogService().log('Migrating old rollback folder to new updates structure');
+
+      await for (final entity in oldRollbackDir.list()) {
+        if (entity is File &&
+            (entity.path.endsWith('.backup') || entity.path.endsWith('.apk'))) {
+          // Parse version from old filename: geogram-desktop.1.6.20.2024-12-08_10-15-00.backup
+          final filename = entity.path.split(Platform.pathSeparator).last;
+          final version = _parseVersionFromOldFilename(filename);
+
+          if (version != null) {
+            final versionDir = await getVersionDirectory(version);
+            final binaryName = _getPlatformBinaryName();
+            final newPath = '$versionDir/$binaryName';
+
+            if (!await File(newPath).exists()) {
+              await entity.copy(newPath);
+              LogService().log('Migrated $version from old rollback folder');
+            }
+
+            // Migrate pinned marker
+            final oldPinnedMarker = File('${entity.path}.pinned');
+            if (await oldPinnedMarker.exists()) {
+              final updatesDir = await getUpdatesDirectory();
+              await File('$updatesDir/$version.pinned').create();
+              await oldPinnedMarker.delete();
+            }
+          }
+
+          await entity.delete();
+        }
+      }
+
+      // Remove old rollback directory if empty
+      final remaining = await oldRollbackDir.list().toList();
+      if (remaining.isEmpty) {
+        await oldRollbackDir.delete();
+        LogService().log('Removed old rollback folder');
+      }
+    } catch (e) {
+      LogService().log('Error migrating from old rollback folder: $e');
+    }
+  }
+
+  /// Parse version from old filename format: geogram-desktop.1.6.20.2024-12-08_10-15-00.backup
+  String? _parseVersionFromOldFilename(String filename) {
+    // Remove extension
+    String name = filename;
+    if (name.endsWith('.backup')) {
+      name = name.substring(0, name.length - 7);
+    } else if (name.endsWith('.apk')) {
+      name = name.substring(0, name.length - 4);
+    }
+
+    // Split by dots
+    final parts = name.split('.');
+    if (parts.length < 4) return null;
+
+    // Find timestamp pattern (YYYY-MM-DD)
+    for (var i = 1; i < parts.length - 1; i++) {
+      if (RegExp(r'^\d{4}-\d{2}-\d{2}').hasMatch(parts[i])) {
+        // Version is between prefix and timestamp
+        return parts.sublist(1, i).join('.');
+      }
+    }
+
+    return null;
+  }
+
+  /// Get backup directory path (deprecated, use getUpdatesDirectory)
+  @Deprecated('Use getUpdatesDirectory instead')
+  Future<String> getBackupDirectory() async {
+    return getUpdatesDirectory();
+  }
+
+  /// List available backups (scans version subdirectories)
   Future<List<BackupInfo>> listBackups() async {
     if (kIsWeb) return [];
 
     try {
-      final backupPath = await getBackupDirectory();
-      final backupDir = Directory(backupPath);
+      final updatesDir = await getUpdatesDirectory();
+      final dir = Directory(updatesDir);
 
-      if (!await backupDir.exists()) {
+      if (!await dir.exists()) {
         return [];
       }
 
       final backups = <BackupInfo>[];
-      await for (final entity in backupDir.list()) {
-        // Accept both .backup (desktop) and .apk (Android) files
-        if (entity is File &&
-            (entity.path.endsWith('.backup') || entity.path.endsWith('.apk'))) {
-          final stat = await entity.stat();
-          final filename = entity.path.split(Platform.pathSeparator).last;
 
-          // Parse version from filename: geogram-desktop.1.4.0.2024-12-02_10-30-00.backup
-          String? version;
-          final parts = filename.split('.');
-          if (parts.length >= 4) {
-            // Try to extract version
-            for (var i = 1; i < parts.length - 1; i++) {
-              if (RegExp(r'^\d{4}-\d{2}-\d{2}').hasMatch(parts[i])) {
-                // This is the timestamp, version is before it
-                version = parts.sublist(1, i).join('.');
-                break;
-              }
-            }
-          }
+      await for (final entity in dir.list()) {
+        if (entity is Directory) {
+          final version = entity.path.split(Platform.pathSeparator).last;
 
-          // Check if backup is pinned (via .pinned marker file)
-          final pinnedMarker = File('${entity.path}.pinned');
+          // Skip non-version directories (must start with digit)
+          if (!RegExp(r'^\d+\.\d+').hasMatch(version)) continue;
+
+          // Find binary inside directory
+          final binaryPath = await _findBinaryInVersionDir(entity.path);
+          if (binaryPath == null) continue;
+
+          final stat = await File(binaryPath).stat();
+
+          // Check if version is pinned (directory-level marker)
+          final pinnedMarker = File('$updatesDir/$version.pinned');
           final isPinned = await pinnedMarker.exists();
 
           backups.add(BackupInfo(
-            filename: filename,
+            filename: version, // Now just version string
             version: version,
             timestamp: stat.modified,
             sizeBytes: stat.size,
-            path: entity.path,
+            path: binaryPath,
             isPinned: isPinned,
           ));
         }
       }
 
-      // Sort by timestamp, newest first
-      backups.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      // Sort by version (semantic versioning), newest first
+      backups.sort((a, b) {
+        // Try semantic version comparison
+        if (a.version != null && b.version != null) {
+          final aParts = a.version!.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+          final bParts = b.version!.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+
+          for (var i = 0; i < aParts.length && i < bParts.length; i++) {
+            if (bParts[i] != aParts[i]) {
+              return bParts[i].compareTo(aParts[i]); // Descending order
+            }
+          }
+          return bParts.length.compareTo(aParts.length);
+        }
+        // Fallback to timestamp
+        return b.timestamp.compareTo(a.timestamp);
+      });
 
       return backups;
     } catch (e) {
@@ -409,7 +576,7 @@ class UpdateService {
     }
   }
 
-  /// Create backup of current binary or APK
+  /// Create backup of current binary or APK (uses version subdirectory)
   Future<BackupInfo?> createBackup() async {
     if (kIsWeb) return null;
 
@@ -429,16 +596,23 @@ class UpdateService {
         return null;
       }
 
-      final backupPath = await getBackupDirectory();
-      final timestamp = DateTime.now()
-          .toIso8601String()
-          .replaceAll(':', '-')
-          .split('.')[0];
+      // Create version subdirectory: updates/{version}/
+      final versionDir = await getVersionDirectory(appVersion);
+      final binaryName = _getPlatformBinaryName();
+      final backupFile = File('$versionDir${Platform.pathSeparator}$binaryName');
 
-      // Use .apk extension for Android, .backup for desktop
-      final extension = Platform.isAndroid ? '.apk' : '.backup';
-      final backupName = 'geogram-desktop.$appVersion.$timestamp$extension';
-      final backupFile = File('$backupPath${Platform.pathSeparator}$backupName');
+      // Check if already exists
+      if (await backupFile.exists()) {
+        LogService().log('Backup already exists for version $appVersion');
+        final stat = await backupFile.stat();
+        return BackupInfo(
+          filename: appVersion,
+          version: appVersion,
+          timestamp: stat.modified,
+          sizeBytes: stat.size,
+          path: backupFile.path,
+        );
+      }
 
       LogService().log('Creating backup: $sourceFile -> ${backupFile.path}');
       await File(sourceFile).copy(backupFile.path);
@@ -448,7 +622,7 @@ class UpdateService {
 
       final stat = await backupFile.stat();
       return BackupInfo(
-        filename: backupName,
+        filename: appVersion,
         version: appVersion,
         timestamp: DateTime.now(),
         sizeBytes: stat.size,
@@ -462,6 +636,7 @@ class UpdateService {
 
   /// Cleanup old backups beyond the maximum limit
   /// Pinned backups are never removed during cleanup
+  /// Removes entire version directories
   Future<void> _cleanupOldBackups() async {
     try {
       final backups = await listBackups();
@@ -472,9 +647,17 @@ class UpdateService {
 
       if (unpinnedBackups.length > maxBackups) {
         final toRemove = unpinnedBackups.sublist(maxBackups);
+        final updatesDir = await getUpdatesDirectory();
+
         for (final backup in toRemove) {
-          LogService().log('Removing old backup: ${backup.filename}');
-          await File(backup.path).delete();
+          if (backup.version == null) continue;
+
+          final versionDir = Directory('$updatesDir/${backup.version}');
+          LogService().log('Removing old version: ${backup.version}');
+
+          if (await versionDir.exists()) {
+            await versionDir.delete(recursive: true);
+          }
         }
       }
     } catch (e) {
@@ -891,20 +1074,26 @@ class UpdateService {
     }
   }
 
-  /// Delete a specific backup
+  /// Delete a specific backup (deletes entire version directory)
   Future<bool> deleteBackup(BackupInfo backup) async {
     if (kIsWeb) return false;
 
     try {
-      final file = File(backup.path);
-      if (await file.exists()) {
-        await file.delete();
+      if (backup.version == null) return false;
+
+      final updatesDir = await getUpdatesDirectory();
+      final versionDir = Directory('$updatesDir/${backup.version}');
+
+      if (await versionDir.exists()) {
+        await versionDir.delete(recursive: true);
+
         // Also delete pinned marker if it exists
-        final pinnedMarker = File('${backup.path}.pinned');
+        final pinnedMarker = File('$updatesDir/${backup.version}.pinned');
         if (await pinnedMarker.exists()) {
           await pinnedMarker.delete();
         }
-        LogService().log('Deleted backup: ${backup.filename}');
+
+        LogService().log('Deleted backup version: ${backup.version}');
         return true;
       }
       return false;
@@ -915,13 +1104,17 @@ class UpdateService {
   }
 
   /// Pin a backup to prevent auto-deletion during cleanup
+  /// Uses directory-level marker: {updatesDir}/{version}.pinned
   Future<bool> pinBackup(BackupInfo backup) async {
     if (kIsWeb) return false;
 
     try {
-      final pinnedMarker = File('${backup.path}.pinned');
+      if (backup.version == null) return false;
+
+      final updatesDir = await getUpdatesDirectory();
+      final pinnedMarker = File('$updatesDir/${backup.version}.pinned');
       await pinnedMarker.writeAsString(DateTime.now().toIso8601String());
-      LogService().log('Pinned backup: ${backup.filename}');
+      LogService().log('Pinned version: ${backup.version}');
       return true;
     } catch (e) {
       LogService().log('Error pinning backup: $e');
@@ -930,14 +1123,18 @@ class UpdateService {
   }
 
   /// Unpin a backup to allow auto-deletion during cleanup
+  /// Uses directory-level marker: {updatesDir}/{version}.pinned
   Future<bool> unpinBackup(BackupInfo backup) async {
     if (kIsWeb) return false;
 
     try {
-      final pinnedMarker = File('${backup.path}.pinned');
+      if (backup.version == null) return false;
+
+      final updatesDir = await getUpdatesDirectory();
+      final pinnedMarker = File('$updatesDir/${backup.version}.pinned');
       if (await pinnedMarker.exists()) {
         await pinnedMarker.delete();
-        LogService().log('Unpinned backup: ${backup.filename}');
+        LogService().log('Unpinned version: ${backup.version}');
       }
       return true;
     } catch (e) {
