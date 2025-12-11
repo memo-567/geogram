@@ -365,10 +365,11 @@ Returns detailed station status and configuration.
 ```json
 {
   "name": "Geogram Desktop Station",
-  "version": "1.6.16",
+  "version": "1.6.17",
   "callsign": "X1ABCD",
   "nickname": "Alice",
   "color": "purple",
+  "platform": "linux",
   "description": "My local Geogram station",
   "connected_devices": 5,
   "uptime": 3600,
@@ -394,6 +395,7 @@ Returns detailed station status and configuration.
 | `callsign` | string | Device callsign (e.g., X1ABCD) |
 | `nickname` | string | User's display name (optional) |
 | `color` | string | User's preferred color: red, blue, green, yellow, purple, orange, pink, cyan |
+| `platform` | string | Operating system: linux, macos, windows, android, ios |
 | `description` | string | Station description |
 | `connected_devices` | int | Number of connected clients (stations only) |
 | `uptime` | int | Uptime in seconds (stations only) |
@@ -427,6 +429,7 @@ Returns list of connected clients, grouped by callsign.
       "callsign": "X1ABCD",
       "nickname": "Alice",
       "color": "purple",
+      "platform": "android",
       "npub": "npub1abc...",
       "latitude": 38.72,
       "longitude": -9.14,
@@ -442,6 +445,8 @@ Returns list of connected clients, grouped by callsign.
 |-------|------|-------------|
 | `callsign` | string | Client's callsign |
 | `nickname` | string | Display name |
+| `color` | string | User's preferred color |
+| `platform` | string | Operating system: linux, macos, windows, android, ios |
 | `npub` | string | Nostr public key (if available) |
 | `connection_types` | array | Connection methods (`local`, `lora`, `meshtastic`) |
 | `latitude` | float | Client's latitude (if shared) |

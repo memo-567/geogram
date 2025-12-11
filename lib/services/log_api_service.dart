@@ -339,6 +339,7 @@ class LogApiService {
       'callsign': callsign,
       'name': callsign.isNotEmpty ? callsign : 'Geogram Desktop',
       'hostname': io.Platform.localHostname,
+      'platform': io.Platform.operatingSystem,
       'port': port,
     };
 

@@ -569,6 +569,7 @@ class DevicesService {
           latitude: statusCache?['latitude'] as double? ?? matchingRelay?.latitude,
           longitude: statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
           preferredColor: statusCache?['color'] as String?,
+          platform: statusCache?['platform'] as String?,
           connectionMethods: statusCache?['connectionMethods'] != null
               ? List<String>.from(statusCache!['connectionMethods'] as List)
               : [],
@@ -1223,6 +1224,11 @@ class DevicesService {
             device.description = data['description'] as String?;
           }
 
+          // Extract platform if available
+          if (data['platform'] != null) {
+            device.platform = data['platform'] as String?;
+          }
+
           // Update fetch timestamp
           device.lastFetched = DateTime.now();
         } catch (e) {
@@ -1624,6 +1630,7 @@ class DevicesService {
           device.latitude = deviceData['latitude'] as double?;
           device.longitude = deviceData['longitude'] as double?;
           device.preferredColor = deviceData['color'] as String?;
+          device.platform = deviceData['platform'] as String?;
           device.lastFetched = DateTime.now();
           // Merge connection methods - ensure at least 'internet' is present
           for (final method in connectionTypes) {
@@ -1653,6 +1660,7 @@ class DevicesService {
             latitude: deviceData['latitude'] as double?,
             longitude: deviceData['longitude'] as double?,
             preferredColor: deviceData['color'] as String?,
+            platform: deviceData['platform'] as String?,
             connectionMethods: connectionTypes,
             source: DeviceSourceType.station,
             lastSeen: DateTime.now(),
@@ -1837,6 +1845,7 @@ class DevicesService {
         'nickname': device.nickname,
         'description': device.description,
         'color': device.preferredColor,
+        'platform': device.platform,
         'latitude': device.latitude,
         'longitude': device.longitude,
         'npub': device.npub,
@@ -1995,6 +2004,9 @@ class RemoteDevice {
   /// User's profile description
   String? description;
 
+  /// Operating system: "linux", "macos", "windows", "android", "ios"
+  String? platform;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -2016,6 +2028,7 @@ class RemoteDevice {
     this.bleRssi,
     this.preferredColor,
     this.description,
+    this.platform,
     this.isPinned = false,
     this.folderId,
   });

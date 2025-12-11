@@ -875,7 +875,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.smartphone, color: theme.colorScheme.primary),
+                        Icon(_getDeviceIcon(device), color: theme.colorScheme.primary),
                         const SizedBox(width: 8),
                         Text(device.displayName),
                       ],
@@ -1074,7 +1074,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     ? theme.colorScheme.tertiaryContainer
                     : theme.colorScheme.primaryContainer),
             child: Icon(
-              isStation ? Icons.cell_tower : Icons.smartphone,
+              _getDeviceIcon(device),
               color: _getDeviceIconColor(device.preferredColor) ??
                   (isStation
                       ? theme.colorScheme.tertiary
@@ -1489,6 +1489,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
   }
 
+  /// Get device icon based on platform
+  /// - Station: cell_tower
+  /// - Desktop (Linux/macOS/Windows): laptop
+  /// - Mobile (Android/iOS) or unknown: smartphone
+  IconData _getDeviceIcon(RemoteDevice device) {
+    if (CallsignGenerator.isStationCallsign(device.callsign)) {
+      return Icons.cell_tower;
+    }
+
+    final platform = device.platform?.toLowerCase() ?? '';
+    if (platform == 'linux' || platform == 'macos' || platform == 'windows') {
+      return Icons.laptop;
+    }
+
+    return Icons.smartphone;  // Default for mobile/unknown
+  }
+
   /// Get color for connection method
   Color _getConnectionMethodColor(String method) {
     switch (method.toLowerCase()) {
@@ -1832,7 +1849,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                       ? theme.colorScheme.tertiaryContainer
                       : theme.colorScheme.primaryContainer,
                   child: Icon(
-                    isStation ? Icons.cell_tower : Icons.smartphone,
+                    _getDeviceIcon(device),
                     color: isStation
                         ? theme.colorScheme.tertiary
                         : theme.colorScheme.primary,
@@ -1887,7 +1904,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                       ? theme.colorScheme.tertiaryContainer
                       : theme.colorScheme.primaryContainer,
                   child: Icon(
-                    isStation ? Icons.cell_tower : Icons.smartphone,
+                    _getDeviceIcon(device),
                     color: isStation
                         ? theme.colorScheme.tertiary
                         : theme.colorScheme.primary,
