@@ -1,16 +1,19 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:record/record.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'log_service.dart';
-import 'opus_encoder.dart';
-import 'opus_decoder.dart';
-import 'ogg_opus_writer.dart';
-import 'alsa_recorder.dart';
-import 'alsa_player.dart';
+import 'ogg_opus_writer.dart' hide OggOpusReader;
+
+// Conditional imports for FFI-dependent code
+import 'audio_native_stub.dart'
+    if (dart.library.io) 'audio_native_ffi.dart';
+
+// Conditional imports for platform-dependent code (File, Platform.isLinux)
+import 'audio_platform_stub.dart'
+    if (dart.library.io) 'audio_platform_io.dart';
 
 /// Audio recording and playback service for voice messages.
 ///
@@ -87,7 +90,7 @@ class AudioService {
   /// Check if microphone permission is granted
   Future<bool> hasPermission() async {
     // On Linux with ALSA, permission is always granted (desktop)
-    if (Platform.isLinux && AlsaRecorder.isAvailable) {
+    if (isLinuxPlatform && AlsaRecorder.isAvailable) {
       return true;
     }
     return await _recorder.hasPermission();
@@ -111,7 +114,7 @@ class AudioService {
       final timestamp = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:\-\.]'), '');
 
       // On Linux, use ALSA directly (no external tools required)
-      if (Platform.isLinux && AlsaRecorder.isAvailable) {
+      if (isLinuxPlatform && AlsaRecorder.isAvailable) {
         return await _startAlsaRecording(tempDir.path, timestamp);
       }
 
@@ -127,7 +130,7 @@ class AudioService {
       String extension;
       AudioEncoder encoder;
 
-      if (Platform.isIOS) {
+      if (isIOSPlatform) {
         extension = 'm4a';
         encoder = AudioEncoder.aacLc;
       } else {
@@ -261,13 +264,13 @@ class AudioService {
 
       // Verify file exists and has content
       if (path != null) {
-        final file = File(path);
+        final file = PlatformFile(path);
         if (await file.exists()) {
           final size = await file.length();
           LogService().log('AudioService: Recording saved, size: ${(size / 1024).toStringAsFixed(1)} KB');
 
           // On Linux, convert WAV to Opus/OGG
-          if (Platform.isLinux && path.endsWith('.wav')) {
+          if (isLinuxPlatform && path.endsWith('.wav')) {
             final oggPath = await _convertWavToOpus(path);
             if (oggPath != null) {
               // Delete the original WAV file
@@ -309,7 +312,7 @@ class AudioService {
 
     // Write WAV file
     final wavData = _createWavFile(Int16List.fromList(_alsaSamples));
-    final file = File(_currentRecordingPath!);
+    final file = PlatformFile(_currentRecordingPath!);
     await file.writeAsBytes(wavData);
 
     LogService().log('AudioService: ALSA recording saved: ${_alsaSamples.length} samples, ${(wavData.length / 1024).toStringAsFixed(1)} KB');
@@ -421,10 +424,10 @@ class AudioService {
       await writer.close();
 
       // Verify output
-      final oggFile = File(oggPath);
+      final oggFile = PlatformFile(oggPath);
       if (await oggFile.exists()) {
         final oggSize = await oggFile.length();
-        final wavSize = await File(wavPath).length();
+        final wavSize = await PlatformFile(wavPath).length();
         final ratio = (oggSize / wavSize * 100).toStringAsFixed(1);
         LogService().log('AudioService: Opus conversion complete: ${(oggSize / 1024).toStringAsFixed(1)} KB ($ratio% of WAV)');
         return oggPath;
@@ -460,7 +463,7 @@ class AudioService {
 
       // Delete the temporary file
       if (_currentRecordingPath != null) {
-        final file = File(_currentRecordingPath!);
+        final file = PlatformFile(_currentRecordingPath!);
         if (await file.exists()) {
           await file.delete();
         }
@@ -483,7 +486,7 @@ class AudioService {
       await stop();
 
       // On Linux with local OGG files, use ALSA player
-      if (Platform.isLinux &&
+      if (isLinuxPlatform &&
           AlsaPlayer.isAvailable &&
           !filePath.startsWith('http') &&
           filePath.endsWith('.ogg')) {
@@ -628,7 +631,7 @@ class AudioService {
   Future<int?> getFileDuration(String filePath) async {
     try {
       // On Linux with local OGG files, calculate from file
-      if (Platform.isLinux && !filePath.startsWith('http') && filePath.endsWith('.ogg')) {
+      if (isLinuxPlatform && !filePath.startsWith('http') && filePath.endsWith('.ogg')) {
         final (packets, sampleRate, _, _) = await OggOpusReader.read(filePath);
         // 20ms per packet
         final durationMs = packets.length * 20;
