@@ -104,6 +104,7 @@ class MessageBubbleWidget extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
                         child: VoicePlayerWidget(
+                          key: ValueKey('voice_${message.voiceFile}'),
                           filePath: voiceFilePath ?? '',
                           durationSeconds: message.voiceDuration,
                           isLocal: voiceFilePath != null,

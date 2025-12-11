@@ -14,12 +14,15 @@ class MessageInputWidget extends StatefulWidget {
   final Function(String content, String? filePath) onSend;
   final int maxLength;
   final bool allowFiles;
+  /// Optional callback for mic button (voice recording)
+  final VoidCallback? onMicPressed;
 
   const MessageInputWidget({
     Key? key,
     required this.onSend,
     this.maxLength = 500,
     this.allowFiles = true,
+    this.onMicPressed,
   }) : super(key: key);
 
   @override
@@ -113,6 +116,14 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                // Mic button (optional, for voice recording)
+                if (widget.onMicPressed != null)
+                  IconButton(
+                    icon: const Icon(Icons.mic),
+                    onPressed: _isSending ? null : widget.onMicPressed,
+                    tooltip: 'Record voice message',
+                    color: theme.colorScheme.primary,
+                  ),
                 // Send button
                 IconButton(
                   icon: _isSending

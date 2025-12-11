@@ -1,17 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
 import '../services/audio_service.dart';
 import '../services/log_service.dart';
+import '../services/audio_platform_stub.dart'
+    if (dart.library.io) '../services/audio_platform_io.dart';
 
 /// Voice message player widget with download indicator.
 ///
-/// States:
-/// 1. **Downloading**: Spinner, disabled play button
-/// 2. **Ready**: Play button enabled, shows duration
-/// 3. **Playing**: Pause button, progress bar
-/// 4. **Paused**: Play button, current position
+/// Simple player: Play button + elapsed/total counter
 class VoicePlayerWidget extends StatefulWidget {
   /// Local file path or remote URL to the voice message
   final String filePath;
@@ -41,17 +37,20 @@ class VoicePlayerWidget extends StatefulWidget {
   State<VoicePlayerWidget> createState() => _VoicePlayerWidgetState();
 }
 
+enum _PlayerState { idle, downloading, loading, ready, playing }
+
 class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioService _audioService = AudioService();
 
   _PlayerState _state = _PlayerState.idle;
-  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  int _elapsedSeconds = 0;
   String? _localFilePath;
   double _downloadProgress = 0.0;
 
-  StreamSubscription<PlayerState>? _playerStateSubscription;
-  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<bool>? _playingSubscription;
+  Timer? _downloadTimer;
+  Timer? _playbackTimer;
 
   @override
   void initState() {
@@ -60,30 +59,16 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
   }
 
   void _setupPlayer() {
-    // Listen to player state
-    _playerStateSubscription = _player.playerStateStream.listen((state) {
+    // Listen to playing state changes to know when playback ends
+    _playingSubscription = _audioService.playingStream.listen((isPlaying) {
       if (!mounted) return;
-
-      setState(() {
-        if (state.processingState == ProcessingState.completed) {
+      if (!isPlaying && _state == _PlayerState.playing) {
+        _stopPlaybackTimer();
+        setState(() {
           _state = _PlayerState.ready;
-          _position = Duration.zero;
-          _player.seek(Duration.zero);
-          _player.pause();
-        } else if (_player.playing) {
-          _state = _PlayerState.playing;
-        } else if (_duration > Duration.zero) {
-          _state = _PlayerState.ready;
-        }
-      });
-    });
-
-    // Listen to position
-    _positionSubscription = _player.positionStream.listen((position) {
-      if (!mounted) return;
-      setState(() {
-        _position = position;
-      });
+          _elapsedSeconds = 0;
+        });
+      }
     });
 
     // Initialize based on whether file is local or needs download
@@ -94,14 +79,48 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
       if (widget.durationSeconds != null) {
         _duration = Duration(seconds: widget.durationSeconds!);
       }
+      // Check if file is already cached locally
+      _checkIfAlreadyCached();
+    }
+  }
+
+  void _startPlaybackTimer() {
+    _elapsedSeconds = 0;
+    _playbackTimer?.cancel();
+    _playbackTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _state != _PlayerState.playing) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _elapsedSeconds++;
+        // Auto-stop if we've reached the duration
+        if (_elapsedSeconds >= _duration.inSeconds) {
+          _elapsedSeconds = _duration.inSeconds;
+        }
+      });
+    });
+  }
+
+  void _stopPlaybackTimer() {
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+  }
+
+  Future<void> _checkIfAlreadyCached() async {
+    if (widget.onDownloadRequested == null) return;
+
+    final path = await widget.onDownloadRequested!();
+    if (path != null && mounted) {
+      _localFilePath = path;
+      setState(() {});
     }
   }
 
   Future<void> _loadLocalFile() async {
     final path = _localFilePath ?? widget.filePath;
 
-    // Check if file exists
-    final file = File(path);
+    final file = PlatformFile(path);
     if (!await file.exists()) {
       LogService().log('VoicePlayerWidget: File not found: $path');
       return;
@@ -112,11 +131,21 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
     });
 
     try {
-      final duration = await _player.setFilePath(path);
+      await _audioService.initialize();
+      await _audioService.load(path);
       if (!mounted) return;
 
+      // Use metadata duration if available
+      Duration actualDuration;
+      if (widget.durationSeconds != null && widget.durationSeconds! > 0) {
+        actualDuration = Duration(seconds: widget.durationSeconds!);
+      } else {
+        final fileDuration = await _audioService.getFileDuration(path);
+        actualDuration = fileDuration ?? Duration.zero;
+      }
+
       setState(() {
-        _duration = duration ?? Duration.zero;
+        _duration = actualDuration;
         _state = _PlayerState.ready;
       });
     } catch (e) {
@@ -137,8 +166,7 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
       _downloadProgress = 0.0;
     });
 
-    // Simulate download progress (actual progress depends on implementation)
-    final progressTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _downloadTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted || _state != _PlayerState.downloading) {
         timer.cancel();
         return;
@@ -150,7 +178,7 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
 
     try {
       final localPath = await widget.onDownloadRequested!();
-      progressTimer.cancel();
+      _downloadTimer?.cancel();
 
       if (localPath != null && mounted) {
         setState(() {
@@ -164,7 +192,7 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
         });
       }
     } catch (e) {
-      progressTimer.cancel();
+      _downloadTimer?.cancel();
       LogService().log('VoicePlayerWidget: Download failed: $e');
       if (mounted) {
         setState(() {
@@ -174,36 +202,74 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
     }
   }
 
-  void _togglePlayPause() {
-    if (_state == _PlayerState.idle && !widget.isLocal) {
-      // Need to download first
-      _download();
+  Future<void> _playFromCache() async {
+    LogService().log('VoicePlayer: _playFromCache called, _state=$_state');
+    if (_state != _PlayerState.idle) {
+      LogService().log('VoicePlayer: _playFromCache: not idle, returning');
+      return;
+    }
+    await _loadLocalFile();
+    LogService().log('VoicePlayer: _playFromCache: after load, _state=$_state');
+    if (_state == _PlayerState.ready) {
+      LogService().log('VoicePlayer: _playFromCache: starting playback');
+      setState(() {
+        _state = _PlayerState.playing;
+        _elapsedSeconds = 0;
+      });
+      _startPlaybackTimer();
+      await _audioService.play();
+      LogService().log('VoicePlayer: _playFromCache: play() returned, _state=$_state');
+    }
+  }
+
+  Future<void> _togglePlayPause() async {
+    LogService().log('VoicePlayer: _togglePlayPause called, _state=$_state');
+
+    if (_state == _PlayerState.idle) {
+      LogService().log('VoicePlayer: state is idle, checking local file');
+      if (widget.isLocal || _localFilePath != null) {
+        await _playFromCache();
+      } else {
+        _download();
+      }
       return;
     }
 
     if (_state == _PlayerState.playing) {
-      _player.pause();
+      LogService().log('VoicePlayer: STOPPING playback');
+      _stopPlaybackTimer();
+      setState(() {
+        _state = _PlayerState.ready;
+        _elapsedSeconds = 0;
+      });
+      await _audioService.stop();
+      LogService().log('VoicePlayer: stop() completed, state now=$_state');
     } else if (_state == _PlayerState.ready) {
-      _player.play();
+      LogService().log('VoicePlayer: STARTING playback from ready');
+      setState(() {
+        _state = _PlayerState.playing;
+        _elapsedSeconds = 0;
+      });
+      _startPlaybackTimer();
+      await _audioService.play();
+      LogService().log('VoicePlayer: play() completed');
     }
   }
 
-  void _seek(double value) {
-    final position = Duration(milliseconds: (value * _duration.inMilliseconds).round());
-    _player.seek(position);
-  }
-
-  String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  String _formatSeconds(int seconds) {
+    final minutes = seconds ~/ 60;
+    final secs = seconds % 60;
+    return '$minutes:${secs.toString().padLeft(2, '0')}';
   }
 
   @override
   void dispose() {
-    _playerStateSubscription?.cancel();
-    _positionSubscription?.cancel();
-    _player.dispose();
+    _playingSubscription?.cancel();
+    _downloadTimer?.cancel();
+    _playbackTimer?.cancel();
+    if (_state == _PlayerState.playing) {
+      _audioService.stop();
+    }
     super.dispose();
   }
 
@@ -214,7 +280,7 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
     final fgColor = theme.colorScheme.onSurface;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         color: bgColor.withOpacity(0.3),
         borderRadius: BorderRadius.circular(20),
@@ -222,136 +288,106 @@ class _VoicePlayerWidgetState extends State<VoicePlayerWidget> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Play/Pause/Download button
-          _buildControlButton(theme, fgColor),
-
+          _buildPlayButton(fgColor),
           const SizedBox(width: 8),
-
-          // Progress/Duration
-          Flexible(
-            child: _buildProgressSection(theme, fgColor),
-          ),
+          _buildTimeDisplay(theme, fgColor),
+          if (!widget.isLocal && _localFilePath != null) ...[
+            const SizedBox(width: 4),
+            _buildDownloadButton(fgColor),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildControlButton(ThemeData theme, Color fgColor) {
-    Widget icon;
-    VoidCallback? onPressed;
-
+  Widget _buildPlayButton(Color fgColor) {
     switch (_state) {
       case _PlayerState.downloading:
       case _PlayerState.loading:
-        icon = SizedBox(
-          width: 20,
-          height: 20,
+        return SizedBox(
+          width: 24,
+          height: 24,
           child: CircularProgressIndicator(
             strokeWidth: 2,
             value: _state == _PlayerState.downloading ? _downloadProgress : null,
             color: fgColor,
           ),
         );
-        onPressed = null;
-        break;
 
       case _PlayerState.playing:
-        icon = Icon(Icons.pause, color: fgColor, size: 24);
-        onPressed = _togglePlayPause;
-        break;
+        return IconButton(
+          icon: Icon(Icons.stop, color: fgColor, size: 24),
+          onPressed: () {
+            LogService().log('VoicePlayer: STOP BUTTON PRESSED');
+            _togglePlayPause();
+          },
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          splashRadius: 16,
+        );
 
       case _PlayerState.ready:
-        icon = Icon(Icons.play_arrow, color: fgColor, size: 24);
-        onPressed = _togglePlayPause;
-        break;
+        return IconButton(
+          icon: Icon(Icons.play_arrow, color: fgColor, size: 24),
+          onPressed: _togglePlayPause,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          splashRadius: 16,
+        );
 
       case _PlayerState.idle:
-        // Show download icon if remote, play if local but not loaded
-        if (!widget.isLocal) {
-          icon = Icon(Icons.download, color: fgColor, size: 24);
-        } else {
-          icon = Icon(Icons.play_arrow, color: fgColor.withOpacity(0.5), size: 24);
-        }
-        onPressed = widget.isLocal ? null : _togglePlayPause;
-        break;
+        final hasLocalFile = widget.isLocal || _localFilePath != null;
+        return IconButton(
+          icon: Icon(Icons.play_arrow, color: fgColor, size: 24),
+          onPressed: hasLocalFile ? _playFromCache : _togglePlayPause,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          splashRadius: 16,
+        );
+    }
+  }
+
+  Widget _buildTimeDisplay(ThemeData theme, Color fgColor) {
+    final totalSeconds = _duration.inSeconds > 0
+        ? _duration.inSeconds
+        : (widget.durationSeconds ?? 0);
+
+    // When playing: show "elapsed / total"
+    // When not playing: show just "total"
+    final String timeText;
+    if (_state == _PlayerState.playing) {
+      timeText = '${_formatSeconds(_elapsedSeconds)} / ${_formatSeconds(totalSeconds)}';
+    } else {
+      timeText = _formatSeconds(totalSeconds);
     }
 
+    return Text(
+      timeText,
+      style: theme.textTheme.bodyMedium?.copyWith(
+        color: fgColor,
+        fontWeight: FontWeight.w500,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
+    );
+  }
+
+  Widget _buildDownloadButton(Color fgColor) {
     return IconButton(
-      icon: icon,
-      onPressed: onPressed,
+      icon: Icon(Icons.download, color: fgColor.withOpacity(0.7), size: 20),
+      onPressed: _saveToDevice,
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-      splashRadius: 18,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      splashRadius: 14,
+      tooltip: 'Save to device',
     );
   }
 
-  Widget _buildProgressSection(ThemeData theme, Color fgColor) {
-    // Show duration from metadata if not yet loaded
-    final displayDuration = _duration > Duration.zero
-        ? _duration
-        : (widget.durationSeconds != null
-            ? Duration(seconds: widget.durationSeconds!)
-            : Duration.zero);
-
-    final progress = displayDuration.inMilliseconds > 0
-        ? (_position.inMilliseconds / displayDuration.inMilliseconds).clamp(0.0, 1.0)
-        : 0.0;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Progress bar (only interactive when ready or playing)
-        SliderTheme(
-          data: SliderThemeData(
-            trackHeight: 3,
-            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-            activeTrackColor: fgColor,
-            inactiveTrackColor: fgColor.withOpacity(0.3),
-            thumbColor: fgColor,
-            overlayColor: fgColor.withOpacity(0.2),
-          ),
-          child: Slider(
-            value: progress,
-            onChanged: (_state == _PlayerState.ready || _state == _PlayerState.playing)
-                ? _seek
-                : null,
-          ),
-        ),
-
-        // Time display
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                _formatDuration(_position),
-                style: TextStyle(
-                  fontSize: 11,
-                  color: fgColor.withOpacity(0.7),
-                ),
-              ),
-              Text(
-                _formatDuration(displayDuration),
-                style: TextStyle(
-                  fontSize: 11,
-                  color: fgColor.withOpacity(0.7),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
+  void _saveToDevice() {
+    if (_localFilePath != null) {
+      LogService().log('Voice file available at: $_localFilePath');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Voice message saved')),
+      );
+    }
   }
-}
-
-enum _PlayerState {
-  idle,        // Not loaded
-  downloading, // Downloading from remote
-  loading,     // Loading local file
-  ready,       // Ready to play (paused)
-  playing,     // Currently playing
 }

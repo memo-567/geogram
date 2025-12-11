@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
 import '../services/audio_service.dart';
 import '../services/log_service.dart';
+import '../services/audio_platform_stub.dart'
+    if (dart.library.io) '../services/audio_platform_io.dart';
 
 /// Voice message recorder widget.
 ///
@@ -30,7 +30,6 @@ class VoiceRecorderWidget extends StatefulWidget {
 
 class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
   final AudioService _audioService = AudioService();
-  final AudioPlayer _previewPlayer = AudioPlayer();
 
   _RecorderState _state = _RecorderState.idle;
   Duration _recordingDuration = Duration.zero;
@@ -44,7 +43,7 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
 
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<Duration>? _previewPositionSubscription;
-  StreamSubscription<PlayerState>? _previewStateSubscription;
+  StreamSubscription<bool>? _previewPlayingSubscription;
 
   @override
   void initState() {
@@ -62,56 +61,67 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
       });
     });
 
-    // Preview player position
-    _previewPositionSubscription = _previewPlayer.positionStream.listen((position) {
-      if (!mounted) return;
+    // Preview player position - use AudioService streams
+    _previewPositionSubscription = _audioService.positionStream.listen((position) {
+      if (!mounted || _state != _RecorderState.preview) return;
       setState(() {
         _previewPosition = position;
+        // Check if playback completed
+        if (_previewDuration > Duration.zero && position >= _previewDuration - const Duration(milliseconds: 100)) {
+          _isPreviewPlaying = false;
+          _previewPosition = Duration.zero;
+        }
       });
     });
 
-    // Preview player state
-    _previewStateSubscription = _previewPlayer.playerStateStream.listen((state) {
-      if (!mounted) return;
+    // Preview player playing state
+    _previewPlayingSubscription = _audioService.playingStream.listen((playing) {
+      if (!mounted || _state != _RecorderState.preview) return;
       setState(() {
-        if (state.processingState == ProcessingState.completed) {
-          _isPreviewPlaying = false;
-          _previewPosition = Duration.zero;
-          _previewPlayer.seek(Duration.zero);
-          _previewPlayer.pause();
-        } else {
-          _isPreviewPlaying = _previewPlayer.playing;
-        }
+        _isPreviewPlaying = playing;
       });
     });
   }
 
   Future<void> _startRecording() async {
-    // Check permission first
-    if (!await _audioService.hasPermission()) {
-      LogService().log('VoiceRecorderWidget: No microphone permission');
-      // Show error and cancel
-      if (mounted) {
+    try {
+      // Initialize audio service
+      await _audioService.initialize();
+
+      // Check permission first
+      if (!await _audioService.hasPermission()) {
+        LogService().log('VoiceRecorderWidget: No microphone permission');
+        // Show error and cancel
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission required')),
+          );
+          widget.onCancel();
+        }
+        return;
+      }
+
+      final path = await _audioService.startRecording();
+      if (path != null && mounted) {
+        setState(() {
+          _state = _RecorderState.recording;
+        });
+      } else if (mounted) {
+        final error = _audioService.lastError ?? 'Unknown error';
+        LogService().log('VoiceRecorderWidget: Recording failed: $error');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission required')),
+          SnackBar(content: Text('Failed to start recording: $error')),
         );
         widget.onCancel();
       }
-      return;
-    }
-
-    final path = await _audioService.startRecording();
-    if (path != null && mounted) {
-      setState(() {
-        _state = _RecorderState.recording;
-      });
-    } else if (mounted) {
-      final error = _audioService.lastError ?? 'Unknown error';
-      LogService().log('VoiceRecorderWidget: Recording failed: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start recording: $error')),
-      );
-      widget.onCancel();
+    } catch (e) {
+      LogService().log('VoiceRecorderWidget: Exception starting recording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Recording error: $e')),
+        );
+        widget.onCancel();
+      }
     }
   }
 
@@ -121,13 +131,19 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
       _recordedFilePath = path;
       _recordedDurationSeconds = _recordingDuration.inSeconds;
 
-      // Load for preview
-      final duration = await _previewPlayer.setFilePath(path);
+      // Load for preview using AudioService
+      final duration = await _audioService.load(path);
+
+      // Also get file duration for more accuracy
+      final fileDuration = await _audioService.getFileDuration(path);
+
       setState(() {
         _state = _RecorderState.preview;
-        _previewDuration = duration ?? Duration.zero;
+        _previewDuration = fileDuration ?? duration ?? Duration.zero;
         _previewPosition = Duration.zero;
       });
+
+      LogService().log('VoiceRecorderWidget: Preview loaded, duration: $_previewDuration');
     } else if (mounted) {
       widget.onCancel();
     }
@@ -138,7 +154,7 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
       await _audioService.cancelRecording();
     } else if (_recordedFilePath != null) {
       // Delete preview file
-      final file = File(_recordedFilePath!);
+      final file = PlatformFile(_recordedFilePath!);
       if (await file.exists()) {
         await file.delete();
       }
@@ -152,17 +168,27 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
     }
   }
 
-  void _togglePreviewPlayback() {
+  Future<void> _togglePreviewPlayback() async {
     if (_isPreviewPlaying) {
-      _previewPlayer.pause();
+      await _audioService.pause();
     } else {
-      _previewPlayer.play();
+      // If at the end, seek to start
+      if (_previewPosition >= _previewDuration - const Duration(milliseconds: 100)) {
+        await _audioService.seek(Duration.zero);
+        setState(() {
+          _previewPosition = Duration.zero;
+        });
+      }
+      await _audioService.play();
     }
   }
 
-  void _seekPreview(double value) {
+  Future<void> _seekPreview(double value) async {
     final position = Duration(milliseconds: (value * _previewDuration.inMilliseconds).round());
-    _previewPlayer.seek(position);
+    await _audioService.seek(position);
+    setState(() {
+      _previewPosition = position;
+    });
   }
 
   String _formatDuration(Duration duration) {
@@ -175,8 +201,11 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
   void dispose() {
     _durationSubscription?.cancel();
     _previewPositionSubscription?.cancel();
-    _previewStateSubscription?.cancel();
-    _previewPlayer.dispose();
+    _previewPlayingSubscription?.cancel();
+    // Stop any playback when widget is disposed
+    if (_state == _RecorderState.preview && _isPreviewPlaying) {
+      _audioService.stop();
+    }
     super.dispose();
   }
 
@@ -258,69 +287,28 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
   }
 
   Widget _buildPreviewUI(ThemeData theme) {
-    final progress = _previewDuration.inMilliseconds > 0
-        ? (_previewPosition.inMilliseconds / _previewDuration.inMilliseconds).clamp(0.0, 1.0)
-        : 0.0;
-
     return Row(
       children: [
-        // Cancel button
+        // Cancel/Delete button
         IconButton(
           icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
           onPressed: _cancel,
           tooltip: 'Delete',
         ),
 
-        // Play/Pause button
-        IconButton(
-          icon: Icon(
-            _isPreviewPlaying ? Icons.pause : Icons.play_arrow,
-            color: theme.colorScheme.primary,
-          ),
-          onPressed: _togglePreviewPlayback,
-          tooltip: _isPreviewPlaying ? 'Pause' : 'Play',
-        ),
-
-        // Progress slider and time
+        // Duration display
         Expanded(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              SliderTheme(
-                data: SliderThemeData(
-                  trackHeight: 3,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                  activeTrackColor: theme.colorScheme.primary,
-                  inactiveTrackColor: theme.colorScheme.primary.withOpacity(0.3),
-                  thumbColor: theme.colorScheme.primary,
-                  overlayColor: theme.colorScheme.primary.withOpacity(0.2),
-                ),
-                child: Slider(
-                  value: progress,
-                  onChanged: _seekPreview,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _formatDuration(_previewPosition),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: theme.colorScheme.onSurface.withOpacity(0.7),
-                      ),
-                    ),
-                    Text(
-                      _formatDuration(_previewDuration),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: theme.colorScheme.onSurface.withOpacity(0.7),
-                      ),
-                    ),
-                  ],
+              Icon(Icons.mic, size: 18, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                _formatDuration(_previewDuration),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: theme.colorScheme.onSurface,
                 ),
               ),
             ],

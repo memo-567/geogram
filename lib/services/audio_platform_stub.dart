@@ -5,6 +5,9 @@ import 'dart:typed_data';
 bool get isLinuxPlatform => false;
 bool get isIOSPlatform => false;
 
+/// Voice messages are not supported on web (browser-dependent, unreliable)
+bool get isVoiceSupported => false;
+
 /// Stub File class for web
 class PlatformFile {
   final String path;

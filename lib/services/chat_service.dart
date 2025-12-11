@@ -1094,4 +1094,542 @@ class ChatService {
 
     await fs.writeAsString(filePath, buffer.toString());
   }
+
+  // ============================================================
+  // Role-Based Access Control Methods for Restricted Chat Rooms
+  // ============================================================
+
+  /// Create a restricted chat room with the caller as owner
+  Future<ChatChannel> createRestrictedRoom({
+    required String id,
+    required String name,
+    required String ownerNpub,
+    String? description,
+  }) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    // Check if channel already exists
+    if (_channels.any((ch) => ch.id == id)) {
+      throw Exception('Channel already exists: $id');
+    }
+
+    // Create config with owner set
+    final config = ChatChannelConfig(
+      id: id,
+      name: name,
+      description: description,
+      visibility: 'RESTRICTED',
+      owner: ownerNpub,
+      admins: [],
+      moderatorNpubs: [],
+      members: [ownerNpub], // Owner is automatically a member
+      banned: [],
+      pendingApplicants: [],
+    );
+
+    final channel = ChatChannel(
+      id: id,
+      type: ChatChannelType.group,
+      name: name,
+      folder: id,
+      participants: [], // Will be managed through config.members
+      description: description,
+      created: DateTime.now(),
+      config: config,
+    );
+
+    return await createChannel(channel);
+  }
+
+  /// Add a member to a restricted room (moderator+ required)
+  Future<void> addMember(String roomId, String actorNpub, String memberNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions
+    if (!config.canManageMembers(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can add members');
+    }
+
+    // Check if user is banned
+    if (config.isBanned(memberNpub)) {
+      throw PermissionDeniedException('User is banned from this room');
+    }
+
+    // Check if already a member
+    if (config.isMember(memberNpub)) {
+      return; // Already a member, no-op
+    }
+
+    // Add to members list
+    final updatedMembers = List<String>.from(config.members)..add(memberNpub);
+
+    // Remove from pending applicants if present
+    final updatedApplicants = config.pendingApplicants
+        .where((a) => a.npub != memberNpub)
+        .toList();
+
+    final updatedConfig = config.copyWith(
+      members: updatedMembers,
+      pendingApplicants: updatedApplicants,
+    );
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Remove a member from a restricted room (moderator+ required)
+  Future<void> removeMember(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Cannot remove the owner
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot remove the room owner');
+    }
+
+    // Check permissions - need to be higher rank than target
+    if (config.isAdmin(targetNpub)) {
+      // Only owner can remove admins
+      if (!config.isOwner(actorNpub)) {
+        throw PermissionDeniedException('Only the owner can remove admins');
+      }
+    } else if (config.isModerator(targetNpub)) {
+      // Only admin+ can remove moderators
+      if (!config.isAdmin(actorNpub)) {
+        throw PermissionDeniedException('Only admins can remove moderators');
+      }
+    } else {
+      // Moderator+ can remove regular members
+      if (!config.canManageMembers(actorNpub)) {
+        throw PermissionDeniedException('Only moderators and above can remove members');
+      }
+    }
+
+    // Remove from all role lists
+    final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+    final updatedMembers = List<String>.from(config.members)..remove(targetNpub);
+
+    final updatedConfig = config.copyWith(
+      admins: updatedAdmins,
+      moderatorNpubs: updatedModerators,
+      members: updatedMembers,
+    );
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Ban a user from a restricted room (moderator+ required)
+  Future<void> banMember(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Cannot ban the owner
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot ban the room owner');
+    }
+
+    // Check permissions
+    if (!config.canBan(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can ban users');
+    }
+
+    // Cannot ban someone of equal or higher rank
+    if (config.isAdmin(targetNpub) && !config.isOwner(actorNpub)) {
+      throw PermissionDeniedException('Only the owner can ban admins');
+    }
+    if (config.isModerator(targetNpub) && !config.isAdmin(actorNpub)) {
+      throw PermissionDeniedException('Only admins can ban moderators');
+    }
+
+    // Remove from all role lists and add to banned
+    final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+    final updatedMembers = List<String>.from(config.members)..remove(targetNpub);
+    final updatedBanned = List<String>.from(config.banned);
+    if (!updatedBanned.contains(targetNpub)) {
+      updatedBanned.add(targetNpub);
+    }
+
+    // Also remove from pending applicants
+    final updatedApplicants = config.pendingApplicants
+        .where((a) => a.npub != targetNpub)
+        .toList();
+
+    final updatedConfig = config.copyWith(
+      admins: updatedAdmins,
+      moderatorNpubs: updatedModerators,
+      members: updatedMembers,
+      banned: updatedBanned,
+      pendingApplicants: updatedApplicants,
+    );
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Unban a user from a restricted room (moderator+ required)
+  Future<void> unbanMember(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions
+    if (!config.canBan(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can unban users');
+    }
+
+    // Remove from banned list
+    final updatedBanned = List<String>.from(config.banned)..remove(targetNpub);
+
+    final updatedConfig = config.copyWith(banned: updatedBanned);
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Promote a member to moderator (admin+ required)
+  Future<void> promoteToModerator(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions
+    if (!config.canManageRoles(actorNpub)) {
+      throw PermissionDeniedException('Only admins and above can promote to moderator');
+    }
+
+    // Target must be a member
+    if (!config.isMember(targetNpub)) {
+      throw PermissionDeniedException('User must be a member before promotion');
+    }
+
+    // Already a moderator or higher?
+    if (config.isModerator(targetNpub)) {
+      return; // Already at or above moderator level
+    }
+
+    // Add to moderators
+    final updatedModerators = List<String>.from(config.moderatorNpubs)..add(targetNpub);
+
+    final updatedConfig = config.copyWith(moderatorNpubs: updatedModerators);
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Promote a member/moderator to admin (owner only)
+  Future<void> promoteToAdmin(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions - only owner can promote to admin
+    if (!config.canManageAdmins(actorNpub)) {
+      throw PermissionDeniedException('Only the owner can promote to admin');
+    }
+
+    // Target must be a member
+    if (!config.isMember(targetNpub)) {
+      throw PermissionDeniedException('User must be a member before promotion');
+    }
+
+    // Already an admin?
+    if (config.isAdmin(targetNpub)) {
+      return; // Already admin or owner
+    }
+
+    // Remove from moderators if present, add to admins
+    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+    final updatedAdmins = List<String>.from(config.admins)..add(targetNpub);
+
+    final updatedConfig = config.copyWith(
+      admins: updatedAdmins,
+      moderatorNpubs: updatedModerators,
+    );
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Demote an admin/moderator (admin+ required, owner for demoting admins)
+  Future<void> demote(String roomId, String actorNpub, String targetNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Cannot demote the owner
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot demote the room owner');
+    }
+
+    // Check permissions based on target's current role
+    if (config.isAdmin(targetNpub)) {
+      // Only owner can demote admins
+      if (!config.isOwner(actorNpub)) {
+        throw PermissionDeniedException('Only the owner can demote admins');
+      }
+      // Remove from admins
+      final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
+      final updatedConfig = config.copyWith(admins: updatedAdmins);
+      await updateChannel(channel.copyWith(config: updatedConfig));
+    } else if (config.isModerator(targetNpub)) {
+      // Admin+ can demote moderators
+      if (!config.isAdmin(actorNpub)) {
+        throw PermissionDeniedException('Only admins can demote moderators');
+      }
+      // Remove from moderators
+      final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+      final updatedConfig = config.copyWith(moderatorNpubs: updatedModerators);
+      await updateChannel(channel.copyWith(config: updatedConfig));
+    }
+    // Regular members can't be demoted further
+  }
+
+  /// Apply for membership in a restricted room
+  Future<void> applyForMembership(String roomId, String applicantNpub, String? callsign, String? message) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check if already a member
+    if (config.isMember(applicantNpub)) {
+      throw PermissionDeniedException('Already a member of this room');
+    }
+
+    // Check if banned
+    if (config.isBanned(applicantNpub)) {
+      throw PermissionDeniedException('You are banned from this room');
+    }
+
+    // Check if already applied
+    if (config.hasApplied(applicantNpub)) {
+      throw PermissionDeniedException('Application already pending');
+    }
+
+    // Add application
+    final application = MembershipApplication(
+      npub: applicantNpub,
+      callsign: callsign,
+      appliedAt: DateTime.now(),
+      message: message,
+    );
+
+    final updatedApplicants = List<MembershipApplication>.from(config.pendingApplicants)
+      ..add(application);
+
+    final updatedConfig = config.copyWith(pendingApplicants: updatedApplicants);
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Approve a membership application (moderator+ required)
+  Future<void> approveApplication(String roomId, String actorNpub, String applicantNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions
+    if (!config.canManageApplications(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can approve applications');
+    }
+
+    // Check if application exists
+    if (!config.hasApplied(applicantNpub)) {
+      throw Exception('No pending application from this user');
+    }
+
+    // Add to members and remove from applicants
+    final updatedMembers = List<String>.from(config.members)..add(applicantNpub);
+    final updatedApplicants = config.pendingApplicants
+        .where((a) => a.npub != applicantNpub)
+        .toList();
+
+    final updatedConfig = config.copyWith(
+      members: updatedMembers,
+      pendingApplicants: updatedApplicants,
+    );
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Reject a membership application (moderator+ required)
+  Future<void> rejectApplication(String roomId, String actorNpub, String applicantNpub) async {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      throw Exception('Room has no configuration: $roomId');
+    }
+
+    // Check permissions
+    if (!config.canManageApplications(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can reject applications');
+    }
+
+    // Remove from applicants
+    final updatedApplicants = config.pendingApplicants
+        .where((a) => a.npub != applicantNpub)
+        .toList();
+
+    final updatedConfig = config.copyWith(pendingApplicants: updatedApplicants);
+
+    await updateChannel(channel.copyWith(config: updatedConfig));
+  }
+
+  /// Get list of pending applications for a room (moderator+ required)
+  List<MembershipApplication> getPendingApplications(String roomId, String actorNpub) {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      return [];
+    }
+
+    // Check permissions
+    if (!config.canManageApplications(actorNpub)) {
+      throw PermissionDeniedException('Only moderators and above can view applications');
+    }
+
+    return List<MembershipApplication>.from(config.pendingApplicants);
+  }
+
+  /// Get room roles information (members can view)
+  Map<String, dynamic> getRoomRoles(String roomId, String actorNpub) {
+    final channel = getChannel(roomId);
+    if (channel == null) {
+      throw Exception('Room not found: $roomId');
+    }
+
+    final config = channel.config;
+    if (config == null) {
+      return {};
+    }
+
+    // Only members can view roles
+    if (!config.canAccess(actorNpub)) {
+      throw PermissionDeniedException('Only members can view room roles');
+    }
+
+    return {
+      'owner': config.owner,
+      'admins': config.admins,
+      'moderators': config.moderatorNpubs,
+      'members': config.members,
+      'banned': config.isModerator(actorNpub) ? config.banned : [], // Only mods see banned list
+      'pendingCount': config.isModerator(actorNpub) ? config.pendingApplicants.length : 0,
+    };
+  }
+
+  /// Check if a user can access a room
+  bool canAccessRoom(String roomId, String? npub) {
+    final channel = getChannel(roomId);
+    if (channel == null) return false;
+
+    final config = channel.config;
+    if (config == null) {
+      // No config means PUBLIC by default
+      return true;
+    }
+
+    // PUBLIC rooms - anyone can access
+    if (config.visibility == 'PUBLIC') return true;
+
+    // RESTRICTED rooms - check membership
+    if (config.visibility == 'RESTRICTED') {
+      if (npub == null) return false;
+      return config.canAccess(npub);
+    }
+
+    // PRIVATE rooms - only device admin (handled elsewhere)
+    return false;
+  }
+
+  /// Get list of rooms visible to a user
+  List<ChatChannel> getVisibleChannels(String? npub) {
+    return _channels.where((channel) {
+      final config = channel.config;
+      if (config == null) return true; // No config = visible
+
+      // PUBLIC rooms always visible
+      if (config.visibility == 'PUBLIC') return true;
+
+      // RESTRICTED rooms only visible to members
+      if (config.visibility == 'RESTRICTED') {
+        return npub != null && config.canAccess(npub);
+      }
+
+      return false;
+    }).toList();
+  }
+}
+
+/// Exception for permission denied errors
+class PermissionDeniedException implements Exception {
+  final String message;
+  PermissionDeniedException(this.message);
+
+  @override
+  String toString() => 'PermissionDeniedException: $message';
 }

@@ -18,6 +18,7 @@ import 'app_args.dart';
 import '../version.dart';
 import '../models/chat_message.dart';
 import '../util/nostr_event.dart';
+import 'audio_service.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -69,7 +70,8 @@ class LogApiService {
   /// Initialize ChatService if a chat collection exists in the active profile's directory
   /// This is called lazily on each chat request to ensure it picks up collections created
   /// after the API starts (e.g., during deferred initialization)
-  Future<bool> _initializeChatServiceIfNeeded() async {
+  /// If createIfMissing is true, creates the chat directory if it doesn't exist.
+  Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {
     try {
       final chatService = ChatService();
 
@@ -81,12 +83,18 @@ class LogApiService {
       // Find chat collection in active profile's directory
       final collectionsDir = CollectionService().collectionsDirectory;
       if (collectionsDir == null) {
+        LogService().log('LogApiService: No collections directory available');
         return false;
       }
 
       final chatDir = io.Directory('$collectionsDir/chat');
       if (!await chatDir.exists()) {
-        return false;
+        if (createIfMissing) {
+          await chatDir.create(recursive: true);
+          LogService().log('LogApiService: Created chat directory at ${chatDir.path}');
+        } else {
+          return false;
+        }
       }
 
       // Get active profile's npub for admin
@@ -117,7 +125,7 @@ class LogApiService {
     // Enable CORS for easier testing
     final headers = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Content-Type': 'application/json',
     };
@@ -190,6 +198,37 @@ class LogApiService {
       if (roomId != null && request.method == 'GET') {
         return await _handleChatFilesRequest(request, roomId, headers);
       }
+    }
+
+    // Chat room member management endpoints (RESTRICTED rooms)
+    // POST /api/chat/{roomId}/members - Add member
+    // DELETE /api/chat/{roomId}/members/{npub} - Remove member
+    if (urlPath.startsWith('api/chat/') && urlPath.contains('/members')) {
+      return await _handleChatMemberManagementRequest(request, urlPath, headers);
+    }
+
+    // Chat room ban management endpoints
+    // POST /api/chat/{roomId}/ban/{npub} - Ban user
+    // DELETE /api/chat/{roomId}/ban/{npub} - Unban user
+    if (urlPath.startsWith('api/chat/') && urlPath.contains('/ban/')) {
+      return await _handleChatBanRequest(request, urlPath, headers);
+    }
+
+    // Chat room roles endpoint
+    // GET /api/chat/{roomId}/roles - Get room roles
+    // POST /api/chat/{roomId}/promote - Promote member
+    // POST /api/chat/{roomId}/demote - Demote member
+    if (urlPath.startsWith('api/chat/') && (urlPath.endsWith('/roles') || urlPath.endsWith('/promote') || urlPath.endsWith('/demote'))) {
+      return await _handleChatRolesRequest(request, urlPath, headers);
+    }
+
+    // Chat room membership application endpoints
+    // POST /api/chat/{roomId}/apply - Apply for membership
+    // GET /api/chat/{roomId}/applicants - List pending applicants
+    // POST /api/chat/{roomId}/approve/{npub} - Approve applicant
+    // DELETE /api/chat/{roomId}/reject/{npub} - Reject applicant
+    if (urlPath.startsWith('api/chat/') && (urlPath.endsWith('/apply') || urlPath.contains('/applicants') || urlPath.contains('/approve/') || urlPath.contains('/reject/'))) {
+      return await _handleChatApplicationRequest(request, urlPath, headers);
     }
 
     // DM API endpoints (for device-to-device direct messages)
@@ -930,6 +969,16 @@ class LogApiService {
       // Remove action from params and pass the rest
       final params = Map<String, dynamic>.from(data)..remove('action');
 
+      // Handle voice actions separately (they are async)
+      if (action.toLowerCase().startsWith('voice_')) {
+        return await _handleVoiceAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle chat room creation (async operation)
+      if (action.toLowerCase() == 'create_restricted_room') {
+        return await _handleCreateRestrictedRoom(params, headers);
+      }
+
       final debugController = DebugController();
       final result = debugController.executeAction(action, params);
 
@@ -947,6 +996,248 @@ class LogApiService {
         body: jsonEncode({
           'error': 'Invalid JSON body',
           'details': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Voice/Audio Debug Actions
+  // ============================================================
+
+  /// Handle voice actions asynchronously
+  Future<shelf.Response> _handleVoiceAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final audioService = AudioService();
+
+    try {
+      switch (action) {
+        case 'voice_record':
+          // Start recording for specified duration (default 5s)
+          final durationSec = params['duration'] as int? ?? 5;
+
+          // Initialize if needed
+          await audioService.initialize();
+
+          // Check permission
+          if (!await audioService.hasPermission()) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Microphone permission not granted',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Start recording
+          final startPath = await audioService.startRecording();
+          if (startPath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': audioService.lastError ?? 'Failed to start recording',
+                'isRecording': audioService.isRecording,
+              }),
+              headers: headers,
+            );
+          }
+
+          // Wait for the specified duration
+          LogService().log('LogApiService: Recording for $durationSec seconds...');
+          await Future.delayed(Duration(seconds: durationSec));
+
+          // Stop recording and get path
+          final filePath = await audioService.stopRecording();
+
+          if (filePath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Recording failed - no file produced',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Verify file exists and get size
+          final file = io.File(filePath);
+          final exists = await file.exists();
+          final size = exists ? await file.length() : 0;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Recording completed',
+              'file_path': filePath,
+              'file_exists': exists,
+              'file_size': size,
+              'duration_recorded': durationSec,
+            }),
+            headers: headers,
+          );
+
+        case 'voice_stop':
+          if (!audioService.isRecording) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Not currently recording',
+              }),
+              headers: headers,
+            );
+          }
+
+          final filePath = await audioService.stopRecording();
+          if (filePath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Failed to stop recording',
+              }),
+              headers: headers,
+            );
+          }
+
+          final file = io.File(filePath);
+          final exists = await file.exists();
+          final size = exists ? await file.length() : 0;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Recording stopped',
+              'file_path': filePath,
+              'file_exists': exists,
+              'file_size': size,
+            }),
+            headers: headers,
+          );
+
+        case 'voice_status':
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'is_recording': audioService.isRecording,
+              'is_playing': audioService.isPlaying,
+              'recording_duration': audioService.recordingDuration.inMilliseconds,
+              'playback_position': audioService.position.inMilliseconds,
+              'playback_duration': audioService.duration?.inMilliseconds,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown voice action: $action',
+              'available': ['voice_record', 'voice_stop', 'voice_status'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Voice action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Chat Room Creation
+  // ============================================================
+
+  /// Handle create_restricted_room debug action
+  /// Creates a restricted chat room with the device owner as the room owner
+  Future<shelf.Response> _handleCreateRestrictedRoom(
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Ensure ChatService is initialized (create chat directory if missing for debug API)
+      final initialized = await _initializeChatServiceIfNeeded(createIfMissing: true);
+      if (!initialized) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Chat service not available',
+          }),
+          headers: headers,
+        );
+      }
+
+      final roomId = params['room_id'] as String?;
+      final name = params['name'] as String?;
+      final ownerNpub = params['owner_npub'] as String?;
+      final description = params['description'] as String?;
+
+      if (roomId == null || roomId.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing room_id parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (name == null || name.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing name parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (ownerNpub == null || ownerNpub.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing owner_npub parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Use ChatService to create the restricted room
+      final chatService = ChatService();
+      final room = await chatService.createRestrictedRoom(
+        id: roomId,
+        name: name,
+        ownerNpub: ownerNpub,
+        description: description,
+      );
+
+      LogService().log('LogApiService: Created restricted room: ${room.id} with owner $ownerNpub');
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Restricted room created',
+          'room': room.toJson(),
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error creating restricted room: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
         }),
         headers: headers,
       );
@@ -1026,10 +1317,22 @@ class LogApiService {
       return false;
     }
 
-    // Admin can access everything
+    // Device admin can access everything
     final security = chatService.security;
     if (npub != null && security.isAdmin(npub)) {
       return true;
+    }
+
+    // RESTRICTED rooms - check role-based membership
+    if (visibility == 'RESTRICTED' && config != null) {
+      // Check if user is banned
+      if (config.isBanned(npub)) {
+        return false;
+      }
+      // Check if user has member access (includes moderators, admins, owner)
+      if (config.canAccess(npub)) {
+        return true;
+      }
     }
 
     // Check if room is open to all ('*' in participants)
@@ -1100,16 +1403,26 @@ class LogApiService {
       final rooms = <Map<String, dynamic>>[];
 
       for (final channel in chatService.channels) {
-        // Check if user can access this room
-        final canAccess = await _canAccessChatRoom(channel.id, authNpub);
-
-        // Only include rooms the user can access (or public rooms)
         final visibility = channel.config?.visibility ?? 'PUBLIC';
+
+        // RESTRICTED rooms are completely hidden from non-members
+        if (visibility == 'RESTRICTED') {
+          final config = channel.config;
+          if (config == null) continue;
+          // Only show if user is a member (includes moderators, admins, owner)
+          if (authNpub == null || !config.canAccess(authNpub)) {
+            continue;
+          }
+        }
+
+        // For non-RESTRICTED rooms, check standard access
+        final canAccess = await _canAccessChatRoom(channel.id, authNpub);
         if (!canAccess && visibility != 'PUBLIC') {
           continue;
         }
 
-        rooms.add({
+        // Build room info
+        final roomInfo = <String, dynamic>{
           'id': channel.id,
           'name': channel.name,
           'description': channel.description,
@@ -1118,7 +1431,21 @@ class LogApiService {
           'participants': channel.participants,
           'lastMessage': channel.lastMessageTime?.toIso8601String(),
           'folder': channel.folder,
-        });
+        };
+
+        // For RESTRICTED rooms, include role info for members
+        if (visibility == 'RESTRICTED' && channel.config != null) {
+          final config = channel.config!;
+          roomInfo['role'] = config.isOwner(authNpub) ? 'owner'
+              : config.isAdmin(authNpub) ? 'admin'
+              : config.isModerator(authNpub) ? 'moderator'
+              : 'member';
+          roomInfo['memberCount'] = config.members.length +
+              config.moderatorNpubs.length +
+              config.admins.length + 1; // +1 for owner
+        }
+
+        rooms.add(roomInfo);
       }
 
       return shelf.Response.ok(
@@ -1734,6 +2061,601 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error listing chat files: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Restricted Chat Room Member Management API endpoints
+  // ============================================================
+
+  /// Verify NOSTR event with action-specific tags for replay attack prevention
+  /// Returns the event if valid, null otherwise
+  NostrEvent? _verifyNostrEventWithTags(
+    shelf.Request request,
+    String expectedAction,
+    String expectedRoomId,
+  ) {
+    final authHeader = request.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      // Verify signature
+      if (!event.verify()) {
+        LogService().log('LogApiService: NOSTR event verification failed - invalid signature');
+        return null;
+      }
+
+      // Check event is recent (within 5 minutes)
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if ((now - event.createdAt).abs() > 300) {
+        LogService().log('LogApiService: NOSTR event verification failed - expired');
+        return null;
+      }
+
+      // Verify action tag
+      final actionTag = event.getTagValue('action');
+      if (actionTag != expectedAction) {
+        LogService().log('LogApiService: NOSTR event verification failed - action mismatch: $actionTag != $expectedAction');
+        return null;
+      }
+
+      // Verify room tag
+      final roomTag = event.getTagValue('room');
+      if (roomTag != expectedRoomId) {
+        LogService().log('LogApiService: NOSTR event verification failed - room mismatch: $roomTag != $expectedRoomId');
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      LogService().log('LogApiService: NOSTR event verification failed - parse error: $e');
+      return null;
+    }
+  }
+
+  /// Handle member management requests: add/remove members
+  /// POST /api/chat/{roomId}/members - Add member (requires 'target' npub in event tags)
+  /// DELETE /api/chat/{roomId}/members/{npub} - Remove member
+  Future<shelf.Response> _handleChatMemberManagementRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Extract roomId from path: api/chat/{roomId}/members or api/chat/{roomId}/members/{npub}
+      final regex = RegExp(r'^api/chat/([^/]+)/members(?:/(.+))?$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final targetNpubFromPath = match.group(2) != null ? Uri.decodeComponent(match.group(2)!) : null;
+
+      if (request.method == 'POST') {
+        // Add member - requires NOSTR event with 'add-member' action
+        final event = _verifyNostrEventWithTags(request, 'add-member', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+              'hint': 'Provide Authorization: Nostr <event> with action:add-member and room:$roomId tags',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target');
+        if (targetNpub == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Missing target tag in event',
+              'hint': 'Include ["target", "npub1..."] tag for target member',
+            }),
+            headers: headers,
+          );
+        }
+
+        await chatService.addMember(roomId, event.npub, targetNpub);
+
+        LogService().log('LogApiService: Member $targetNpub added to $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'add-member',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+          }),
+          headers: headers,
+        );
+      } else if (request.method == 'DELETE') {
+        // Remove member - requires NOSTR event with 'remove-member' action
+        final event = _verifyNostrEventWithTags(request, 'remove-member', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target') ?? targetNpubFromPath;
+        if (targetNpub == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'Missing target npub'}),
+            headers: headers,
+          );
+        }
+
+        await chatService.removeMember(roomId, event.npub, targetNpub);
+
+        LogService().log('LogApiService: Member $targetNpub removed from $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'remove-member',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response(405, body: jsonEncode({'error': 'Method not allowed'}), headers: headers);
+    } on PermissionDeniedException catch (e) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': e.message, 'code': 'PERMISSION_DENIED'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error in member management: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle ban management requests
+  /// POST /api/chat/{roomId}/ban/{npub} - Ban user
+  /// DELETE /api/chat/{roomId}/ban/{npub} - Unban user
+  Future<shelf.Response> _handleChatBanRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Extract roomId and npub from path: api/chat/{roomId}/ban/{npub}
+      final regex = RegExp(r'^api/chat/([^/]+)/ban/(.+)$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final targetNpubFromPath = Uri.decodeComponent(match.group(2)!);
+
+      if (request.method == 'POST') {
+        // Ban user - requires NOSTR event with 'ban' action
+        final event = _verifyNostrEventWithTags(request, 'ban', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target') ?? targetNpubFromPath;
+        await chatService.banMember(roomId, event.npub, targetNpub);
+
+        LogService().log('LogApiService: User $targetNpub banned from $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'ban',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+          }),
+          headers: headers,
+        );
+      } else if (request.method == 'DELETE') {
+        // Unban user - requires NOSTR event with 'unban' action
+        final event = _verifyNostrEventWithTags(request, 'unban', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target') ?? targetNpubFromPath;
+        await chatService.unbanMember(roomId, event.npub, targetNpub);
+
+        LogService().log('LogApiService: User $targetNpub unbanned from $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'unban',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response(405, body: jsonEncode({'error': 'Method not allowed'}), headers: headers);
+    } on PermissionDeniedException catch (e) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': e.message, 'code': 'PERMISSION_DENIED'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error in ban management: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle role management requests
+  /// GET /api/chat/{roomId}/roles - Get room roles
+  /// POST /api/chat/{roomId}/promote - Promote member (requires 'role' tag: moderator|admin)
+  /// POST /api/chat/{roomId}/demote - Demote member
+  Future<shelf.Response> _handleChatRolesRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Extract roomId from path
+      final regex = RegExp(r'^api/chat/([^/]+)/(roles|promote|demote)$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final action = match.group(2)!;
+
+      if (action == 'roles' && request.method == 'GET') {
+        // Get roles - requires NOSTR auth
+        final authNpub = _verifyNostrAuth(request);
+        if (authNpub == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Authentication required',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final roles = chatService.getRoomRoles(roomId, authNpub);
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'roomId': roomId,
+            ...roles,
+          }),
+          headers: headers,
+        );
+      } else if (action == 'promote' && request.method == 'POST') {
+        // Promote - requires NOSTR event with 'promote' action and 'role' tag
+        final event = _verifyNostrEventWithTags(request, 'promote', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target');
+        final role = event.getTagValue('role');
+        if (targetNpub == null || role == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'error': 'Missing target or role tags',
+              'hint': 'Include ["target", "npub1..."] and ["role", "moderator|admin"] tags',
+            }),
+            headers: headers,
+          );
+        }
+
+        if (role == 'admin') {
+          await chatService.promoteToAdmin(roomId, event.npub, targetNpub);
+        } else if (role == 'moderator') {
+          await chatService.promoteToModerator(roomId, event.npub, targetNpub);
+        } else {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'Invalid role: $role. Use "moderator" or "admin"'}),
+            headers: headers,
+          );
+        }
+
+        LogService().log('LogApiService: User $targetNpub promoted to $role in $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'promote',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+            'role': role,
+          }),
+          headers: headers,
+        );
+      } else if (action == 'demote' && request.method == 'POST') {
+        // Demote - requires NOSTR event with 'demote' action
+        final event = _verifyNostrEventWithTags(request, 'demote', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        final targetNpub = event.getTagValue('target');
+        if (targetNpub == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'Missing target tag'}),
+            headers: headers,
+          );
+        }
+
+        await chatService.demote(roomId, event.npub, targetNpub);
+
+        LogService().log('LogApiService: User $targetNpub demoted in $roomId by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'demote',
+            'roomId': roomId,
+            'targetNpub': targetNpub,
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response(405, body: jsonEncode({'error': 'Method not allowed'}), headers: headers);
+    } on PermissionDeniedException catch (e) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': e.message, 'code': 'PERMISSION_DENIED'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error in role management: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle membership application requests
+  /// POST /api/chat/{roomId}/apply - Apply for membership
+  /// GET /api/chat/{roomId}/applicants - List pending applicants
+  /// POST /api/chat/{roomId}/approve/{npub} - Approve applicant
+  /// DELETE /api/chat/{roomId}/reject/{npub} - Reject applicant
+  Future<shelf.Response> _handleChatApplicationRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Handle /apply endpoint
+      if (urlPath.endsWith('/apply')) {
+        final regex = RegExp(r'^api/chat/([^/]+)/apply$');
+        final match = regex.firstMatch(urlPath);
+        if (match == null) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'Invalid path format'}),
+            headers: headers,
+          );
+        }
+
+        final roomId = Uri.decodeComponent(match.group(1)!);
+
+        if (request.method == 'POST') {
+          // Apply for membership - requires NOSTR event with 'apply' action
+          final event = _verifyNostrEventWithTags(request, 'apply', roomId);
+          if (event == null) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Invalid or missing NOSTR authentication',
+                'code': 'AUTH_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          final callsign = event.getTagValue('callsign');
+          final message = event.content.isNotEmpty ? event.content : null;
+
+          await chatService.applyForMembership(roomId, event.npub, callsign, message);
+
+          LogService().log('LogApiService: Membership application submitted for $roomId by ${event.npub}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'action': 'apply',
+              'roomId': roomId,
+              'status': 'pending',
+            }),
+            headers: headers,
+          );
+        }
+      }
+
+      // Handle /applicants endpoint
+      if (urlPath.contains('/applicants')) {
+        final regex = RegExp(r'^api/chat/([^/]+)/applicants$');
+        final match = regex.firstMatch(urlPath);
+        if (match != null && request.method == 'GET') {
+          final roomId = Uri.decodeComponent(match.group(1)!);
+
+          final authNpub = _verifyNostrAuth(request);
+          if (authNpub == null) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Authentication required',
+                'code': 'AUTH_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          final applicants = chatService.getPendingApplications(roomId, authNpub);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'roomId': roomId,
+              'applicants': applicants.map((a) => {
+                'npub': a.npub,
+                'callsign': a.callsign,
+                'appliedAt': a.appliedAt.toIso8601String(),
+                'message': a.message,
+              }).toList(),
+              'total': applicants.length,
+            }),
+            headers: headers,
+          );
+        }
+      }
+
+      // Handle /approve/{npub} endpoint
+      if (urlPath.contains('/approve/')) {
+        final regex = RegExp(r'^api/chat/([^/]+)/approve/(.+)$');
+        final match = regex.firstMatch(urlPath);
+        if (match != null && request.method == 'POST') {
+          final roomId = Uri.decodeComponent(match.group(1)!);
+          final applicantNpubFromPath = Uri.decodeComponent(match.group(2)!);
+
+          final event = _verifyNostrEventWithTags(request, 'approve', roomId);
+          if (event == null) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Invalid or missing NOSTR authentication',
+                'code': 'AUTH_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          final applicantNpub = event.getTagValue('target') ?? applicantNpubFromPath;
+          await chatService.approveApplication(roomId, event.npub, applicantNpub);
+
+          LogService().log('LogApiService: Application approved for $applicantNpub in $roomId by ${event.npub}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'action': 'approve',
+              'roomId': roomId,
+              'applicantNpub': applicantNpub,
+            }),
+            headers: headers,
+          );
+        }
+      }
+
+      // Handle /reject/{npub} endpoint
+      if (urlPath.contains('/reject/')) {
+        final regex = RegExp(r'^api/chat/([^/]+)/reject/(.+)$');
+        final match = regex.firstMatch(urlPath);
+        if (match != null && request.method == 'DELETE') {
+          final roomId = Uri.decodeComponent(match.group(1)!);
+          final applicantNpubFromPath = Uri.decodeComponent(match.group(2)!);
+
+          final event = _verifyNostrEventWithTags(request, 'reject', roomId);
+          if (event == null) {
+            return shelf.Response.forbidden(
+              jsonEncode({
+                'error': 'Invalid or missing NOSTR authentication',
+                'code': 'AUTH_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          final applicantNpub = event.getTagValue('target') ?? applicantNpubFromPath;
+          await chatService.rejectApplication(roomId, event.npub, applicantNpub);
+
+          LogService().log('LogApiService: Application rejected for $applicantNpub in $roomId by ${event.npub}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'action': 'reject',
+              'roomId': roomId,
+              'applicantNpub': applicantNpub,
+            }),
+            headers: headers,
+          );
+        }
+      }
+
+      return shelf.Response(405, body: jsonEncode({'error': 'Method not allowed'}), headers: headers);
+    } on PermissionDeniedException catch (e) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': e.message, 'code': 'PERMISSION_DENIED'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error in application management: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

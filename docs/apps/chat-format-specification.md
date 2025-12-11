@@ -227,23 +227,32 @@ Check out this photo!
 **Fields**:
 - `voice`: Filename of voice recording in `files/` subdirectory
 - `duration`: Duration in seconds (for display without decoding)
+- `sha1`: SHA1 hash of the voice file (for integrity verification)
 
 **Storage**: Voice files stored in `files/` subdirectory
 
 **File Format**:
-- Preferred: Opus codec in WebM container (`.webm`)
+- Preferred: Opus codec in OGG container (`.ogg`) on Linux
+- Preferred: Opus codec in WebM container (`.webm`) on other platforms
 - Fallback: AAC in M4A container (`.m4a`)
 - Encoding: 16 kHz mono, 12 kbps bitrate
 - Maximum duration: 30 seconds (~45 KB)
 
-**Filename Convention**: `voice_{YYYYMMDD}_{HHMMSS}.webm`
+**Filename Convention**: `voice_{YYYYMMDD}_{HHMMSS}.ogg` or `.webm`
 
 **Example**:
 ```
 > 2025-12-11 14:30_25 -- X1ABCD
---> voice: voice_20251211_143025.webm
+--> voice: voice_20251211_143025.ogg
 --> duration: 12
+--> sha1: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3
 ```
+
+**Security**:
+- SHA1 hash is included in signed content to prevent file tampering
+- Signed content format: `[voice:filename:duration:sha1=hash]`
+- Recipients can verify file integrity by comparing SHA1 of downloaded file
+- If SHA1 doesn't match, the file may have been tampered with
 
 **Notes**:
 - Voice messages typically have empty content

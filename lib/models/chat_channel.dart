@@ -254,8 +254,28 @@ class ChatChannelConfig {
   /// Max message text size in characters
   final int maxSizeText;
 
-  /// List of moderator callsigns
+  /// List of moderator callsigns (legacy, kept for backward compatibility)
   final List<String> moderators;
+
+  // === Role-Based Access Control (npub-based) ===
+
+  /// Room owner npub (creator with full control)
+  final String? owner;
+
+  /// List of admin npubs (full room management)
+  final List<String> admins;
+
+  /// List of moderator npubs (member management, message moderation)
+  final List<String> moderatorNpubs;
+
+  /// List of member npubs (read/write access)
+  final List<String> members;
+
+  /// List of banned npubs (no access, cannot reapply)
+  final List<String> banned;
+
+  /// Pending membership applications
+  final List<MembershipApplication> pendingApplicants;
 
   ChatChannelConfig({
     required this.id,
@@ -268,7 +288,57 @@ class ChatChannelConfig {
     this.maxFileSize = 10,
     this.maxSizeText = 500,
     this.moderators = const [],
+    this.owner,
+    this.admins = const [],
+    this.moderatorNpubs = const [],
+    this.members = const [],
+    this.banned = const [],
+    this.pendingApplicants = const [],
   });
+
+  // === Role Check Methods ===
+
+  /// Check if npub is the room owner
+  bool isOwner(String? npub) => npub != null && owner == npub;
+
+  /// Check if npub is an admin (includes owner)
+  bool isAdmin(String? npub) =>
+      npub != null && (admins.contains(npub) || isOwner(npub));
+
+  /// Check if npub is a moderator (includes admins)
+  bool isModerator(String? npub) =>
+      npub != null && (moderatorNpubs.contains(npub) || isAdmin(npub));
+
+  /// Check if npub is a member (includes moderators)
+  bool isMember(String? npub) =>
+      npub != null && (members.contains(npub) || isModerator(npub));
+
+  /// Check if npub is banned
+  bool isBanned(String? npub) => npub != null && banned.contains(npub);
+
+  /// Check if npub has a pending application
+  bool hasApplied(String? npub) =>
+      npub != null && pendingApplicants.any((a) => a.npub == npub);
+
+  // === Permission Check Methods ===
+
+  /// Check if npub can access the room (member and not banned)
+  bool canAccess(String? npub) => isMember(npub) && !isBanned(npub);
+
+  /// Check if npub can manage members (add/remove)
+  bool canManageMembers(String? npub) => isModerator(npub);
+
+  /// Check if npub can manage roles (promote/demote moderators)
+  bool canManageRoles(String? npub) => isAdmin(npub);
+
+  /// Check if npub can manage admins (only owner)
+  bool canManageAdmins(String? npub) => isOwner(npub);
+
+  /// Check if npub can ban users
+  bool canBan(String? npub) => isModerator(npub);
+
+  /// Check if npub can approve/reject applications
+  bool canManageApplications(String? npub) => isModerator(npub);
 
   /// Create default config for a channel
   factory ChatChannelConfig.defaults({
@@ -303,6 +373,16 @@ class ChatChannelConfig {
       maxFileSize: json['max_file_size'] as int? ?? 10,
       maxSizeText: json['max_size_text'] as int? ?? 500,
       moderators: List<String>.from(json['moderators'] as List? ?? []),
+      // Role-based access control fields
+      owner: json['owner'] as String?,
+      admins: List<String>.from(json['admins'] as List? ?? []),
+      moderatorNpubs:
+          List<String>.from(json['moderator_npubs'] as List? ?? []),
+      members: List<String>.from(json['members'] as List? ?? []),
+      banned: List<String>.from(json['banned'] as List? ?? []),
+      pendingApplicants: (json['pending_applicants'] as List? ?? [])
+          .map((a) => MembershipApplication.fromJson(a as Map<String, dynamic>))
+          .toList(),
     );
   }
 
@@ -319,11 +399,117 @@ class ChatChannelConfig {
       'max_file_size': maxFileSize,
       'max_size_text': maxSizeText,
       'moderators': moderators,
+      // Role-based access control fields
+      if (owner != null) 'owner': owner,
+      if (admins.isNotEmpty) 'admins': admins,
+      if (moderatorNpubs.isNotEmpty) 'moderator_npubs': moderatorNpubs,
+      if (members.isNotEmpty) 'members': members,
+      if (banned.isNotEmpty) 'banned': banned,
+      if (pendingApplicants.isNotEmpty)
+        'pending_applicants': pendingApplicants.map((a) => a.toJson()).toList(),
     };
+  }
+
+  /// Create a copy with modified fields
+  ChatChannelConfig copyWith({
+    String? id,
+    String? name,
+    String? description,
+    String? visibility,
+    bool? readonly,
+    bool? fileUpload,
+    int? filesPerPost,
+    int? maxFileSize,
+    int? maxSizeText,
+    List<String>? moderators,
+    String? owner,
+    List<String>? admins,
+    List<String>? moderatorNpubs,
+    List<String>? members,
+    List<String>? banned,
+    List<MembershipApplication>? pendingApplicants,
+  }) {
+    return ChatChannelConfig(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      description: description ?? this.description,
+      visibility: visibility ?? this.visibility,
+      readonly: readonly ?? this.readonly,
+      fileUpload: fileUpload ?? this.fileUpload,
+      filesPerPost: filesPerPost ?? this.filesPerPost,
+      maxFileSize: maxFileSize ?? this.maxFileSize,
+      maxSizeText: maxSizeText ?? this.maxSizeText,
+      moderators: moderators ?? List<String>.from(this.moderators),
+      owner: owner ?? this.owner,
+      admins: admins ?? List<String>.from(this.admins),
+      moderatorNpubs: moderatorNpubs ?? List<String>.from(this.moderatorNpubs),
+      members: members ?? List<String>.from(this.members),
+      banned: banned ?? List<String>.from(this.banned),
+      pendingApplicants: pendingApplicants ??
+          this.pendingApplicants.map((a) => a.copy()).toList(),
+    );
   }
 
   @override
   String toString() {
     return 'ChatChannelConfig(id: $id, name: $name, visibility: $visibility)';
+  }
+}
+
+/// Represents a membership application to join a restricted room
+class MembershipApplication {
+  /// Applicant's npub (NOSTR public key)
+  final String npub;
+
+  /// Applicant's callsign (for display)
+  final String? callsign;
+
+  /// When the application was submitted
+  final DateTime appliedAt;
+
+  /// Optional message from the applicant
+  final String? message;
+
+  MembershipApplication({
+    required this.npub,
+    this.callsign,
+    required this.appliedAt,
+    this.message,
+  });
+
+  /// Create from JSON
+  factory MembershipApplication.fromJson(Map<String, dynamic> json) {
+    return MembershipApplication(
+      npub: json['npub'] as String,
+      callsign: json['callsign'] as String?,
+      appliedAt: DateTime.parse(json['applied_at'] as String),
+      message: json['message'] as String?,
+    );
+  }
+
+  /// Convert to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'npub': npub,
+      if (callsign != null) 'callsign': callsign,
+      'applied_at': appliedAt.toIso8601String(),
+      if (message != null) 'message': message,
+    };
+  }
+
+  /// Create a copy
+  MembershipApplication copy() {
+    return MembershipApplication(
+      npub: npub,
+      callsign: callsign,
+      appliedAt: appliedAt,
+      message: message,
+    );
+  }
+
+  @override
+  String toString() {
+    return 'MembershipApplication(npub: $npub, callsign: $callsign, '
+        'appliedAt: $appliedAt)';
   }
 }

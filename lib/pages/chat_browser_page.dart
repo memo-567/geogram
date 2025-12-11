@@ -30,6 +30,7 @@ import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/new_channel_dialog.dart';
 import 'chat_settings_page.dart';
+import 'room_management_page.dart';
 
 /// Page for browsing and interacting with a chat collection
 class ChatBrowserPage extends StatefulWidget {
@@ -1199,12 +1200,47 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       MaterialPageRoute(
         builder: (context) => ChatSettingsPage(
           collectionPath: storagePath,
+          channelId: _selectedChannel?.id,
         ),
       ),
     ).then((_) {
       // Reload security settings when returning
       _chatService.refreshChannels();
       setState(() {});
+    });
+  }
+
+  /// Open room management page for member and role management
+  void _openRoomManagement() {
+    // Not available for remote devices or DMs
+    if (widget.isRemoteDevice || _selectedChannel == null) {
+      return;
+    }
+
+    // Only for group channels
+    if (!_selectedChannel!.isGroup) {
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RoomManagementPage(
+          channel: _selectedChannel!,
+        ),
+      ),
+    ).then((_) {
+      // Reload channel data when returning
+      _chatService.refreshChannels();
+      setState(() {
+        _channels = _chatService.channels;
+        // Update selected channel with refreshed data
+        final updated = _chatService.channels.firstWhere(
+          (c) => c.id == _selectedChannel!.id,
+          orElse: () => _selectedChannel!,
+        );
+        _selectedChannel = updated;
+      });
     });
   }
 
@@ -1298,6 +1334,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           },
         ),
         actions: [
+          // Show room info/management for group channels (not DM)
+          if (!widget.isRemoteDevice && _selectedChannel != null && _selectedChannel!.isGroup)
+            IconButton(
+              icon: const Icon(Icons.group),
+              onPressed: _openRoomManagement,
+              tooltip: _i18n.t('room_management'),
+            ),
           // Only show add channel for local chat (not remote devices)
           if (!widget.isRemoteDevice)
             IconButton(

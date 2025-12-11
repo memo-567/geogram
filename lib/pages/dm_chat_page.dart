@@ -15,6 +15,8 @@ import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/voice_recorder_widget.dart';
 import '../services/audio_service.dart';
+import '../services/audio_platform_stub.dart'
+    if (dart.library.io) '../services/audio_platform_io.dart';
 
 /// Page for 1:1 direct message conversation
 class DMChatPage extends StatefulWidget {
@@ -369,26 +371,11 @@ class _DMChatPageState extends State<DMChatPage> {
             ),
           )
         else if (isOnline)
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // Mic button - padded to align with MessageInputWidget's internal padding
-              Padding(
-                padding: const EdgeInsets.only(left: 4, bottom: 16),
-                child: IconButton(
-                  icon: const Icon(Icons.mic),
-                  onPressed: _startRecording,
-                  tooltip: 'Record voice message',
-                ),
-              ),
-              // Text input
-              Expanded(
-                child: MessageInputWidget(
-                  onSend: (content, filePath) => _sendMessage(content),
-                  allowFiles: false, // DMs don't support file attachments yet
-                ),
-              ),
-            ],
+          MessageInputWidget(
+            onSend: (content, filePath) => _sendMessage(content),
+            allowFiles: false, // DMs don't support file attachments yet
+            // Only show mic button on supported platforms (Linux, Android)
+            onMicPressed: isVoiceSupported ? _startRecording : null,
           )
         else
           // Disabled input when offline

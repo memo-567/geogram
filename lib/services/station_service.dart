@@ -408,13 +408,13 @@ class StationService {
             stationName = data['name'] as String?;
             stationDescription = data['description'] as String?;
 
-            // Extract location from response
-            final location = data['location'] as Map<String, dynamic>?;
-            if (location != null) {
-              stationLatitude = (location['latitude'] as num?)?.toDouble();
-              stationLongitude = (location['longitude'] as num?)?.toDouble();
+            // Extract location from response (can be Map or String)
+            final locationData = data['location'];
+            if (locationData is Map<String, dynamic>) {
+              stationLatitude = (locationData['latitude'] as num?)?.toDouble();
+              stationLongitude = (locationData['longitude'] as num?)?.toDouble();
             }
-            // Also check top-level latitude/longitude
+            // Also check top-level latitude/longitude (used by p2p.radio)
             stationLatitude ??= (data['latitude'] as num?)?.toDouble();
             stationLongitude ??= (data['longitude'] as num?)?.toDouble();
 

@@ -37,6 +37,9 @@ class AudioService {
   Duration _alsaPosition = Duration.zero;
   Duration? _alsaDuration;
 
+  // Current playback file path (to identify which player is active)
+  String? _currentPlaybackPath;
+
   // Recording state
   bool _isRecording = false;
   String? _currentRecordingPath;
@@ -47,6 +50,7 @@ class AudioService {
   final _recordingDurationController = StreamController<Duration>.broadcast();
   final _playerStateController = StreamController<PlayerState>.broadcast();
   final _positionController = StreamController<Duration>.broadcast();
+  final _playingController = StreamController<bool>.broadcast();
 
   // Constants
   static const maxRecordingDuration = Duration(seconds: 30);
@@ -61,6 +65,9 @@ class AudioService {
 
   /// Stream of playback position updates
   Stream<Duration> get positionStream => _positionController.stream;
+
+  /// Stream of playing state changes (true = playing, false = paused/stopped)
+  Stream<bool> get playingStream => _playingController.stream;
 
   /// Current recording duration
   Duration get recordingDuration => _recordingDuration;
@@ -77,6 +84,9 @@ class AudioService {
   /// Total duration of loaded audio
   Duration? get duration => _alsaPlayer != null ? _alsaDuration : _player?.duration;
 
+  /// Currently loaded/playing file path (null if nothing loaded)
+  String? get currentPlaybackPath => _currentPlaybackPath;
+
   /// Initialize the service and set up listeners
   Future<void> initialize() async {
     // On Linux, use ALSA for playback (just_audio has no Linux implementation)
@@ -91,6 +101,7 @@ class AudioService {
     // Forward player state changes
     _player!.playerStateStream.listen((state) {
       _playerStateController.add(state);
+      _playingController.add(state.playing);
     });
 
     // Forward position updates
@@ -499,6 +510,9 @@ class AudioService {
       // Stop any current playback
       await stop();
 
+      // Track which file is now loaded
+      _currentPlaybackPath = filePath;
+
       // On Linux with local OGG files, use ALSA player
       if (isLinuxPlatform &&
           AlsaPlayer.isAvailable &&
@@ -510,6 +524,7 @@ class AudioService {
       Duration? duration;
       if (_player == null) {
         LogService().log('AudioService: just_audio not available on this platform');
+        _currentPlaybackPath = null;
         return null;
       }
       if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
@@ -522,6 +537,7 @@ class AudioService {
       return duration;
     } catch (e) {
       LogService().log('AudioService: Failed to load audio: $e');
+      _currentPlaybackPath = null;
       return null;
     }
   }
@@ -530,7 +546,7 @@ class AudioService {
   Future<Duration?> _loadAlsa(String filePath) async {
     try {
       // Read and decode OGG/Opus file
-      final (packets, sampleRate, channels, preSkip) =
+      final (packets, sampleRate, channels, preSkip, _) =
           await OggOpusReader.read(filePath);
 
       if (packets.isEmpty) {
@@ -571,18 +587,22 @@ class AudioService {
           case AlsaPlayerState.playing:
             _alsaIsPlaying = true;
             _playerStateController.add(PlayerState(true, ProcessingState.ready));
+            _playingController.add(true);
             break;
           case AlsaPlayerState.paused:
             _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.ready));
+            _playingController.add(false);
             break;
           case AlsaPlayerState.completed:
             _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.completed));
+            _playingController.add(false);
             break;
           case AlsaPlayerState.stopped:
             _alsaIsPlaying = false;
             _playerStateController.add(PlayerState(false, ProcessingState.idle));
+            _playingController.add(false);
             break;
         }
       });
@@ -637,6 +657,7 @@ class AudioService {
       } else if (_player != null) {
         await _player!.stop();
       }
+      _currentPlaybackPath = null;
     } catch (e) {
       LogService().log('AudioService: Failed to stop: $e');
     }
@@ -656,14 +677,16 @@ class AudioService {
   }
 
   /// Get the duration of an audio file without loading it for playback.
-  Future<int?> getFileDuration(String filePath) async {
+  Future<Duration?> getFileDuration(String filePath) async {
     try {
-      // On Linux with local OGG files, calculate from file
+      // On Linux with local OGG files, calculate from file using granule position
       if (isLinuxPlatform && !filePath.startsWith('http') && filePath.endsWith('.ogg')) {
-        final (packets, sampleRate, _, _) = await OggOpusReader.read(filePath);
-        // 20ms per packet
-        final durationMs = packets.length * 20;
-        return durationMs ~/ 1000;
+        final (_, _, _, preSkip, granulePosition) = await OggOpusReader.read(filePath);
+        // Granule position is total samples at 48kHz (Opus internal rate)
+        // Subtract pre-skip to get actual audio samples
+        final actualSamples = granulePosition - preSkip;
+        final durationMs = (actualSamples * 1000) ~/ 48000;
+        return Duration(milliseconds: durationMs);
       }
 
       // On Linux, just_audio is not available
@@ -682,7 +705,7 @@ class AudioService {
       }
 
       await tempPlayer.dispose();
-      return duration?.inSeconds;
+      return duration;
     } catch (e) {
       LogService().log('AudioService: Failed to get file duration: $e');
       return null;
@@ -700,6 +723,7 @@ class AudioService {
     await _recordingDurationController.close();
     await _playerStateController.close();
     await _positionController.close();
+    await _playingController.close();
   }
 }
 

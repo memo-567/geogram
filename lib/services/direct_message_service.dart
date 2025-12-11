@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
 import '../models/chat_message.dart';
@@ -496,6 +497,8 @@ class DirectMessageService {
         message.setMeta('npub', profile.npub);
         message.setMeta('eventId', signedEvent.id!);
         message.setMeta('signature', signedEvent.sig!);
+        // Mark as verified - we signed it ourselves
+        message.setMeta('verified', 'true');
       }
     }
 
@@ -549,31 +552,36 @@ class DirectMessageService {
     // 2. Get or create conversation
     final conversation = await getOrCreateConversation(normalizedCallsign);
 
-    // 3. Copy voice file to conversation files folder
-    final voiceFileName = await _copyVoiceFile(voiceFilePath, conversation.path);
-    if (voiceFileName == null) {
+    // 3. Copy voice file to conversation files folder (also calculates SHA1)
+    final copyResult = await _copyVoiceFile(voiceFilePath, conversation.path);
+    if (copyResult == null) {
       throw DMDeliveryFailedException('Failed to copy voice file');
     }
+    final voiceFileName = copyResult.fileName;
+    final voiceSha1 = copyResult.sha1Hash;
 
     // 4. Create the message with voice metadata (empty content for voice-only messages)
+    // SHA1 hash is included in metadata for integrity verification
     final message = ChatMessage.now(
       author: profile.callsign,
       content: '',
       metadata: {
         'voice': voiceFileName,
         'duration': durationSeconds.toString(),
+        'sha1': voiceSha1,
       },
     );
 
     // 5. Sign the message per chat-format-specification.md
+    // The SHA1 hash is included in the signed content to prevent file tampering
     final signingService = SigningService();
     await signingService.initialize();
 
     NostrEvent? signedEvent;
     if (signingService.canSign(profile)) {
       final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
-      // For voice messages, we sign a descriptor string since content is empty
-      final contentToSign = '[voice:$voiceFileName:${durationSeconds}s]';
+      // For voice messages, we sign a descriptor string including SHA1 for integrity
+      final contentToSign = '[voice:$voiceFileName:${durationSeconds}s:sha1=$voiceSha1]';
       signedEvent = await signingService.generateSignedEvent(
         contentToSign,
         {
@@ -581,6 +589,7 @@ class DirectMessageService {
           'callsign': profile.callsign,
           'voice': voiceFileName,
           'duration': durationSeconds.toString(),
+          'sha1': voiceSha1,
         },
         profile,
         createdAt: createdAt,
@@ -590,6 +599,8 @@ class DirectMessageService {
         message.setMeta('npub', profile.npub);
         message.setMeta('eventId', signedEvent.id!);
         message.setMeta('signature', signedEvent.sig!);
+        // Mark as verified - we signed it ourselves
+        message.setMeta('verified', 'true');
       }
     }
 
@@ -621,14 +632,20 @@ class DirectMessageService {
   }
 
   /// Copy voice file to conversation files folder
-  /// Returns the filename (not full path) or null on failure
-  Future<String?> _copyVoiceFile(String sourcePath, String conversationPath) async {
+  /// Returns (filename, sha1Hash) or null on failure
+  Future<({String fileName, String sha1Hash})?> _copyVoiceFile(String sourcePath, String conversationPath) async {
     try {
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
         LogService().log('DM: Voice source file not found: $sourcePath');
         return null;
       }
+
+      // Read file bytes for copying and hashing
+      final bytes = await sourceFile.readAsBytes();
+
+      // Calculate SHA1 hash for integrity verification
+      final sha1Hash = sha1.convert(bytes).toString();
 
       // Create files directory
       final storagePath = StorageConfig().baseDir;
@@ -645,10 +662,10 @@ class DirectMessageService {
       final fileName = 'voice_$timestamp$extension';
 
       final destPath = p.join(filesDir.path, fileName);
-      await sourceFile.copy(destPath);
+      await File(destPath).writeAsBytes(bytes);
 
-      LogService().log('DM: Copied voice file to $destPath');
-      return fileName;
+      LogService().log('DM: Copied voice file to $destPath (sha1: $sha1Hash)');
+      return (fileName: fileName, sha1Hash: sha1Hash);
     } catch (e) {
       LogService().log('DM: Failed to copy voice file: $e');
       return null;

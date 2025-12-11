@@ -342,8 +342,9 @@ class WavReader {
 /// Read Opus packets from an OGG container file.
 class OggOpusReader {
   /// Read an OGG Opus file and return Opus packets with sample rate and channels.
-  /// Returns (packets, sampleRate, channels, preSkip).
-  static Future<(List<Uint8List>, int, int, int)> read(String filePath) async {
+  /// Returns (packets, sampleRate, channels, preSkip, finalGranulePosition).
+  /// The finalGranulePosition is the total number of samples at 48kHz.
+  static Future<(List<Uint8List>, int, int, int, int)> read(String filePath) async {
     final file = File(filePath);
     final bytes = await file.readAsBytes();
     final data = ByteData.sublistView(bytes);
@@ -352,6 +353,7 @@ class OggOpusReader {
     var sampleRate = 48000;
     var channels = 1;
     var preSkip = 312;
+    var finalGranulePosition = 0;
     var offset = 0;
     var isFirstDataPacket = true;
 
@@ -368,11 +370,17 @@ class OggOpusReader {
       // Parse page header
       // final version = bytes[offset + 4];
       // final headerType = bytes[offset + 5];
-      // final granulePosition = data.getUint64(offset + 6, Endian.little);
+      // Granule position is total sample count at 48kHz (Opus always uses 48kHz internally)
+      final granulePosition = data.getInt64(offset + 6, Endian.little);
       // final serialNumber = data.getUint32(offset + 14, Endian.little);
       // final pageSequence = data.getUint32(offset + 18, Endian.little);
       // final crc = data.getUint32(offset + 22, Endian.little);
       final numSegments = bytes[offset + 26];
+
+      // Track the final granule position (last valid one)
+      if (granulePosition > 0) {
+        finalGranulePosition = granulePosition;
+      }
 
       if (offset + 27 + numSegments > bytes.length) break;
 
@@ -454,7 +462,7 @@ class OggOpusReader {
     }
 
     LogService().log(
-        'OggOpusReader: Read ${packets.length} packets from $filePath');
-    return (packets, sampleRate, channels, preSkip);
+        'OggOpusReader: Read ${packets.length} packets from $filePath, granule=$finalGranulePosition');
+    return (packets, sampleRate, channels, preSkip, finalGranulePosition);
   }
 }

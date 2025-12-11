@@ -157,6 +157,9 @@ class ChatMessage implements Comparable<ChatMessage> {
     return dur != null ? int.tryParse(dur) : null;
   }
 
+  /// Get voice file SHA1 hash (for integrity verification)
+  String? get voiceSha1 => getMeta('sha1');
+
   /// Check if message has location
   bool get hasLocation => hasMeta('lat') && hasMeta('lon');
 

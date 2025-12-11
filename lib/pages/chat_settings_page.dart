@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import '../models/chat_settings.dart';
 import '../models/chat_security.dart';
+import '../models/chat_channel.dart';
 import '../services/chat_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
@@ -16,10 +17,12 @@ import 'package:path/path.dart' as path;
 /// Page for managing chat settings and moderators
 class ChatSettingsPage extends StatefulWidget {
   final String collectionPath;
+  final String? channelId;
 
   const ChatSettingsPage({
     Key? key,
     required this.collectionPath,
+    this.channelId,
   }) : super(key: key);
 
   @override
@@ -33,8 +36,10 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
 
   ChatSettings _settings = ChatSettings();
   ChatSecurity _security = ChatSecurity();
+  ChatChannel? _channel;
   bool _isLoading = false;
   bool _isAdmin = false;
+  bool _isChannelOwner = false;
 
   @override
   void initState() {
@@ -64,6 +69,20 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
       // Check if current user is admin
       final profile = _profileService.getProfile();
       _isAdmin = _security.isAdmin(profile.npub);
+
+      // Load channel if channelId provided
+      if (widget.channelId != null) {
+        try {
+          _channel = _chatService.channels.firstWhere(
+            (c) => c.id == widget.channelId,
+          );
+          // Check if current user is the channel owner
+          _isChannelOwner = _channel?.config?.owner == profile.npub ||
+              (_channel?.config?.owner == null && _isAdmin);
+        } catch (_) {
+          // Channel not found
+        }
+      }
     } catch (e) {
       _showError('Failed to load settings: $e');
     } finally {
@@ -145,6 +164,20 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           ),
 
           const SizedBox(height: 24),
+
+          // Room visibility section (only for group channels, visible to owner/admin)
+          if (_channel != null &&
+              _channel!.isGroup &&
+              (_isChannelOwner || _isAdmin)) ...[
+            _buildSection(
+              theme,
+              _i18n.t('room_visibility'),
+              [
+                _buildVisibilitySelector(theme),
+              ],
+            ),
+            const SizedBox(height: 24),
+          ],
 
           // Security section (admin only)
           if (_isAdmin) ...[
@@ -412,6 +445,107 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
           backgroundColor: Colors.green,
         ),
       );
+    }
+  }
+
+  /// Build visibility selector with radio options
+  Widget _buildVisibilitySelector(ThemeData theme) {
+    final currentVisibility = _channel?.config?.visibility ?? 'PUBLIC';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Text(
+            _i18n.t('change_visibility_warning'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        RadioListTile<String>(
+          title: Row(
+            children: [
+              Icon(Icons.public, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(_i18n.t('public')),
+            ],
+          ),
+          subtitle: Text(
+            _i18n.t('public_room_description'),
+            style: theme.textTheme.bodySmall,
+          ),
+          value: 'PUBLIC',
+          groupValue: currentVisibility,
+          onChanged: (value) => _changeVisibility(value!),
+        ),
+        RadioListTile<String>(
+          title: Row(
+            children: [
+              Icon(Icons.lock, size: 20, color: Colors.amber.shade700),
+              const SizedBox(width: 8),
+              Text(_i18n.t('restricted')),
+            ],
+          ),
+          subtitle: Text(
+            _i18n.t('restricted_room_description'),
+            style: theme.textTheme.bodySmall,
+          ),
+          value: 'RESTRICTED',
+          groupValue: currentVisibility,
+          onChanged: (value) => _changeVisibility(value!),
+        ),
+      ],
+    );
+  }
+
+  /// Change room visibility
+  Future<void> _changeVisibility(String newVisibility) async {
+    if (_channel == null) return;
+
+    final profile = _profileService.getProfile();
+
+    // Get current config or create a default one
+    final currentConfig = _channel!.config ?? ChatChannelConfig(
+      id: _channel!.id,
+      name: _channel!.name,
+      visibility: 'PUBLIC',
+    );
+
+    final currentVisibility = currentConfig.visibility;
+    if (currentVisibility == newVisibility) return;
+
+    try {
+      var updatedConfig = currentConfig.copyWith(visibility: newVisibility);
+
+      // If making restricted and no owner set, set current user as owner
+      if (newVisibility == 'RESTRICTED' && updatedConfig.owner == null) {
+        updatedConfig = updatedConfig.copyWith(owner: profile.npub);
+      }
+
+      // If making restricted, ensure current user is in members list
+      if (newVisibility == 'RESTRICTED' &&
+          !updatedConfig.members.contains(profile.npub)) {
+        final newMembers = List<String>.from(updatedConfig.members)
+          ..add(profile.npub);
+        updatedConfig = updatedConfig.copyWith(members: newMembers);
+      }
+
+      await _chatService.updateChannel(_channel!.copyWith(config: updatedConfig));
+
+      setState(() {
+        _channel = _chatService.channels.firstWhere(
+          (c) => c.id == widget.channelId,
+        );
+        _isChannelOwner = true; // After making restricted, user becomes owner
+      });
+
+      _showSuccess(newVisibility == 'RESTRICTED'
+          ? _i18n.t('room_made_restricted')
+          : _i18n.t('room_made_public'));
+    } catch (e) {
+      _showError('Failed to change visibility: $e');
     }
   }
 }
