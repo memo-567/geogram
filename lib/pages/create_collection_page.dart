@@ -44,6 +44,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('alerts', Icons.campaign),
     _CollectionTypeInfo('news', Icons.newspaper),
     _CollectionTypeInfo('www', Icons.language),
+    _CollectionTypeInfo('backup', Icons.backup),
     _CollectionTypeInfo('files', Icons.folder),
     _CollectionTypeInfo('postcards', Icons.mail),
     _CollectionTypeInfo('contacts', Icons.contacts),
@@ -57,7 +58,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'contacts', 'places', 'market', 'alerts', 'groups'
+    'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'backup'
   };
 
   @override
@@ -747,6 +748,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Receive and manage alerts and notifications. Stay informed about important updates and events in your network.';
       case 'groups':
         return 'Organize people into groups for easier management and communication. Create teams or interest groups.';
+      case 'backup':
+        return 'Securely backup your data to other devices with end-to-end encryption. Your data stays private while being safely stored across trusted contacts.';
       case 'station':
         return 'Station configuration for network communication settings. Manage how your node connects to the network.';
       default:
@@ -851,6 +854,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Member management',
           'Group roles',
           'Bulk actions',
+        ];
+      case 'backup':
+        return [
+          'End-to-end encryption',
+          'Multiple providers',
+          'Automatic scheduling',
+          'Full restore support',
         ];
       case 'station':
         return [

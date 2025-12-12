@@ -15,6 +15,7 @@ import '../services/collection_service.dart';
 import '../services/signing_service.dart';
 import '../services/user_location_service.dart';
 import '../services/security_service.dart';
+import '../services/backup_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -268,6 +269,34 @@ class WebSocketService {
               if (eventId != null) {
                 _handleOkResponse(eventId, success, message);
               }
+            } else if (data['type'] == 'backup_invite') {
+              // Backup invite from a client
+              LogService().log('✓ Received backup invite');
+              BackupService().handleBackupInvite(data);
+            } else if (data['type'] == 'backup_invite_response') {
+              // Response to our backup invite
+              LogService().log('✓ Received backup invite response');
+              BackupService().handleBackupInviteResponse(data);
+            } else if (data['type'] == 'backup_start') {
+              // Client is starting a backup
+              LogService().log('✓ Received backup start notification');
+              BackupService().handleBackupStart(data);
+            } else if (data['type'] == 'backup_complete') {
+              // Client completed a backup
+              LogService().log('✓ Received backup complete notification');
+              BackupService().handleBackupComplete(data);
+            } else if (data['type'] == 'backup_discovery_challenge') {
+              // Discovery challenge for account restoration
+              LogService().log('✓ Received backup discovery challenge');
+              BackupService().handleDiscoveryChallenge(data);
+            } else if (data['type'] == 'backup_discovery_response') {
+              // Response to discovery challenge
+              LogService().log('✓ Received backup discovery response');
+              BackupService().handleDiscoveryResponse(data);
+            } else if (data['type'] == 'backup_status_change') {
+              // Status change notification from provider
+              LogService().log('✓ Received backup status change');
+              BackupService().handleStatusChange(data);
             }
 
             _messageController.add(data);

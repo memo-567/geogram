@@ -56,6 +56,30 @@ enum DebugAction {
 
   /// Get voice recording status (for testing)
   voiceStatus,
+
+  /// Enable backup provider mode with settings
+  backupProviderEnable,
+
+  /// Create test data files for backup testing
+  backupCreateTestData,
+
+  /// Send backup invite to a provider
+  backupSendInvite,
+
+  /// Accept backup invite from a client (provider side)
+  backupAcceptInvite,
+
+  /// Start backup to a provider
+  backupStart,
+
+  /// Get backup status
+  backupGetStatus,
+
+  /// Start restore from a provider
+  backupRestore,
+
+  /// List backup snapshots from a provider
+  backupListSnapshots,
 }
 
 /// Toast message to be displayed
@@ -413,6 +437,69 @@ class DebugController {
         'action': 'voice_status',
         'description': 'Get voice recording status',
         'params': {},
+      },
+      {
+        'action': 'backup_provider_enable',
+        'description': 'Enable backup provider mode with storage settings',
+        'params': {
+          'enabled': '(optional) true/false (default: true)',
+          'max_storage_gb': '(optional) Max total storage in GB (default: 10)',
+          'max_client_storage_gb': '(optional) Max per-client storage in GB (default: 1)',
+          'max_snapshots': '(optional) Max snapshots per client (default: 10)',
+        },
+      },
+      {
+        'action': 'backup_create_test_data',
+        'description': 'Create test files for backup testing',
+        'params': {
+          'file_count': '(optional) Number of files to create (default: 5)',
+          'file_size_kb': '(optional) Size of each file in KB (default: 10)',
+        },
+      },
+      {
+        'action': 'backup_send_invite',
+        'description': 'Send backup invite to a provider device',
+        'params': {
+          'callsign': 'Target provider callsign (required)',
+          'interval_days': '(optional) Backup interval in days (default: 1)',
+        },
+      },
+      {
+        'action': 'backup_accept_invite',
+        'description': 'Accept backup invite from a client (provider side)',
+        'params': {
+          'client_npub': 'Client NPUB (required)',
+          'client_callsign': 'Client callsign (required)',
+          'max_storage_gb': '(optional) Storage quota in GB (default: 1)',
+          'max_snapshots': '(optional) Max snapshots (default: 10)',
+        },
+      },
+      {
+        'action': 'backup_start',
+        'description': 'Start backup to a provider',
+        'params': {
+          'provider_callsign': 'Provider callsign (required)',
+        },
+      },
+      {
+        'action': 'backup_status',
+        'description': 'Get current backup/restore status',
+        'params': {},
+      },
+      {
+        'action': 'backup_restore',
+        'description': 'Start restore from a provider snapshot',
+        'params': {
+          'provider_callsign': 'Provider callsign (required)',
+          'snapshot_id': 'Snapshot date YYYY-MM-DD (required)',
+        },
+      },
+      {
+        'action': 'backup_list_snapshots',
+        'description': 'List available snapshots from a provider',
+        'params': {
+          'provider_callsign': 'Provider callsign (required)',
+        },
       },
     ];
   }

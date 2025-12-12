@@ -352,6 +352,85 @@ curl -X POST http://localhost:5678/api/dm/X2TEST/messages \
     -d '{"content": "Hello from instance 1!"}'
 ```
 
+### Backup Testing
+
+Test backup functionality between two instances (one provider, one client):
+
+```bash
+#!/bin/bash
+# backup-test.sh
+
+PORT_PROVIDER=5577
+PORT_CLIENT=5588
+DATA_PROVIDER=/tmp/geogram-provider
+DATA_CLIENT=/tmp/geogram-client
+
+# Cleanup previous test data
+rm -rf $DATA_PROVIDER $DATA_CLIENT
+
+# Start provider instance (will become backup provider)
+geogram_desktop --port=$PORT_PROVIDER --data-dir=$DATA_PROVIDER \
+  --new-identity --nickname="Provider" --skip-intro --http-api --debug-api \
+  --scan-localhost=5500-5600 &
+PID_PROVIDER=$!
+
+# Start client instance (will backup to provider)
+geogram_desktop --port=$PORT_CLIENT --data-dir=$DATA_CLIENT \
+  --new-identity --nickname="Client" --skip-intro --http-api --debug-api \
+  --scan-localhost=5500-5600 &
+PID_CLIENT=$!
+
+# Wait for startup
+sleep 10
+
+# Get provider callsign
+PROVIDER_CALLSIGN=$(curl -s http://localhost:$PORT_PROVIDER/api/status | jq -r '.callsign')
+CLIENT_CALLSIGN=$(curl -s http://localhost:$PORT_CLIENT/api/status | jq -r '.callsign')
+echo "Provider: $PROVIDER_CALLSIGN, Client: $CLIENT_CALLSIGN"
+
+# Enable backup provider mode on provider
+curl -s -X POST http://localhost:$PORT_PROVIDER/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_provider_enable", "max_storage_bytes": 10737418240}'
+
+# Create test data on client
+curl -s -X POST http://localhost:$PORT_CLIENT/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_create_test_data", "file_count": 5, "max_file_size": 4096}'
+
+# Client sends backup invite to provider
+curl -s -X POST http://localhost:$PORT_CLIENT/api/debug \
+  -H "Content-Type: application/json" \
+  -d "{\"action\": \"backup_send_invite\", \"provider_callsign\": \"$PROVIDER_CALLSIGN\"}"
+
+sleep 2
+
+# Provider accepts invite
+curl -s -X POST http://localhost:$PORT_PROVIDER/api/debug \
+  -H "Content-Type: application/json" \
+  -d "{\"action\": \"backup_accept_invite\", \"client_callsign\": \"$CLIENT_CALLSIGN\"}"
+
+sleep 2
+
+# Client starts backup
+curl -s -X POST http://localhost:$PORT_CLIENT/api/debug \
+  -H "Content-Type: application/json" \
+  -d "{\"action\": \"backup_start\", \"provider_callsign\": \"$PROVIDER_CALLSIGN\"}"
+
+# Monitor backup status
+for i in {1..30}; do
+  STATUS=$(curl -s -X POST http://localhost:$PORT_CLIENT/api/debug \
+    -H "Content-Type: application/json" \
+    -d '{"action": "backup_get_status"}')
+  echo "Backup status: $STATUS"
+  sleep 2
+done
+
+# Cleanup
+kill $PID_PROVIDER $PID_CLIENT
+rm -rf $DATA_PROVIDER $DATA_CLIENT
+```
+
 ### Clean Environment Testing
 
 Test with a fresh data directory:

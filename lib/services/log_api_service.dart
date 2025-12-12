@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:math';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart' as shelf;
@@ -10,6 +13,7 @@ import 'profile_service.dart';
 import 'collection_service.dart';
 import 'debug_controller.dart';
 import 'security_service.dart';
+import 'storage_config.dart';
 import 'user_location_service.dart';
 import 'chat_service.dart';
 import 'direct_message_service.dart';
@@ -19,6 +23,8 @@ import '../version.dart';
 import '../models/chat_message.dart';
 import '../util/nostr_event.dart';
 import 'audio_service.dart';
+import 'backup_service.dart';
+import '../models/backup_models.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -268,6 +274,11 @@ class LogApiService {
       }
     }
 
+    // Backup API endpoints
+    if (urlPath.startsWith('api/backup/')) {
+      return await _handleBackupRequest(request, urlPath, headers);
+    }
+
     // Devices API endpoint (for debug - list discovered devices)
     if ((urlPath == 'api/devices' || urlPath == 'api/devices/') && request.method == 'GET') {
       if (!SecurityService().debugApiEnabled) {
@@ -329,6 +340,15 @@ class LogApiService {
           '/api/dm/conversations': 'List direct message conversations',
           '/api/dm/{callsign}/messages': 'GET/POST direct messages with a device',
           '/api/dm/sync/{callsign}': 'Sync DM messages with remote device',
+          '/api/backup/settings': 'GET/PUT backup provider settings',
+          '/api/backup/clients': 'GET list of backup clients (as provider)',
+          '/api/backup/clients/{callsign}': 'GET/DELETE specific backup client',
+          '/api/backup/providers': 'GET list of backup providers (as client)',
+          '/api/backup/providers/{callsign}': 'POST invite, PUT update, DELETE remove provider',
+          '/api/backup/start': 'POST start backup to provider',
+          '/api/backup/status': 'GET current backup/restore status',
+          '/api/backup/restore': 'POST start restore from provider',
+          '/api/backup/discover': 'POST start discovery, GET /api/backup/discover/{id} for status',
           '/api/devices': 'List discovered devices (requires debug API enabled)',
           '/api/debug': 'Debug API - GET for status, POST to trigger actions (requires debug API enabled)',
         },
@@ -996,6 +1016,11 @@ class LogApiService {
         return await _handleCreateRestrictedRoom(params, headers);
       }
 
+      // Handle backup actions separately (they are async)
+      if (action.toLowerCase().startsWith('backup_')) {
+        return await _handleBackupAction(action.toLowerCase(), params, headers);
+      }
+
       final debugController = DebugController();
       final result = debugController.executeAction(action, params);
 
@@ -1169,6 +1194,409 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Debug API - Backup Actions
+  // ============================================================
+
+  /// Handle backup debug actions asynchronously
+  Future<shelf.Response> _handleBackupAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+
+    try {
+      // Ensure backup service is initialized
+      await backupService.initialize();
+
+      switch (action) {
+        case 'backup_provider_enable':
+          // Enable/configure backup provider mode
+          final enabled = params['enabled'] != false;
+          final maxStorageGb = (params['max_storage_gb'] as num?)?.toDouble() ?? 10.0;
+          final maxClientStorageGb = (params['max_client_storage_gb'] as num?)?.toDouble() ?? 1.0;
+          final maxSnapshots = (params['max_snapshots'] as num?)?.toInt() ?? 10;
+
+          final settings = BackupProviderSettings(
+            enabled: enabled,
+            maxTotalStorageBytes: (maxStorageGb * 1024 * 1024 * 1024).toInt(),
+            defaultMaxClientStorageBytes: (maxClientStorageGb * 1024 * 1024 * 1024).toInt(),
+            defaultMaxSnapshots: maxSnapshots,
+          );
+
+          await backupService.saveProviderSettings(settings);
+
+          LogService().log('LogApiService: Backup provider ${enabled ? "enabled" : "disabled"}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Backup provider ${enabled ? "enabled" : "disabled"}',
+              'settings': settings.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'backup_create_test_data':
+          // Create random test files for backup testing
+          final fileCount = (params['file_count'] as num?)?.toInt() ?? 5;
+          final fileSizeKb = (params['file_size_kb'] as num?)?.toInt() ?? 10;
+
+          final testFiles = await _createBackupTestData(fileCount, fileSizeKb);
+
+          LogService().log('LogApiService: Created $fileCount test files for backup');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Created $fileCount test files',
+              'files': testFiles,
+            }),
+            headers: headers,
+          );
+
+        case 'backup_send_invite':
+          // Send backup invite to a provider
+          final providerCallsign = params['provider_callsign'] as String?;
+          final intervalDays = (params['interval_days'] as num?)?.toInt() ?? 7;
+
+          if (providerCallsign == null || providerCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing provider_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final result = await backupService.sendInvite(providerCallsign, intervalDays);
+
+          if (result != null) {
+            LogService().log('LogApiService: Sent backup invite to $providerCallsign');
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Invite sent to $providerCallsign',
+                'provider': result.toJson(),
+              }),
+              headers: headers,
+            );
+          } else {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Failed to send invite or timed out',
+              }),
+              headers: headers,
+            );
+          }
+
+        case 'backup_accept_invite':
+          // Accept a pending backup invite (provider side)
+          final clientCallsign = params['client_callsign'] as String?;
+          var clientNpub = params['client_npub'] as String?;
+          final maxStorageMb = (params['max_storage_mb'] as num?)?.toInt() ?? 100;
+          final maxSnapshots = (params['max_snapshots'] as num?)?.toInt() ?? 5;
+
+          if (clientCallsign == null || clientCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing client_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Try to look up npub from devices if not provided
+          if (clientNpub == null || clientNpub.isEmpty) {
+            final devicesService = DevicesService();
+            final devices = devicesService.getAllDevices();
+            final device = devices.where((d) =>
+              d.callsign.toUpperCase() == clientCallsign.toUpperCase()).firstOrNull;
+            if (device != null && device.npub != null && device.npub!.isNotEmpty) {
+              clientNpub = device.npub;
+              LogService().log('LogApiService: Found npub for $clientCallsign: $clientNpub');
+            }
+          }
+
+          if (clientNpub == null || clientNpub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing client_npub parameter and could not find device npub for callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          await backupService.acceptInvite(
+            clientNpub,
+            clientCallsign,
+            maxStorageMb * 1024 * 1024,
+            maxSnapshots,
+          );
+
+          LogService().log('LogApiService: Accepted backup invite from $clientCallsign');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Accepted invite from $clientCallsign',
+              'client_npub': clientNpub,
+            }),
+            headers: headers,
+          );
+
+        case 'backup_start':
+          // Start a backup to a provider
+          final providerCallsign = params['provider_callsign'] as String?;
+
+          if (providerCallsign == null || providerCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing provider_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final status = await backupService.startBackup(providerCallsign);
+
+          LogService().log('LogApiService: Started backup to $providerCallsign');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': status.status != 'failed',
+              'message': status.status == 'failed' ? status.error : 'Backup started',
+              'status': status.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'backup_status':
+        case 'backup_get_status':
+          // Get current backup/restore status
+          final backupStatus = backupService.backupStatus;
+          final restoreStatus = backupService.restoreStatus;
+          final providers = backupService.getProviders();
+          final clients = backupService.getClients();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'backup_status': backupStatus.toJson(),
+              'restore_status': restoreStatus.toJson(),
+              'providers': providers.map((p) => p.toJson()).toList(),
+              'clients': clients.map((c) => c.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'backup_restore':
+          // Start restore from a provider
+          final providerCallsign = params['provider_callsign'] as String?;
+          final snapshotId = params['snapshot_id'] as String?;
+
+          if (providerCallsign == null || providerCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing provider_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (snapshotId == null || snapshotId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing snapshot_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          await backupService.startRestore(providerCallsign, snapshotId);
+
+          LogService().log('LogApiService: Started restore from $providerCallsign snapshot $snapshotId');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Restore started',
+              'status': backupService.restoreStatus.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'backup_list_snapshots':
+          // List snapshots from a provider (provider-side) or for a client
+          final clientCallsign = params['client_callsign'] as String?;
+
+          if (clientCallsign == null || clientCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing client_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final snapshots = await backupService.getSnapshots(clientCallsign);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'client_callsign': clientCallsign,
+              'snapshots': snapshots.map((s) => s.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'backup_add_provider':
+          // Directly add a provider relationship (for LAN testing without WebSocket)
+          final providerCallsign = params['provider_callsign'] as String?;
+          var providerNpub = params['provider_npub'] as String?;
+          final intervalDays = (params['interval_days'] as num?)?.toInt() ?? 3;
+          final maxStorageMb = (params['max_storage_mb'] as num?)?.toInt() ?? 100;
+          final maxSnapshots = (params['max_snapshots'] as num?)?.toInt() ?? 5;
+
+          if (providerCallsign == null || providerCallsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing provider_callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Try to look up npub from devices if not provided
+          if (providerNpub == null || providerNpub.isEmpty) {
+            final devicesService = DevicesService();
+            final devices = devicesService.getAllDevices();
+            final device = devices.where((d) =>
+              d.callsign.toUpperCase() == providerCallsign.toUpperCase()).firstOrNull;
+            if (device != null && device.npub != null && device.npub!.isNotEmpty) {
+              providerNpub = device.npub;
+              LogService().log('LogApiService: Found npub for $providerCallsign: $providerNpub');
+            }
+          }
+
+          if (providerNpub == null || providerNpub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing provider_npub parameter and could not find device npub for callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Create active provider relationship directly
+          final relationship = BackupProviderRelationship(
+            providerNpub: providerNpub,
+            providerCallsign: providerCallsign.toUpperCase(),
+            backupIntervalDays: intervalDays,
+            status: BackupRelationshipStatus.active,
+            maxStorageBytes: maxStorageMb * 1024 * 1024,
+            maxSnapshots: maxSnapshots,
+          );
+
+          await backupService.updateProvider(relationship);
+
+          LogService().log('LogApiService: Added provider $providerCallsign directly (for testing)');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Provider added directly',
+              'provider': relationship.toJson(),
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown backup action: $action',
+              'available': [
+                'backup_provider_enable',
+                'backup_create_test_data',
+                'backup_send_invite',
+                'backup_accept_invite',
+                'backup_add_provider',
+                'backup_start',
+                'backup_status',
+                'backup_restore',
+                'backup_list_snapshots',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Backup action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Create test data files for backup testing
+  Future<List<Map<String, dynamic>>> _createBackupTestData(int fileCount, int fileSizeKb) async {
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      await storageConfig.init();
+    }
+
+    final testDir = io.Directory(path.join(storageConfig.baseDir, 'test-backup-data'));
+    if (!await testDir.exists()) {
+      await testDir.create(recursive: true);
+    }
+
+    final random = Random();
+    final files = <Map<String, dynamic>>[];
+
+    for (var i = 0; i < fileCount; i++) {
+      final fileName = 'test_file_${i + 1}.bin';
+      final filePath = path.join(testDir.path, fileName);
+      final file = io.File(filePath);
+
+      // Generate random bytes
+      final bytes = Uint8List(fileSizeKb * 1024);
+      for (var j = 0; j < bytes.length; j++) {
+        bytes[j] = random.nextInt(256);
+      }
+
+      await file.writeAsBytes(bytes);
+
+      // Calculate SHA1 for verification
+      final sha1Hash = sha1.convert(bytes).toString();
+
+      files.add({
+        'name': fileName,
+        'path': filePath,
+        'size': bytes.length,
+        'sha1': sha1Hash,
+      });
+    }
+
+    return files;
   }
 
   // ============================================================
@@ -3219,5 +3647,661 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Backup API Endpoints
+  // ============================================================
+
+  /// Main handler for all /api/backup/* endpoints
+  Future<shelf.Response> _handleBackupRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final backupService = BackupService();
+      final method = request.method;
+
+      // Remove 'api/backup/' prefix for easier parsing
+      final subPath = urlPath.substring('api/backup/'.length);
+
+      // GET/PUT /api/backup/settings - Provider settings
+      if (subPath == 'settings' || subPath == 'settings/') {
+        if (method == 'GET') {
+          return await _handleBackupSettingsGet(headers);
+        } else if (method == 'PUT') {
+          return await _handleBackupSettingsPut(request, headers);
+        }
+      }
+
+      // GET /api/backup/clients - List clients (provider endpoint)
+      if (subPath == 'clients' || subPath == 'clients/') {
+        if (method == 'GET') {
+          return await _handleBackupClientsGet(headers);
+        }
+      }
+
+      // GET/DELETE /api/backup/clients/{callsign} - Client details or remove
+      if (subPath.startsWith('clients/') && !subPath.contains('/snapshots')) {
+        final callsign = _extractCallsignFromBackupPath(subPath, 'clients/');
+        if (callsign != null) {
+          if (method == 'GET') {
+            return await _handleBackupClientGet(callsign, headers);
+          } else if (method == 'DELETE') {
+            return await _handleBackupClientDelete(request, callsign, headers);
+          } else if (method == 'PUT') {
+            return await _handleBackupClientPut(request, callsign, headers);
+          }
+        }
+      }
+
+      // GET /api/backup/clients/{callsign}/snapshots - List snapshots
+      if (subPath.contains('/snapshots') && !subPath.contains('/files/')) {
+        final match = RegExp(r'^clients/([^/]+)/snapshots/?$').firstMatch(subPath);
+        if (match != null) {
+          final callsign = match.group(1)!.toUpperCase();
+          if (method == 'GET') {
+            return await _handleBackupSnapshotsGet(callsign, headers);
+          }
+        }
+      }
+
+      // GET/PUT /api/backup/clients/{callsign}/snapshots/{date} - Manifest
+      final snapshotMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/?$').firstMatch(subPath);
+      if (snapshotMatch != null) {
+        final callsign = snapshotMatch.group(1)!.toUpperCase();
+        final snapshotId = snapshotMatch.group(2)!;
+        if (method == 'GET') {
+          return await _handleBackupManifestGet(callsign, snapshotId, headers);
+        } else if (method == 'PUT') {
+          return await _handleBackupManifestPut(request, callsign, snapshotId, headers);
+        }
+      }
+
+      // GET/PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
+      final fileMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/files/(.+)$').firstMatch(subPath);
+      if (fileMatch != null) {
+        final callsign = fileMatch.group(1)!.toUpperCase();
+        final snapshotId = fileMatch.group(2)!;
+        final fileName = fileMatch.group(3)!;
+        if (method == 'GET') {
+          return await _handleBackupFileGet(callsign, snapshotId, fileName, headers);
+        } else if (method == 'PUT') {
+          return await _handleBackupFilePut(request, callsign, snapshotId, fileName, headers);
+        }
+      }
+
+      // GET /api/backup/providers - List providers (client endpoint)
+      if (subPath == 'providers' || subPath == 'providers/') {
+        if (method == 'GET') {
+          return await _handleBackupProvidersGet(headers);
+        }
+      }
+
+      // POST/PUT/DELETE /api/backup/providers/{callsign}
+      if (subPath.startsWith('providers/')) {
+        final callsign = _extractCallsignFromBackupPath(subPath, 'providers/');
+        if (callsign != null) {
+          if (method == 'POST') {
+            return await _handleBackupProviderInvite(request, callsign, headers);
+          } else if (method == 'PUT') {
+            return await _handleBackupProviderUpdate(request, callsign, headers);
+          } else if (method == 'DELETE') {
+            return await _handleBackupProviderRemove(callsign, headers);
+          } else if (method == 'GET') {
+            return await _handleBackupProviderGet(callsign, headers);
+          }
+        }
+      }
+
+      // POST /api/backup/start - Start backup
+      if (subPath == 'start' && method == 'POST') {
+        return await _handleBackupStart(request, headers);
+      }
+
+      // GET /api/backup/status - Get backup/restore status
+      if (subPath == 'status' && method == 'GET') {
+        return await _handleBackupStatusGet(headers);
+      }
+
+      // POST /api/backup/restore - Start restore
+      if (subPath == 'restore' && method == 'POST') {
+        return await _handleBackupRestore(request, headers);
+      }
+
+      // POST /api/backup/discover - Start discovery
+      // GET /api/backup/discover/{id} - Get discovery status
+      if (subPath == 'discover' && method == 'POST') {
+        return await _handleBackupDiscoverStart(request, headers);
+      }
+      if (subPath.startsWith('discover/')) {
+        final discoveryId = subPath.substring('discover/'.length);
+        if (discoveryId.isNotEmpty && method == 'GET') {
+          return await _handleBackupDiscoverStatus(discoveryId, headers);
+        }
+      }
+
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Backup endpoint not found', 'path': urlPath}),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error handling backup request: $e\n$stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Helper to extract callsign from backup path
+  String? _extractCallsignFromBackupPath(String subPath, String prefix) {
+    if (!subPath.startsWith(prefix)) return null;
+    final remainder = subPath.substring(prefix.length);
+    final slashIndex = remainder.indexOf('/');
+    final callsign = slashIndex >= 0 ? remainder.substring(0, slashIndex) : remainder;
+    return callsign.isEmpty ? null : callsign.toUpperCase();
+  }
+
+  // === Provider Settings Endpoints ===
+
+  /// GET /api/backup/settings - Get provider settings
+  Future<shelf.Response> _handleBackupSettingsGet(Map<String, String> headers) async {
+    final backupService = BackupService();
+    final settings = backupService.providerSettings;
+
+    return shelf.Response.ok(
+      jsonEncode(settings?.toJson() ?? {
+        'enabled': false,
+        'maxTotalStorageBytes': 0,
+        'defaultMaxClientStorageBytes': 0,
+        'defaultMaxSnapshots': 0,
+        'autoAcceptFromContacts': false,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// PUT /api/backup/settings - Update provider settings
+  Future<shelf.Response> _handleBackupSettingsPut(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+
+    final backupService = BackupService();
+    final currentSettings = backupService.providerSettings ?? BackupProviderSettings(
+      enabled: false,
+      maxTotalStorageBytes: 0,
+      defaultMaxClientStorageBytes: 0,
+      defaultMaxSnapshots: 0,
+      autoAcceptFromContacts: false,
+      updatedAt: DateTime.now(),
+    );
+
+    // Update settings
+    final newSettings = BackupProviderSettings(
+      enabled: data['enabled'] as bool? ?? currentSettings.enabled,
+      maxTotalStorageBytes: data['maxTotalStorageBytes'] as int? ?? currentSettings.maxTotalStorageBytes,
+      defaultMaxClientStorageBytes: data['defaultMaxClientStorageBytes'] as int? ?? currentSettings.defaultMaxClientStorageBytes,
+      defaultMaxSnapshots: data['defaultMaxSnapshots'] as int? ?? currentSettings.defaultMaxSnapshots,
+      autoAcceptFromContacts: data['autoAcceptFromContacts'] as bool? ?? currentSettings.autoAcceptFromContacts,
+      updatedAt: DateTime.now(),
+    );
+
+    await backupService.saveProviderSettings(newSettings);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'settings': newSettings.toJson()}),
+      headers: headers,
+    );
+  }
+
+  // === Provider Client Management Endpoints ===
+
+  /// GET /api/backup/clients - List all clients
+  Future<shelf.Response> _handleBackupClientsGet(Map<String, String> headers) async {
+    final backupService = BackupService();
+    final clients = await backupService.getClients();
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'clients': clients.map((c) => c.toJson()).toList(),
+        'total': clients.length,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/clients/{callsign} - Get specific client
+  Future<shelf.Response> _handleBackupClientGet(
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final clients = await backupService.getClients();
+    final client = clients.where((c) => c.clientCallsign == callsign).firstOrNull;
+
+    if (client == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Client not found', 'callsign': callsign}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode(client.toJson()),
+      headers: headers,
+    );
+  }
+
+  /// PUT /api/backup/clients/{callsign} - Accept/update client (for invite acceptance)
+  Future<shelf.Response> _handleBackupClientPut(
+    shelf.Request request,
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final action = data['action'] as String?;
+
+    final backupService = BackupService();
+
+    if (action == 'accept') {
+      final maxStorageBytes = data['maxStorageBytes'] as int? ??
+          backupService.providerSettings?.defaultMaxClientStorageBytes ?? 1073741824;
+      final maxSnapshots = data['maxSnapshots'] as int? ??
+          backupService.providerSettings?.defaultMaxSnapshots ?? 7;
+
+      // Find the client npub
+      final clients = await backupService.getClients();
+      final client = clients.where((c) => c.clientCallsign == callsign).firstOrNull;
+      if (client == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Client not found', 'callsign': callsign}),
+          headers: headers,
+        );
+      }
+
+      await backupService.acceptInvite(client.clientNpub, client.clientCallsign, maxStorageBytes, maxSnapshots);
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'message': 'Client invite accepted'}),
+        headers: headers,
+      );
+    } else if (action == 'decline') {
+      final clients = await backupService.getClients();
+      final client = clients.where((c) => c.clientCallsign == callsign).firstOrNull;
+      if (client == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Client not found', 'callsign': callsign}),
+          headers: headers,
+        );
+      }
+
+      await backupService.declineInvite(client.clientNpub, client.clientCallsign);
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'message': 'Client invite declined'}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.badRequest(
+      body: jsonEncode({'error': 'Invalid action', 'validActions': ['accept', 'decline']}),
+      headers: headers,
+    );
+  }
+
+  /// DELETE /api/backup/clients/{callsign} - Remove client
+  Future<shelf.Response> _handleBackupClientDelete(
+    shelf.Request request,
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final queryParams = request.url.queryParameters;
+    final deleteData = queryParams['deleteData'] == 'true';
+
+    final backupService = BackupService();
+    await backupService.removeClient(callsign, deleteData: deleteData);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Client removed', 'dataDeleted': deleteData}),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/clients/{callsign}/snapshots - List snapshots
+  Future<shelf.Response> _handleBackupSnapshotsGet(
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final snapshots = await backupService.getSnapshots(callsign);
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'snapshots': snapshots.map((s) => s.toJson()).toList(),
+        'total': snapshots.length,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/clients/{callsign}/snapshots/{date} - Get manifest
+  Future<shelf.Response> _handleBackupManifestGet(
+    String callsign,
+    String snapshotId,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final manifest = await backupService.getManifest(callsign, snapshotId);
+
+    if (manifest == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Manifest not found', 'callsign': callsign, 'snapshotId': snapshotId}),
+        headers: headers,
+      );
+    }
+
+    // Return raw encrypted manifest (base64 encoded)
+    return shelf.Response.ok(
+      jsonEncode({'manifest': manifest}),
+      headers: headers,
+    );
+  }
+
+  /// PUT /api/backup/clients/{callsign}/snapshots/{date} - Upload manifest
+  Future<shelf.Response> _handleBackupManifestPut(
+    shelf.Request request,
+    String callsign,
+    String snapshotId,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final manifestBase64 = data['manifest'] as String?;
+
+    if (manifestBase64 == null) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing manifest field'}),
+        headers: headers,
+      );
+    }
+
+    final backupService = BackupService();
+    // Decode base64 to bytes for storage
+    final manifestBytes = Uint8List.fromList(base64Decode(manifestBase64));
+    await backupService.saveManifest(callsign, snapshotId, manifestBytes);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Manifest saved'}),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/clients/{callsign}/snapshots/{date}/files/{name} - Get encrypted file
+  Future<shelf.Response> _handleBackupFileGet(
+    String callsign,
+    String snapshotId,
+    String fileName,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final fileData = await backupService.getEncryptedFile(callsign, snapshotId, fileName);
+
+    if (fileData == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'File not found'}),
+        headers: headers,
+      );
+    }
+
+    // Return raw binary data
+    return shelf.Response.ok(
+      fileData,
+      headers: {...headers, 'Content-Type': 'application/octet-stream'},
+    );
+  }
+
+  /// PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name} - Upload encrypted file
+  Future<shelf.Response> _handleBackupFilePut(
+    shelf.Request request,
+    String callsign,
+    String snapshotId,
+    String fileName,
+    Map<String, String> headers,
+  ) async {
+    final bytes = await request.read().expand((chunk) => chunk).toList();
+    final fileData = Uint8List.fromList(bytes);
+
+    final backupService = BackupService();
+    await backupService.saveEncryptedFile(callsign, snapshotId, fileName, fileData);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'File saved', 'size': fileData.length}),
+      headers: headers,
+    );
+  }
+
+  // === Client Provider Management Endpoints ===
+
+  /// GET /api/backup/providers - List providers
+  Future<shelf.Response> _handleBackupProvidersGet(Map<String, String> headers) async {
+    final backupService = BackupService();
+    final providers = await backupService.getProviders();
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'providers': providers.map((p) => p.toJson()).toList(),
+        'total': providers.length,
+      }),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/providers/{callsign} - Get specific provider
+  Future<shelf.Response> _handleBackupProviderGet(
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final providers = await backupService.getProviders();
+    final provider = providers.where((p) => p.providerCallsign == callsign).firstOrNull;
+
+    if (provider == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Provider not found', 'callsign': callsign}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode(provider.toJson()),
+      headers: headers,
+    );
+  }
+
+  /// POST /api/backup/providers/{callsign} - Send invite to provider
+  Future<shelf.Response> _handleBackupProviderInvite(
+    shelf.Request request,
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final intervalDays = data['intervalDays'] as int? ?? 1;
+
+    final backupService = BackupService();
+    await backupService.sendInvite(callsign, intervalDays);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Invite sent to provider', 'callsign': callsign}),
+      headers: headers,
+    );
+  }
+
+  /// PUT /api/backup/providers/{callsign} - Update provider settings
+  Future<shelf.Response> _handleBackupProviderUpdate(
+    shelf.Request request,
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+
+    final backupService = BackupService();
+    final providers = await backupService.getProviders();
+    final provider = providers.where((p) => p.providerCallsign == callsign).firstOrNull;
+
+    if (provider == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Provider not found', 'callsign': callsign}),
+        headers: headers,
+      );
+    }
+
+    // Update provider settings (e.g., interval)
+    if (data.containsKey('intervalDays')) {
+      final newInterval = data['intervalDays'] as int;
+      final updatedProvider = BackupProviderRelationship(
+        providerNpub: provider.providerNpub,
+        providerCallsign: provider.providerCallsign,
+        backupIntervalDays: newInterval,
+        status: provider.status,
+        maxStorageBytes: provider.maxStorageBytes,
+        maxSnapshots: provider.maxSnapshots,
+        lastSuccessfulBackup: provider.lastSuccessfulBackup,
+        nextScheduledBackup: provider.nextScheduledBackup,
+        createdAt: provider.createdAt,
+      );
+      await backupService.updateProvider(updatedProvider);
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Provider updated'}),
+      headers: headers,
+    );
+  }
+
+  /// DELETE /api/backup/providers/{callsign} - Remove provider
+  Future<shelf.Response> _handleBackupProviderRemove(
+    String callsign,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    await backupService.removeProvider(callsign);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Provider removed', 'callsign': callsign}),
+      headers: headers,
+    );
+  }
+
+  // === Backup/Restore Operations ===
+
+  /// POST /api/backup/start - Start backup
+  Future<shelf.Response> _handleBackupStart(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final providerCallsign = data['providerCallsign'] as String?;
+
+    if (providerCallsign == null) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing providerCallsign'}),
+        headers: headers,
+      );
+    }
+
+    final backupService = BackupService();
+    final status = await backupService.startBackup(providerCallsign);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'status': status.toJson()}),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/status - Get current backup/restore status
+  Future<shelf.Response> _handleBackupStatusGet(Map<String, String> headers) async {
+    final backupService = BackupService();
+    final status = backupService.backupStatus;
+
+    return shelf.Response.ok(
+      jsonEncode(status?.toJson() ?? {'status': 'idle'}),
+      headers: headers,
+    );
+  }
+
+  /// POST /api/backup/restore - Start restore
+  Future<shelf.Response> _handleBackupRestore(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final providerCallsign = data['providerCallsign'] as String?;
+    final snapshotId = data['snapshotId'] as String?;
+
+    if (providerCallsign == null || snapshotId == null) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing providerCallsign or snapshotId'}),
+        headers: headers,
+      );
+    }
+
+    final backupService = BackupService();
+    await backupService.startRestore(providerCallsign, snapshotId);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'message': 'Restore started'}),
+      headers: headers,
+    );
+  }
+
+  // === Discovery Endpoints ===
+
+  /// POST /api/backup/discover - Start discovery
+  Future<shelf.Response> _handleBackupDiscoverStart(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    final body = await request.readAsString();
+    final data = body.isEmpty ? <String, dynamic>{} : jsonDecode(body) as Map<String, dynamic>;
+    final timeoutSeconds = data['timeoutSeconds'] as int? ?? 30;
+
+    final backupService = BackupService();
+    final discoveryId = await backupService.startDiscovery(timeoutSeconds);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'discoveryId': discoveryId}),
+      headers: headers,
+    );
+  }
+
+  /// GET /api/backup/discover/{id} - Get discovery status
+  Future<shelf.Response> _handleBackupDiscoverStatus(
+    String discoveryId,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    final status = backupService.getDiscoveryStatus(discoveryId);
+
+    if (status == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Discovery not found', 'discoveryId': discoveryId}),
+        headers: headers,
+      );
+    }
+
+    return shelf.Response.ok(
+      jsonEncode(status.toJson()),
+      headers: headers,
+    );
   }
 }

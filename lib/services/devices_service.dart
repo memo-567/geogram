@@ -209,6 +209,17 @@ class DevicesService {
       case DebugAction.voiceStatus:
         // Voice actions are handled directly by LogApiService
         break;
+
+      case DebugAction.backupProviderEnable:
+      case DebugAction.backupCreateTestData:
+      case DebugAction.backupSendInvite:
+      case DebugAction.backupAcceptInvite:
+      case DebugAction.backupStart:
+      case DebugAction.backupGetStatus:
+      case DebugAction.backupRestore:
+      case DebugAction.backupListSnapshots:
+        // Backup actions are handled directly by LogApiService
+        break;
     }
   }
 

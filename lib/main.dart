@@ -28,6 +28,7 @@ import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
+import 'services/backup_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -57,6 +58,7 @@ import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
 import 'pages/station_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
+import 'pages/backup_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -281,6 +283,10 @@ void main() async {
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
       await NetworkMonitorService().initialize();
       LogService().log('NetworkMonitorService initialized');
+
+      // Initialize BackupService for E2E encrypted backups
+      await BackupService().initialize();
+      LogService().log('BackupService initialized');
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
@@ -854,7 +860,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   bool _isFixedCollectionType(Collection collection) {
     const fixedTypes = {
       'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'station'
+      'www', 'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'station', 'backup'
     };
     return fixedTypes.contains(collection.type);
   }
@@ -1095,9 +1101,11 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                     collectionPath: collection.storagePath ?? '',
                                                                                     collectionTitle: collection.title,
                                                                                   )
-                                                                                : collection.type == 'station'
-                                                                                    ? const StationDashboardPage()
-                                                                                    : CollectionBrowserPage(collection: collection);
+                                                                                : collection.type == 'backup'
+                                                                                    ? const BackupBrowserPage()
+                                                                                    : collection.type == 'station'
+                                                                                        ? const StationDashboardPage()
+                                                                                        : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1301,6 +1309,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.groups;
       case 'alerts':
         return Icons.campaign;
+      case 'backup':
+        return Icons.backup;
       case 'station':
         return Icons.cell_tower;
       default:

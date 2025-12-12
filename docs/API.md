@@ -17,6 +17,7 @@ This document describes the HTTP API endpoints available on Geogram radio statio
   - [Blog](#blog)
   - [Logs](#logs)
   - [Debug API](#debug-api)
+  - [Backup](#backup)
 - [WebSocket Connection](#websocket-connection)
 - [Station Configuration](#station-configuration)
 
@@ -1114,6 +1115,14 @@ Triggers a debug action.
 | `voice_record` | Record audio for testing | `duration` (optional): Seconds to record (default: 5) |
 | `voice_stop` | Stop recording and get file path | None |
 | `voice_status` | Get recording/playback status | None |
+| `backup_provider_enable` | Enable backup provider mode | `max_storage_bytes` (optional): Max total storage, `max_client_storage` (optional): Per-client limit, `max_snapshots` (optional): Max snapshots per client |
+| `backup_create_test_data` | Create random test files for backup testing | `file_count` (optional): Number of files (default: 10), `max_file_size` (optional): Max bytes per file (default: 10240) |
+| `backup_send_invite` | Send backup invite to a provider | `provider_callsign` (required): Target provider callsign, `interval_days` (optional): Backup interval (default: 3) |
+| `backup_accept_invite` | Accept a pending backup invite (provider side) | `client_callsign` (required): Client to accept |
+| `backup_start` | Start backup to a provider | `provider_callsign` (required): Target provider |
+| `backup_get_status` | Get current backup/restore status | None |
+| `backup_restore` | Start restore from a provider snapshot | `provider_callsign` (required): Provider callsign, `snapshot_id` (optional): Snapshot date (YYYY-MM-DD) |
+| `backup_list_snapshots` | List available snapshots from a provider | `provider_callsign` (required): Provider callsign |
 
 **Response - Success (200 OK):**
 ```json
@@ -1185,6 +1194,46 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "sync_dm", "callsign": "REMOTE-42", "url": "http://192.168.1.100:3456"}'
+
+# Enable backup provider mode
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_provider_enable", "max_storage_bytes": 10737418240}'
+
+# Create test data files for backup testing
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_create_test_data", "file_count": 5, "max_file_size": 4096}'
+
+# Send backup invite to a provider
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_send_invite", "provider_callsign": "X2BCDE", "interval_days": 3}'
+
+# Accept backup invite (on provider side)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_accept_invite", "client_callsign": "X1ABCD"}'
+
+# Start backup
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_start", "provider_callsign": "X2BCDE"}'
+
+# Get backup/restore status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_get_status"}'
+
+# List snapshots from a provider
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_list_snapshots", "provider_callsign": "X2BCDE"}'
+
+# Restore from a snapshot
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "backup_restore", "provider_callsign": "X2BCDE", "snapshot_id": "2025-12-12"}'
 ```
 
 ---
@@ -1239,6 +1288,380 @@ Returns list of discovered devices. **Requires Debug API to be enabled.**
 | `bleRssi` | int | BLE signal strength in dBm |
 
 **Response (403 Forbidden):** Debug API is disabled.
+
+---
+
+### Backup
+
+The Backup API enables peer-to-peer backup and restore between devices. A device can act as a backup client (sending backups) or a backup provider (storing backups for others). All backup data is end-to-end encrypted using the client's NOSTR keys.
+
+For detailed specifications, see [Backup Format Specification](apps/backup-format-specification.md).
+
+#### Provider Endpoints
+
+##### GET /api/backup/settings
+
+Returns provider backup settings.
+
+**Response (200 OK):**
+```json
+{
+  "enabled": true,
+  "max_total_storage_bytes": 107374182400,
+  "used_storage_bytes": 52428800000,
+  "available_storage_bytes": 54946382400,
+  "client_count": 5,
+  "default_max_client_storage_bytes": 10737418240,
+  "default_max_snapshots": 10
+}
+```
+
+##### PUT /api/backup/settings
+
+Update provider backup settings.
+
+**Request:**
+```json
+{
+  "enabled": true,
+  "max_total_storage_bytes": 214748364800,
+  "default_max_client_storage_bytes": 21474836480,
+  "default_max_snapshots": 15
+}
+```
+
+**Response (200 OK):** Updated settings object.
+
+##### GET /api/backup/clients
+
+List all backup clients for this provider.
+
+**Response (200 OK):**
+```json
+{
+  "clients": [
+    {
+      "callsign": "X1ABCD",
+      "npub": "npub1abc123...",
+      "status": "active",
+      "max_storage_bytes": 10737418240,
+      "current_storage_bytes": 524288000,
+      "snapshot_count": 3,
+      "last_backup_at": "2025-12-12T15:30:00Z"
+    }
+  ]
+}
+```
+
+##### GET /api/backup/clients/{callsign}
+
+Get specific client info.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Client's callsign |
+
+**Response (200 OK):** Client object with full details.
+
+##### DELETE /api/backup/clients/{callsign}
+
+Remove client and optionally delete their backups.
+
+**Query Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `delete_data` | `false` | Also delete all backup data |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "callsign": "X1ABCD",
+  "data_deleted": true
+}
+```
+
+##### GET /api/backup/clients/{callsign}/snapshots
+
+List client's snapshots.
+
+**Response (200 OK):**
+```json
+{
+  "snapshots": [
+    {
+      "snapshot_id": "2025-12-12",
+      "status": "complete",
+      "total_files": 1234,
+      "total_bytes": 524288000,
+      "started_at": "2025-12-12T15:30:00Z",
+      "completed_at": "2025-12-12T16:45:00Z"
+    }
+  ]
+}
+```
+
+##### GET /api/backup/clients/{callsign}/snapshots/{date}
+
+Get snapshot manifest (encrypted).
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `callsign` | Client's callsign |
+| `date` | Snapshot date `YYYY-MM-DD` |
+
+**Response (200 OK):** Encrypted manifest JSON (decryptable only by client).
+
+##### GET /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
+
+Download encrypted file from snapshot.
+
+**Response (200 OK):** Binary encrypted file data.
+
+##### PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
+
+Upload encrypted file to snapshot. Requires NOSTR authentication.
+
+**Headers:**
+| Header | Description |
+|--------|-------------|
+| `Authorization` | `Nostr <base64_encoded_event>` |
+| `Content-Type` | `application/octet-stream` |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "file": "a94a8fe5.enc",
+  "bytes": 4128
+}
+```
+
+#### Client Endpoints
+
+##### GET /api/backup/providers
+
+List configured backup providers.
+
+**Response (200 OK):**
+```json
+{
+  "providers": [
+    {
+      "callsign": "X2BCDE",
+      "npub": "npub1xyz789...",
+      "status": "active",
+      "max_storage_bytes": 10737418240,
+      "backup_interval_days": 3,
+      "last_successful_backup": "2025-12-12T15:30:00Z",
+      "next_scheduled_backup": "2025-12-15T15:30:00Z"
+    }
+  ]
+}
+```
+
+##### POST /api/backup/providers
+
+Send backup invite to a device.
+
+**Request:**
+```json
+{
+  "callsign": "X2BCDE",
+  "backup_interval_days": 3
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "status": "pending",
+  "provider_callsign": "X2BCDE"
+}
+```
+
+##### PUT /api/backup/providers/{callsign}
+
+Update provider settings (e.g., backup interval).
+
+**Request:**
+```json
+{
+  "backup_interval_days": 7
+}
+```
+
+##### DELETE /api/backup/providers/{callsign}
+
+Remove provider relationship.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "callsign": "X2BCDE"
+}
+```
+
+##### POST /api/backup/start
+
+Start manual backup to a provider.
+
+**Request:**
+```json
+{
+  "provider_callsign": "X2BCDE"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "snapshot_id": "2025-12-12",
+  "status": "in_progress"
+}
+```
+
+##### GET /api/backup/status
+
+Get current backup status.
+
+**Response (200 OK):**
+```json
+{
+  "active_backup": {
+    "provider_callsign": "X2BCDE",
+    "snapshot_id": "2025-12-12",
+    "status": "in_progress",
+    "progress_percent": 45,
+    "files_transferred": 567,
+    "files_total": 1234,
+    "bytes_transferred": 234567890,
+    "bytes_total": 524288000,
+    "started_at": "2025-12-12T15:30:00Z"
+  }
+}
+```
+
+##### POST /api/backup/restore
+
+Start restore from a provider snapshot.
+
+**Request:**
+```json
+{
+  "provider_callsign": "X2BCDE",
+  "snapshot_id": "2025-12-12"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "status": "downloading",
+  "total_files": 1234,
+  "total_bytes": 524288000
+}
+```
+
+#### Provider Discovery (Account Restoration)
+
+When restoring an account on a new device, the client can automatically discover backup providers using a challenge-response protocol that protects privacy.
+
+##### POST /api/backup/discover
+
+Initiate automatic provider discovery. Queries all connected devices via station to find backup providers for the local NPUB.
+
+**Request:**
+```json
+{
+  "timeout_seconds": 30
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "discovery_id": "abc123",
+  "status": "in_progress",
+  "devices_to_query": 42
+}
+```
+
+##### GET /api/backup/discover/{discovery_id}
+
+Poll discovery status.
+
+**Parameters:**
+| Parameter | Description |
+|-----------|-------------|
+| `discovery_id` | ID returned from POST /api/backup/discover |
+
+**Response (200 OK) - In Progress:**
+```json
+{
+  "discovery_id": "abc123",
+  "status": "in_progress",
+  "devices_queried": 20,
+  "devices_responded": 15,
+  "providers_found": []
+}
+```
+
+**Response (200 OK) - Complete:**
+```json
+{
+  "discovery_id": "abc123",
+  "status": "complete",
+  "devices_queried": 42,
+  "devices_responded": 38,
+  "providers_found": [
+    {
+      "callsign": "X2BCDE",
+      "npub": "npub1xyz789...",
+      "max_storage_bytes": 10737418240,
+      "snapshot_count": 5,
+      "latest_snapshot": "2025-12-10"
+    },
+    {
+      "callsign": "X3CDEF",
+      "npub": "npub1abc456...",
+      "max_storage_bytes": 5368709120,
+      "snapshot_count": 3,
+      "latest_snapshot": "2025-12-08"
+    }
+  ]
+}
+```
+
+**Discovery Protocol:**
+
+The discovery uses NOSTR-signed challenge-response to ensure only the NPUB owner can identify their providers:
+
+1. Client sends signed `backup_discovery_challenge` to each connected device
+2. Each device verifies signature and checks if they're a provider for that NPUB
+3. Provider responds with signed `backup_discovery_response` echoing the unique challenge
+4. Client verifies response signatures and collects provider list
+
+This protects privacy: without the NSEC (private key), no one can discover who backs up whom.
+
+**Example Usage:**
+```bash
+# Start discovery
+curl -X POST http://localhost:3456/api/backup/discover \
+  -H "Content-Type: application/json" \
+  -d '{"timeout_seconds": 30}'
+# Returns: {"discovery_id": "abc123", "status": "in_progress", ...}
+
+# Poll for results
+curl http://localhost:3456/api/backup/discover/abc123
+# Returns: {"status": "complete", "providers_found": [...]}
+```
 
 ---
 
