@@ -16,6 +16,7 @@ import '../services/signing_service.dart';
 import '../services/user_location_service.dart';
 import '../services/security_service.dart';
 import '../services/backup_service.dart';
+import '../services/ble_foreground_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -236,6 +237,9 @@ class WebSocketService {
                 _disconnectGraceTimer = null;
                 // Fire connected event
                 _fireConnectionStateChanged(true, stationCallsign: stationId);
+                // Enable foreground service keep-alive on Android
+                // This ensures the WebSocket stays alive even when the display is off
+                _enableForegroundKeepAlive();
               } else {
                 LogService().log('✗ Hello rejected');
                 LogService().log('Reason: ${data['message']}');
@@ -347,6 +351,9 @@ class WebSocketService {
     }
     _channel = null;
     _subscription = null;
+
+    // Disable foreground service keep-alive on Android
+    _disableForegroundKeepAlive();
 
     // Fire disconnected event
     _fireConnectionStateChanged(false);
@@ -1079,6 +1086,9 @@ class WebSocketService {
     _subscription?.cancel();
     _subscription = null;
 
+    // Disable foreground service keep-alive on Android when connection lost
+    _disableForegroundKeepAlive();
+
     // If not attempting reconnection, mark as disconnected immediately
     if (!_shouldReconnect) {
       _disconnectGraceTimer?.cancel();
@@ -1139,6 +1149,39 @@ class WebSocketService {
       LogService().log('✗ Reconnection failed: $e');
       _isReconnecting = false;
     }
+  }
+
+  /// Enable Android foreground service keep-alive for WebSocket
+  /// This is called when WebSocket successfully connects to the station
+  void _enableForegroundKeepAlive() {
+    // Only relevant on Android - other platforms don't need this
+    if (kIsWeb) return;
+    if (!Platform.isAndroid) return;
+
+    final foregroundService = BLEForegroundService();
+
+    // Set up callback to send PING when foreground service triggers keep-alive
+    foregroundService.onKeepAlivePing = () {
+      LogService().log('Foreground service triggered keep-alive ping');
+      _sendPing();
+    };
+
+    // Enable keep-alive in the foreground service
+    foregroundService.enableKeepAlive();
+    LogService().log('WebSocket: Enabled foreground service keep-alive');
+  }
+
+  /// Disable Android foreground service keep-alive for WebSocket
+  /// This is called when WebSocket disconnects from the station
+  void _disableForegroundKeepAlive() {
+    // Only relevant on Android
+    if (kIsWeb) return;
+    if (!Platform.isAndroid) return;
+
+    final foregroundService = BLEForegroundService();
+    foregroundService.onKeepAlivePing = null;
+    foregroundService.disableKeepAlive();
+    LogService().log('WebSocket: Disabled foreground service keep-alive');
   }
 
   /// Cleanup

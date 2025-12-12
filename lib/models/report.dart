@@ -134,6 +134,7 @@ class Report {
   final Map<String, String> metadata;
   final List<StationShareStatus> stationShares;
   final String? nostrEventId;
+  final String? lastModified; // ISO 8601 format timestamp of last modification
 
   Report({
     required this.folderName,
@@ -166,6 +167,7 @@ class Report {
     this.metadata = const {},
     this.stationShares = const [],
     this.nostrEventId,
+    this.lastModified,
   });
 
   /// Check if user has liked this report
@@ -200,6 +202,16 @@ class Report {
     final expDate = expirationDateTime;
     if (expDate == null) return false;
     return DateTime.now().isAfter(expDate);
+  }
+
+  /// Parse last modified timestamp to DateTime
+  DateTime? get lastModifiedDateTime {
+    if (lastModified == null) return null;
+    try {
+      return DateTime.parse(lastModified!);
+    } catch (e) {
+      return null;
+    }
   }
 
   /// Get NOSTR public key
@@ -351,6 +363,7 @@ class Report {
     Map<String, String> metadata = {};
     List<StationShareStatus> stationShares = [];
     String? nostrEventId;
+    String? lastModified;
 
     int contentStart = headerEnd;
     for (int i = headerEnd; i < lines.length; i++) {
@@ -406,6 +419,8 @@ class Report {
         likedBy = line.substring(10).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       } else if (line.startsWith('LIKE_COUNT: ')) {
         likeCount = int.tryParse(line.substring(12).trim()) ?? 0;
+      } else if (line.startsWith('LAST_MODIFIED: ')) {
+        lastModified = line.substring(15).trim();
       } else if (line.startsWith('-->')) {
         final metaLine = line.substring(3).trim();
         final colonIndex = metaLine.indexOf(':');
@@ -527,6 +542,7 @@ class Report {
       metadata: metadata,
       stationShares: stationShares,
       nostrEventId: nostrEventId,
+      lastModified: lastModified,
     );
   }
 
@@ -605,6 +621,9 @@ class Report {
     if (likeCount > 0) {
       buffer.writeln('LIKE_COUNT: $likeCount');
     }
+    if (lastModified != null && lastModified!.isNotEmpty) {
+      buffer.writeln('LAST_MODIFIED: $lastModified');
+    }
 
     buffer.writeln();
 
@@ -674,6 +693,7 @@ class Report {
     Map<String, String>? metadata,
     List<StationShareStatus>? stationShares,
     String? nostrEventId,
+    String? lastModified,
   }) {
     return Report(
       folderName: folderName ?? this.folderName,
@@ -706,12 +726,92 @@ class Report {
       metadata: metadata ?? this.metadata,
       stationShares: stationShares ?? this.stationShares,
       nostrEventId: nostrEventId ?? this.nostrEventId,
+      lastModified: lastModified ?? this.lastModified,
     );
   }
 
   @override
   String toString() {
     return 'Report(folder: $folderName, severity: ${severity.name}, status: ${status.name})';
+  }
+
+  /// Create Report from API JSON (from toApiJson output)
+  factory Report.fromApiJson(Map<String, dynamic> json) {
+    // Parse titles from translations or single title
+    final titles = <String, String>{};
+    final titleTranslations = json['title_translations'] as Map<String, dynamic>?;
+    if (titleTranslations != null) {
+      for (final entry in titleTranslations.entries) {
+        titles[entry.key] = entry.value as String;
+      }
+    } else if (json['title'] != null) {
+      titles['EN'] = json['title'] as String;
+    }
+
+    // Parse descriptions from translations or single description
+    final descriptions = <String, String>{};
+    final descTranslations = json['description_translations'] as Map<String, dynamic>?;
+    if (descTranslations != null) {
+      for (final entry in descTranslations.entries) {
+        descriptions[entry.key] = entry.value as String;
+      }
+    } else if (json['description'] != null) {
+      descriptions['EN'] = json['description'] as String;
+    }
+
+    // Parse verified_by list
+    final verifiedBy = (json['verified_by'] as List<dynamic>?)
+        ?.map((e) => e as String)
+        .toList() ?? [];
+
+    // Parse liked_by list
+    final likedBy = (json['liked_by'] as List<dynamic>?)
+        ?.map((e) => e as String)
+        .toList() ?? [];
+
+    // Parse admins list
+    final admins = (json['admins'] as List<dynamic>?)
+        ?.map((e) => e as String)
+        .toList() ?? [];
+
+    // Parse moderators list
+    final moderators = (json['moderators'] as List<dynamic>?)
+        ?.map((e) => e as String)
+        .toList() ?? [];
+
+    // Build metadata for signature/npub
+    final metadata = <String, String>{};
+    if (json['npub'] != null) {
+      metadata['npub'] = json['npub'] as String;
+    }
+    if (json['signature'] != null) {
+      metadata['signature'] = json['signature'] as String;
+    }
+
+    return Report(
+      folderName: json['id'] as String? ?? '',
+      created: json['created'] as String? ?? '',
+      author: json['author'] as String? ?? '',
+      latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
+      longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+      severity: ReportSeverity.fromString(json['severity'] as String? ?? 'info'),
+      type: json['type'] as String? ?? 'other',
+      status: ReportStatus.fromString(json['status'] as String? ?? 'open'),
+      address: json['address'] as String?,
+      contact: json['contact'] as String?,
+      verifiedBy: verifiedBy,
+      verificationCount: json['verification_count'] as int? ?? verifiedBy.length,
+      likedBy: likedBy,
+      likeCount: json['like_count'] as int? ?? likedBy.length,
+      admins: admins,
+      moderators: moderators,
+      ttl: json['ttl'] as int?,
+      expires: json['expires'] as String?,
+      titles: titles,
+      descriptions: descriptions,
+      metadata: metadata,
+      lastModified: json['last_modified'] as String?,
+    );
   }
 
   /// Generate API ID from created timestamp and title (YYYY-MM-DD_title-slug)
@@ -759,6 +859,7 @@ class Report {
         'verification_count': verificationCount,
         'like_count': likeCount,
         'has_photos': hasPhotos,
+        'last_modified': lastModified,
       };
     }
     // Full JSON for detail view
@@ -787,6 +888,7 @@ class Report {
       'expires': expires,
       'npub': npub,
       'signature': signature,
+      'last_modified': lastModified,
     };
   }
 }

@@ -59,6 +59,96 @@ class Event {
     this.links = const [],
   });
 
+  /// Create Event from API JSON (from toApiJson output)
+  factory Event.fromApiJson(Map<String, dynamic> json) {
+    // Parse comments if present
+    final commentsJson = json['comments'] as List<dynamic>? ?? [];
+    final comments = commentsJson.map((c) {
+      final commentMap = c as Map<String, dynamic>;
+      return EventComment(
+        author: commentMap['author'] as String? ?? '',
+        timestamp: commentMap['timestamp'] as String? ?? '',
+        content: commentMap['content'] as String? ?? '',
+        metadata: commentMap['npub'] != null
+            ? {'npub': commentMap['npub'] as String}
+            : {},
+      );
+    }).toList();
+
+    // Parse updates if present
+    final updatesJson = json['updates'] as List<dynamic>? ?? [];
+    final updates = updatesJson.map((u) {
+      final updateMap = u as Map<String, dynamic>;
+      return EventUpdate(
+        id: updateMap['id'] as String? ?? '',
+        title: updateMap['title'] as String? ?? '',
+        author: updateMap['author'] as String? ?? '',
+        posted: updateMap['posted'] as String? ?? '',
+        content: updateMap['content'] as String? ?? '',
+      );
+    }).toList();
+
+    // Parse registration if present
+    EventRegistration? registration;
+    final regJson = json['registration'] as Map<String, dynamic>?;
+    if (regJson != null) {
+      final goingJson = regJson['going'] as List<dynamic>? ?? [];
+      final interestedJson = regJson['interested'] as List<dynamic>? ?? [];
+
+      final going = goingJson.map((e) {
+        final entryMap = e as Map<String, dynamic>;
+        return RegistrationEntry(
+          callsign: entryMap['callsign'] as String? ?? '',
+          npub: entryMap['npub'] as String? ?? '',
+        );
+      }).toList();
+
+      final interested = interestedJson.map((e) {
+        final entryMap = e as Map<String, dynamic>;
+        return RegistrationEntry(
+          callsign: entryMap['callsign'] as String? ?? '',
+          npub: entryMap['npub'] as String? ?? '',
+        );
+      }).toList();
+
+      registration = EventRegistration(going: going, interested: interested);
+    }
+
+    // Parse links if present
+    final linksJson = json['links'] as List<dynamic>? ?? [];
+    final links = linksJson.map((l) {
+      final linkMap = l as Map<String, dynamic>;
+      return EventLink(
+        url: linkMap['url'] as String? ?? '',
+        description: linkMap['description'] as String? ?? '',
+        password: linkMap['password'] as String?,
+      );
+    }).toList();
+
+    return Event(
+      id: json['id'] as String? ?? '',
+      author: json['author'] as String? ?? '',
+      timestamp: json['timestamp'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      startDate: json['start_date'] as String?,
+      endDate: json['end_date'] as String?,
+      admins: (json['admins'] as List<dynamic>?)?.cast<String>() ?? [],
+      moderators: (json['moderators'] as List<dynamic>?)?.cast<String>() ?? [],
+      location: json['location'] as String? ?? 'online',
+      locationName: json['location_name'] as String?,
+      content: json['content'] as String? ?? '',
+      agenda: json['agenda'] as String?,
+      visibility: json['visibility'] as String? ?? 'public',
+      likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
+      comments: comments,
+      flyers: (json['flyers'] as List<dynamic>?)?.cast<String>() ?? [],
+      trailer: json['trailer'] as String?,
+      updates: updates,
+      registration: registration,
+      links: links,
+    );
+  }
+
   /// Parse timestamp to DateTime
   DateTime get dateTime {
     try {

@@ -286,18 +286,28 @@ class ReportService {
   ///
   /// If [notifyRelays] is true and the report has already been shared,
   /// it will send an update to the stations (using the same d-tag for replacement).
+  /// If [updateLastModified] is true (default), the lastModified timestamp is updated.
   Future<void> saveReport(
     Report report, {
     bool isExpired = false,
     bool notifyRelays = true,
+    bool updateLastModified = true,
   }) async {
     if (_collectionPath == null) return;
 
+    // Update lastModified timestamp if requested
+    var reportToSave = report;
+    if (updateLastModified) {
+      reportToSave = report.copyWith(
+        lastModified: DateTime.now().toUtc().toIso8601String(),
+      );
+    }
+
     final baseDir = isExpired ? 'expired' : 'active';
-    final regionFolder = report.regionFolder;
-    final reportPath = '$_collectionPath/$baseDir/$regionFolder/${report.folderName}';
+    final regionFolder = reportToSave.regionFolder;
+    final reportPath = '$_collectionPath/$baseDir/$regionFolder/${reportToSave.folderName}';
     final reportFilePath = '$reportPath/report.txt';
-    final content = report.exportAsText();
+    final content = reportToSave.exportAsText();
 
     if (kIsWeb) {
       final fs = FileSystemService.instance;
@@ -314,13 +324,13 @@ class ReportService {
       await reportFile.writeAsString(content, flush: true);
     }
 
-    LogService().log('ReportService: Saved report: ${report.folderName}');
+    LogService().log('ReportService: Saved report: ${reportToSave.folderName}');
 
     // Notify stations of update if this is an existing alert
-    if (notifyRelays && report.nostrEventId != null) {
+    if (notifyRelays && reportToSave.nostrEventId != null) {
       try {
         final alertService = AlertSharingService();
-        final result = await alertService.shareAlert(report);
+        final result = await alertService.shareAlert(reportToSave);
 
         if (result.anySuccess) {
           LogService().log(
@@ -375,6 +385,7 @@ class ReportService {
       expires: expires,
       titles: {'EN': title},
       descriptions: {'EN': description},
+      lastModified: now.toUtc().toIso8601String(),
     );
 
     // Sign the report and create NOSTR event BEFORE saving
@@ -384,15 +395,15 @@ class ReportService {
     if (signResult == null) {
       // Failed to sign - save unsigned report (should not happen in normal use)
       LogService().log('ReportService: WARNING - Failed to sign report, saving without NOSTR data');
-      await saveReport(report, notifyRelays: false);
+      await saveReport(report, notifyRelays: false, updateLastModified: false);
       return report;
     }
 
     // Use the signed report (has npub + signature in metadata)
     report = signResult.report;
 
-    // Save the signed report first
-    await saveReport(report, notifyRelays: false);
+    // Save the signed report first (don't update lastModified, already set on creation)
+    await saveReport(report, notifyRelays: false, updateLastModified: false);
 
     // Share to stations using the pre-created event
     try {
@@ -424,8 +435,8 @@ class ReportService {
           );
         }
 
-        // Re-save with station status
-        await saveReport(report, notifyRelays: false);
+        // Re-save with station status (don't update lastModified)
+        await saveReport(report, notifyRelays: false, updateLastModified: false);
         LogService().log('ReportService: Alert shared to $confirmed station(s), $failed failed');
       }
     } catch (e) {
@@ -730,6 +741,9 @@ class ReportService {
       final commentFile = File(commentFilePath);
       await commentFile.writeAsString(fileContent, flush: true);
     }
+
+    // Update the report's lastModified timestamp
+    await saveReport(report, isExpired: isExpired, notifyRelays: false);
 
     LogService().log('ReportService: Added comment to $folderName');
 

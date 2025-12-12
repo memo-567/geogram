@@ -24,6 +24,8 @@ import '../services/bluetooth_classic_pairing_service.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'dm_chat_page.dart';
+import 'events_browser_page.dart';
+import 'report_browser_page.dart';
 
 /// Page for browsing remote devices and their collections
 class DevicesBrowserPage extends StatefulWidget {
@@ -354,6 +356,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       case 'chat':
         _openChatCollection(collection);
         break;
+      case 'events':
+        _openEventsCollection(collection);
+        break;
+      case 'alerts':
+        _openAlertsCollection(collection);
+        break;
       default:
         _showCollectionInfo(collection);
     }
@@ -380,6 +388,62 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ChatBrowserPage(
+          remoteDeviceUrl: remoteUrl,
+          remoteDeviceCallsign: _selectedDevice!.callsign,
+          remoteDeviceName: _selectedDevice!.name,
+        ),
+      ),
+    );
+  }
+
+  void _openEventsCollection(RemoteCollection collection) {
+    if (_selectedDevice == null) return;
+
+    // Build the remote device URL
+    String remoteUrl = _selectedDevice!.url ?? '';
+
+    // Convert WebSocket URL to HTTP URL for API calls
+    if (remoteUrl.startsWith('ws://')) {
+      remoteUrl = remoteUrl.replaceFirst('ws://', 'http://');
+    } else if (remoteUrl.startsWith('wss://')) {
+      remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
+    }
+
+    LogService().log('DevicesBrowserPage: Opening events for ${_selectedDevice!.callsign} at $remoteUrl');
+
+    // Navigate to the EventsBrowserPage with remote device parameters
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EventsBrowserPage(
+          remoteDeviceUrl: remoteUrl,
+          remoteDeviceCallsign: _selectedDevice!.callsign,
+          remoteDeviceName: _selectedDevice!.name,
+        ),
+      ),
+    );
+  }
+
+  void _openAlertsCollection(RemoteCollection collection) {
+    if (_selectedDevice == null) return;
+
+    // Build the remote device URL
+    String remoteUrl = _selectedDevice!.url ?? '';
+
+    // Convert WebSocket URL to HTTP URL for API calls
+    if (remoteUrl.startsWith('ws://')) {
+      remoteUrl = remoteUrl.replaceFirst('ws://', 'http://');
+    } else if (remoteUrl.startsWith('wss://')) {
+      remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
+    }
+
+    LogService().log('DevicesBrowserPage: Opening alerts for ${_selectedDevice!.callsign} at $remoteUrl');
+
+    // Navigate to the ReportBrowserPage with remote device parameters
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReportBrowserPage(
           remoteDeviceUrl: remoteUrl,
           remoteDeviceCallsign: _selectedDevice!.callsign,
           remoteDeviceName: _selectedDevice!.name,
@@ -827,7 +891,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                           ],
                         ),
                       ),
-                    if (folder.isDefault && deviceCount > 0)
+                    if (deviceCount > 0)
                       PopupMenuItem<String>(
                         value: 'select_all',
                         child: Row(
@@ -835,6 +899,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                             Icon(Icons.select_all, size: 20, color: theme.colorScheme.primary),
                             const SizedBox(width: 12),
                             Text(_i18n.t('select_all')),
+                          ],
+                        ),
+                      ),
+                    // Remove disconnected option - available when there are offline devices
+                    if (devicesInFolder.any((d) => !d.isOnline))
+                      PopupMenuItem<String>(
+                        value: 'remove_disconnected',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_sweep_outlined, size: 20, color: theme.colorScheme.error),
+                            const SizedBox(width: 12),
+                            Text(
+                              _i18n.t('remove_disconnected'),
+                              style: TextStyle(color: theme.colorScheme.error),
+                            ),
                           ],
                         ),
                       ),
@@ -956,6 +1035,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
           }
         });
         break;
+      case 'remove_disconnected':
+        await _confirmRemoveDisconnected(folder);
+        break;
     }
   }
 
@@ -1046,6 +1128,49 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
     if (confirmed == true) {
       await _devicesService.deleteFolder(folder.id);
+      setState(() {});
+    }
+  }
+
+  /// Confirm removing all disconnected devices from a folder
+  Future<void> _confirmRemoveDisconnected(DeviceFolder folder) async {
+    final devices = _devicesService.getDevicesInFolder(
+      folder.id == DevicesService.defaultFolderId ? null : folder.id,
+    );
+    final offlineDevices = devices.where((d) => !d.isOnline).toList();
+    final offlineCount = offlineDevices.length;
+
+    if (offlineCount == 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('remove_disconnected')),
+        content: Text(_i18n.t('remove_disconnected_confirm', params: [offlineCount.toString()])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('remove')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      for (final device in offlineDevices) {
+        await _devicesService.removeDevice(device.callsign);
+        if (_selectedDevice?.callsign == device.callsign) {
+          _selectedDevice = null;
+        }
+      }
+      _devices = _filterRemoteDevices(_devicesService.getAllDevices());
       setState(() {});
     }
   }
@@ -1186,23 +1311,25 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Direct message button with unread badge
-          Badge(
-            isLabelVisible: (_dmUnreadCounts[device.callsign] ?? 0) > 0,
-            label: Text(
-              (_dmUnreadCounts[device.callsign] ?? 0) > 99
-                  ? '99+'
-                  : '${_dmUnreadCounts[device.callsign] ?? 0}',
-            ),
-            child: IconButton(
-              icon: Icon(
-                Icons.message_outlined,
-                color: theme.colorScheme.primary,
-                size: 20,
+          // Only show for online devices that are not stations (stations can't reply)
+          if (device.isOnline && !isStation)
+            Badge(
+              isLabelVisible: (_dmUnreadCounts[device.callsign] ?? 0) > 0,
+              label: Text(
+                (_dmUnreadCounts[device.callsign] ?? 0) > 99
+                    ? '99+'
+                    : '${_dmUnreadCounts[device.callsign] ?? 0}',
               ),
-              onPressed: () => _openDirectMessage(device),
-              tooltip: _i18n.t('send_message'),
+              child: IconButton(
+                icon: Icon(
+                  Icons.message_outlined,
+                  color: theme.colorScheme.primary,
+                  size: 20,
+                ),
+                onPressed: () => _openDirectMessage(device),
+                tooltip: _i18n.t('send_message'),
+              ),
             ),
-          ),
           // Menu button with pin and delete options
           PopupMenuButton<String>(
             icon: Icon(

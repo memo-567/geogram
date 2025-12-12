@@ -23,6 +23,7 @@ import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
+import '../services/alert_feedback_service.dart';
 import 'location_picker_page.dart';
 
 /// Page for viewing and editing report details
@@ -44,6 +45,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   final ReportService _reportService = ReportService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
+  final AlertFeedbackService _alertFeedbackService = AlertFeedbackService();
 
   late bool _isNew;
   late bool _isEditing;
@@ -52,6 +54,90 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   List<ReportComment> _comments = [];
   bool _isLoading = false;
   String? _currentUserNpub;
+
+  /// Check if this report is from a remote station (not local)
+  bool get _isFromStation => _report?.metadata['from_station'] == 'true';
+
+  /// Save station alert to disk (for persisting likes, verifications, comments)
+  Future<void> _saveStationAlert() async {
+    if (_report == null || !_isFromStation || kIsWeb) return;
+
+    try {
+      // Station alerts are stored in the collection path passed to this widget
+      // which is: {devicesDir}/{callsign}/alerts
+      final alertDir = Directory(path.join(widget.collectionPath, _report!.folderName));
+      final reportFilePath = path.join(alertDir.path, 'report.txt');
+
+      LogService().log('ReportDetailPage: _saveStationAlert() - collectionPath: ${widget.collectionPath}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - folderName: ${_report!.folderName}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - alertDir: ${alertDir.path}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - reportFilePath: $reportFilePath');
+      LogService().log('ReportDetailPage: _saveStationAlert() - likedBy: ${_report!.likedBy}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - likeCount: ${_report!.likeCount}');
+
+      if (!await alertDir.exists()) {
+        await alertDir.create(recursive: true);
+        LogService().log('ReportDetailPage: _saveStationAlert() - created alertDir');
+      }
+
+      final reportFile = File(reportFilePath);
+      final exportedContent = _report!.exportAsText();
+      await reportFile.writeAsString(exportedContent);
+
+      // Verify the file was written correctly
+      final verifyContent = await reportFile.readAsString();
+      final hasLikedBy = verifyContent.contains('LIKED_BY:');
+      LogService().log('ReportDetailPage: _saveStationAlert() - file written, size: ${verifyContent.length}, hasLikedBy: $hasLikedBy');
+
+      LogService().log('ReportDetailPage: Saved station alert ${_report!.folderName}');
+    } catch (e, stack) {
+      LogService().log('ReportDetailPage: Error saving station alert: $e\n$stack');
+    }
+  }
+
+  /// Save a comment for a station alert
+  Future<void> _saveStationAlertComment(String author, String content, {String? npub}) async {
+    if (_report == null || !_isFromStation || kIsWeb) return;
+
+    try {
+      final commentsDir = Directory(path.join(widget.collectionPath, _report!.folderName, 'comments'));
+
+      if (!await commentsDir.exists()) {
+        await commentsDir.create(recursive: true);
+      }
+
+      // Generate comment filename
+      final now = DateTime.now();
+      final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
+      final fileName = '${timestamp}_$author.txt';
+
+      final commentFile = File(path.join(commentsDir.path, fileName));
+
+      // Build comment content - format must match ReportComment.fromText() expectations
+      // Format: AUTHOR, CREATED (YYYY-MM-DD HH:MM_ss), empty line, content, empty line, --> npub
+      final createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+      final buffer = StringBuffer();
+      buffer.writeln('AUTHOR: $author');
+      buffer.writeln('CREATED: $createdStr');
+      buffer.writeln();
+      buffer.writeln(content);
+
+      if (npub != null && npub.isNotEmpty) {
+        buffer.writeln();
+        buffer.writeln('--> npub: $npub');
+      }
+
+      await commentFile.writeAsString(buffer.toString());
+
+      LogService().log('ReportDetailPage: Saved comment for station alert ${_report!.folderName}');
+    } catch (e) {
+      LogService().log('ReportDetailPage: Error saving station alert comment: $e');
+    }
+  }
+
   List<String> _imageFilePaths = [];  // Store paths instead of File objects for web compatibility
   List<String> _existingImages = [];
 
@@ -154,11 +240,49 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null) return;
 
     try {
-      _comments = await _reportService.loadComments(_report!.folderName);
+      if (_isFromStation && !kIsWeb) {
+        // Load comments from station alert directory
+        _comments = await _loadStationAlertComments();
+      } else {
+        // Load comments from local collection
+        _comments = await _reportService.loadComments(_report!.folderName);
+      }
       setState(() {});
     } catch (e) {
       LogService().log('ReportDetailPage: Error loading comments: $e');
     }
+  }
+
+  /// Load comments for a station alert from local disk
+  Future<List<ReportComment>> _loadStationAlertComments() async {
+    final comments = <ReportComment>[];
+
+    try {
+      final commentsDir = Directory(path.join(widget.collectionPath, _report!.folderName, 'comments'));
+
+      if (!await commentsDir.exists()) return comments;
+
+      await for (final entity in commentsDir.list()) {
+        if (entity is! File) continue;
+        if (!entity.path.endsWith('.txt')) continue;
+
+        try {
+          final content = await entity.readAsString();
+          final fileName = entity.path.split('/').last;
+          final comment = ReportComment.fromText(content, fileName.replaceAll('.txt', ''));
+          comments.add(comment);
+        } catch (e) {
+          LogService().log('ReportDetailPage: Error loading comment: $e');
+        }
+      }
+
+      // Sort by date (newest first)
+      comments.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    } catch (e) {
+      LogService().log('ReportDetailPage: Error loading station alert comments: $e');
+    }
+
+    return comments;
   }
 
   Future<void> _addComment() async {
@@ -173,15 +297,47 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     setState(() => _isLoading = true);
 
     try {
-      await _reportService.addComment(
-        _report!.folderName,
-        profile.callsign,
-        _commentController.text.trim(),
-        npub: _currentUserNpub,
-      );
-      _commentController.clear();
-      await _loadComments();
-      _showSuccess(_i18n.t('comment_added'));
+      final commentContent = _commentController.text.trim();
+      final alertId = _report!.apiId;
+
+      if (_isFromStation) {
+        // For station alerts: save comment to local disk, then sync to station
+        await _saveStationAlertComment(profile.callsign, commentContent, npub: _currentUserNpub);
+        _commentController.clear();
+        await _loadComments();
+        _showSuccess(_i18n.t('comment_added'));
+
+        // Sync to station (best-effort)
+        _alertFeedbackService.commentOnStation(
+          alertId,
+          profile.callsign,
+          commentContent,
+          npub: _currentUserNpub,
+        ).catchError((e) {
+          LogService().log('Failed to sync comment to station: $e');
+        });
+      } else {
+        // For local alerts: use ReportService
+        await _reportService.addComment(
+          _report!.folderName,
+          profile.callsign,
+          commentContent,
+          npub: _currentUserNpub,
+        );
+        _commentController.clear();
+        await _loadComments();
+        _showSuccess(_i18n.t('comment_added'));
+
+        // Sync to station (best-effort)
+        _alertFeedbackService.commentOnStation(
+          alertId,
+          profile.callsign,
+          commentContent,
+          npub: _currentUserNpub,
+        ).catchError((e) {
+          LogService().log('Failed to sync comment to station: $e');
+        });
+      }
     } catch (e) {
       _showError('Failed to add comment: $e');
     }
@@ -195,15 +351,65 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     setState(() => _isLoading = true);
 
     try {
-      if (_report!.isLikedBy(_currentUserNpub!)) {
-        await _reportService.unlikeReport(_report!.folderName, _currentUserNpub!);
-      } else {
-        await _reportService.likeReport(_report!.folderName, _currentUserNpub!);
-      }
+      final wasLiked = _report!.isLikedBy(_currentUserNpub!);
+      final alertId = _report!.apiId;
 
-      // Reload report
-      _report = await _reportService.loadReport(_report!.folderName);
-      setState(() {});
+      if (_isFromStation) {
+        // For station alerts: update in-memory immediately, save to disk, then sync to station
+        final updatedLikedBy = List<String>.from(_report!.likedBy);
+        if (wasLiked) {
+          updatedLikedBy.remove(_currentUserNpub!);
+        } else {
+          updatedLikedBy.add(_currentUserNpub!);
+        }
+        _report = _report!.copyWith(
+          likedBy: updatedLikedBy,
+          likeCount: updatedLikedBy.length,
+          lastModified: DateTime.now().toUtc().toIso8601String(),
+        );
+
+        // Save to disk for persistence
+        await _saveStationAlert();
+
+        setState(() {});
+        _showSuccess(wasLiked ? _i18n.t('unliked') : _i18n.t('liked'));
+
+        // Sync to station (best-effort)
+        if (wasLiked) {
+          _alertFeedbackService.unlikeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+            LogService().log('Failed to sync unlike to station: $e');
+          });
+        } else {
+          _alertFeedbackService.likeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+            LogService().log('Failed to sync like to station: $e');
+          });
+        }
+      } else {
+        // For local alerts: save locally first, then sync
+        if (wasLiked) {
+          await _reportService.unlikeReport(_report!.folderName, _currentUserNpub!);
+        } else {
+          await _reportService.likeReport(_report!.folderName, _currentUserNpub!);
+        }
+
+        // Reload report from local storage
+        _report = await _reportService.loadReport(_report!.folderName);
+        setState(() {});
+        _showSuccess(wasLiked ? _i18n.t('unliked') : _i18n.t('liked'));
+
+        // Sync to station (best-effort)
+        if (_report != null) {
+          if (wasLiked) {
+            _alertFeedbackService.unlikeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+              LogService().log('Failed to sync unlike to station: $e');
+            });
+          } else {
+            _alertFeedbackService.likeAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+              LogService().log('Failed to sync like to station: $e');
+            });
+          }
+        }
+      }
     } catch (e) {
       _showError('Failed to toggle like: $e');
     }
@@ -505,15 +711,49 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   Future<void> _verify() async {
     if (_report == null || _currentUserNpub == null || _currentUserNpub!.isEmpty) return;
 
+    // Already verified by this user
+    if (_report!.verifiedBy.contains(_currentUserNpub!)) return;
+
     setState(() => _isLoading = true);
 
     try {
-      await _reportService.verify(_report!.folderName, _currentUserNpub!);
-      _showSuccess('Verified');
+      final alertId = _report!.apiId;
 
-      // Reload report
-      _report = await _reportService.loadReport(_report!.folderName);
-      setState(() {});
+      if (_isFromStation) {
+        // For station alerts: update in-memory immediately, save to disk, then sync to station
+        final updatedVerifiedBy = List<String>.from(_report!.verifiedBy)..add(_currentUserNpub!);
+        _report = _report!.copyWith(
+          verifiedBy: updatedVerifiedBy,
+          verificationCount: updatedVerifiedBy.length,
+          lastModified: DateTime.now().toUtc().toIso8601String(),
+        );
+
+        // Save to disk for persistence
+        await _saveStationAlert();
+
+        setState(() {});
+        _showSuccess(_i18n.t('verified'));
+
+        // Sync to station (best-effort)
+        _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+          LogService().log('Failed to sync verification to station: $e');
+        });
+      } else {
+        // For local alerts: save locally first, then sync
+        await _reportService.verify(_report!.folderName, _currentUserNpub!);
+        _showSuccess(_i18n.t('verified'));
+
+        // Reload report from local storage
+        _report = await _reportService.loadReport(_report!.folderName);
+        setState(() {});
+
+        // Sync to station (best-effort)
+        if (_report != null) {
+          _alertFeedbackService.verifyAlertOnStation(alertId, _currentUserNpub!).catchError((e) {
+            LogService().log('Failed to sync verification to station: $e');
+          });
+        }
+      }
     } catch (e) {
       _showError('Failed to verify: $e');
     }
@@ -526,9 +766,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     final theme = Theme.of(context);
     final profile = _profileService.getProfile();
     final isAuthor = _report != null && _report!.author == profile.callsign;
-    final canEdit = _report == null ||
+    // Can't edit station alerts (remote) - only local reports
+    final canEdit = !_isFromStation && (
+                     _report == null ||
                      isAuthor ||
-                     (_currentUserNpub != null && _report!.isAdmin(_currentUserNpub!));
+                     (_currentUserNpub != null && _report!.isAdmin(_currentUserNpub!)));
 
     return Scaffold(
       appBar: AppBar(

@@ -22,6 +22,7 @@ import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatu
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
+import '../services/storage_config.dart';
 import 'report_detail_page.dart';
 
 /// Maps browser page showing geo-located items
@@ -354,13 +355,30 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     // Open detail page based on item type
     switch (item.type) {
       case MapItemType.alert:
-        if (item.collectionPath != null && item.sourceItem is Report) {
+        if (item.sourceItem is Report) {
+          final report = item.sourceItem as Report;
+          String collectionPath;
+
+          if (item.isFromStation) {
+            // Station alerts: construct path from devices directory
+            final storageConfig = StorageConfig();
+            final callsign = report.metadata['station_callsign'] ?? 'unknown';
+            collectionPath = '${storageConfig.devicesDir}/$callsign/alerts';
+          } else if (item.collectionPath != null) {
+            // Local alerts: use the collection path
+            collectionPath = item.collectionPath!;
+          } else {
+            // Fallback - shouldn't happen
+            LogService().log('MapsBrowserPage: Alert has no collection path');
+            return;
+          }
+
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => ReportDetailPage(
-                collectionPath: item.collectionPath!,
-                report: item.sourceItem as Report,
+                collectionPath: collectionPath,
+                report: report,
               ),
             ),
           );

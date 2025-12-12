@@ -264,6 +264,14 @@ class StationAlertService {
             '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_$seconds';
       }
 
+      // Parse feedback fields
+      final likedBy = (json['liked_by'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList() ?? [];
+      final verifiedBy = (json['verified_by'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList() ?? [];
+
       return Report(
         folderName: folderName,
         titles: {'EN': json['title'] as String? ?? folderName},
@@ -276,6 +284,11 @@ class StationAlertService {
         created: created,
         author: json['author'] as String? ?? callsign,
         address: json['address'] as String?,
+        likedBy: likedBy,
+        likeCount: json['like_count'] as int? ?? likedBy.length,
+        verifiedBy: verifiedBy,
+        verificationCount: json['verification_count'] as int? ?? verifiedBy.length,
+        lastModified: json['last_modified'] as String?,
         metadata: {
           'station_callsign': callsign,
           'from_station': 'true',
@@ -287,19 +300,35 @@ class StationAlertService {
     }
   }
 
-  /// Merge new alerts into cache, avoiding duplicates
+  /// Merge new alerts into cache, using lastModified to determine which version is newer
   void _mergeAlerts(List<Report> newAlerts) {
     final existingFolders = _cachedAlerts.map((a) => a.folderName).toSet();
 
     for (final alert in newAlerts) {
       if (!existingFolders.contains(alert.folderName)) {
+        // New alert - add to cache
         _cachedAlerts.add(alert);
         existingFolders.add(alert.folderName);
       } else {
-        // Update existing alert
+        // Existing alert - compare lastModified timestamps
         final index = _cachedAlerts.indexWhere((a) => a.folderName == alert.folderName);
         if (index >= 0) {
-          _cachedAlerts[index] = alert;
+          final existing = _cachedAlerts[index];
+          final existingModified = existing.lastModifiedDateTime;
+          final newModified = alert.lastModifiedDateTime;
+
+          // Update if station version is newer or if we don't have lastModified info
+          if (newModified != null) {
+            if (existingModified == null || newModified.isAfter(existingModified)) {
+              // Station version is newer - update cache with new feedback counts
+              _cachedAlerts[index] = alert;
+              LogService().log('StationAlertService: Updated alert ${alert.folderName} (station version newer)');
+            }
+          } else if (existingModified == null) {
+            // Neither has lastModified, use station version
+            _cachedAlerts[index] = alert;
+          }
+          // Otherwise keep existing (our version is newer)
         }
       }
     }

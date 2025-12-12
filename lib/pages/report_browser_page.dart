@@ -3,9 +3,11 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../models/report.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
@@ -14,19 +16,35 @@ import '../services/alert_sharing_service.dart';
 import '../services/station_alert_service.dart';
 import '../services/user_location_service.dart';
 import '../services/log_service.dart';
+import '../services/storage_config.dart';
 import 'report_detail_page.dart';
 import 'report_settings_page.dart';
 
 /// Report browser page with list and map views
 class ReportBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String? collectionPath;
+  final String? collectionTitle;
+
+  /// Remote device URL for viewing alerts from another device (e.g., "http://localhost:5577")
+  final String? remoteDeviceUrl;
+
+  /// Remote device callsign (for display)
+  final String? remoteDeviceCallsign;
+
+  /// Remote device name (for display)
+  final String? remoteDeviceName;
 
   const ReportBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    this.collectionPath,
+    this.collectionTitle,
+    this.remoteDeviceUrl,
+    this.remoteDeviceCallsign,
+    this.remoteDeviceName,
   });
+
+  /// Check if viewing remote device alerts
+  bool get isRemoteDevice => remoteDeviceUrl != null;
 
   @override
   State<ReportBrowserPage> createState() => _ReportBrowserPageState();
@@ -76,21 +94,93 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   }
 
   Future<void> _initialize() async {
-    await _reportService.initializeCollection(widget.collectionPath);
-    await _loadReports();
+    if (widget.isRemoteDevice) {
+      // Remote mode: load alerts from remote device API
+      await _loadRemoteAlerts();
+    } else {
+      // Local mode: load from local collection
+      await _reportService.initializeCollection(widget.collectionPath ?? '');
+      await _loadReports();
 
-    // Initialize user location service for automatic updates
-    await _userLocationService.initialize();
+      // Initialize user location service for automatic updates
+      await _userLocationService.initialize();
 
-    // Load cached station alerts and start polling
-    await _stationAlertService.loadCachedAlerts();
-    _stationAlerts = _stationAlertService.cachedAlerts;
-    _filterRelayAlertsByDistance();
-    _lastFetchTime = _stationAlertService.getTimeSinceLastFetch();
-    _stationAlertService.startPolling();
+      // Load cached station alerts from disk (instant display)
+      await _stationAlertService.loadCachedAlerts();
+      _stationAlerts = _stationAlertService.cachedAlerts;
+      _filterRelayAlertsByDistance();
+      _lastFetchTime = _stationAlertService.getTimeSinceLastFetch();
 
-    // Initial fetch of station alerts
-    _loadRelayAlerts();
+      // Update UI with cached alerts immediately
+      if (mounted) setState(() {});
+
+      // Start background polling and fetch fresh data from station
+      _stationAlertService.startPolling();
+      _loadRelayAlerts();
+    }
+  }
+
+  /// Load alerts from remote device via API
+  Future<void> _loadRemoteAlerts() async {
+    if (!widget.isRemoteDevice) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final url = '${widget.remoteDeviceUrl}/api/alerts';
+      LogService().log('Fetching remote alerts from: $url');
+
+      final response = await http.get(
+        Uri.parse(url),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final alertsJson = data['alerts'] as List<dynamic>? ?? [];
+
+        _allReports = alertsJson
+            .map((json) => Report.fromApiJson(json as Map<String, dynamic>))
+            .toList();
+
+        LogService().log('Loaded ${_allReports.length} alerts from remote device');
+      } else {
+        LogService().log('Failed to load remote alerts: ${response.statusCode}');
+        _allReports = [];
+      }
+    } catch (e) {
+      LogService().log('Error loading remote alerts: $e');
+      _allReports = [];
+    }
+
+    if (mounted) {
+      setState(() {
+        _filteredReports = _allReports;
+        _isLoading = false;
+      });
+      _filterReports();
+    }
+  }
+
+  /// Get full alert details from remote device API
+  Future<Report?> _getRemoteAlertDetails(String alertId) async {
+    if (!widget.isRemoteDevice) return null;
+
+    try {
+      final url = '${widget.remoteDeviceUrl}/api/alerts/$alertId';
+      LogService().log('Fetching remote alert details from: $url');
+
+      final response = await http.get(
+        Uri.parse(url),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return Report.fromApiJson(data);
+      }
+    } catch (e) {
+      LogService().log('Error fetching remote alert details: $e');
+    }
+    return null;
   }
 
   Future<void> _loadReports() async {
@@ -213,11 +303,18 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   }
 
   String _getDisplayTitle() {
+    // For remote mode, show device name
+    if (widget.isRemoteDevice) {
+      final deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? '';
+      return '${_i18n.t('collection_type_alerts')} - $deviceName';
+    }
+
     // Translate known fixed type names
-    if (widget.collectionTitle.toLowerCase() == 'alerts') {
+    final title = widget.collectionTitle ?? '';
+    if (title.toLowerCase() == 'alerts') {
       return _i18n.t('collection_type_alerts');
     }
-    return widget.collectionTitle;
+    return title;
   }
 
   @override
@@ -228,8 +325,15 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       appBar: AppBar(
         title: Text(_getDisplayTitle()),
         actions: [
-          // Upload all unsent alerts
-          if (_getUnsentAlertCount() > 0)
+          // Refresh button for remote mode
+          if (widget.isRemoteDevice)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadRemoteAlerts,
+              tooltip: _i18n.t('refresh'),
+            ),
+          // Upload all unsent alerts (local mode only)
+          if (!widget.isRemoteDevice && _getUnsentAlertCount() > 0)
             _isUploading
                 ? const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16),
@@ -372,29 +476,30 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
               ),
             ],
           ),
-          // Settings
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ReportSettingsPage(
-                    collectionPath: widget.collectionPath,
+          // Settings (local mode only)
+          if (!widget.isRemoteDevice)
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ReportSettingsPage(
+                      collectionPath: widget.collectionPath ?? '',
+                    ),
                   ),
-                ),
-              );
-              _loadReports();
-            },
-          ),
+                );
+                _loadReports();
+              },
+            ),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Radius slider - compact for mobile
-                _buildRadiusSlider(theme),
+                // Radius slider - compact for mobile (hide in remote mode)
+                if (!widget.isRemoteDevice) _buildRadiusSlider(theme),
 
                 // Search bar - compact
                 Padding(
@@ -458,11 +563,13 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                 ),
               ],
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createReport,
-        icon: const Icon(Icons.add),
-        label: Text(_i18n.t('new_alert')),
-      ),
+      floatingActionButton: widget.isRemoteDevice
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _createReport,
+              icon: const Icon(Icons.add),
+              label: Text(_i18n.t('new_alert')),
+            ),
     );
   }
 
@@ -1064,11 +1171,23 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
   }
 
   void _openReport(Report report) {
+    // Determine collection path based on whether it's a station alert or local
+    String collectionPath;
+    if (report.metadata['from_station'] == 'true') {
+      // Station alerts: construct path from devices directory
+      final storageConfig = StorageConfig();
+      final callsign = report.metadata['station_callsign'] ?? 'unknown';
+      collectionPath = '${storageConfig.devicesDir}/$callsign/alerts';
+    } else {
+      // Local alerts: use widget's collection path
+      collectionPath = widget.collectionPath ?? '';
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ReportDetailPage(
-          collectionPath: widget.collectionPath,
+          collectionPath: collectionPath,
           report: report,
         ),
       ),
@@ -1080,7 +1199,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ReportDetailPage(
-          collectionPath: widget.collectionPath,
+          collectionPath: widget.collectionPath ?? '',
         ),
       ),
     ).then((_) => _loadReports());

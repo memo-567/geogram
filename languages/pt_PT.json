@@ -1115,6 +1115,7 @@
   "like": "Gosto",
   "likes": "Gostos",
   "liked": "Gostei",
+  "unliked": "Gosto removido",
   "comment_added": "Comentário adicionado",
   "chat_rooms": "Salas de Chat",
   "chat_settings": "Definições de Chat",
@@ -1380,6 +1381,9 @@
   "selected_count": "{0} selecionado(s)",
   "new_folder": "Nova pasta",
   "folder_options": "Opções da pasta",
+  "remove_disconnected": "Remover desligados",
+  "remove_disconnected_confirm": "Remover {0} dispositivo(s) desligado(s) e todos os seus dados em cache? Esta ação não pode ser desfeita.",
+  "remove": "Remover",
   "discovered_folder": "Descobertos",
   "drop_devices_here": "Soltar dispositivos aqui",
 

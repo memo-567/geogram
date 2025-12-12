@@ -72,6 +72,9 @@
   "drop_devices_here": "Drop devices here",
   "empty_folder_confirm": "Move all {1} device(s) from \"{0}\" to Discovered?",
   "delete_folder_confirm": "Delete folder \"{0}\" and all {1} device(s) inside? This cannot be undone.",
+  "remove_disconnected": "Remove disconnected",
+  "remove_disconnected_confirm": "Remove {0} disconnected device(s) and all their cached data? This cannot be undone.",
+  "remove": "Remove",
   "discovered_folder": "Discovered",
 
   "about_geogram": "About Geogram",
@@ -1198,6 +1201,7 @@
   "like": "Like",
   "likes": "Likes",
   "liked": "Liked",
+  "unliked": "Unliked",
   "comment_added": "Comment added",
   "chat_rooms": "Chat Rooms",
   "chat_settings": "Chat Settings",

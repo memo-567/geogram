@@ -4663,14 +4663,6 @@ class LogApiService {
     String urlPath,
     Map<String, String> headers,
   ) async {
-    if (request.method != 'GET') {
-      return shelf.Response(
-        405,
-        body: jsonEncode({'error': 'Method not allowed. Alerts API is read-only.'}),
-        headers: headers,
-      );
-    }
-
     try {
       String? dataDir;
       try {
@@ -4695,13 +4687,46 @@ class LogApiService {
         subPath = subPath.substring(0, subPath.length - 1);
       }
 
+      // Parse the sub-path to determine the operation
+      final pathParts = subPath.split('/');
+
+      // Handle POST methods for feedback
+      if (request.method == 'POST') {
+        if (pathParts.length == 2) {
+          final alertId = pathParts[0];
+          final action = pathParts[1];
+
+          switch (action) {
+            case 'like':
+              return await _handleAlertsLike(request, alertId, dataDir, headers);
+            case 'unlike':
+              return await _handleAlertsUnlike(request, alertId, dataDir, headers);
+            case 'verify':
+              return await _handleAlertsVerify(request, alertId, dataDir, headers);
+            case 'comment':
+              return await _handleAlertsComment(request, alertId, dataDir, headers);
+          }
+        }
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed for this endpoint'}),
+          headers: headers,
+        );
+      }
+
+      // Handle GET methods
+      if (request.method != 'GET') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+
       // GET /api/alerts - List all alerts
       if (subPath.isEmpty) {
         return await _handleAlertsListAlerts(request, dataDir, headers);
       }
-
-      // Parse the sub-path to determine the operation
-      final pathParts = subPath.split('/');
 
       if (pathParts.length == 1) {
         // GET /api/alerts/{alertId} - Get single alert
@@ -4881,6 +4906,277 @@ class LogApiService {
         'Cache-Control': 'public, max-age=86400', // Cache for 1 day
       },
     );
+  }
+
+  /// POST /api/alerts/{alertId}/like - Like an alert
+  Future<shelf.Response> _handleAlertsLike(
+    shelf.Request request,
+    String alertId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final npub = json['npub'] as String?;
+
+      if (npub == null || npub.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'npub is required'}),
+          headers: headers,
+        );
+      }
+
+      final result = await _getAlertByApiId(alertId, dataDir);
+      if (result == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+          headers: headers,
+        );
+      }
+
+      var alert = result.$1;
+      final alertPath = result.$2;
+
+      // Add like if not already liked
+      if (!alert.likedBy.contains(npub)) {
+        final updatedLikedBy = List<String>.from(alert.likedBy)..add(npub);
+        alert = alert.copyWith(
+          likedBy: updatedLikedBy,
+          likeCount: updatedLikedBy.length,
+          lastModified: DateTime.now().toUtc().toIso8601String(),
+        );
+
+        // Save the updated alert
+        final reportFile = io.File('$alertPath/report.txt');
+        await reportFile.writeAsString(alert.exportAsText(), flush: true);
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'like_count': alert.likeCount,
+          'last_modified': alert.lastModified,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/alerts/{alertId}/unlike - Unlike an alert
+  Future<shelf.Response> _handleAlertsUnlike(
+    shelf.Request request,
+    String alertId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final npub = json['npub'] as String?;
+
+      if (npub == null || npub.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'npub is required'}),
+          headers: headers,
+        );
+      }
+
+      final result = await _getAlertByApiId(alertId, dataDir);
+      if (result == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+          headers: headers,
+        );
+      }
+
+      var alert = result.$1;
+      final alertPath = result.$2;
+
+      // Remove like if present
+      if (alert.likedBy.contains(npub)) {
+        final updatedLikedBy = List<String>.from(alert.likedBy)..remove(npub);
+        alert = alert.copyWith(
+          likedBy: updatedLikedBy,
+          likeCount: updatedLikedBy.length,
+          lastModified: DateTime.now().toUtc().toIso8601String(),
+        );
+
+        // Save the updated alert
+        final reportFile = io.File('$alertPath/report.txt');
+        await reportFile.writeAsString(alert.exportAsText(), flush: true);
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'like_count': alert.likeCount,
+          'last_modified': alert.lastModified,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/alerts/{alertId}/verify - Verify an alert
+  Future<shelf.Response> _handleAlertsVerify(
+    shelf.Request request,
+    String alertId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final npub = json['npub'] as String?;
+
+      if (npub == null || npub.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'npub is required'}),
+          headers: headers,
+        );
+      }
+
+      final result = await _getAlertByApiId(alertId, dataDir);
+      if (result == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+          headers: headers,
+        );
+      }
+
+      var alert = result.$1;
+      final alertPath = result.$2;
+
+      // Add verification if not already verified
+      if (!alert.verifiedBy.contains(npub)) {
+        final updatedVerifiedBy = List<String>.from(alert.verifiedBy)..add(npub);
+        alert = alert.copyWith(
+          verifiedBy: updatedVerifiedBy,
+          verificationCount: updatedVerifiedBy.length,
+          lastModified: DateTime.now().toUtc().toIso8601String(),
+        );
+
+        // Save the updated alert
+        final reportFile = io.File('$alertPath/report.txt');
+        await reportFile.writeAsString(alert.exportAsText(), flush: true);
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'verification_count': alert.verificationCount,
+          'last_modified': alert.lastModified,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/alerts/{alertId}/comment - Add a comment to an alert
+  Future<shelf.Response> _handleAlertsComment(
+    shelf.Request request,
+    String alertId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final author = json['author'] as String?;
+      final content = json['content'] as String?;
+      final npub = json['npub'] as String?;
+      final signature = json['signature'] as String?;
+
+      if (author == null || author.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'author is required'}),
+          headers: headers,
+        );
+      }
+      if (content == null || content.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'content is required'}),
+          headers: headers,
+        );
+      }
+
+      final result = await _getAlertByApiId(alertId, dataDir);
+      if (result == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Alert not found', 'alertId': alertId}),
+          headers: headers,
+        );
+      }
+
+      var alert = result.$1;
+      final alertPath = result.$2;
+
+      // Create comment
+      final now = DateTime.now();
+      final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+      final id = '${now.millisecondsSinceEpoch}';
+
+      // Build comment content
+      final commentBuffer = StringBuffer();
+      commentBuffer.writeln('AUTHOR: $author');
+      commentBuffer.writeln('CREATED: $created');
+      commentBuffer.writeln();
+      commentBuffer.writeln(content);
+      if (npub != null && npub.isNotEmpty) {
+        commentBuffer.writeln();
+        commentBuffer.writeln('--> npub: $npub');
+      }
+      if (signature != null && signature.isNotEmpty) {
+        commentBuffer.writeln('--> signature: $signature');
+      }
+
+      // Create comments directory if needed
+      final commentsDir = io.Directory('$alertPath/comments');
+      if (!await commentsDir.exists()) {
+        await commentsDir.create(recursive: true);
+      }
+
+      // Save comment file
+      final commentFile = io.File('${commentsDir.path}/$id.txt');
+      await commentFile.writeAsString(commentBuffer.toString(), flush: true);
+
+      // Update alert's lastModified
+      alert = alert.copyWith(
+        lastModified: DateTime.now().toUtc().toIso8601String(),
+      );
+      final reportFile = io.File('$alertPath/report.txt');
+      await reportFile.writeAsString(alert.exportAsText(), flush: true);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'comment_id': id,
+          'last_modified': alert.lastModified,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 
   /// Get all alerts from devices directory
@@ -5404,12 +5700,195 @@ class LogApiService {
             headers: headers,
           );
 
+        case 'alert_like':
+          // Like/unlike an alert
+          final alertId = params['alert_id'] as String?;
+          if (alertId == null || alertId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert
+          final likeResult = await _getAlertByApiId(alertId, dataDir);
+          if (likeResult == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': alertId,
+              }),
+              headers: headers,
+            );
+          }
+
+          final alertToLike = likeResult.$1;
+          final alertPathForLike = likeResult.$2;
+
+          // Get npub from params or use profile
+          String? npub = params['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            try {
+              final profile = ProfileService().getProfile();
+              npub = profile.npub;
+            } catch (e) {
+              // Profile not initialized
+            }
+          }
+
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing npub parameter and no profile npub available',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Toggle like
+          final likedBy = List<String>.from(alertToLike.likedBy);
+          final wasLiked = likedBy.contains(npub);
+
+          if (wasLiked) {
+            likedBy.remove(npub);
+          } else {
+            likedBy.add(npub);
+          }
+
+          // Create updated report using copyWith
+          final updatedAlert = alertToLike.copyWith(
+            likedBy: likedBy,
+            likeCount: likedBy.length,
+          );
+
+          // Save to disk
+          final reportFileForLike = io.File('$alertPathForLike/report.txt');
+          await reportFileForLike.writeAsString(updatedAlert.exportAsText());
+
+          LogService().log('LogApiService: ${wasLiked ? "Unliked" : "Liked"} alert: $alertId by $npub');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': wasLiked ? 'Alert unliked' : 'Alert liked',
+              'alert_id': alertId,
+              'liked': !wasLiked,
+              'like_count': updatedAlert.likeCount,
+              'liked_by': updatedAlert.likedBy,
+            }),
+            headers: headers,
+          );
+
+        case 'alert_comment':
+          // Add a comment to an alert
+          final alertIdForComment = params['alert_id'] as String?;
+          final content = params['content'] as String?;
+
+          if (alertIdForComment == null || alertIdForComment.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing content parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert
+          final commentResult = await _getAlertByApiId(alertIdForComment, dataDir);
+          if (commentResult == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': alertIdForComment,
+              }),
+              headers: headers,
+            );
+          }
+
+          final alertPathForComment = commentResult.$2;
+
+          // Get author from params or profile
+          String author = params['author'] as String? ?? '';
+          String? commentNpub = params['npub'] as String?;
+
+          if (author.isEmpty) {
+            try {
+              final profile = ProfileService().getProfile();
+              author = profile.callsign;
+              commentNpub ??= profile.npub;
+            } catch (e) {
+              author = 'ANONYMOUS';
+            }
+          }
+
+          // Create comments directory
+          final commentsDir = io.Directory('$alertPathForComment/comments');
+          if (!await commentsDir.exists()) {
+            await commentsDir.create(recursive: true);
+          }
+
+          // Generate comment filename
+          final now = DateTime.now();
+          final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+              '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
+          final fileName = '${timestamp}_$author.txt';
+
+          final commentFile = io.File('${commentsDir.path}/$fileName');
+
+          // Build comment content - format must match ReportComment.fromText() expectations
+          final createdStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+          final buffer = StringBuffer();
+          buffer.writeln('AUTHOR: $author');
+          buffer.writeln('CREATED: $createdStr');
+          buffer.writeln();
+          buffer.writeln(content);
+
+          if (commentNpub != null && commentNpub.isNotEmpty) {
+            buffer.writeln();
+            buffer.writeln('--> npub: $commentNpub');
+          }
+
+          await commentFile.writeAsString(buffer.toString());
+
+          LogService().log('LogApiService: Added comment to alert: $alertIdForComment by $author');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Comment added',
+              'alert_id': alertIdForComment,
+              'comment_file': fileName,
+              'author': author,
+              'created': createdStr,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown alert action: $action',
-              'available': ['alert_create', 'alert_list', 'alert_delete'],
+              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_like', 'alert_comment'],
             }),
             headers: headers,
           );

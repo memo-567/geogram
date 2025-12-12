@@ -23,8 +23,14 @@ class MainActivity : FlutterActivity() {
         bluetoothClassicPlugin = BluetoothClassicPlugin(this, flutterEngine)
         bluetoothClassicPlugin?.initialize()
 
-        // BLE foreground service channel
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL).setMethodCallHandler { call, result ->
+        // BLE foreground service channel with bidirectional communication
+        val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
+
+        // Set the method channel on the service for callbacks to Dart
+        BLEForegroundService.setMethodChannel(bleChannel)
+
+        // Handle method calls from Dart to native
+        bleChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startBLEService" -> {
                     BLEForegroundService.start(this)
@@ -32,6 +38,16 @@ class MainActivity : FlutterActivity() {
                 }
                 "stopBLEService" -> {
                     BLEForegroundService.stop(this)
+                    result.success(true)
+                }
+                "enableKeepAlive" -> {
+                    // Enable WebSocket keep-alive in the foreground service
+                    BLEForegroundService.enableKeepAlive(this)
+                    result.success(true)
+                }
+                "disableKeepAlive" -> {
+                    // Disable WebSocket keep-alive in the foreground service
+                    BLEForegroundService.disableKeepAlive(this)
                     result.success(true)
                 }
                 else -> result.notImplemented()

@@ -11,6 +11,7 @@ import 'place_service.dart';
 import 'news_service.dart';
 import 'report_service.dart';
 import 'station_service.dart';
+import 'station_alert_service.dart';
 import 'contact_service.dart';
 import 'profile_service.dart';
 import 'log_service.dart';
@@ -269,7 +270,7 @@ class MapsService {
     return items;
   }
 
-  /// Load reports from all report collections
+  /// Load reports from all report collections and station alerts
   Future<List<MapItem>> _loadReports(
     double centerLat,
     double centerLon,
@@ -278,6 +279,7 @@ class MapsService {
     bool forceRefresh = false,
   }) async {
     final items = <MapItem>[];
+    final addedFolderNames = <String>{}; // Track added alerts to avoid duplicates
 
     try {
       // Get all collections and filter for alerts type
@@ -286,6 +288,7 @@ class MapsService {
 
       LogService().log('MapsService: Found ${reportCollections.length} alerts collections');
 
+      // Load local alerts from collections
       for (var collection in reportCollections) {
         if (collection.storagePath == null) continue;
 
@@ -307,6 +310,7 @@ class MapsService {
             if (radiusKm != null && distance > radiusKm) continue;
 
             items.add(MapItem.fromAlert(report, distanceKm: distance, languageCode: languageCode, collectionPath: collection.storagePath));
+            addedFolderNames.add(report.folderName);
           }
 
           LogService().log('MapsService: Loaded ${reports.length} reports from ${collection.title}');
@@ -315,7 +319,48 @@ class MapsService {
         }
       }
 
-      LogService().log('MapsService: Found ${items.length} total reports');
+      // Load station alerts (from other devices via the station)
+      try {
+        final stationAlertService = StationAlertService();
+
+        // Load cached alerts first (in case we haven't fetched recently)
+        await stationAlertService.loadCachedAlerts();
+
+        // Get station alerts
+        final stationAlerts = stationAlertService.cachedAlerts;
+
+        LogService().log('MapsService: Found ${stationAlerts.length} station alerts');
+
+        for (var report in stationAlerts) {
+          // Skip if already added from local collection (avoid duplicates)
+          if (addedFolderNames.contains(report.folderName)) continue;
+
+          final distance = MapItem.calculateDistance(
+            centerLat,
+            centerLon,
+            report.latitude,
+            report.longitude,
+          );
+
+          if (radiusKm != null && distance > radiusKm) continue;
+
+          // Mark as from station in the MapItem
+          items.add(MapItem.fromAlert(
+            report,
+            distanceKm: distance,
+            languageCode: languageCode,
+            collectionPath: null, // Station alerts don't have a local collection path
+            isFromStation: true,
+          ));
+          addedFolderNames.add(report.folderName);
+        }
+
+        LogService().log('MapsService: Added ${stationAlerts.length} station alerts to map');
+      } catch (e) {
+        LogService().log('MapsService: Error loading station alerts: $e');
+      }
+
+      LogService().log('MapsService: Found ${items.length} total reports (local + station)');
     } catch (e) {
       LogService().log('MapsService: Error loading reports: $e');
     }

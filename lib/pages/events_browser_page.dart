@@ -5,12 +5,15 @@
 
 import 'package:flutter/material.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
+import 'package:http/http.dart' as http;
 import '../models/event.dart';
 import '../models/event_link.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
 import '../dialogs/new_event_dialog.dart';
@@ -18,15 +21,27 @@ import '../dialogs/new_update_dialog.dart';
 import 'event_settings_page.dart';
 
 /// Events browser page with 2-panel layout
+/// Supports both local collection viewing and remote device viewing via API
 class EventsBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String? collectionPath;
+  final String? collectionTitle;
+
+  // Remote device viewing parameters (like ChatBrowserPage)
+  final String? remoteDeviceUrl;
+  final String? remoteDeviceCallsign;
+  final String? remoteDeviceName;
 
   const EventsBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    this.collectionPath,
+    this.collectionTitle,
+    this.remoteDeviceUrl,
+    this.remoteDeviceCallsign,
+    this.remoteDeviceName,
   }) : super(key: key);
+
+  /// Whether viewing events from a remote device
+  bool get isRemoteDevice => remoteDeviceUrl != null;
 
   @override
   State<EventsBrowserPage> createState() => _EventsBrowserPageState();
@@ -65,14 +80,115 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     _currentUserNpub = profile.npub;
     _currentCallsign = profile.callsign;
 
-    // Initialize event service
-    await _eventService.initializeCollection(widget.collectionPath);
-
-    await _loadEvents();
+    if (widget.isRemoteDevice) {
+      // Remote device mode - load from API
+      LogService().log('EventsBrowserPage: Remote device mode - loading from ${widget.remoteDeviceUrl}');
+      await _loadRemoteEvents();
+    } else {
+      // Local mode - initialize event service with collection path
+      if (widget.collectionPath != null) {
+        await _eventService.initializeCollection(widget.collectionPath!);
+      }
+      await _loadEvents();
+    }
 
     // Expand most recent year by default
     if (_allEvents.isNotEmpty) {
       _expandedYears.add(_allEvents.first.year);
+    }
+  }
+
+  /// Load events from remote device via API
+  Future<void> _loadRemoteEvents() async {
+    if (widget.remoteDeviceUrl == null) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final url = '${widget.remoteDeviceUrl}/api/events';
+      LogService().log('EventsBrowserPage: Fetching remote events from $url');
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final eventsList = data['events'] as List<dynamic>? ?? [];
+
+        final events = <Event>[];
+        for (var eventJson in eventsList) {
+          try {
+            final event = Event.fromApiJson(eventJson as Map<String, dynamic>);
+            events.add(event);
+          } catch (e) {
+            LogService().log('EventsBrowserPage: Error parsing event: $e');
+          }
+        }
+
+        // Sort by date (newest first)
+        events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+        setState(() {
+          _allEvents = events;
+          _filteredEvents = events;
+          _isLoading = false;
+
+          // Expand most recent year by default
+          if (_allEvents.isNotEmpty && _expandedYears.isEmpty) {
+            _expandedYears.add(_allEvents.first.year);
+          }
+        });
+
+        _filterEvents();
+
+        // Auto-select the most recent event
+        if (_allEvents.isNotEmpty && _selectedEvent == null) {
+          await _selectRemoteEvent(_allEvents.first);
+        }
+
+        LogService().log('EventsBrowserPage: Loaded ${events.length} remote events');
+      } else {
+        LogService().log('EventsBrowserPage: Failed to fetch events: ${response.statusCode}');
+        setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      LogService().log('EventsBrowserPage: Error fetching remote events: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  /// Select and load full details for a remote event
+  Future<void> _selectRemoteEvent(Event event) async {
+    if (widget.remoteDeviceUrl == null) return;
+
+    try {
+      final url = '${widget.remoteDeviceUrl}/api/events/${event.id}';
+      LogService().log('EventsBrowserPage: Fetching remote event details from $url');
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final fullEvent = Event.fromApiJson(data);
+        setState(() {
+          _selectedEvent = fullEvent;
+        });
+      } else {
+        // Fall back to summary event
+        setState(() {
+          _selectedEvent = event;
+        });
+      }
+    } catch (e) {
+      LogService().log('EventsBrowserPage: Error fetching remote event details: $e');
+      setState(() {
+        _selectedEvent = event;
+      });
     }
   }
 
@@ -213,7 +329,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => EventSettingsPage(
           event: _selectedEvent!,
-          collectionPath: widget.collectionPath,
+          collectionPath: widget.collectionPath ?? '',
         ),
       ),
     );
@@ -347,9 +463,14 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    // Build title - show device name for remote viewing
+    final title = widget.isRemoteDevice
+        ? '${_i18n.t('events')} - ${widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? ''}'
+        : _i18n.t('events');
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('events')),
+        title: Text(title),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -401,14 +522,16 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
               children: [
                 IconButton(
                   icon: const Icon(Icons.refresh),
-                  onPressed: _loadEvents,
+                  onPressed: widget.isRemoteDevice ? _loadRemoteEvents : _loadEvents,
                   tooltip: _i18n.t('refresh'),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: _createNewEvent,
-                  tooltip: _i18n.t('new_event'),
-                ),
+                // Only show add button for local events
+                if (!widget.isRemoteDevice)
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: _createNewEvent,
+                    tooltip: _i18n.t('new_event'),
+                  ),
               ],
             ),
           ),
@@ -547,9 +670,15 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
               ...events.map((event) => EventTileWidget(
                     event: event,
                     isSelected: _selectedEvent?.id == event.id,
-                    onTap: () => isMobileView
-                        ? _selectEventMobile(event)
-                        : _selectEvent(event),
+                    onTap: () {
+                      if (widget.isRemoteDevice) {
+                        _selectRemoteEvent(event);
+                      } else if (isMobileView) {
+                        _selectEventMobile(event);
+                      } else {
+                        _selectEvent(event);
+                      }
+                    },
                   )),
           ],
         );
@@ -568,7 +697,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => _EventDetailPage(
           event: fullEvent,
-          collectionPath: widget.collectionPath,
+          collectionPath: widget.collectionPath ?? '',
           eventService: _eventService,
           profileService: _profileService,
           i18n: _i18n,
@@ -607,26 +736,34 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       );
     }
 
-    final canEdit = _selectedEvent!.canEdit(_currentCallsign ?? '', _currentUserNpub);
+    // Disable editing for remote events
+    final canEdit = widget.isRemoteDevice
+        ? false
+        : _selectedEvent!.canEdit(_currentCallsign ?? '', _currentUserNpub);
     final hasLiked = _selectedEvent!.hasUserLiked(_currentCallsign ?? '');
 
     return EventDetailWidget(
       event: _selectedEvent!,
-      collectionPath: widget.collectionPath,
+      collectionPath: widget.collectionPath ?? '',
       currentCallsign: _currentCallsign,
       currentUserNpub: _currentUserNpub,
       canEdit: canEdit,
       hasLiked: hasLiked,
-      onLike: hasLiked ? _unlikeEvent : _likeEvent,
-      onEdit: _editEvent,
-      onUploadFiles: _uploadFiles,
-      onCreateUpdate: _createUpdate,
-      onRefresh: () async {
-        final updated = await _eventService.loadEvent(_selectedEvent!.id);
-        setState(() {
-          _selectedEvent = updated;
-        });
-      },
+      // Disable like/edit/upload for remote events
+      onLike: widget.isRemoteDevice ? null : (hasLiked ? _unlikeEvent : _likeEvent),
+      onEdit: widget.isRemoteDevice ? null : _editEvent,
+      onUploadFiles: widget.isRemoteDevice ? null : _uploadFiles,
+      onCreateUpdate: widget.isRemoteDevice ? null : _createUpdate,
+      onRefresh: widget.isRemoteDevice
+          ? () async {
+              await _selectRemoteEvent(_selectedEvent!);
+            }
+          : () async {
+              final updated = await _eventService.loadEvent(_selectedEvent!.id);
+              setState(() {
+                _selectedEvent = updated;
+              });
+            },
     );
   }
 }

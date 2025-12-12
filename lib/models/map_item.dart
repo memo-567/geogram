@@ -68,6 +68,7 @@ class MapItem {
   final double? distanceKm;
   final dynamic sourceItem; // Original Event/Place/NewsArticle/Report/Station/Contact
   final String? collectionPath; // Path to collection folder for opening details
+  final bool isFromStation; // True if this item came from a station (remote)
 
   MapItem({
     required this.type,
@@ -79,6 +80,7 @@ class MapItem {
     this.distanceKm,
     this.sourceItem,
     this.collectionPath,
+    this.isFromStation = false,
   });
 
   /// Create MapItem from an Event
@@ -127,7 +129,7 @@ class MapItem {
   }
 
   /// Create MapItem from a Report (Alert)
-  factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? collectionPath}) {
+  factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? collectionPath, bool isFromStation = false}) {
     return MapItem(
       type: MapItemType.alert,
       id: report.folderName,
@@ -138,6 +140,7 @@ class MapItem {
       distanceKm: distanceKm,
       sourceItem: report,
       collectionPath: collectionPath,
+      isFromStation: isFromStation,
     );
   }
 
@@ -218,6 +221,7 @@ class MapItem {
       distanceKm: newDistance,
       sourceItem: sourceItem,
       collectionPath: collectionPath,
+      isFromStation: isFromStation,
     );
   }
 

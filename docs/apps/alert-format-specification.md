@@ -1,7 +1,7 @@
 # Report Format Specification
 
-**Version**: 1.0
-**Last Updated**: 2025-11-23
+**Version**: 1.1
+**Last Updated**: 2025-12-12
 **Status**: Draft
 
 ## Table of Contents
@@ -275,12 +275,15 @@ ADDRESS: Full Address (optional)
 CONTACT: Contact information (optional)
 VERIFIED_BY: npub1user1..., npub1user2... (optional)
 VERIFICATION_COUNT: 3 (optional)
+LIKED_BY: npub1user1..., npub1user2... (optional)
+LIKE_COUNT: 5 (optional)
 DUPLICATE_OF: report-folder-name (optional)
 RELATED_REPORTS: report-folder1, report-folder2 (optional)
 OFFICIAL_CASE: CASE-12345 (optional)
 AUTHORITY_NOTIFIED: Fire Department, 2025-11-23 14:30_00 (optional)
 TTL: 2592000 (optional, in seconds)
 EXPIRES: 2025-12-23 10:00_00 (optional)
+LAST_MODIFIED: 2025-12-12T15:30:00Z (optional, ISO 8601)
 ADMINS: npub1abc123..., npub1xyz789... (optional)
 MODERATORS: npub1delta..., npub1echo... (optional)
 UPDATE_AUTHORIZED: npub1user1..., npub1user2... (optional)
@@ -315,12 +318,15 @@ ADDRESS: Full Address (optional)
 CONTACT: Contact information (optional)
 VERIFIED_BY: npub1user1..., npub1user2... (optional)
 VERIFICATION_COUNT: 3 (optional)
+LIKED_BY: npub1user1..., npub1user2... (optional)
+LIKE_COUNT: 5 (optional)
 DUPLICATE_OF: report-folder-name (optional)
 RELATED_REPORTS: report-folder1, report-folder2 (optional)
 OFFICIAL_CASE: CASE-12345 (optional)
 AUTHORITY_NOTIFIED: Fire Department, 2025-11-23 14:30_00 (optional)
 TTL: 2592000 (optional, in seconds)
 EXPIRES: 2025-12-23 10:00_00 (optional)
+LAST_MODIFIED: 2025-12-12T15:30:00Z (optional, ISO 8601)
 ADMINS: npub1abc123..., npub1xyz789... (optional)
 MODERATORS: npub1delta..., npub1echo... (optional)
 UPDATE_AUTHORIZED: npub1user1..., npub1user2... (optional)
@@ -3205,6 +3211,21 @@ apariencia y valor histórico del área.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.1 (2025-12-12)
+
+**Feedback Tracking and Station Sync**:
+- **LIKED_BY Field**: Added `LIKED_BY` field to track users who liked the report (uses npub format)
+- **LIKE_COUNT Field**: Added `LIKE_COUNT` field to track total likes
+- **LAST_MODIFIED Field**: Added `LAST_MODIFIED` field (ISO 8601 format) for tracking modifications
+  - Automatically updated when report content, likes, verifications, or comments change
+  - Used by station sync to determine which version is newer
+- **Station Feedback API**: Added POST endpoints for feedback synchronization
+  - `POST /api/alerts/{alertId}/like` - Like an alert
+  - `POST /api/alerts/{alertId}/unlike` - Unlike an alert
+  - `POST /api/alerts/{alertId}/verify` - Verify an alert
+  - `POST /api/alerts/{alertId}/comment` - Add a comment to an alert
+- **Best-Effort Sync**: Feedback is saved locally first, then synced to station asynchronously
 
 ### Version 1.0 (2025-11-23)
 

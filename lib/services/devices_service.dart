@@ -1088,8 +1088,11 @@ class DevicesService {
       proxyOk = await _checkViaRelayProxy(device);
     }
 
-    // Device is online if ANY connection method works
-    final isNowOnline = directOk || proxyOk;
+    // Device is online if ANY connection method works (including BLE)
+    // BLE connection is indicated by 'bluetooth' or 'bluetooth_plus' in connectionMethods
+    final hasBLEConnection = device.connectionMethods.contains('bluetooth') ||
+                             device.connectionMethods.contains('bluetooth_plus');
+    final isNowOnline = directOk || proxyOk || hasBLEConnection;
     device.isOnline = isNowOnline;
     _notifyListeners();
 
