@@ -1256,6 +1256,11 @@ class DevicesService {
             device.platform = data['platform'] as String?;
           }
 
+          // Extract npub (NOSTR public key) if available
+          if (data['npub'] != null) {
+            device.npub = data['npub'] as String?;
+          }
+
           // Update fetch timestamp
           device.lastFetched = DateTime.now();
         } catch (e) {

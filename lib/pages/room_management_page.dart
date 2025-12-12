@@ -4,11 +4,12 @@
  */
 
 import 'package:flutter/material.dart';
-import 'dart:convert';
 import '../models/chat_channel.dart';
 import '../services/chat_service.dart';
+import '../services/devices_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import 'add_member_page.dart';
 
 /// Page for managing chat room members and roles (for restricted rooms)
 class RoomManagementPage extends StatefulWidget {
@@ -26,6 +27,7 @@ class RoomManagementPage extends StatefulWidget {
 class _RoomManagementPageState extends State<RoomManagementPage>
     with SingleTickerProviderStateMixin {
   final ChatService _chatService = ChatService();
+  final DevicesService _devicesService = DevicesService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
 
@@ -325,6 +327,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
         npub: _config!.owner!,
         role: 'owner',
         callsign: _npubToCallsign(_config!.owner!),
+        nickname: _getNicknameForNpub(_config!.owner!),
       ));
     }
 
@@ -335,6 +338,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
           npub: npub,
           role: 'admin',
           callsign: _npubToCallsign(npub),
+          nickname: _getNicknameForNpub(npub),
         ));
       }
     }
@@ -346,6 +350,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
           npub: npub,
           role: 'moderator',
           callsign: _npubToCallsign(npub),
+          nickname: _getNicknameForNpub(npub),
         ));
       }
     }
@@ -359,6 +364,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
           npub: npub,
           role: 'member',
           callsign: _npubToCallsign(npub),
+          nickname: _getNicknameForNpub(npub),
         ));
       }
     }
@@ -410,10 +416,13 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       ),
       title: Row(
         children: [
-          Text(
-            member.callsign,
-            style: TextStyle(
-              fontWeight: isCurrentUser ? FontWeight.bold : FontWeight.normal,
+          Flexible(
+            child: Text(
+              member.displayName,
+              style: TextStyle(
+                fontWeight: isCurrentUser ? FontWeight.bold : FontWeight.normal,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           if (isCurrentUser) ...[
@@ -728,6 +737,9 @@ class _RoomManagementPageState extends State<RoomManagementPage>
         itemCount: banned.length,
         itemBuilder: (context, index) {
           final npub = banned[index];
+          final callsign = _npubToCallsign(npub);
+          final nickname = _getNicknameForNpub(npub);
+          final displayName = _getDisplayName(callsign, nickname);
           return ListTile(
             leading: CircleAvatar(
               backgroundColor: theme.colorScheme.errorContainer,
@@ -736,7 +748,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
                 color: theme.colorScheme.onErrorContainer,
               ),
             ),
-            title: Text(_npubToCallsign(npub)),
+            title: Text(displayName),
             subtitle: Text(
               _truncateNpub(npub),
               style: theme.textTheme.bodySmall?.copyWith(
@@ -760,11 +772,17 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(member.callsign),
+        title: Text(member.displayName),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (member.nickname != null && member.nickname!.isNotEmpty) ...[
+              _buildDetailRow(_i18n.t('nickname'), member.nickname!),
+              const SizedBox(height: 8),
+            ],
+            _buildDetailRow(_i18n.t('callsign'), member.callsign),
+            const SizedBox(height: 8),
             _buildDetailRow(_i18n.t('role'), _i18n.t('role_${member.role}')),
             const SizedBox(height: 8),
             _buildDetailRow(_i18n.t('npub'), member.npub),
@@ -801,40 +819,22 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   }
 
   Future<void> _showAddMemberDialog() async {
-    final controller = TextEditingController();
+    if (_config == null || _userNpub == null) return;
 
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_i18n.t('add_member')),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(
-            labelText: _i18n.t('nostr_public_key_npub'),
-            hintText: 'npub1...',
-          ),
-          maxLines: 3,
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddMemberPage(
+          channel: widget.channel,
+          userNpub: _userNpub!,
+          config: _config!,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(_i18n.t('cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: Text(_i18n.t('add')),
-          ),
-        ],
       ),
     );
 
-    if (result != null && result.isNotEmpty) {
-      if (!result.startsWith('npub1')) {
-        _showError(_i18n.t('invalid_npub_format'));
-        return;
-      }
-
-      await _addMember(result);
+    // Reload data if members were added
+    if (result == true) {
+      await _loadData();
     }
   }
 
@@ -1040,6 +1040,25 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     return 'X$chars';
   }
 
+  /// Look up device by npub and return its nickname if available
+  String? _getNicknameForNpub(String npub) {
+    final devices = _devicesService.getAllDevices();
+    for (final device in devices) {
+      if (device.npub == npub) {
+        return device.nickname;
+      }
+    }
+    return null;
+  }
+
+  /// Get display name for member: "Nickname (CALLSIGN)" or just "CALLSIGN"
+  String _getDisplayName(String callsign, String? nickname) {
+    if (nickname != null && nickname.isNotEmpty) {
+      return '$nickname ($callsign)';
+    }
+    return callsign;
+  }
+
   String _truncateNpub(String npub) {
     if (npub.length <= 20) return npub;
     return '${npub.substring(0, 12)}...${npub.substring(npub.length - 8)}';
@@ -1211,10 +1230,20 @@ class _MemberInfo {
   final String npub;
   final String role;
   final String callsign;
+  final String? nickname;
 
   _MemberInfo({
     required this.npub,
     required this.role,
     required this.callsign,
+    this.nickname,
   });
+
+  /// Get display name: "Nickname (CALLSIGN)" or just "CALLSIGN"
+  String get displayName {
+    if (nickname != null && nickname!.isNotEmpty) {
+      return '$nickname ($callsign)';
+    }
+    return callsign;
+  }
 }

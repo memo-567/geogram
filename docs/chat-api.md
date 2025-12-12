@@ -8,6 +8,8 @@ The Chat API allows external applications to:
 - List available chat rooms
 - Read messages from chat rooms
 - Post messages (as device owner or as authenticated users via NOSTR-signed events)
+- Edit messages (author only, with NOSTR authentication)
+- Delete messages (author can delete own, moderators can delete any)
 - List files attached to chat rooms
 
 All endpoints are available under `/api/chat/` and require the HTTP API to be enabled in Security settings.
@@ -198,6 +200,128 @@ Post a message with a NOSTR-signed event:
 - `400 Bad Request`: Missing content/event, content too long, invalid event kind
 - `403 Forbidden`: Invalid signature, author not authorized, room is read-only
 - `404 Not Found`: Room doesn't exist
+
+---
+
+### DELETE /api/chat/{roomId}/messages/{timestamp}
+
+Delete a message by its timestamp. Only the original author can delete their own messages. Moderators can also delete any message.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+- `timestamp`: Message timestamp (URL-encoded format: `YYYY-MM-DD%20HH%3AMM_ss`)
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (required): NOSTR event with action tags
+
+**Authorization Event Requirements:**
+The NOSTR event must include specific tags:
+- `["action", "delete"]` - Indicates delete action
+- `["room", "{roomId}"]` - Must match the roomId in the URL
+- `["timestamp", "{timestamp}"]` - Must match the timestamp in the URL (optional but recommended)
+
+**Example Event:**
+```json
+{
+  "pubkey": "author_hex_pubkey",
+  "created_at": 1733923456,
+  "kind": 1,
+  "tags": [
+    ["t", "chat"],
+    ["action", "delete"],
+    ["room", "main"],
+    ["timestamp", "2025-12-11 14:30_25"]
+  ],
+  "content": "Deleting message",
+  "sig": "hex_signature"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "action": "delete",
+  "roomId": "main",
+  "deleted": {
+    "timestamp": "2025-12-11 14:30_25",
+    "author": "CR7BBQ"
+  }
+}
+```
+
+**Error Responses:**
+- `403 Forbidden`: Invalid NOSTR signature, not authorized (not author or moderator)
+- `404 Not Found`: Message not found
+
+---
+
+### PUT /api/chat/{roomId}/messages/{timestamp}
+
+Edit a message by its timestamp. Only the original author can edit their own messages. Moderators cannot edit other users' messages.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+- `timestamp`: Message timestamp (URL-encoded format: `YYYY-MM-DD%20HH%3AMM_ss`)
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (required): NOSTR event with action tags
+
+**Authorization Event Requirements:**
+The NOSTR event must include specific tags and the new content:
+- `["action", "edit"]` - Indicates edit action
+- `["room", "{roomId}"]` - Must match the roomId in the URL
+- `["timestamp", "{timestamp}"]` - Must match the timestamp in the URL (optional but recommended)
+- `["callsign", "{callsign}"]` - Author's callsign (optional, verified against message author)
+- `content`: The new message content
+
+**Important:** The event `sig` (signature) becomes the new signature for the edited message, and is stored in the message metadata.
+
+**Example Event:**
+```json
+{
+  "pubkey": "author_hex_pubkey",
+  "created_at": 1733923500,
+  "kind": 1,
+  "tags": [
+    ["t", "chat"],
+    ["action", "edit"],
+    ["room", "main"],
+    ["timestamp", "2025-12-11 14:30_25"],
+    ["callsign", "CR7BBQ"]
+  ],
+  "content": "Updated message content here",
+  "sig": "new_hex_signature"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "action": "edit",
+  "roomId": "main",
+  "edited": {
+    "timestamp": "2025-12-11 14:30_25",
+    "author": "CR7BBQ",
+    "edited_at": "2025-12-11 15:00_10"
+  }
+}
+```
+
+**Storage Format After Edit:**
+```
+> 2025-12-11 14:30_25 -- CR7BBQ
+Updated message content here
+--> edited_at: 2025-12-11 15:00_10
+--> npub: npub1qqq...
+--> signature: new_hex_signature_for_updated_content
+```
+
+**Error Responses:**
+- `400 Bad Request`: Empty content
+- `403 Forbidden`: Invalid NOSTR signature, not authorized (not the author)
+- `404 Not Found`: Message not found
 
 ---
 

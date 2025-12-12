@@ -49,7 +49,7 @@ class ChatMessage implements Comparable<ChatMessage> {
     Map<String, String>? metadata,
   }) {
     final now = DateTime.now();
-    final timestamp = _formatTimestamp(now);
+    final timestamp = formatTimestamp(now);
 
     return ChatMessage(
       author: author,
@@ -60,7 +60,8 @@ class ChatMessage implements Comparable<ChatMessage> {
   }
 
   /// Format DateTime to chat timestamp format: YYYY-MM-DD HH:MM_ss
-  static String _formatTimestamp(DateTime dt) {
+  /// Public static method for use by ChatService.editMessage()
+  static String formatTimestamp(DateTime dt) {
     String year = dt.year.toString().padLeft(4, '0');
     String month = dt.month.toString().padLeft(2, '0');
     String day = dt.day.toString().padLeft(2, '0');
@@ -196,6 +197,12 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Get author's npub
   String? get npub => getMeta('npub');
 
+  /// Get edited_at timestamp (if message was edited)
+  String? get editedAt => getMeta('edited_at');
+
+  /// Check if message has been edited
+  bool get isEdited => hasMeta('edited_at');
+
   /// Get message delivery status (for DMs)
   MessageStatus? get deliveryStatus {
     final status = getMeta('status');
@@ -237,6 +244,8 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// > YYYY-MM-DD HH:MM_ss -- CALLSIGN
   /// Content goes here
   /// --> metadata_key: metadata_value
+  /// --> edited_at: timestamp (if edited, before npub/signature)
+  /// --> npub: bech32_key (before signature)
   /// --> signature: hex_signature (if signed, must be last)
   String exportAsText() {
     StringBuffer buffer = StringBuffer();
@@ -254,12 +263,25 @@ class ChatMessage implements Comparable<ChatMessage> {
       buffer.writeln(content);
     }
 
-    // Metadata (excluding Poll if already written, and signature which goes last)
+    // Reserved keys that have special ordering (written at the end)
+    const reservedKeys = {'Poll', 'edited_at', 'npub', 'signature'};
+
+    // Metadata (excluding reserved keys which have special ordering)
     for (var entry in metadata.entries) {
-      if (entry.key == 'Poll' || entry.key == 'signature') {
-        continue; // Skip Poll (already written) and signature (goes last)
+      if (reservedKeys.contains(entry.key)) {
+        continue; // Skip reserved keys - they're written in specific order
       }
       buffer.writeln('--> ${entry.key}: ${entry.value}');
+    }
+
+    // edited_at comes before npub/signature (if present)
+    if (isEdited) {
+      buffer.writeln('--> edited_at: $editedAt');
+    }
+
+    // npub comes before signature (if present)
+    if (hasMeta('npub')) {
+      buffer.writeln('--> npub: $npub');
     }
 
     // Signature must be last if present

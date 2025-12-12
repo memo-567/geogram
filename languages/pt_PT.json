@@ -1474,5 +1474,17 @@
   "public_room_description": "Qualquer pessoa pode ver e entrar nesta sala",
   "restricted_room_description": "Apenas membros convidados podem ver e aceder a esta sala",
   "room_made_public": "Sala agora é pública",
-  "room_made_restricted": "Sala agora é restrita"
+  "room_made_restricted": "Sala agora é restrita",
+  "search_devices": "Procurar dispositivos...",
+  "known_devices": "Dispositivos Conhecidos",
+  "add_by_npub": "Adicionar por NPUB manualmente",
+  "members_added": "{0} membros adicionados",
+  "add_count": "Adicionar ({0})",
+  "npub_too_short": "NPUB muito curto",
+  "no_devices_found": "Nenhum dispositivo encontrado",
+  "all_devices_are_members": "Todos os dispositivos conhecidos já são membros",
+  "no_devices_with_npub": "Nenhum dispositivo com NPUB disponível",
+  "use_manual_npub_entry": "Use a opção de entrada manual acima para adicionar membros pelo NPUB",
+  "online": "Online",
+  "already_a_member": "Este utilizador já é membro"
 }

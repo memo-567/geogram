@@ -200,6 +200,13 @@ class LogApiService {
       }
     }
 
+    // Chat message edit/delete endpoints
+    // DELETE /api/chat/{roomId}/messages/{timestamp} - Delete own message
+    // PUT /api/chat/{roomId}/messages/{timestamp} - Edit own message
+    if (urlPath.startsWith('api/chat/') && urlPath.contains('/messages/')) {
+      return await _handleChatMessageModificationRequest(request, urlPath, headers);
+    }
+
     // Chat room member management endpoints (RESTRICTED rooms)
     // POST /api/chat/{roomId}/members - Add member
     // DELETE /api/chat/{roomId}/members/{npub} - Remove member
@@ -407,6 +414,16 @@ class LogApiService {
     // Add description if set
     if (description != null && description.isNotEmpty) {
       response['description'] = description;
+    }
+
+    // Add npub (NOSTR public key) for device identity
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.npub != null && profile.npub!.isNotEmpty) {
+        response['npub'] = profile.npub;
+      }
+    } catch (e) {
+      // Profile service not initialized
     }
 
     // Add uptime in seconds
@@ -2231,6 +2248,196 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error in member management: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle message edit and delete requests
+  /// DELETE /api/chat/{roomId}/messages/{timestamp} - Delete own message (or mod can delete any)
+  /// PUT /api/chat/{roomId}/messages/{timestamp} - Edit own message (author only)
+  Future<shelf.Response> _handleChatMessageModificationRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      // Extract roomId and timestamp from path: api/chat/{roomId}/messages/{timestamp}
+      // Timestamp format: YYYY-MM-DD HH:MM_ss (URL encoded: YYYY-MM-DD%20HH%3AMM_ss)
+      final regex = RegExp(r'^api/chat/([^/]+)/messages/(.+)$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final timestamp = Uri.decodeComponent(match.group(2)!);
+
+      if (request.method == 'DELETE') {
+        // Delete message - requires NOSTR event with 'delete' action
+        final event = _verifyNostrEventWithTags(request, 'delete', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Get timestamp from event tags (should match URL)
+        final timestampTag = event.getTagValue('timestamp');
+        if (timestampTag != null && timestampTag != timestamp) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Timestamp mismatch between URL and event',
+              'code': 'TIMESTAMP_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Find the message first to get the author
+        final message = await chatService.findMessage(roomId, timestamp);
+        if (message == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}),
+            headers: headers,
+          );
+        }
+
+        // Delete the message (ChatService handles authorization)
+        await chatService.deleteMessageByTimestamp(
+          channelId: roomId,
+          timestamp: timestamp,
+          authorCallsign: message.author,
+          actorNpub: event.npub,
+        );
+
+        LogService().log('LogApiService: Message deleted from $roomId at $timestamp by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'delete',
+            'roomId': roomId,
+            'deleted': {
+              'timestamp': timestamp,
+              'author': message.author,
+            },
+          }),
+          headers: headers,
+        );
+      } else if (request.method == 'PUT') {
+        // Edit message - requires NOSTR event with 'edit' action
+        final event = _verifyNostrEventWithTags(request, 'edit', roomId);
+        if (event == null) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Invalid or missing NOSTR authentication',
+              'code': 'AUTH_REQUIRED',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Get timestamp from event tags (should match URL)
+        final timestampTag = event.getTagValue('timestamp');
+        if (timestampTag != null && timestampTag != timestamp) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Timestamp mismatch between URL and event',
+              'code': 'TIMESTAMP_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+
+        // Get the callsign from the event tags
+        final callsignTag = event.getTagValue('callsign');
+
+        // Find the message first to get the author
+        final message = await chatService.findMessage(roomId, timestamp);
+        if (message == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}),
+            headers: headers,
+          );
+        }
+
+        // Verify callsign matches if provided
+        if (callsignTag != null && callsignTag != message.author) {
+          return shelf.Response.forbidden(
+            jsonEncode({
+              'error': 'Callsign mismatch',
+              'code': 'CALLSIGN_MISMATCH',
+            }),
+            headers: headers,
+          );
+        }
+
+        // New content is in the event content field
+        final newContent = event.content;
+        if (newContent.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'New content cannot be empty'}),
+            headers: headers,
+          );
+        }
+
+        // Edit the message (ChatService handles authorization - only author can edit)
+        // event.sig is guaranteed non-null since _verifyNostrEventWithTags verified the signature
+        final editedMessage = await chatService.editMessage(
+          channelId: roomId,
+          timestamp: timestamp,
+          authorCallsign: message.author,
+          newContent: newContent,
+          actorNpub: event.npub,
+          newSignature: event.sig!,
+          newCreatedAt: event.createdAt,
+        );
+
+        if (editedMessage == null) {
+          return shelf.Response.internalServerError(
+            body: jsonEncode({'error': 'Failed to edit message'}),
+            headers: headers,
+          );
+        }
+
+        LogService().log('LogApiService: Message edited in $roomId at $timestamp by ${event.npub}');
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'action': 'edit',
+            'roomId': roomId,
+            'edited': {
+              'timestamp': timestamp,
+              'author': editedMessage.author,
+              'edited_at': editedMessage.editedAt,
+            },
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response(405, body: jsonEncode({'error': 'Method not allowed'}), headers: headers);
+    } on PermissionDeniedException catch (e) {
+      return shelf.Response.forbidden(
+        jsonEncode({'error': e.message, 'code': 'PERMISSION_DENIED'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error in message modification: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

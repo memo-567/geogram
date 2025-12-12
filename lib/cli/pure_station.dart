@@ -412,6 +412,7 @@ class PureConnectedClient {
   String? platform;
   String? version;
   String? address;
+  String? npub;
   double? latitude;
   double? longitude;
   DateTime connectedAt;
@@ -427,6 +428,7 @@ class PureConnectedClient {
     this.platform,
     this.version,
     this.address,
+    this.npub,
     this.latitude,
     this.longitude,
   })  : connectedAt = DateTime.now(),
@@ -437,6 +439,7 @@ class PureConnectedClient {
         'callsign': callsign ?? 'Unknown',
         'nickname': nickname,
         'color': color,
+        'npub': npub,
         'device_type': deviceType ?? 'Unknown',
         'platform': platform,
         'version': version,
@@ -1822,7 +1825,14 @@ class PureStationServer {
             double? latitude;
             double? longitude;
             String? color;
+            String? npub;
             if (event != null) {
+              // Extract npub from event pubkey (hex -> npub format)
+              final pubkey = event['pubkey'] as String?;
+              if (pubkey != null && pubkey.isNotEmpty) {
+                npub = NostrCrypto.encodeNpub(pubkey);
+              }
+
               // Extract callsign, nickname, platform, color, and coordinates from event tags
               final tags = event['tags'] as List<dynamic>?;
               String? platform;
@@ -1870,9 +1880,23 @@ class PureStationServer {
               }
             }
 
+            // npub is mandatory - reject HELLO if missing
+            if (npub == null || npub.isEmpty) {
+              final response = {
+                'type': 'hello_ack',
+                'success': false,
+                'error': 'npub is required for HELLO',
+                'station_id': _settings.callsign,
+              };
+              client.socket.add(jsonEncode(response));
+              _log('WARN', 'HELLO rejected: missing npub from ${callsign ?? "unknown"}');
+              break;
+            }
+
             client.callsign = callsign;
             client.nickname = nickname;
             client.color = color;
+            client.npub = npub;
             client.deviceType = deviceType;
             client.version = version;
             client.latitude = latitude;
@@ -1883,12 +1907,13 @@ class PureStationServer {
               'type': 'hello_ack',
               'success': true,
               'station_id': _settings.callsign,
+              'station_npub': _settings.npub,
               'message': 'Welcome to ${_settings.name}',
               'version': cliAppVersion,
             };
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
-            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"})');
+            _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
             break;
 
           case 'PING':
@@ -2840,6 +2865,7 @@ class PureStationServer {
       'location': _settings.location,
       'latitude': _settings.latitude,
       'longitude': _settings.longitude,
+      'npub': _settings.npub,
       'tile_server': _settings.tileServerEnabled,
       'osm_fallback': _settings.osmFallbackEnabled,
       'cache_size': _tileCache.size,

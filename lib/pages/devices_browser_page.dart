@@ -1514,6 +1514,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   /// Get device icon based on platform
   /// - Station: cell_tower
+  /// - Embedded (ESP32/ESP8266/Arduino): settings_input_antenna
   /// - Desktop (Linux/macOS/Windows): laptop
   /// - Mobile (Android/iOS) or unknown: smartphone
   IconData _getDeviceIcon(RemoteDevice device) {
@@ -1522,6 +1523,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     }
 
     final platform = device.platform?.toLowerCase() ?? '';
+
+    // Embedded devices (ESP32, Arduino, etc.)
+    if (platform == 'esp32' || platform == 'esp8266' || platform == 'arduino' || platform == 'embedded') {
+      return Icons.settings_input_antenna;
+    }
+
+    // Desktop platforms
     if (platform == 'linux' || platform == 'macos' || platform == 'windows') {
       return Icons.laptop;
     }

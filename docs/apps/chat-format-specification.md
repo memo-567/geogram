@@ -1,7 +1,7 @@
 # Chat Format Specification
 
-**Version**: 1.2
-**Last Updated**: 2025-12-11
+**Version**: 1.3
+**Last Updated**: 2025-12-12
 **Status**: Active
 
 ## Table of Contents
@@ -272,6 +272,45 @@ Check out this photo!
 That's nice to hear.
 --> icon_like: CR7BBQ, ALPHA1
 ```
+
+#### Edited Messages
+
+**Purpose**: Indicate that a message has been edited after original posting
+
+**Fields**:
+- `edited_at`: Timestamp when the message was last edited (format: `YYYY-MM-DD HH:MM_ss`)
+
+**Storage**: When a message is edited:
+1. The original timestamp is preserved (this is the message identifier)
+2. The content is updated
+3. `edited_at` metadata is added with the edit timestamp
+4. The message must be re-signed with the new content (if originally signed)
+
+**Position**: `edited_at` should be placed before `npub` and `signature` in metadata ordering
+
+**Example (original message)**:
+```
+> 2025-12-11 14:30_25 -- CR7BBQ
+Hello everyone!
+--> npub: npub1qqq...
+--> signature: abc123...
+```
+
+**Example (after editing)**:
+```
+> 2025-12-11 14:30_25 -- CR7BBQ
+Updated message content here
+--> edited_at: 2025-12-11 15:00_10
+--> npub: npub1qqq...
+--> signature: new_signature_for_updated_content
+```
+
+**Important Notes**:
+- The original timestamp (`14:30_25`) is preserved as the unique message identifier
+- `edited_at` shows when the edit occurred
+- If the message was signed, the new signature covers the updated content plus `edited_at`
+- Only the original author can edit their own messages via the API
+- Moderators cannot edit other users' messages (prevents tampering)
 
 #### Message References
 
@@ -1085,6 +1124,15 @@ Messages should be inserted in chronological order, not necessarily appended to 
 - [Module System](../geogram-server/src/main/java/geogram/apps/Module.java) - Chat module architecture
 
 ## Change Log
+
+### Version 1.3 (2025-12-12)
+- **Added message edit/delete API support**:
+  - New `edited_at` metadata field to track when messages were edited
+  - `edited_at` must be placed before `npub` and `signature` in metadata ordering
+  - Original timestamp is preserved as message identifier
+  - Signature is recalculated for edited content
+  - DELETE `/api/chat/{roomId}/messages/{timestamp}` - Author or moderator can delete
+  - PUT `/api/chat/{roomId}/messages/{timestamp}` - Only author can edit (not moderators)
 
 ### Version 1.2 (2025-12-11)
 - **Added voice message metadata fields**:

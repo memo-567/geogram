@@ -1096,6 +1096,351 @@ class ChatService {
   }
 
   // ============================================================
+  // Message Find and Edit Methods
+  // ============================================================
+
+  /// Find a message by timestamp (and optionally author)
+  /// Returns null if message not found
+  Future<ChatMessage?> findMessage(
+    String channelId,
+    String timestamp, {
+    String? author,
+  }) async {
+    if (_collectionPath == null) {
+      return null;
+    }
+
+    final channel = getChannel(channelId);
+    if (channel == null) {
+      return null;
+    }
+
+    final channelPath = '$_collectionPath/${channel.folder}';
+
+    // Parse the timestamp to get the date for daily files
+    DateTime? messageDate;
+    try {
+      // Format: YYYY-MM-DD HH:MM_ss
+      final datePart = timestamp.substring(0, 10);
+      final parts = datePart.split('-');
+      messageDate = DateTime(
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        int.parse(parts[2]),
+      );
+    } catch (e) {
+      // If we can't parse the timestamp, we'll need to search all files
+      messageDate = null;
+    }
+
+    List<ChatMessage> messages;
+
+    if (channel.isMain && messageDate != null) {
+      // Load from specific daily file
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        if (!await fs.exists(messageFilePath)) {
+          return null;
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        if (!await messageFile.exists()) {
+          return null;
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    } else if (!channel.isMain) {
+      // Load from single messages.txt
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = '$channelPath/messages.txt';
+        if (!await fs.exists(messageFilePath)) {
+          return null;
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        if (!await messageFile.exists()) {
+          return null;
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    } else {
+      // Main channel but couldn't parse date - load all messages
+      messages = await loadMessages(channelId, limit: 10000);
+    }
+
+    // Find the message by timestamp (and optionally author)
+    for (final msg in messages) {
+      if (msg.timestamp == timestamp) {
+        if (author == null || msg.author == author) {
+          return msg;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Edit a message - only the original author can edit
+  /// Returns the updated message, or null if not found/not authorized
+  Future<ChatMessage?> editMessage({
+    required String channelId,
+    required String timestamp,
+    required String authorCallsign,
+    required String newContent,
+    required String actorNpub,
+    required String newSignature,
+    required int newCreatedAt,
+  }) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    final channel = getChannel(channelId);
+    if (channel == null) {
+      throw Exception('Channel not found: $channelId');
+    }
+
+    final channelPath = '$_collectionPath/${channel.folder}';
+
+    // Parse the timestamp to get the date for daily files
+    DateTime messageDate;
+    try {
+      final datePart = timestamp.substring(0, 10);
+      final parts = datePart.split('-');
+      messageDate = DateTime(
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        int.parse(parts[2]),
+      );
+    } catch (e) {
+      throw Exception('Invalid timestamp format: $timestamp');
+    }
+
+    List<ChatMessage> messages;
+    ChatMessage? targetMessage;
+    int targetIndex = -1;
+
+    if (channel.isMain) {
+      // Load from daily file
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        if (!await fs.exists(messageFilePath)) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        if (!await messageFile.exists()) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    } else {
+      // Load from single messages.txt
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = '$channelPath/messages.txt';
+        if (!await fs.exists(messageFilePath)) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        if (!await messageFile.exists()) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    }
+
+    // Find the target message
+    for (int i = 0; i < messages.length; i++) {
+      if (messages[i].timestamp == timestamp && messages[i].author == authorCallsign) {
+        targetMessage = messages[i];
+        targetIndex = i;
+        break;
+      }
+    }
+
+    if (targetMessage == null) {
+      throw Exception('Message not found');
+    }
+
+    // Verify authorization: only the author can edit their own message
+    final messageNpub = targetMessage.npub;
+    if (messageNpub != actorNpub) {
+      throw Exception('Only the author can edit this message');
+    }
+
+    // Create the edited_at timestamp
+    final now = DateTime.now();
+    final editedAt = ChatMessage.formatTimestamp(now);
+
+    // Create updated message with new content, edited_at, and new signature
+    final updatedMetadata = Map<String, String>.from(targetMessage.metadata);
+    updatedMetadata['edited_at'] = editedAt;
+    updatedMetadata['npub'] = actorNpub;
+    updatedMetadata['signature'] = newSignature;
+    updatedMetadata['created_at'] = newCreatedAt.toString();
+
+    final updatedMessage = targetMessage.copyWith(
+      content: newContent,
+      metadata: updatedMetadata,
+    );
+
+    // Replace the message in the list
+    messages[targetIndex] = updatedMessage;
+
+    // Rewrite the file
+    if (channel.isMain) {
+      if (kIsWeb) {
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    } else {
+      if (kIsWeb) {
+        final messageFilePath = '$channelPath/messages.txt';
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    }
+
+    return updatedMessage;
+  }
+
+  /// Delete a message - author can delete own, moderators can delete any
+  /// Returns true if deleted, throws exception on error
+  Future<bool> deleteMessageByTimestamp({
+    required String channelId,
+    required String timestamp,
+    required String authorCallsign,
+    required String actorNpub,
+  }) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    final channel = getChannel(channelId);
+    if (channel == null) {
+      throw Exception('Channel not found: $channelId');
+    }
+
+    final channelPath = '$_collectionPath/${channel.folder}';
+
+    // Parse the timestamp to get the date for daily files
+    DateTime messageDate;
+    try {
+      final datePart = timestamp.substring(0, 10);
+      final parts = datePart.split('-');
+      messageDate = DateTime(
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        int.parse(parts[2]),
+      );
+    } catch (e) {
+      throw Exception('Invalid timestamp format: $timestamp');
+    }
+
+    List<ChatMessage> messages;
+    ChatMessage? targetMessage;
+
+    if (channel.isMain) {
+      // Load from daily file
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        if (!await fs.exists(messageFilePath)) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        if (!await messageFile.exists()) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    } else {
+      // Load from single messages.txt
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = '$channelPath/messages.txt';
+        if (!await fs.exists(messageFilePath)) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        if (!await messageFile.exists()) {
+          throw Exception('Message file not found');
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    }
+
+    // Find the target message
+    for (final msg in messages) {
+      if (msg.timestamp == timestamp && msg.author == authorCallsign) {
+        targetMessage = msg;
+        break;
+      }
+    }
+
+    if (targetMessage == null) {
+      throw Exception('Message not found');
+    }
+
+    // Verify authorization: author can delete own, moderators can delete any
+    final messageNpub = targetMessage.npub;
+    final isAuthor = messageNpub == actorNpub;
+    final isModerator = _security.canModerate(actorNpub, channelId);
+
+    if (!isAuthor && !isModerator) {
+      throw Exception('Not authorized to delete this message');
+    }
+
+    // Remove the message from the list
+    messages.removeWhere((msg) =>
+        msg.timestamp == timestamp && msg.author == authorCallsign);
+
+    // Rewrite the file
+    if (channel.isMain) {
+      if (kIsWeb) {
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    } else {
+      if (kIsWeb) {
+        final messageFilePath = '$channelPath/messages.txt';
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    }
+
+    return true;
+  }
+
+  // ============================================================
   // Role-Based Access Control Methods for Restricted Chat Rooms
   // ============================================================
 

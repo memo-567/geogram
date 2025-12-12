@@ -1522,5 +1522,17 @@
   "public_room_description": "Anyone can see and join this room",
   "restricted_room_description": "Only invited members can see and access this room",
   "room_made_public": "Room is now public",
-  "room_made_restricted": "Room is now restricted"
+  "room_made_restricted": "Room is now restricted",
+  "search_devices": "Search devices...",
+  "known_devices": "Known Devices",
+  "add_by_npub": "Add by NPUB manually",
+  "members_added": "{0} members added",
+  "add_count": "Add ({0})",
+  "npub_too_short": "NPUB is too short",
+  "no_devices_found": "No devices found",
+  "all_devices_are_members": "All known devices are already members",
+  "no_devices_with_npub": "No devices with NPUB available",
+  "use_manual_npub_entry": "Use the manual entry option above to add members by their NPUB",
+  "online": "Online",
+  "already_a_member": "This user is already a member"
 }

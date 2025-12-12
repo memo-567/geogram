@@ -1206,6 +1206,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     ).then((_) {
       // Reload security settings when returning
       _chatService.refreshChannels();
+      // Re-fetch the selected channel to get updated config (e.g., visibility change)
+      if (_selectedChannel != null) {
+        _selectedChannel = _chatService.getChannel(_selectedChannel!.id);
+      }
       setState(() {});
     });
   }
@@ -1334,15 +1338,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           },
         ),
         actions: [
-          // Show room info/management for group channels (not DM)
-          if (!widget.isRemoteDevice && _selectedChannel != null && _selectedChannel!.isGroup)
+          // Show room info/management for RESTRICTED group channels only
+          if (!widget.isRemoteDevice &&
+              _selectedChannel != null &&
+              _selectedChannel!.isGroup &&
+              _selectedChannel!.config?.visibility == 'RESTRICTED')
             IconButton(
               icon: const Icon(Icons.group),
               onPressed: _openRoomManagement,
               tooltip: _i18n.t('room_management'),
             ),
-          // Only show add channel for local chat (not remote devices)
-          if (!widget.isRemoteDevice)
+          // Add channel button: always in landscape, only on channel list in portrait
+          if (!widget.isRemoteDevice && (isWideScreen || _selectedChannel == null))
             IconButton(
               icon: const Icon(Icons.add),
               onPressed: _showNewChannelDialog,
