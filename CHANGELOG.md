@@ -1,5 +1,21 @@
 # Geogram Desktop Changelog
 
+## 2025-12-12 - v1.6.27
+
+### Changes
+- Fix station distance display by fetching lat/lon on connect
+- Add voice debug actions to DebugController enum
+- Fix WebRTC P2P message delivery and add station device list
+- Fix just_audio not available on Linux - skip initialization
+- Fix web build by adding conditional imports for FFI code
+- Add self-contained audio playback for Linux via ALSA FFI
+- Add voice messages to 1:1 DM chat
+- Add unread DM badge to Devices navigation icon
+- Add laptop icon for desktop devices (Linux/macOS/Windows)
+- Fix device distance display and chat bubble readability
+- Fix update mirror to sync all binaries even if GitHub Actions is still building
+
+
 ## 2025-12-10 - v1.6.15
 
 ### Changes
