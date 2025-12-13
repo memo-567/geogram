@@ -48,6 +48,7 @@ class _UpdatePageState extends State<UpdatePage> {
     });
 
     try {
+      // Load cached release info first for immediate display
       _latestRelease = _updateService.getLatestRelease();
       _backups = await _updateService.listBackups();
     } catch (e) {
@@ -66,7 +67,57 @@ class _UpdatePageState extends State<UpdatePage> {
       );
       if (isNewer) {
         _downloadAndInstall();
+        return; // Don't check for updates if auto-installing
       }
+    }
+
+    // Automatically check for updates in background when visiting this page
+    // This provides immediate feedback to the user without requiring a manual click
+    _checkForUpdatesInBackground();
+  }
+
+  /// Check for updates in the background without blocking the UI
+  Future<void> _checkForUpdatesInBackground() async {
+    // Don't check if already checking or downloading
+    if (_updateService.isChecking || _updateService.isDownloading) return;
+
+    setState(() {
+      _statusMessage = _i18n.t('checking_for_updates');
+    });
+
+    try {
+      final release = await _updateService.checkForUpdates();
+      if (!mounted) return;
+
+      if (release != null) {
+        setState(() {
+          _latestRelease = release;
+        });
+
+        final isNewer = _updateService.isNewerVersion(
+          _updateService.getCurrentVersion(),
+          release.version,
+        );
+        if (isNewer) {
+          setState(() {
+            _statusMessage = _i18n.t('update_available_msg', params: [release.version]);
+          });
+        } else {
+          setState(() {
+            _statusMessage = _i18n.t('running_latest_version');
+          });
+        }
+      } else {
+        setState(() {
+          _statusMessage = _i18n.t('could_not_check_updates');
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      // Don't show error for background check - just clear status
+      setState(() {
+        _statusMessage = null;
+      });
     }
   }
 
@@ -822,6 +873,7 @@ class _UpdatePageState extends State<UpdatePage> {
   /// Build the main clickable update status card
   Widget _buildUpdateStatusCard(bool hasUpdate) {
     final isDownloading = _updateService.isDownloading;
+    final isChecking = _updateService.isChecking;
 
     // Determine card appearance based on state
     Color cardColor;
@@ -834,7 +886,7 @@ class _UpdatePageState extends State<UpdatePage> {
       icon = Icons.downloading;
       title = _i18n.t('downloading_update');
       subtitle = _i18n.t('downloading_update_wait');
-    } else if (_isLoading) {
+    } else if (_isLoading || isChecking) {
       cardColor = Theme.of(context).colorScheme.surfaceContainerHighest;
       icon = Icons.sync;
       title = _i18n.t('checking');
@@ -881,7 +933,7 @@ class _UpdatePageState extends State<UpdatePage> {
       color: cardColor,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: (isDownloading || _isLoading) ? null : _handleUpdateCardTap,
+        onTap: (isDownloading || _isLoading || isChecking) ? null : _handleUpdateCardTap,
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Row(
@@ -892,7 +944,7 @@ class _UpdatePageState extends State<UpdatePage> {
                   color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: _isLoading && !isDownloading
+                child: (_isLoading || isChecking) && !isDownloading
                     ? SizedBox(
                         width: 24,
                         height: 24,
@@ -930,7 +982,7 @@ class _UpdatePageState extends State<UpdatePage> {
                   ],
                 ),
               ),
-              if (!isDownloading && !_isLoading)
+              if (!isDownloading && !_isLoading && !isChecking)
                 Icon(
                   Icons.chevron_right,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
