@@ -75,10 +75,18 @@ class DevicesService {
   DateTime? _lastFullRefreshTime;
   static const _fullRefreshCooldown = Duration(minutes: 1);
 
+  /// Track initialization state to avoid re-initializing and losing online status
+  bool _isInitialized = false;
+
   /// Initialize the service
   /// [skipBLE] - If true, skip BLE initialization (used for first-time Android users
   /// who need to see onboarding screen before permission dialogs)
   Future<void> initialize({bool skipBLE = false}) async {
+    // Skip if already initialized - this preserves current device online states
+    if (_isInitialized) {
+      return;
+    }
+
     await _cacheService.initialize();
     await _loadCachedDevices();
 
@@ -93,6 +101,8 @@ class DevicesService {
     }
     _subscribeToDebugActions();
     _subscribeToStationConnection();
+
+    _isInitialized = true;
   }
 
   /// Subscribe to station connection events to auto-update station device
