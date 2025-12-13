@@ -31,6 +31,10 @@ import 'report_browser_page.dart';
 class DevicesBrowserPage extends StatefulWidget {
   const DevicesBrowserPage({super.key});
 
+  /// Static callback for handling back gesture from HomePage
+  /// Returns true if back was handled (device detail was cleared)
+  static bool Function()? onBackPressed;
+
   @override
   State<DevicesBrowserPage> createState() => _DevicesBrowserPageState();
 }
@@ -79,6 +83,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _subscribeToConnectionStateChanges();
     _subscribeToBLEStatus();
     _startAutoRefresh();
+
+    // Register back button handler for HomePage to call
+    DevicesBrowserPage.onBackPressed = _handleBackFromHomePage;
+  }
+
+  /// Handle back button press from HomePage
+  /// Returns true if we handled it (device detail was cleared)
+  bool _handleBackFromHomePage() {
+    if (_selectedDevice != null && MediaQuery.of(context).size.width < 600) {
+      setState(() => _selectedDevice = null);
+      return true;
+    }
+    return false;
   }
 
   /// Subscribe to connection state changes to refresh UI when connectivity changes
@@ -221,6 +238,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _dmUnreadSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _bleStatusSubscription?.cancel();
+    // Clear back button handler
+    DevicesBrowserPage.onBackPressed = null;
     super.dispose();
   }
 

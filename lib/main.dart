@@ -662,6 +662,15 @@ class _HomePageState extends State<HomePage> {
       // Don't allow back gesture to exit app when on Collections (index 0)
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
+        // Check if DevicesBrowserPage needs to handle back (viewing device details)
+        if (_selectedIndex == 2 && DevicesBrowserPage.onBackPressed != null) {
+          // Let DevicesBrowserPage handle it - it will clear the selected device
+          final handled = DevicesBrowserPage.onBackPressed!();
+          if (handled) {
+            // Back was handled by DevicesBrowserPage, don't navigate away
+            return;
+          }
+        }
         if (_selectedIndex != 0) {
           // Navigate back to Collections panel
           setState(() {
