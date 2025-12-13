@@ -1,7 +1,7 @@
 # Report Format Specification
 
-**Version**: 1.1
-**Last Updated**: 2025-12-12
+**Version**: 1.2
+**Last Updated**: 2025-12-14
 **Status**: Draft
 
 ## Table of Contents
@@ -14,6 +14,7 @@
 - [Report Types Reference](#report-types-reference)
 - [Photos and Media](#photos-and-media)
 - [Photo Guidelines](#photo-guidelines)
+- [Station Photo Synchronization](#station-photo-synchronization)
 - [Verification System](#verification-system)
 - [Duplicate Detection](#duplicate-detection)
 - [Authority Integration](#authority-integration)
@@ -1286,6 +1287,158 @@ Resolution Update:
 - Use same time of day if possible (similar lighting)
 - Include same reference markers
 - Shows clear evidence of resolution
+
+## Station Photo Synchronization
+
+### Overview
+
+When alerts are shared to a station (relay), photos need to be synchronized separately from the report text. This is because:
+
+1. **NOSTR events** only contain the report.txt content (text data)
+2. **Photos** are binary files that must be transferred via HTTP
+3. **Bandwidth efficiency** requires on-demand photo fetching
+
+### Photo Sync Architecture
+
+```
+┌─────────────┐     Share Alert      ┌─────────────┐
+│   Client A  │ ─────────────────────▶│   Station   │
+│  (Author)   │     (NOSTR event)    │             │
+│             │                      │             │
+│             │     Upload Photos    │             │
+│             │ ─────────────────────▶│             │
+│             │     (HTTP POST)      │             │
+└─────────────┘                      └──────┬──────┘
+                                           │
+                                           │ Receive Alert
+                                           │ (NOSTR event)
+                                           ▼
+                                    ┌─────────────┐
+                                    │   Client B  │
+                                    │ (Subscriber)│
+                                    │             │
+                                    │  Request    │
+                                    │  Photos ────┼─── On-Demand
+                                    │  (HTTP GET) │    Fetch
+                                    └─────────────┘
+```
+
+### Client Photo Upload
+
+When a client shares an alert to a station:
+
+1. **Alert NOSTR event** is sent first via WebSocket
+2. **After confirmation**, client uploads photos via HTTP POST
+3. **Upload endpoint**: `POST /{callsign}/api/alerts/{alertId}/files/{filename}`
+
+**Supported Photo Formats**:
+- `.jpg`, `.jpeg` (Content-Type: image/jpeg)
+- `.png` (Content-Type: image/png)
+- `.gif` (Content-Type: image/gif)
+- `.webp` (Content-Type: image/webp)
+
+**Photo Locations Scanned**:
+- Alert root folder (author's initial photos)
+- `images/` subdirectory (if exists)
+
+**Example Upload**:
+```
+POST /X1ABC2/api/alerts/38.7223_-9.1393_broken-sidewalk/files/photo1.jpg
+Content-Type: image/jpeg
+X-Callsign: X1ABC2
+
+[binary photo data]
+```
+
+### Station Photo Storage
+
+The station stores received photos alongside the report:
+
+```
+station_storage/
+└── X1ABC2/
+    └── alerts/
+        └── active/
+            └── 38.7_-9.1/
+                └── 38.7223_-9.1393_broken-sidewalk/
+                    ├── report.txt
+                    ├── photo1.jpg      # Uploaded by author
+                    └── photo2.jpg      # Uploaded by author
+```
+
+### On-Demand Photo Fetching
+
+To conserve bandwidth, the station uses **lazy loading** for photos:
+
+1. **Photo request arrives** from subscriber client
+2. **Station checks** if photo exists locally
+3. **If missing** and author is online, station fetches from author
+4. **Station caches** the photo for future requests
+
+**Fetch Request** (Station to Author):
+```json
+{
+  "type": "fetch_file",
+  "alertId": "38.7223_-9.1393_broken-sidewalk",
+  "filename": "photo1.jpg"
+}
+```
+
+**Fetch Response** (Author to Station):
+```json
+{
+  "type": "file_response",
+  "alertId": "38.7223_-9.1393_broken-sidewalk",
+  "filename": "photo1.jpg",
+  "contentType": "image/jpeg",
+  "data": "<base64-encoded-data>"
+}
+```
+
+### Photo Download by Subscribers
+
+Subscriber clients can download photos via HTTP GET:
+
+**Download Endpoint**: `GET /{callsign}/api/alerts/{alertId}/files/{filename}`
+
+**Example**:
+```
+GET /X1ABC2/api/alerts/38.7223_-9.1393_broken-sidewalk/files/photo1.jpg
+
+Response:
+Content-Type: image/jpeg
+[binary photo data]
+```
+
+**Error Responses**:
+- `404 Not Found` - Photo doesn't exist and author is offline
+- `504 Gateway Timeout` - Author didn't respond to fetch request
+
+### Photo References in Report
+
+Photos are referenced in `report.txt` via the `PHOTOS` field:
+
+```
+PHOTOS: photo1.jpg, photo2.jpg, evidence.png
+```
+
+Clients use this list to know which photos to request from the station.
+
+### Bandwidth Considerations
+
+The photo sync system is designed to minimize bandwidth usage:
+
+1. **Upload on share** - Author uploads photos only once when sharing
+2. **On-demand fetch** - Station only fetches photos when actually requested
+3. **Station caching** - Once fetched, photos are cached for all subscribers
+4. **No automatic sync** - Photos aren't transferred until needed
+
+### API Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/{callsign}/api/alerts/{alertId}/files/{filename}` | Upload photo to station |
+| GET | `/{callsign}/api/alerts/{alertId}/files/{filename}` | Download photo from station |
 
 ## Verification System
 
@@ -3211,6 +3364,27 @@ apariencia y valor histórico del área.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.2 (2025-12-14)
+
+**Station Photo Synchronization**:
+- **Photo Upload on Share**: Client automatically uploads photos to station via HTTP POST after sharing alert
+  - Upload endpoint: `POST /{callsign}/api/alerts/{alertId}/files/{filename}`
+  - Supports JPG, PNG, GIF, WebP formats
+  - Scans alert root folder and `images/` subdirectory
+- **On-Demand Photo Fetching**: Station fetches photos lazily to conserve bandwidth
+  - Photos only fetched when requested by a subscriber
+  - Station requests from author client if online
+  - Photos cached for subsequent requests
+- **Photo Download API**: Subscribers can download photos via HTTP GET
+  - Download endpoint: `GET /{callsign}/api/alerts/{alertId}/files/{filename}`
+  - Returns 404 if photo unavailable and author offline
+- **WebSocket Fetch Protocol**: Station-to-client photo fetch messages
+  - `fetch_file` request with alertId and filename
+  - `file_response` with base64-encoded photo data
+- **Bandwidth Efficiency**: Designed to minimize data transfer
+  - No automatic photo sync on alert receive
+  - Photos transferred only when actually needed
 
 ### Version 1.1 (2025-12-12)
 

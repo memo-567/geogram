@@ -7,6 +7,10 @@
  */
 
 import 'dart:async';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as path;
 import '../models/report.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -15,6 +19,7 @@ import 'profile_service.dart';
 import 'signing_service.dart';
 import 'websocket_service.dart';
 import 'station_service.dart';
+import 'storage_config.dart';
 
 /// Result of sending an alert to a station
 class AlertSendResult {
@@ -212,6 +217,12 @@ class AlertSharingService {
 
       if (result.success) {
         confirmed++;
+
+        // Upload photos after successful alert share
+        final photosUploaded = await uploadPhotosToStation(report, stationUrl);
+        if (photosUploaded > 0) {
+          LogService().log('AlertSharingService: Uploaded $photosUploaded photos to $stationUrl');
+        }
       } else {
         failed++;
       }
@@ -393,5 +404,132 @@ class AlertSharingService {
       stationShares: shares,
       nostrEventId: nostrEventId ?? report.nostrEventId,
     );
+  }
+
+  /// Upload photos from an alert folder to the station
+  ///
+  /// This uploads all photos from the alert's local folder to the station
+  /// so they're available for other clients to download.
+  Future<int> uploadPhotosToStation(Report report, String stationUrl) async {
+    if (kIsWeb) return 0;
+
+    try {
+      // Get the alert folder path using StorageConfig and profile
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) {
+        LogService().log('AlertSharingService: StorageConfig not initialized');
+        return 0;
+      }
+
+      final profile = _profileService.getProfile();
+      final callsign = profile.callsign;
+      if (callsign.isEmpty) {
+        LogService().log('AlertSharingService: No callsign');
+        return 0;
+      }
+
+      // Alerts are stored in: {devicesDir}/{callsign}/alerts/active/{regionFolder}/{folderName}
+      final alertPath = '${storageConfig.devicesDir}/$callsign/alerts/active/${report.regionFolder}/${report.folderName}';
+      final alertDir = Directory(alertPath);
+
+      if (!await alertDir.exists()) {
+        LogService().log('AlertSharingService: Alert folder not found: $alertPath');
+        return 0;
+      }
+
+      // Find all photos in the folder
+      final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+      final photos = <File>[];
+
+      await for (final entity in alertDir.list()) {
+        if (entity is File) {
+          final ext = path.extension(entity.path).toLowerCase();
+          if (photoExtensions.contains(ext)) {
+            photos.add(entity);
+          }
+        }
+      }
+
+      // Also check images subdirectory
+      final imagesDir = Directory('$alertPath/images');
+      if (await imagesDir.exists()) {
+        await for (final entity in imagesDir.list()) {
+          if (entity is File) {
+            final ext = path.extension(entity.path).toLowerCase();
+            if (photoExtensions.contains(ext)) {
+              photos.add(entity);
+            }
+          }
+        }
+      }
+
+      if (photos.isEmpty) {
+        LogService().log('AlertSharingService: No photos to upload for ${report.folderName}');
+        return 0;
+      }
+
+      LogService().log('AlertSharingService: Found ${photos.length} photos to upload');
+
+      // Convert WebSocket URL to HTTP URL
+      var baseUrl = stationUrl;
+      if (baseUrl.startsWith('wss://')) {
+        baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+      } else if (baseUrl.startsWith('ws://')) {
+        baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+      }
+
+      // Upload endpoint: POST /{callsign}/api/alerts/{folderName}/files
+      // Use folderName (coordinate-based) to match where the station stores the alert
+      final alertFolderName = report.folderName;
+      final uploadUrl = '$baseUrl/$callsign/api/alerts/$alertFolderName/files';
+
+      int uploadedCount = 0;
+
+      for (final photo in photos) {
+        try {
+          final filename = path.basename(photo.path);
+          final bytes = await photo.readAsBytes();
+
+          // Determine content type
+          final ext = path.extension(filename).toLowerCase();
+          String contentType = 'application/octet-stream';
+          if (ext == '.jpg' || ext == '.jpeg') {
+            contentType = 'image/jpeg';
+          } else if (ext == '.png') {
+            contentType = 'image/png';
+          } else if (ext == '.gif') {
+            contentType = 'image/gif';
+          } else if (ext == '.webp') {
+            contentType = 'image/webp';
+          }
+
+          LogService().log('AlertSharingService: Uploading $filename to $uploadUrl');
+
+          final response = await http.post(
+            Uri.parse('$uploadUrl/$filename'),
+            headers: {
+              'Content-Type': contentType,
+              'X-Callsign': callsign,
+            },
+            body: bytes,
+          ).timeout(const Duration(seconds: 60));
+
+          if (response.statusCode == 200 || response.statusCode == 201) {
+            uploadedCount++;
+            LogService().log('AlertSharingService: Uploaded $filename successfully');
+          } else {
+            LogService().log('AlertSharingService: Failed to upload $filename: ${response.statusCode}');
+          }
+        } catch (e) {
+          LogService().log('AlertSharingService: Error uploading photo: $e');
+        }
+      }
+
+      LogService().log('AlertSharingService: Uploaded $uploadedCount/${photos.length} photos');
+      return uploadedCount;
+    } catch (e) {
+      LogService().log('AlertSharingService: Error in uploadPhotosToStation: $e');
+      return 0;
+    }
   }
 }

@@ -1756,6 +1756,12 @@ class PureStationServer {
         await _handleAlertFeedback(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (_isAlertFileUploadPath(path) && method == 'POST') {
+        // /{callsign}/api/alerts/{alertId}/files/{filename} - upload alert photo
+        await _handleAlertFileUpload(request);
+      } else if (_isAlertFileUploadPath(path) && method == 'GET') {
+        // /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
+        await _handleAlertFileServe(request);
       } else if (_isCallsignApiPath(path)) {
         // /{callsign}/api/* - proxy to connected device
         await _handleCallsignApiProxy(request);
@@ -2321,6 +2327,11 @@ class PureStationServer {
       // Store alert
       await _storeAlert(senderCallsign, folderName, event.content);
 
+      // Note: Photos are NOT fetched automatically to save bandwidth.
+      // Photos are obtained via:
+      // 1. Client uploads after sharing (AlertSharingService.uploadPhotosToStation)
+      // 2. On-demand fetch when alert details are requested and author is online
+
       // Fire event for subscribers
       EventBus().fire(AlertReceivedEvent(
         eventId: eventId,
@@ -2361,6 +2372,218 @@ class PureStationServer {
     await reportFile.writeAsString(content, flush: true);
 
     _log('INFO', 'Alert stored at: $alertPath/report.txt');
+  }
+
+  /// Fetch photos from the connected client for an alert
+  /// This runs asynchronously (fire and forget) to not block the alert acknowledgment
+  Future<void> _fetchAlertPhotosFromClient(PureConnectedClient client, String callsign, String folderName) async {
+    try {
+      _log('INFO', 'ALERT PHOTOS: Attempting to fetch photos from $callsign for alert $folderName');
+
+      // Generate alert ID (same format as apiId in Report model)
+      final alertId = folderName;
+
+      // Create a unique request ID
+      final requestId = 'photo-fetch-${DateTime.now().millisecondsSinceEpoch}';
+
+      // First, request the alert details to get the photos list
+      final detailsRequest = {
+        'type': 'proxy_request',
+        'request_id': requestId,
+        'method': 'GET',
+        'path': '/api/alerts/$alertId',
+        'headers': jsonEncode({'Accept': 'application/json'}),
+        'body': '',
+      };
+
+      // Set up a completer for the response
+      final completer = Completer<Map<String, dynamic>>();
+      _pendingProxyRequests[requestId] = completer;
+
+      // Send the request to the client
+      client.socket.add(jsonEncode(detailsRequest));
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          _pendingProxyRequests.remove(requestId);
+          return {'statusCode': 408, 'responseBody': 'Timeout'};
+        },
+      );
+
+      _pendingProxyRequests.remove(requestId);
+
+      if (response['statusCode'] != 200) {
+        _log('WARN', 'ALERT PHOTOS: Failed to get alert details: ${response['statusCode']}');
+        return;
+      }
+
+      // Parse the response to get photos list
+      final bodyStr = response['responseBody'] as String? ?? '';
+      if (bodyStr.isEmpty) {
+        _log('WARN', 'ALERT PHOTOS: Empty response body');
+        return;
+      }
+
+      Map<String, dynamic> alertDetails;
+      try {
+        alertDetails = jsonDecode(bodyStr) as Map<String, dynamic>;
+      } catch (e) {
+        _log('WARN', 'ALERT PHOTOS: Failed to parse alert details: $e');
+        return;
+      }
+
+      final photos = (alertDetails['photos'] as List<dynamic>?)?.cast<String>() ?? [];
+
+      if (photos.isEmpty) {
+        _log('INFO', 'ALERT PHOTOS: No photos in alert $folderName');
+        return;
+      }
+
+      _log('INFO', 'ALERT PHOTOS: Found ${photos.length} photos to fetch: $photos');
+
+      // Download each photo
+      final devicesDir = PureStorageConfig().devicesDir;
+      final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+      int downloadedCount = 0;
+
+      for (final photoName in photos) {
+        try {
+          // Check if photo already exists
+          final photoFile = File('$alertPath/$photoName');
+          if (await photoFile.exists()) {
+            _log('INFO', 'ALERT PHOTOS: $photoName already exists, skipping');
+            continue;
+          }
+
+          // Request the photo
+          final photoRequestId = 'photo-$photoName-${DateTime.now().millisecondsSinceEpoch}';
+          final photoRequest = {
+            'type': 'proxy_request',
+            'request_id': photoRequestId,
+            'method': 'GET',
+            'path': '/api/alerts/$alertId/files/$photoName',
+            'headers': jsonEncode({'Accept': 'application/octet-stream'}),
+            'body': '',
+          };
+
+          final photoCompleter = Completer<Map<String, dynamic>>();
+          _pendingProxyRequests[photoRequestId] = photoCompleter;
+
+          client.socket.add(jsonEncode(photoRequest));
+
+          final photoResponse = await photoCompleter.future.timeout(
+            const Duration(seconds: 60),
+            onTimeout: () {
+              _pendingProxyRequests.remove(photoRequestId);
+              return {'statusCode': 408, 'responseBody': 'Timeout'};
+            },
+          );
+
+          _pendingProxyRequests.remove(photoRequestId);
+
+          if (photoResponse['statusCode'] == 200) {
+            // Save the photo
+            final isBase64 = photoResponse['isBase64'] == true;
+            final body = photoResponse['responseBody'] ?? '';
+
+            List<int> bytes;
+            if (isBase64) {
+              bytes = base64Decode(body);
+            } else {
+              bytes = utf8.encode(body);
+            }
+
+            if (bytes.isNotEmpty) {
+              await photoFile.writeAsBytes(bytes, flush: true);
+              downloadedCount++;
+              _log('INFO', 'ALERT PHOTOS: Downloaded $photoName (${bytes.length} bytes)');
+            }
+          } else {
+            _log('WARN', 'ALERT PHOTOS: Failed to download $photoName: ${photoResponse['statusCode']}');
+          }
+        } catch (e) {
+          _log('ERROR', 'ALERT PHOTOS: Error downloading $photoName: $e');
+        }
+      }
+
+      _log('INFO', 'ALERT PHOTOS: Completed - downloaded $downloadedCount/${photos.length} photos for $folderName');
+    } catch (e) {
+      _log('ERROR', 'ALERT PHOTOS: Error fetching photos: $e');
+    }
+  }
+
+  /// Fetch a single photo from a connected client (on-demand)
+  /// Returns true if the photo was successfully fetched and saved
+  Future<bool> _fetchSinglePhotoFromClient(
+    PureConnectedClient client,
+    String callsign,
+    String alertId,
+    String filename,
+  ) async {
+    try {
+      // Request the photo
+      final photoRequestId = 'photo-ondemand-${DateTime.now().millisecondsSinceEpoch}';
+      final photoRequest = {
+        'type': 'proxy_request',
+        'request_id': photoRequestId,
+        'method': 'GET',
+        'path': '/api/alerts/$alertId/files/$filename',
+        'headers': jsonEncode({'Accept': 'application/octet-stream'}),
+        'body': '',
+      };
+
+      final photoCompleter = Completer<Map<String, dynamic>>();
+      _pendingProxyRequests[photoRequestId] = photoCompleter;
+
+      client.socket.add(jsonEncode(photoRequest));
+
+      final photoResponse = await photoCompleter.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          _pendingProxyRequests.remove(photoRequestId);
+          return {'statusCode': 408, 'responseBody': 'Timeout'};
+        },
+      );
+
+      _pendingProxyRequests.remove(photoRequestId);
+
+      if (photoResponse['statusCode'] == 200) {
+        // Save the photo
+        final isBase64 = photoResponse['isBase64'] == true;
+        final body = photoResponse['responseBody'] ?? '';
+
+        List<int> bytes;
+        if (isBase64) {
+          bytes = base64Decode(body);
+        } else {
+          bytes = utf8.encode(body);
+        }
+
+        if (bytes.isNotEmpty) {
+          final devicesDir = PureStorageConfig().devicesDir;
+          final alertPath = '$devicesDir/$callsign/alerts/$alertId';
+
+          // Ensure directory exists
+          final alertDir = Directory(alertPath);
+          if (!await alertDir.exists()) {
+            await alertDir.create(recursive: true);
+          }
+
+          final photoFile = File('$alertPath/$filename');
+          await photoFile.writeAsBytes(bytes, flush: true);
+          _log('INFO', 'ALERT PHOTO: On-demand fetch successful - $filename (${bytes.length} bytes)');
+          return true;
+        }
+      }
+
+      _log('WARN', 'ALERT PHOTO: On-demand fetch failed - status ${photoResponse['statusCode']}');
+      return false;
+    } catch (e) {
+      _log('ERROR', 'ALERT PHOTO: On-demand fetch error: $e');
+      return false;
+    }
   }
 
   /// Handle GET /alerts - Display public alerts page
@@ -3426,6 +3649,229 @@ class PureStationServer {
       request.response.write('Bad Gateway: $e');
     } finally {
       _pendingProxyRequests.remove(requestId);
+    }
+  }
+
+  /// Check if path matches /{callsign}/api/alerts/{alertId}/files/{filename} pattern for photo uploads
+  bool _isAlertFileUploadPath(String path) {
+    // Pattern: /{callsign}/api/alerts/{alertId}/files/{filename}
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle POST /{callsign}/api/alerts/{alertId}/files/{filename} - upload alert photo
+  Future<void> _handleAlertFileUpload(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+
+      // Parse path: /{callsign}/api/alerts/{alertId}/files/{filename}
+      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
+      final match = regex.firstMatch(path);
+
+      if (match == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = match.group(1)!.toUpperCase();
+      final alertId = match.group(2)!;
+      final filename = match.group(3)!;
+
+      // Validate filename (prevent directory traversal)
+      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid filename'}));
+        return;
+      }
+
+      // Validate it's an allowed file type
+      final ext = filename.toLowerCase().split('.').last;
+      final allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+      if (!allowedExtensions.contains(ext)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Invalid file type',
+          'allowed': allowedExtensions,
+        }));
+        return;
+      }
+
+      // Read the file content from request body
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      // Limit file size (10MB max)
+      if (bytes.length > 10 * 1024 * 1024) {
+        request.response.statusCode = 413;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File too large', 'max_size_mb': 10}));
+        return;
+      }
+
+      _log('INFO', '═══════════════════════════════════════════════════════');
+      _log('INFO', 'ALERT PHOTO UPLOAD: Receiving photo for alert');
+      _log('INFO', '  Callsign: $callsign');
+      _log('INFO', '  Alert ID: $alertId');
+      _log('INFO', '  Filename: $filename');
+      _log('INFO', '  Size: ${bytes.length} bytes');
+      _log('INFO', '═══════════════════════════════════════════════════════');
+
+      // Store the file in devices/{callsign}/alerts/{alertId}/{filename}
+      final devicesDir = PureStorageConfig().devicesDir;
+      final alertPath = '$devicesDir/$callsign/alerts/$alertId';
+      final alertDir = Directory(alertPath);
+
+      // Check if alert folder exists (alert must have been shared first)
+      if (!await alertDir.exists()) {
+        _log('WARN', 'Alert folder does not exist: $alertPath');
+        // Create the folder - the alert may have been received but folder not created
+        await alertDir.create(recursive: true);
+      }
+
+      // Write the file
+      final filePath = '$alertPath/$filename';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      _log('INFO', 'ALERT PHOTO UPLOAD: Saved to $filePath');
+
+      // Send success response
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'message': 'Photo uploaded successfully',
+        'callsign': callsign,
+        'alert_id': alertId,
+        'filename': filename,
+        'size': bytes.length,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error handling alert file upload: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
+  Future<void> _handleAlertFileServe(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+
+      // Parse path: /{callsign}/api/alerts/{alertId}/files/{filename}
+      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
+      final match = regex.firstMatch(path);
+
+      if (match == null) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final callsign = match.group(1)!.toUpperCase();
+      final alertId = match.group(2)!;
+      final filename = match.group(3)!;
+
+      // Validate filename (prevent directory traversal)
+      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid filename'}));
+        return;
+      }
+
+      // Try to find the file in devices/{callsign}/alerts/{alertId}/{filename}
+      final devicesDir = PureStorageConfig().devicesDir;
+      final filePath = '$devicesDir/$callsign/alerts/$alertId/$filename';
+      var file = File(filePath);
+
+      if (!await file.exists()) {
+        // File not found on station - try to fetch from the author if they're online
+        _log('INFO', 'ALERT PHOTO: $filename not found locally, checking if author $callsign is online');
+
+        // Find the client by callsign
+        PureConnectedClient? authorClient;
+        for (final c in _clients.values) {
+          if (c.callsign?.toUpperCase() == callsign) {
+            authorClient = c;
+            break;
+          }
+        }
+
+        if (authorClient != null) {
+          // Author is online - try to fetch the photo
+          _log('INFO', 'ALERT PHOTO: Author $callsign is online, fetching $filename');
+          final fetched = await _fetchSinglePhotoFromClient(authorClient, callsign, alertId, filename);
+          if (fetched) {
+            file = File(filePath);
+            if (!await file.exists()) {
+              _log('WARN', 'ALERT PHOTO: Fetch succeeded but file not found');
+            }
+          } else {
+            _log('WARN', 'ALERT PHOTO: Failed to fetch $filename from author');
+          }
+        } else {
+          _log('INFO', 'ALERT PHOTO: Author $callsign is not online');
+        }
+
+        // Check again if file exists after potential fetch
+        if (!await file.exists()) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'File not found',
+            'callsign': callsign,
+            'alert_id': alertId,
+            'filename': filename,
+            'author_online': authorClient != null,
+          }));
+          return;
+        }
+      }
+
+      // Determine content type
+      final ext = filename.toLowerCase().split('.').last;
+      String contentType = 'application/octet-stream';
+      if (ext == 'jpg' || ext == 'jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == 'png') {
+        contentType = 'image/png';
+      } else if (ext == 'gif') {
+        contentType = 'image/gif';
+      } else if (ext == 'webp') {
+        contentType = 'image/webp';
+      }
+
+      // Read and serve the file
+      final bytes = await file.readAsBytes();
+
+      request.response.statusCode = 200;
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.headers.set('Cache-Control', 'public, max-age=86400');
+      request.response.add(bytes);
+
+      _log('INFO', 'ALERT PHOTO SERVE: Served $filename for alert $alertId (${bytes.length} bytes)');
+    } catch (e) {
+      _log('ERROR', 'Error serving alert file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
     }
   }
 

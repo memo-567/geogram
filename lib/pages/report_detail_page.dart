@@ -1357,6 +1357,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                               hintText: _i18n.t('comment_hint'),
                               border: OutlineInputBorder(),
                             ),
+                            textCapitalization: TextCapitalization.sentences,
                             maxLines: 3,
                             minLines: 1,
                           ),

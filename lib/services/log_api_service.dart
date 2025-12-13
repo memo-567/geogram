@@ -29,6 +29,7 @@ import '../models/backup_models.dart';
 import 'event_service.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
+import 'alert_sharing_service.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -5269,16 +5270,33 @@ class LogApiService {
       final alertsDir = io.Directory('${deviceEntity.path}/alerts');
       if (!await alertsDir.exists()) continue;
 
-      await for (final alertEntity in alertsDir.list()) {
-        if (alertEntity is! io.Directory) continue;
+      // Search recursively through alerts directory (handles both flat and nested structures)
+      await _collectAlertsRecursively(alertsDir, alerts, status: status, lat: lat, lon: lon, radius: radius);
+    }
 
-        // File is named report.txt for backwards compatibility
-        final alertFile = io.File('${alertEntity.path}/report.txt');
-        if (!await alertFile.exists()) continue;
+    // Sort by date (newest first)
+    alerts.sort((a, b) => b.$1.dateTime.compareTo(a.$1.dateTime));
+    return alerts;
+  }
 
+  /// Helper to recursively collect all alerts from a directory
+  Future<void> _collectAlertsRecursively(
+    io.Directory dir,
+    List<(Report, String)> alerts, {
+    String? status,
+    double? lat,
+    double? lon,
+    double? radius,
+  }) async {
+    await for (final entity in dir.list()) {
+      if (entity is! io.Directory) continue;
+
+      // Check if this directory contains a report.txt
+      final alertFile = io.File('${entity.path}/report.txt');
+      if (await alertFile.exists()) {
         try {
           final content = await alertFile.readAsString();
-          final alert = Report.fromText(content, alertEntity.path.split('/').last);
+          final alert = Report.fromText(content, entity.path.split('/').last);
 
           // Apply status filter
           if (status != null && alert.status.toFileString() != status) continue;
@@ -5291,17 +5309,16 @@ class LogApiService {
             if (distance > radius) continue;
           }
 
-          alerts.add((alert, alertEntity.path));
+          alerts.add((alert, entity.path));
         } catch (e) {
           // Skip malformed alerts
-          LogService().log('LogApiService: Error parsing alert ${alertEntity.path}: $e');
+          LogService().log('LogApiService: Error parsing alert ${entity.path}: $e');
         }
+      } else {
+        // No report.txt, recurse into subdirectory (e.g., active/, region folders)
+        await _collectAlertsRecursively(entity, alerts, status: status, lat: lat, lon: lon, radius: radius);
       }
     }
-
-    // Sort by date (newest first)
-    alerts.sort((a, b) => b.$1.dateTime.compareTo(a.$1.dateTime));
-    return alerts;
   }
 
   /// Find alert by API ID (YYYY-MM-DD_title-slug)
@@ -5316,23 +5333,36 @@ class LogApiService {
       final alertsDir = io.Directory('${deviceEntity.path}/alerts');
       if (!await alertsDir.exists()) continue;
 
-      await for (final alertEntity in alertsDir.list()) {
-        if (alertEntity is! io.Directory) continue;
+      // Search recursively through alerts directory (handles both flat and nested structures)
+      final result = await _searchAlertsRecursively(alertsDir, apiId);
+      if (result != null) return result;
+    }
+    return null;
+  }
 
-        final alertFile = io.File('${alertEntity.path}/report.txt');
-        if (!await alertFile.exists()) continue;
+  /// Helper to recursively search for an alert by apiId
+  Future<(Report, String)?> _searchAlertsRecursively(io.Directory dir, String apiId) async {
+    await for (final entity in dir.list()) {
+      if (entity is! io.Directory) continue;
 
+      // Check if this directory contains a report.txt
+      final alertFile = io.File('${entity.path}/report.txt');
+      if (await alertFile.exists()) {
         try {
           final content = await alertFile.readAsString();
-          final alert = Report.fromText(content, alertEntity.path.split('/').last);
+          final alert = Report.fromText(content, entity.path.split('/').last);
 
           // Check if this alert's apiId matches
           if (alert.apiId == apiId) {
-            return (alert, alertEntity.path);
+            return (alert, entity.path);
           }
         } catch (e) {
           // Skip malformed alerts
         }
+      } else {
+        // No report.txt, recurse into subdirectory (e.g., active/, region folders)
+        final result = await _searchAlertsRecursively(entity, apiId);
+        if (result != null) return result;
       }
     }
     return null;
@@ -5652,9 +5682,49 @@ class LogApiService {
           final titleSlug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
           final folderName = '${latStr}_${lonStr}_$titleSlug';
 
-          // Create the alert directory
-          final alertDir = io.Directory('$dataDir/devices/$callsign/alerts/$folderName');
+          // Calculate region folder (rounded to 1 decimal) to match uploadPhotosToStation path
+          final roundedLat = (latitude * 10).round() / 10;
+          final roundedLon = (longitude * 10).round() / 10;
+          final regionFolder = '${roundedLat}_$roundedLon';
+
+          // Create the alert directory in the proper structure: alerts/active/{regionFolder}/{folderName}
+          final alertDir = io.Directory('$dataDir/devices/$callsign/alerts/active/$regionFolder/$folderName');
           await alertDir.create(recursive: true);
+
+          // Check if we should create a test photo
+          final includePhoto = params['photo'] == true || params['photo'] == 'true';
+          String? createdPhotoPath;
+
+          if (includePhoto) {
+            // Create a simple test image (1x1 red pixel PNG)
+            final testPhotoName = 'test_photo.png';
+            createdPhotoPath = '${alertDir.path}/$testPhotoName';
+
+            // Create a minimal valid PNG (1x1 red pixel)
+            final pngBytes = Uint8List.fromList([
+              0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+              0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
+              0x49, 0x48, 0x44, 0x52, // IHDR
+              0x00, 0x00, 0x00, 0x01, // width: 1
+              0x00, 0x00, 0x00, 0x01, // height: 1
+              0x08, 0x02, // bit depth: 8, color type: RGB
+              0x00, 0x00, 0x00, // compression, filter, interlace
+              0x90, 0x77, 0x53, 0xDE, // CRC
+              0x00, 0x00, 0x00, 0x0C, // IDAT chunk length
+              0x49, 0x44, 0x41, 0x54, // IDAT
+              0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, // compressed data (red pixel)
+              0x01, 0x01, 0x01, 0x00, // Adler-32 checksum
+              0x18, 0xDD, 0x8D, 0xB4, // CRC
+              0x00, 0x00, 0x00, 0x00, // IEND chunk length
+              0x49, 0x45, 0x4E, 0x44, // IEND
+              0xAE, 0x42, 0x60, 0x82, // CRC
+            ]);
+
+            final photoFile = io.File(createdPhotoPath);
+            await photoFile.writeAsBytes(pngBytes);
+
+            LogService().log('LogApiService: Created test photo at $createdPhotoPath');
+          }
 
           // Create the alert object
           final alert = Report(
@@ -5679,8 +5749,11 @@ class LogApiService {
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
-              'message': 'Alert created',
+              'message': 'Alert created${includePhoto ? " with photo" : ""}',
               'alert': alert.toApiJson(),
+              'photo_created': includePhoto,
+              'photo_path': createdPhotoPath,
+              'alert_path': alertDir.path,
             }),
             headers: headers,
           );
@@ -6198,12 +6271,69 @@ class LogApiService {
             headers: headers,
           );
 
+        case 'alert_share':
+          // Share an alert to station (sends NOSTR event + uploads photos)
+          final alertIdToShare = params['alert_id'] as String?;
+          if (alertIdToShare == null || alertIdToShare.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing alert_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Find the alert
+          final shareResult = await _getAlertByApiId(alertIdToShare, dataDir);
+          if (shareResult == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found',
+                'alert_id': alertIdToShare,
+              }),
+              headers: headers,
+            );
+          }
+
+          final alertToShare = shareResult.$1;
+          final alertPath = shareResult.$2;
+
+          LogService().log('LogApiService: Sharing alert ${alertToShare.apiId} from $alertPath');
+
+          // Share to station
+          final alertSharingService = AlertSharingService();
+          final summary = await alertSharingService.shareAlert(alertToShare);
+
+          LogService().log('LogApiService: Share result - confirmed: ${summary.confirmed}, failed: ${summary.failed}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': summary.anySuccess,
+              'message': summary.anySuccess
+                  ? 'Alert shared to ${summary.confirmed} station(s)'
+                  : 'Failed to share alert',
+              'alert_id': alertIdToShare,
+              'confirmed': summary.confirmed,
+              'failed': summary.failed,
+              'skipped': summary.skipped,
+              'event_id': summary.eventId,
+              'results': summary.results.map((r) => {
+                'station': r.stationUrl,
+                'success': r.success,
+                'message': r.message,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown alert action: $action',
-              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment', 'alert_add_photo'],
+              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment', 'alert_add_photo', 'alert_share'],
             }),
             headers: headers,
           );

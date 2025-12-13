@@ -1403,7 +1403,8 @@ Triggers a debug action.
 | `event_create` | Create an event for testing | `title` (required): Event title, `content` (required): Event content, `location` (required): "online" or "lat,lon", `app_name` (optional): App name (default: "my-events"), `location_name` (optional): Venue name |
 | `event_list` | List all events | `year` (optional): Filter by year |
 | `event_delete` | Delete an event | `event_id` (required): Event ID (e.g., "2025-01-15_party"), `app_name` (optional): App name (default: "my-events") |
-| `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type |
+| `alert_create` | Create an alert for testing | `title` (required): Alert title, `description` (required): Alert description, `latitude` (optional): Location lat, `longitude` (optional): Location lon, `severity` (optional): info/attention/urgent/emergency, `type` (optional): Alert type, `photo` (optional): If true, creates a test photo in the alert |
+| `alert_share` | Share an alert to stations | `alert_id` (required): Alert ID (e.g., "38_7222_n9_1393_broken-sidewalk"). Shares the alert via NOSTR event and uploads photos to the station |
 | `alert_list` | List all alerts | `status` (optional): Filter by status |
 | `alert_delete` | Delete an alert | `alert_id` (required): Alert ID (e.g., "2025-12-10_broken-sidewalk") |
 | `alert_point` | Point/unpoint an alert (call attention) | `alert_id` (required): Alert ID, `npub` (optional): User npub (uses profile npub if not provided) |
@@ -1550,6 +1551,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "alert_add_photo", "alert_id": "2025-12-13_test-fire-hazard", "url": "https://example.com/image.jpg", "name": "downloaded.jpg"}'
+
+# Create an alert with a test photo
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_create", "title": "Test Alert", "description": "Test description", "photo": true}'
+
+# Share an alert to stations (uploads alert and photos via NOSTR)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_share", "alert_id": "38_7222_n9_1393_test-alert"}'
 ```
 
 ---

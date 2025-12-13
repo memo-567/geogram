@@ -1,5 +1,29 @@
 # Geogram Desktop Changelog
 
+## 2025-12-14 - v1.6.34
+
+### Bug Fixes
+- Fix photo upload path for station alerts - use coordinate-based folder name instead of date-based ID
+- Photo files are now correctly uploaded alongside alert data when sharing to stations
+
+### UI Improvements
+- Increase default zoom level from 10 to 16 when selecting alert location on map
+- Auto-capitalize first letter when writing comments in Alert Details
+
+### Debug API
+- Add `alert_share` action to share alerts via NOSTR and upload photos to station
+- Add `photo` parameter to `alert_create` action for creating test alerts with photos
+- Add recursive search for alerts in nested directory structure
+
+### Testing
+- Add comprehensive Dart test for alert photo functionality (`tests/alert_photo_test.dart`)
+- Test launches temporary station + 2 clients for end-to-end alert photo verification
+
+### Documentation
+- Update API.md with new debug API actions for alert testing
+- Expand alert format specification with photo handling details
+
+
 ## 2025-12-13 - v1.6.33
 
 ### New Features

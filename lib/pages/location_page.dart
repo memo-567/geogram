@@ -375,7 +375,7 @@ class _LocationPageState extends State<LocationPage> {
                   mapController: _mapController,
                   options: MapOptions(
                     initialCenter: _selectedPosition,
-                    initialZoom: 10.0,
+                    initialZoom: 16.0,
                     minZoom: 1.0,
                     maxZoom: 18.0,
                     interactionOptions: const InteractionOptions(
