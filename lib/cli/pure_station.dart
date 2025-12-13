@@ -1751,6 +1751,9 @@ class PureStationServer {
         await _handleAlertsPage(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
+      } else if (path.startsWith('/api/alerts/') && method == 'POST') {
+        // Handle alert feedback: /api/alerts/{alertId}/{action}
+        await _handleAlertFeedback(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else if (_isCallsignApiPath(path)) {
@@ -2639,6 +2642,20 @@ class PureStationServer {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
+      } else if (line.startsWith('LIKED_BY: ')) {
+        final likedByStr = line.substring(10).trim();
+        alert['liked_by'] = likedByStr.isEmpty ? <String>[] : likedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        alert['like_count'] = (alert['liked_by'] as List).length;
+      } else if (line.startsWith('LIKE_COUNT: ')) {
+        alert['like_count'] = int.tryParse(line.substring(12).trim()) ?? 0;
+      } else if (line.startsWith('VERIFIED_BY: ')) {
+        final verifiedByStr = line.substring(13).trim();
+        alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        alert['verification_count'] = (alert['verified_by'] as List).length;
+      } else if (line.startsWith('VERIFICATION_COUNT: ')) {
+        alert['verification_count'] = int.tryParse(line.substring(20).trim()) ?? 0;
+      } else if (line.startsWith('LAST_MODIFIED: ')) {
+        alert['last_modified'] = line.substring(15).trim();
       } else if (line.startsWith('-->')) {
         // Metadata section, stop description
         inDescription = false;
@@ -2656,6 +2673,362 @@ class PureStationServer {
     }
 
     return alert;
+  }
+
+  /// Handle POST /api/alerts/{alertId}/{action} - Alert feedback (like, unlike, verify, comment)
+  Future<void> _handleAlertFeedback(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+      // Parse: /api/alerts/{alertId}/{action}
+      final pathParts = path.substring('/api/alerts/'.length).split('/');
+      if (pathParts.length != 2) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path format'}));
+        return;
+      }
+
+      final alertId = pathParts[0];
+      final action = pathParts[1];
+
+      // Parse body
+      final body = await utf8.decoder.bind(request).join();
+      Map<String, dynamic> json = {};
+      if (body.isNotEmpty) {
+        try {
+          json = jsonDecode(body) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+
+      // Find alert by ID
+      final alertInfo = await _findAlertById(alertId);
+      if (alertInfo == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Alert not found', 'alert_id': alertId}));
+        return;
+      }
+
+      final alertPath = alertInfo['path'] as String;
+      final reportFile = File('$alertPath/report.txt');
+
+      switch (action) {
+        case 'like':
+          await _handleAlertLike(request, alertPath, reportFile, json, isLike: true);
+          break;
+        case 'unlike':
+          await _handleAlertLike(request, alertPath, reportFile, json, isLike: false);
+          break;
+        case 'verify':
+          await _handleAlertVerify(request, alertPath, reportFile, json);
+          break;
+        case 'comment':
+          await _handleAlertComment(request, alertPath, json);
+          break;
+        default:
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Unknown action', 'action': action}));
+      }
+    } catch (e) {
+      _log('ERROR', 'Error handling alert feedback: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal error', 'message': e.toString()}));
+    }
+  }
+
+  /// Find alert by apiId (YYYY-MM-DD_title-slug)
+  Future<Map<String, dynamic>?> _findAlertById(String alertId) async {
+    final devicesDir = Directory(PureStorageConfig().devicesDir);
+    if (!await devicesDir.exists()) return null;
+
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! Directory) continue;
+
+      final callsign = deviceEntity.path.split('/').last;
+      final alertsDir = Directory('${deviceEntity.path}/alerts');
+      if (!await alertsDir.exists()) continue;
+
+      await for (final alertEntity in alertsDir.list()) {
+        if (alertEntity is! Directory) continue;
+
+        final reportFile = File('${alertEntity.path}/report.txt');
+        if (!await reportFile.exists()) continue;
+
+        try {
+          final content = await reportFile.readAsString();
+          final alert = _parseAlertContent(content, callsign, alertEntity.path.split('/').last);
+
+          // Generate apiId and compare
+          final apiId = _generateApiId(alert['created'] as String, alert['title'] as String);
+          if (apiId == alertId) {
+            return {
+              'path': alertEntity.path,
+              'callsign': callsign,
+              'folderName': alertEntity.path.split('/').last,
+              'alert': alert,
+            };
+          }
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
+
+  /// Generate API ID from created timestamp and title (matches Report.apiId)
+  String _generateApiId(String created, String title) {
+    final datePart = created.split(' ').first;
+    final slug = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    return '${datePart}_$slug';
+  }
+
+  /// Handle alert like/unlike
+  Future<void> _handleAlertLike(
+    HttpRequest request,
+    String alertPath,
+    File reportFile,
+    Map<String, dynamic> json, {
+    required bool isLike,
+  }) async {
+    final npub = json['npub'] as String?;
+    if (npub == null || npub.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing npub'}));
+      return;
+    }
+
+    // Read current content
+    final content = await reportFile.readAsString();
+    final lines = content.split('\n');
+
+    // Parse current likedBy
+    var likedBy = <String>[];
+    for (final line in lines) {
+      if (line.startsWith('LIKED_BY: ')) {
+        final likedByStr = line.substring(10).trim();
+        likedBy = likedByStr.isEmpty ? [] : likedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        break;
+      }
+    }
+
+    // Update likedBy
+    bool changed = false;
+    if (isLike && !likedBy.contains(npub)) {
+      likedBy.add(npub);
+      changed = true;
+    } else if (!isLike && likedBy.contains(npub)) {
+      likedBy.remove(npub);
+      changed = true;
+    }
+
+    if (changed) {
+      // Update file content
+      final newContent = _updateAlertFeedback(content, likedBy: likedBy);
+      await reportFile.writeAsString(newContent, flush: true);
+      _log('INFO', 'Alert ${isLike ? "liked" : "unliked"} by $npub');
+    }
+
+    request.response.statusCode = 200;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'success': true,
+      'liked': isLike ? likedBy.contains(npub) : !likedBy.contains(npub),
+      'like_count': likedBy.length,
+      'last_modified': DateTime.now().toUtc().toIso8601String(),
+    }));
+  }
+
+  /// Handle alert verify
+  Future<void> _handleAlertVerify(
+    HttpRequest request,
+    String alertPath,
+    File reportFile,
+    Map<String, dynamic> json,
+  ) async {
+    final npub = json['npub'] as String?;
+    if (npub == null || npub.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing npub'}));
+      return;
+    }
+
+    // Read current content
+    final content = await reportFile.readAsString();
+    final lines = content.split('\n');
+
+    // Parse current verifiedBy
+    var verifiedBy = <String>[];
+    for (final line in lines) {
+      if (line.startsWith('VERIFIED_BY: ')) {
+        final verifiedByStr = line.substring(13).trim();
+        verifiedBy = verifiedByStr.isEmpty ? [] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        break;
+      }
+    }
+
+    // Add to verifiedBy if not already present
+    bool changed = false;
+    if (!verifiedBy.contains(npub)) {
+      verifiedBy.add(npub);
+      changed = true;
+    }
+
+    if (changed) {
+      final newContent = _updateAlertFeedback(content, verifiedBy: verifiedBy);
+      await reportFile.writeAsString(newContent, flush: true);
+      _log('INFO', 'Alert verified by $npub');
+    }
+
+    request.response.statusCode = 200;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'success': true,
+      'verified': true,
+      'verification_count': verifiedBy.length,
+      'last_modified': DateTime.now().toUtc().toIso8601String(),
+    }));
+  }
+
+  /// Handle alert comment
+  Future<void> _handleAlertComment(
+    HttpRequest request,
+    String alertPath,
+    Map<String, dynamic> json,
+  ) async {
+    final author = json['author'] as String?;
+    final content = json['content'] as String?;
+    final npub = json['npub'] as String?;
+    final signature = json['signature'] as String?;
+
+    if (author == null || author.isEmpty || content == null || content.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing author or content'}));
+      return;
+    }
+
+    // Create comments directory
+    final commentsDir = Directory('$alertPath/comments');
+    if (!await commentsDir.exists()) {
+      await commentsDir.create(recursive: true);
+    }
+
+    // Generate comment ID and filename
+    final now = DateTime.now();
+    final id = '${now.millisecondsSinceEpoch}';
+    final createdStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+
+    // Build comment content
+    final buffer = StringBuffer();
+    buffer.writeln('AUTHOR: $author');
+    buffer.writeln('CREATED: $createdStr');
+    buffer.writeln();
+    buffer.writeln(content);
+    if (npub != null && npub.isNotEmpty) {
+      buffer.writeln('--> npub: $npub');
+    }
+    if (signature != null && signature.isNotEmpty) {
+      buffer.writeln('--> signature: $signature');
+    }
+
+    // Save comment file
+    final commentFile = File('${commentsDir.path}/$id.txt');
+    await commentFile.writeAsString(buffer.toString(), flush: true);
+
+    // Update alert's lastModified
+    final reportFile = File('$alertPath/report.txt');
+    if (await reportFile.exists()) {
+      final alertContent = await reportFile.readAsString();
+      final newContent = _updateAlertFeedback(alertContent, lastModified: DateTime.now().toUtc().toIso8601String());
+      await reportFile.writeAsString(newContent, flush: true);
+    }
+
+    _log('INFO', 'Comment added to alert by $author');
+
+    request.response.statusCode = 200;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'success': true,
+      'comment_id': id,
+      'last_modified': DateTime.now().toUtc().toIso8601String(),
+    }));
+  }
+
+  /// Update alert file with new feedback data
+  String _updateAlertFeedback(
+    String content, {
+    List<String>? likedBy,
+    List<String>? verifiedBy,
+    String? lastModified,
+  }) {
+    final lines = content.split('\n');
+    final newLines = <String>[];
+
+    bool hasLikedBy = false;
+    bool hasLikeCount = false;
+    bool hasVerifiedBy = false;
+    bool hasVerificationCount = false;
+    bool hasLastModified = false;
+
+    for (final line in lines) {
+      if (likedBy != null && line.startsWith('LIKED_BY: ')) {
+        newLines.add('LIKED_BY: ${likedBy.join(', ')}');
+        hasLikedBy = true;
+      } else if (likedBy != null && line.startsWith('LIKE_COUNT: ')) {
+        newLines.add('LIKE_COUNT: ${likedBy.length}');
+        hasLikeCount = true;
+      } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
+        newLines.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
+        hasVerifiedBy = true;
+      } else if (verifiedBy != null && line.startsWith('VERIFICATION_COUNT: ')) {
+        newLines.add('VERIFICATION_COUNT: ${verifiedBy.length}');
+        hasVerificationCount = true;
+      } else if (lastModified != null && line.startsWith('LAST_MODIFIED: ')) {
+        newLines.add('LAST_MODIFIED: $lastModified');
+        hasLastModified = true;
+      } else {
+        newLines.add(line);
+      }
+    }
+
+    // Find insertion point (after metadata lines like ADDRESS, TYPE, etc. but before description)
+    int insertIndex = newLines.length;
+    for (int i = 0; i < newLines.length; i++) {
+      if (newLines[i].trim().isEmpty && i > 0 && !newLines[i - 1].startsWith('-->')) {
+        insertIndex = i;
+        break;
+      }
+    }
+
+    // Add missing fields
+    final toInsert = <String>[];
+    if (likedBy != null && !hasLikedBy && likedBy.isNotEmpty) {
+      toInsert.add('LIKED_BY: ${likedBy.join(', ')}');
+    }
+    if (likedBy != null && !hasLikeCount && likedBy.isNotEmpty) {
+      toInsert.add('LIKE_COUNT: ${likedBy.length}');
+    }
+    if (verifiedBy != null && !hasVerifiedBy && verifiedBy.isNotEmpty) {
+      toInsert.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
+    }
+    if (verifiedBy != null && !hasVerificationCount && verifiedBy.isNotEmpty) {
+      toInsert.add('VERIFICATION_COUNT: ${verifiedBy.length}');
+    }
+    if (lastModified != null && !hasLastModified) {
+      toInsert.add('LAST_MODIFIED: $lastModified');
+    }
+
+    if (toInsert.isNotEmpty) {
+      newLines.insertAll(insertIndex, toInsert);
+    }
+
+    return newLines.join('\n');
   }
 
   /// Build HTML page for alerts
