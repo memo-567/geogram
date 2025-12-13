@@ -1133,8 +1133,21 @@ class WebSocketService {
     LogService().log('Attempting to reconnect to station...');
 
     try {
-      await connectAndHello(_stationUrl!);
-      LogService().log('✓ Reconnection successful!');
+      final success = await connectAndHello(_stationUrl!);
+      if (success) {
+        LogService().log('✓ Reconnection initiated, waiting for hello_ack...');
+        // Set a timeout to reset _isReconnecting if hello_ack is not received
+        // hello_ack handler will cancel this and reset _isReconnecting = false
+        Future.delayed(const Duration(seconds: 10), () {
+          if (_isReconnecting) {
+            LogService().log('✗ Reconnection timeout - no hello_ack received');
+            _isReconnecting = false;
+          }
+        });
+      } else {
+        LogService().log('✗ Reconnection failed');
+        _isReconnecting = false;
+      }
     } catch (e) {
       LogService().log('✗ Reconnection failed: $e');
       _isReconnecting = false;

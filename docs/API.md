@@ -1408,6 +1408,7 @@ Triggers a debug action.
 | `alert_delete` | Delete an alert | `alert_id` (required): Alert ID (e.g., "2025-12-10_broken-sidewalk") |
 | `alert_point` | Point/unpoint an alert (call attention) | `alert_id` (required): Alert ID, `npub` (optional): User npub (uses profile npub if not provided) |
 | `alert_comment` | Add a comment to an alert | `alert_id` (required): Alert ID, `content` (required): Comment text, `author` (optional): Author callsign, `npub` (optional): Author npub |
+| `alert_add_photo` | Add a photo to an alert | `alert_id` (required): Alert ID, `url` (optional): URL to download image from, `name` (optional): Photo filename (default: auto-generated) |
 
 **Response - Success (200 OK):**
 ```json
@@ -1539,6 +1540,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "alert_comment", "alert_id": "38_7222_n9_1393_broken-sidewalk", "content": "Issue verified", "author": "X1ABCD", "npub": "npub1xyz..."}'
+
+# Add a placeholder photo to an alert
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_add_photo", "alert_id": "2025-12-13_test-fire-hazard", "name": "evidence.png"}'
+
+# Add a photo from URL to an alert
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "alert_add_photo", "alert_id": "2025-12-13_test-fire-hazard", "url": "https://example.com/image.jpg", "name": "downloaded.jpg"}'
 ```
 
 ---

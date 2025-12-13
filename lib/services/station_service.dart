@@ -35,7 +35,11 @@ class StationService {
 
   /// Initialize station service
   Future<void> initialize() async {
-    if (_initialized) return;
+    if (_initialized) {
+      // Already initialized, but check if we need to reconnect
+      await _ensureConnected();
+      return;
+    }
 
     try {
       await _loadStations();
@@ -43,13 +47,25 @@ class StationService {
       LogService().log('StationService initialized with ${_stations.length} stations');
 
       // Auto-connect to preferred station
-      final preferredStation = getPreferredStation();
-      if (preferredStation != null && preferredStation.url.isNotEmpty) {
-        LogService().log('Auto-connecting to preferred station: ${preferredStation.name}');
-        connectRelay(preferredStation.url);
-      }
+      await _ensureConnected();
     } catch (e) {
       LogService().log('Error initializing StationService: $e');
+    }
+  }
+
+  /// Ensure connection to preferred station
+  Future<void> _ensureConnected() async {
+    // Check if WebSocket is actually connected
+    if (_wsService.isConnected) {
+      LogService().log('StationService: WebSocket already connected');
+      return;
+    }
+
+    // Auto-connect to preferred station
+    final preferredStation = getPreferredStation();
+    if (preferredStation != null && preferredStation.url.isNotEmpty) {
+      LogService().log('Auto-connecting to preferred station: ${preferredStation.name}');
+      connectRelay(preferredStation.url);
     }
   }
 

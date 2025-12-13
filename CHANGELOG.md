@@ -1,5 +1,16 @@
 # Geogram Desktop Changelog
 
+## 2025-12-13 - v1.6.32
+
+### Changes
+- UI improvements for alerts and apps panels
+- Fix catchError handlers for fire-and-forget station sync calls
+- Rename likes to points for alerts, show point count in UI
+- Add alert feedback API endpoints (like, unlike, verify, comment) to pure_station
+- Fix back button navigation in Devices panel on portrait mode
+- Fix device connection status being reset when navigating between panels
+
+
 ## 2025-12-13 - v1.6.30
 
 ### Changes

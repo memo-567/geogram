@@ -4,6 +4,7 @@ import 'dart:io' as io if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart' as shelf;
@@ -6037,12 +6038,152 @@ class LogApiService {
             headers: headers,
           );
 
+        case 'alert_add_photo':
+          // Add a photo to an existing alert
+          final alertIdForPhoto = params['alert_id'] as String?;
+          final imageUrl = params['url'] as String?;
+          final photoName = params['name'] as String? ?? 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+          if (alertIdForPhoto == null || alertIdForPhoto.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing required parameter: alert_id',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Get callsign from profile service
+          String callsignForPhoto = 'TEST';
+          try {
+            final profile = ProfileService().getProfile();
+            callsignForPhoto = profile.callsign;
+          } catch (e) {
+            // Profile service not initialized
+          }
+
+          // Find the alert folder by searching for matching alert_id
+          final alertsDir = io.Directory('$dataDir/devices/$callsignForPhoto/alerts');
+          if (!await alertsDir.exists()) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'No alerts directory found',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Search for matching alert folder
+          io.Directory? foundAlertDir;
+          await for (final entity in alertsDir.list()) {
+            if (entity is io.Directory) {
+              final reportFile = io.File('${entity.path}/report.txt');
+              if (await reportFile.exists()) {
+                try {
+                  final content = await reportFile.readAsString();
+                  final report = Report.fromText(content, entity.path.split('/').last);
+                  if (report.apiId == alertIdForPhoto) {
+                    foundAlertDir = entity;
+                    break;
+                  }
+                } catch (e) {
+                  // Skip malformed reports
+                }
+              }
+            }
+          }
+
+          if (foundAlertDir == null) {
+            return shelf.Response.notFound(
+              jsonEncode({
+                'success': false,
+                'error': 'Alert not found: $alertIdForPhoto',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Determine photo path
+          final photoPath = '${foundAlertDir.path}/$photoName';
+
+          if (imageUrl != null && imageUrl.isNotEmpty) {
+            // Download image from URL
+            try {
+              final response = await http.get(Uri.parse(imageUrl));
+              if (response.statusCode == 200) {
+                await io.File(photoPath).writeAsBytes(response.bodyBytes);
+                LogService().log('LogApiService: Downloaded photo from $imageUrl to $photoPath');
+              } else {
+                return shelf.Response.internalServerError(
+                  body: jsonEncode({
+                    'success': false,
+                    'error': 'Failed to download image: HTTP ${response.statusCode}',
+                  }),
+                  headers: headers,
+                );
+              }
+            } catch (e) {
+              return shelf.Response.internalServerError(
+                body: jsonEncode({
+                  'success': false,
+                  'error': 'Failed to download image: $e',
+                }),
+                headers: headers,
+              );
+            }
+          } else {
+            // Create a simple placeholder PNG image (1x1 red pixel as test)
+            // PNG header + IHDR + IDAT + IEND for a minimal valid PNG
+            final pngBytes = <int>[
+              // PNG signature
+              0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+              // IHDR chunk (13 bytes of data)
+              0x00, 0x00, 0x00, 0x0D, // length
+              0x49, 0x48, 0x44, 0x52, // "IHDR"
+              0x00, 0x00, 0x00, 0x10, // width: 16
+              0x00, 0x00, 0x00, 0x10, // height: 16
+              0x08, // bit depth: 8
+              0x02, // color type: RGB
+              0x00, // compression: deflate
+              0x00, // filter: adaptive
+              0x00, // interlace: none
+              0x90, 0x77, 0x53, 0xDE, // CRC
+              // IDAT chunk (compressed image data - solid red 16x16)
+              0x00, 0x00, 0x00, 0x1D, // length: 29
+              0x49, 0x44, 0x41, 0x54, // "IDAT"
+              0x78, 0x9C, 0x62, 0xF8, 0xCF, 0x00, 0x00, 0x00,
+              0x30, 0x00, 0x01, 0x62, 0xF8, 0xCF, 0xC0, 0xC0,
+              0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0x00, 0x00, 0x19,
+              0x60, 0x00, 0x19,
+              0x67, 0xA3, 0x8B, 0x5E, // CRC
+              // IEND chunk
+              0x00, 0x00, 0x00, 0x00, // length: 0
+              0x49, 0x45, 0x4E, 0x44, // "IEND"
+              0xAE, 0x42, 0x60, 0x82, // CRC
+            ];
+            await io.File(photoPath).writeAsBytes(pngBytes);
+            LogService().log('LogApiService: Created placeholder photo at $photoPath');
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Photo added to alert',
+              'alert_id': alertIdForPhoto,
+              'photo_path': photoPath,
+              'photo_name': photoName,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown alert action: $action',
-              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment'],
+              'available': ['alert_create', 'alert_list', 'alert_delete', 'alert_point', 'alert_verify', 'alert_comment', 'alert_add_photo'],
             }),
             headers: headers,
           );
