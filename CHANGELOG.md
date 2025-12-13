@@ -2,13 +2,25 @@
 
 ## 2025-12-13 - v1.6.32
 
-### Changes
-- UI improvements for alerts and apps panels
+### New Features
+- Add full-screen photo viewer for alert images with zoom, pan, and swipe navigation
+- Add left/right navigation buttons and page indicators in photo viewer
+
+### UI Improvements
+- Close New Alert panel automatically after saving
+- Move Save button to bottom-right corner with consistent FloatingActionButton styling
+- Move Points chip to top badges area next to severity and status in alert details
+- Capitalize severity labels (Emergency, Urgent, Attention, Info) and status labels in UI
+- Filter user's own alerts from "Nearby Alerts" section to avoid duplicates
+- Replace separate Favorite/Delete icons with a single menu button in Apps panel
+- Move apps menu icon to top-right corner for cleaner appearance
+- Move favorite badge to top-left corner when apps are favorited
+
+### Removed
+- Remove Subscribe and Verify actions from alert details (not working properly)
+
+### Bug Fixes
 - Fix catchError handlers for fire-and-forget station sync calls
-- Rename likes to points for alerts, show point count in UI
-- Add alert feedback API endpoints (like, unlike, verify, comment) to pure_station
-- Fix back button navigation in Devices panel on portrait mode
-- Fix device connection status being reset when navigating between panels
 
 
 ## 2025-12-13 - v1.6.30
