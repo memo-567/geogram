@@ -1186,6 +1186,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     return ListTile(
       selected: isSelected && !_isMultiSelectMode,
       selectedTileColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+      contentPadding: const EdgeInsets.only(left: 16, right: 4),
       leading: _isMultiSelectMode
           ? Checkbox(
               value: isChecked,
