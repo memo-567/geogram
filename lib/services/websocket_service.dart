@@ -815,8 +815,9 @@ class WebSocketService {
     }
   }
 
-  /// Forward API request to local LogApiService HTTP server
-  /// This enables station proxy to access device's full API
+  /// Forward API request to local LogApiService
+  /// Uses direct function calls to bypass localhost HTTP connection
+  /// (Android 9+ blocks cleartext HTTP by default, even to localhost)
   Future<void> _forwardToLocalApi(
     String requestId,
     String method,
@@ -825,52 +826,38 @@ class WebSocketService {
     String? body,
   ) async {
     try {
-      final localPort = LogApiService().port;
-      final localUrl = 'http://localhost:$localPort$path';
-      LogService().log('HTTP_REQUEST: Forwarding to local API: $method $localUrl');
-      final uri = Uri.parse(localUrl);
+      LogService().log('HTTP_REQUEST: Direct call to API: $method $path');
 
       // Parse headers from JSON if provided
-      Map<String, String> headers = {'Content-Type': 'application/json'};
+      Map<String, String>? headers;
       if (headersJson != null && headersJson.isNotEmpty) {
         try {
           final parsed = jsonDecode(headersJson) as Map<String, dynamic>;
           headers = parsed.map((k, v) => MapEntry(k, v.toString()));
         } catch (_) {
-          // Keep default headers if parsing fails
+          // Keep null headers if parsing fails
         }
       }
 
-      // Make request to local server
-      http.Response response;
-      switch (method.toUpperCase()) {
-        case 'GET':
-          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
-          break;
-        case 'POST':
-          response = await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
-          break;
-        case 'PUT':
-          response = await http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 25));
-          break;
-        case 'DELETE':
-          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 25));
-          break;
-        default:
-          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
-      }
+      // Call LogApiService directly (no HTTP connection needed)
+      final response = await LogApiService().handleRequestDirect(
+        method: method.toUpperCase(),
+        path: path,
+        headers: headers,
+        body: body,
+      );
 
       // Send response back through WebSocket to station
       _sendHttpResponse(
         requestId,
         response.statusCode,
-        {'Content-Type': response.headers['content-type'] ?? 'application/json'},
+        {'Content-Type': response.headers['Content-Type'] ?? 'application/json'},
         response.body,
       );
 
       LogService().log('HTTP_REQUEST: Response sent back to station: $method $path -> ${response.statusCode} (${response.body.length} bytes)');
     } catch (e, stack) {
-      LogService().log('HTTP_REQUEST: Error forwarding to local API: $e');
+      LogService().log('HTTP_REQUEST: Error in direct API call: $e');
       LogService().log('HTTP_REQUEST: Stack trace: $stack');
       _sendHttpResponse(requestId, 502, {'Content-Type': 'text/plain'}, 'Bad Gateway: $e');
     }

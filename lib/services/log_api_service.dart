@@ -129,6 +129,53 @@ class LogApiService {
     }
   }
 
+  /// Handle API request directly (without HTTP)
+  /// Used by WebSocket relay to bypass localhost HTTP connection on Android
+  /// which blocks cleartext traffic by default.
+  ///
+  /// Returns a tuple of (statusCode, headers, body)
+  Future<({int statusCode, Map<String, String> headers, String body})> handleRequestDirect({
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    String? body,
+  }) async {
+    try {
+      // Create a mock shelf.Request
+      // shelf.Request expects URL without leading slash for the path portion
+      final normalizedPath = path.startsWith('/') ? path.substring(1) : path;
+      final uri = Uri.parse('http://localhost:$port/$normalizedPath');
+
+      // For POST/PUT requests with body, we need to include it
+      final request = shelf.Request(
+        method,
+        uri,
+        headers: headers,
+        body: body,
+      );
+
+      // Call the existing handler
+      final response = await _handleRequest(request);
+
+      // Read response body
+      final responseBody = await response.readAsString();
+
+      return (
+        statusCode: response.statusCode,
+        headers: Map<String, String>.from(response.headers),
+        body: responseBody,
+      );
+    } catch (e, stack) {
+      LogService().log('handleRequestDirect error: $e');
+      LogService().log('Stack: $stack');
+      return (
+        statusCode: 500,
+        headers: <String, String>{'Content-Type': 'application/json'},
+        body: jsonEncode({'error': 'Internal Server Error', 'message': e.toString()}),
+      );
+    }
+  }
+
   Future<shelf.Response> _handleRequest(shelf.Request request) async {
     // Enable CORS for easier testing
     final headers = {
