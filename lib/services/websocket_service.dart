@@ -256,7 +256,7 @@ class WebSocketService {
                 data['fileName'] as String?,
               );
             } else if (data['type'] == 'HTTP_REQUEST') {
-              LogService().log('✓ Station forwarded HTTP request');
+              LogService().log('✓ Station forwarded HTTP request: ${data['method']} ${data['path']} (requestId: ${data['requestId']})');
               _handleHttpRequest(
                 data['requestId'] as String?,
                 data['method'] as String?,
@@ -826,7 +826,9 @@ class WebSocketService {
   ) async {
     try {
       final localPort = LogApiService().port;
-      final uri = Uri.parse('http://localhost:$localPort$path');
+      final localUrl = 'http://localhost:$localPort$path';
+      LogService().log('HTTP_REQUEST: Forwarding to local API: $method $localUrl');
+      final uri = Uri.parse(localUrl);
 
       // Parse headers from JSON if provided
       Map<String, String> headers = {'Content-Type': 'application/json'};
@@ -866,9 +868,10 @@ class WebSocketService {
         response.body,
       );
 
-      LogService().log('Station proxy forwarded: $method $path -> ${response.statusCode}');
-    } catch (e) {
-      LogService().log('Error forwarding to local API: $e');
+      LogService().log('HTTP_REQUEST: Response sent back to station: $method $path -> ${response.statusCode} (${response.body.length} bytes)');
+    } catch (e, stack) {
+      LogService().log('HTTP_REQUEST: Error forwarding to local API: $e');
+      LogService().log('HTTP_REQUEST: Stack trace: $stack');
       _sendHttpResponse(requestId, 502, {'Content-Type': 'text/plain'}, 'Bad Gateway: $e');
     }
   }
