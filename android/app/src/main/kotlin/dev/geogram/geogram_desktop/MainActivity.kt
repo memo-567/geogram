@@ -96,6 +96,20 @@ class MainActivity : FlutterActivity() {
                     android.util.Log.d("GeogramUpdate", "Current APK path: $apkPath")
                     result.success(apkPath)
                 }
+                "startDownloadService" -> {
+                    DownloadForegroundService.start(this)
+                    result.success(true)
+                }
+                "stopDownloadService" -> {
+                    DownloadForegroundService.stop(this)
+                    result.success(true)
+                }
+                "updateDownloadProgress" -> {
+                    val progress = call.argument<Int>("progress") ?: 0
+                    val status = call.argument<String>("status") ?: "Downloading..."
+                    DownloadForegroundService.updateProgress(this, progress, status)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

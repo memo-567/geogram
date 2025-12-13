@@ -711,6 +711,44 @@ class UpdateService {
     }
   }
 
+  /// Start the download foreground service (Android only)
+  Future<void> _startDownloadService() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+
+    try {
+      await _updateChannel.invokeMethod('startDownloadService');
+      LogService().log('Download foreground service started');
+    } catch (e) {
+      LogService().log('Error starting download service: $e');
+    }
+  }
+
+  /// Stop the download foreground service (Android only)
+  Future<void> _stopDownloadService() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+
+    try {
+      await _updateChannel.invokeMethod('stopDownloadService');
+      LogService().log('Download foreground service stopped');
+    } catch (e) {
+      LogService().log('Error stopping download service: $e');
+    }
+  }
+
+  /// Update the download service notification with progress (Android only)
+  Future<void> _updateDownloadServiceProgress(int progress, String status) async {
+    if (kIsWeb || !Platform.isAndroid) return;
+
+    try {
+      await _updateChannel.invokeMethod('updateDownloadProgress', {
+        'progress': progress,
+        'status': status,
+      });
+    } catch (e) {
+      // Don't log every progress update error to avoid spam
+    }
+  }
+
   /// Download update to temporary file with resume support
   Future<String?> downloadUpdate(ReleaseInfo release,
       {void Function(double progress)? onProgress}) async {
@@ -729,6 +767,9 @@ class UpdateService {
     downloadProgress.value = 0.0;
     _bytesDownloaded = 0;
     _totalBytes = 0;
+
+    // Start foreground service to keep download alive in background
+    await _startDownloadService();
 
     try {
       LogService().log('Downloading update from: $downloadUrl');
@@ -893,6 +934,9 @@ class UpdateService {
       downloadProgress.value = 0.0;
       _bytesDownloaded = 0;
       _totalBytes = 0;
+
+      // Stop the foreground service
+      await _stopDownloadService();
     }
   }
 
@@ -911,6 +955,11 @@ class UpdateService {
       onProgress?.call(progress);
       _lastProgressUpdate = now;
       _lastProgressValue = progress;
+
+      // Update the foreground service notification with progress
+      final progressPercent = (progress * 100).toInt();
+      final status = getDownloadStatus();
+      _updateDownloadServiceProgress(progressPercent, status.isNotEmpty ? status : 'Downloading...');
     }
   }
 
@@ -932,6 +981,9 @@ class UpdateService {
     _isDownloading = false;
     _downloadProgress = 0.0;
     downloadProgress.value = 0.0;
+
+    // Stop the foreground service
+    await _stopDownloadService();
   }
 
   /// Verify APK file integrity by checking ZIP structure

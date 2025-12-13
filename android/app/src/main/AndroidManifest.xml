@@ -21,6 +21,7 @@
     <!-- Foreground service permissions for keeping BLE alive in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Permission to install APK updates -->
@@ -59,12 +60,19 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- BLE Foreground Service to keep Bluetooth active in background -->
+        <!-- BLE Foreground Service to keep Bluetooth and network active in background -->
         <service
             android:name=".BLEForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
+
+        <!-- Download Foreground Service to keep downloads active in background -->
+        <service
+            android:name=".DownloadForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- FileProvider for sharing APK files during updates -->
         <provider

@@ -1,5 +1,18 @@
 # Geogram Desktop Changelog
 
+## 2025-12-13 - v1.6.33
+
+### New Features
+- Add foreground service for software update downloads to prevent interruption when screen turns off or app goes to background
+- Download progress notification with real-time MB progress display
+- Wake lock during downloads to keep network operations active
+
+### Improvements
+- Add dataSync permission to BLE foreground service for WebSocket and API operations
+- WebSocket connections and API requests through p2p.radio station proxy now continue when display is powered off
+- Network operations remain active in background for better station connectivity
+
+
 ## 2025-12-13 - v1.6.32
 
 ### New Features

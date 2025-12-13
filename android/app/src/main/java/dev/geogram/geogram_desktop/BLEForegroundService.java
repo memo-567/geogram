@@ -123,7 +123,16 @@ public class BLEForegroundService extends Service {
         Log.d(TAG, "Foreground service onStartCommand, action=" + action);
 
         Notification notification = createNotification();
-        startForeground(NOTIFICATION_ID, notification);
+
+        // Use both connectedDevice (for BLE) and dataSync (for WebSocket/network) service types
+        // This ensures network operations continue even when the display is off
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
 
         // Handle keep-alive enable/disable actions
         if ("ENABLE_KEEPALIVE".equals(action)) {
