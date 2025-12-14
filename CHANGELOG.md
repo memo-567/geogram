@@ -1,5 +1,16 @@
 # Geogram Desktop Changelog
 
+## 2025-12-14 - v1.6.36
+
+### UI Improvements
+- Add keyboard navigation to photo viewer (Left/Right arrows to browse, Escape to close)
+- Auto-capitalize first letter in Title and Description fields when creating alerts
+- Improve location picker default zoom from 10 to 17 for better usability
+- Remember user's preferred zoom level in location picker between sessions
+
+### Bug Fixes
+- Refresh alert data after successful comment and point/unpoint sync to station
+
 ## 2025-12-14 - v1.6.35
 
 ### Alert Comments
