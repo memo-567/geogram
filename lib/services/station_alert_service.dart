@@ -598,6 +598,7 @@ class StationAlertService {
       if (!await devicesDir.exists()) return;
 
       _cachedAlerts.clear();
+      final seenFolderNames = <String>{};
 
       await for (final deviceEntity in devicesDir.list()) {
         if (deviceEntity is! Directory) continue;
@@ -609,15 +610,21 @@ class StationAlertService {
         final alertsDir = Directory('${deviceEntity.path}/alerts');
         if (!await alertsDir.exists()) continue;
 
-        await for (final alertEntity in alertsDir.list()) {
+        await for (final alertEntity in alertsDir.list(recursive: true)) {
           if (alertEntity is! Directory) continue;
 
           final reportFile = File('${alertEntity.path}/report.txt');
           if (!await reportFile.exists()) continue;
 
           try {
+            final folderName = alertEntity.path.split('/').last;
+
+            // Skip if we've already loaded this alert (handles duplicates in different paths)
+            if (seenFolderNames.contains(folderName)) continue;
+            seenFolderNames.add(folderName);
+
             final content = await reportFile.readAsString();
-            final report = Report.fromText(content, alertEntity.path.split('/').last);
+            final report = Report.fromText(content, folderName);
 
             // Mark as from station
             final metadata = Map<String, String>.from(report.metadata);
@@ -683,5 +690,36 @@ class StationAlertService {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     return '${diff.inDays}d ago';
+  }
+
+  /// Download fresh alert from station and update cache
+  Future<void> refreshAlert(String folderName, String stationCallsign) async {
+    try {
+      final station = _stationService.getPreferredStation();
+      if (station == null) return;
+
+      var baseUrl = station.url;
+      if (baseUrl.startsWith('wss://')) baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+      else if (baseUrl.startsWith('ws://')) baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) return;
+
+      final devicesDir = storageConfig.devicesDir;
+      final alertPath = await _findExistingAlertPath(devicesDir, stationCallsign, folderName);
+      if (alertPath == null) return;
+
+      final alertDetails = await _fetchAlertDetails(folderName, baseUrl, stationCallsign);
+
+      if (alertDetails != null) {
+        final reportContent = alertDetails['report_content'] as String?;
+        if (reportContent != null && reportContent.isNotEmpty) {
+          await File('$alertPath/report.txt').writeAsString(reportContent);
+          await loadCachedAlerts();  // Refresh the in-memory cache
+        }
+      }
+    } catch (e) {
+      LogService().log('StationAlertService: Error refreshing alert: $e');
+    }
   }
 }
