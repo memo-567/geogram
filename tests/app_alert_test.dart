@@ -552,9 +552,9 @@ Future<void> testVerifySetup() async {
 String? _createdAlertId;
 String? _createdAlertFolderName;
 
-/// Photo names used in the test
-const String photo1Name = 'test_photo.png';
-const String photo2Name = 'photo_2.png';
+/// Photo names used in the test (now in images/ subfolder with sequential naming)
+const String photo1Name = 'images/photo1.png';
+const String photo2Name = 'images/photo2.png';
 
 /// Test creating an alert with two photos on the client
 Future<bool> testCreateAlertWithPhotos() async {
@@ -610,14 +610,40 @@ Future<bool> testCreateAlertWithPhotos() async {
   // Step 3: Verify both photos exist locally on the client
   await Future.delayed(const Duration(seconds: 1));
 
-  final regionFolder = '38.7_-9.1';
-  final alertPath = '$clientADataDir/devices/$_clientACallsign/alerts/active/$regionFolder/$_createdAlertFolderName';
+  // Search for the alert folder (now uses timestamp-based folder name in active/{region}/)
+  final alertPath = await _findAlertPath(clientADataDir, _clientACallsign!, _createdAlertFolderName!);
+
+  if (alertPath == null) {
+    // List what exists for debugging
+    info('Alert folder not found. Listing directory structure:');
+    final alertsDir = Directory('$clientADataDir/devices/$_clientACallsign/alerts');
+    if (await alertsDir.exists()) {
+      await for (final entity in alertsDir.list(recursive: true)) {
+        info('  ${entity.path}');
+      }
+    }
+    fail('Verify local photos', 'Alert folder not found: $_createdAlertFolderName');
+    return false;
+  }
 
   info('Alert path: $alertPath');
 
-  // Check first photo
+  // Check images/ subfolder exists
+  final imagesDir = Directory('$alertPath/images');
+  if (!await imagesDir.exists()) {
+    fail('Verify local photos', 'images/ subfolder not found');
+    return false;
+  }
+  info('images/ subfolder exists');
+
+  // Check first photo (photo1Name includes 'images/' prefix)
   final photo1File = File('$alertPath/$photo1Name');
   if (!await photo1File.exists()) {
+    // List what's in images folder for debugging
+    info('Files in images folder:');
+    await for (final file in imagesDir.list()) {
+      info('  ${file.path.split('/').last}');
+    }
     fail('Verify local photos', 'First photo not found: $photo1Name');
     return false;
   }
@@ -627,13 +653,17 @@ Future<bool> testCreateAlertWithPhotos() async {
   // Check second photo
   final photo2File = File('$alertPath/$photo2Name');
   if (!await photo2File.exists()) {
+    info('Files in images folder:');
+    await for (final file in imagesDir.list()) {
+      info('  ${file.path.split('/').last}');
+    }
     fail('Verify local photos', 'Second photo not found: $photo2Name');
     return false;
   }
   final photo2Size = await photo2File.length();
   info('Second photo exists locally: $photo2Name ($photo2Size bytes)');
 
-  pass('Alert created with 2 photos');
+  pass('Alert created with 2 photos in images/ subfolder');
   return true;
 }
 
@@ -745,13 +775,26 @@ Future<bool> testVerifyAlertAndPhotosOnStation() async {
   info('Report content verified');
   pass('Alert report verified on station');
 
-  // Verify first photo exists on station
-  final photo1OnStation = File('$foundAlertPath/$photo1Name');
-  if (!await photo1OnStation.exists()) {
+  // Verify images/ subfolder exists on station
+  final stationImagesDir = Directory('$foundAlertPath/images');
+  if (!await stationImagesDir.exists()) {
     // List files in alert folder for debugging
     info('Files in station alert folder:');
     final alertDir = Directory(foundAlertPath!);
-    await for (final file in alertDir.list()) {
+    await for (final file in alertDir.list(recursive: true)) {
+      info('  ${file.path.replaceFirst(foundAlertPath!, '')}');
+    }
+    fail('Verify images folder', 'images/ subfolder not found on station');
+    return false;
+  }
+  info('images/ subfolder exists on station');
+
+  // Verify first photo exists on station (photo1Name includes 'images/' prefix)
+  final photo1OnStation = File('$foundAlertPath/$photo1Name');
+  if (!await photo1OnStation.exists()) {
+    // List files in images folder for debugging
+    info('Files in station images folder:');
+    await for (final file in stationImagesDir.list()) {
       info('  ${file.path.split('/').last}');
     }
     fail('Verify photo 1', 'First photo not found on station: $photo1Name');
@@ -764,10 +807,8 @@ Future<bool> testVerifyAlertAndPhotosOnStation() async {
   // Verify second photo exists on station
   final photo2OnStation = File('$foundAlertPath/$photo2Name');
   if (!await photo2OnStation.exists()) {
-    // List files in alert folder for debugging
-    info('Files in station alert folder:');
-    final alertDir = Directory(foundAlertPath!);
-    await for (final file in alertDir.list()) {
+    info('Files in station images folder:');
+    await for (final file in stationImagesDir.list()) {
       info('  ${file.path.split('/').last}');
     }
     fail('Verify photo 2', 'Second photo not found on station: $photo2Name');
@@ -989,12 +1030,24 @@ Future<bool> testVerifyAlertAndPhotosOnClientB() async {
   info('Report content verified');
   pass('Alert report synced to Client B');
 
-  // Verify first photo was downloaded
-  final photo1OnClientB = File('$foundAlertPath/$photo1Name');
-  if (!await photo1OnClientB.exists()) {
+  // Verify images/ subfolder exists on Client B
+  final clientBImagesDir = Directory('$foundAlertPath/images');
+  if (!await clientBImagesDir.exists()) {
     info('Files in Client B alert folder:');
     final alertDir = Directory(foundAlertPath!);
-    await for (final file in alertDir.list()) {
+    await for (final file in alertDir.list(recursive: true)) {
+      info('  ${file.path.replaceFirst(foundAlertPath!, '')}');
+    }
+    fail('Verify images folder', 'images/ subfolder not found on Client B');
+    return false;
+  }
+  info('images/ subfolder exists on Client B');
+
+  // Verify first photo was downloaded (photo1Name includes 'images/' prefix)
+  final photo1OnClientB = File('$foundAlertPath/$photo1Name');
+  if (!await photo1OnClientB.exists()) {
+    info('Files in Client B images folder:');
+    await for (final file in clientBImagesDir.list()) {
       info('  ${file.path.split('/').last}');
     }
     fail('Verify photo 1', 'First photo not found on Client B: $photo1Name');
@@ -1007,9 +1060,8 @@ Future<bool> testVerifyAlertAndPhotosOnClientB() async {
   // Verify second photo was downloaded
   final photo2OnClientB = File('$foundAlertPath/$photo2Name');
   if (!await photo2OnClientB.exists()) {
-    info('Files in Client B alert folder:');
-    final alertDir = Directory(foundAlertPath!);
-    await for (final file in alertDir.list()) {
+    info('Files in Client B images folder:');
+    await for (final file in clientBImagesDir.list()) {
       info('  ${file.path.split('/').last}');
     }
     fail('Verify photo 2', 'Second photo not found on Client B: $photo2Name');
@@ -1177,6 +1229,22 @@ String _extractField(String content, String fieldName) {
   final regex = RegExp('^$fieldName: (.*)?\$', multiLine: true);
   final match = regex.firstMatch(content);
   return match?.group(1)?.trim() ?? '';
+}
+
+/// Find alert path by searching recursively
+Future<String?> _findAlertPath(String dataDir, String callsign, String folderName) async {
+  final alertsDir = Directory('$dataDir/devices/$callsign/alerts');
+  if (!await alertsDir.exists()) return null;
+
+  await for (final entity in alertsDir.list(recursive: true)) {
+    if (entity is Directory && entity.path.endsWith('/$folderName')) {
+      final reportFile = File('${entity.path}/report.txt');
+      if (await reportFile.exists()) {
+        return entity.path;
+      }
+    }
+  }
+  return null;
 }
 
 /// Parse POINTED_BY field value as a list of npubs
@@ -1586,6 +1654,196 @@ Future<bool> testSyncCommentToClientA() async {
 }
 
 // ============================================================
+// Folder Structure Consistency Test
+// ============================================================
+
+/// Test that all three instances have the same folder structure after sync
+Future<bool> testVerifyFolderStructureConsistency() async {
+  section('Verify Folder Structure Consistency');
+
+  if (_createdAlertFolderName == null) {
+    fail('Verify structure', 'Missing alert folder name');
+    return false;
+  }
+
+  final folderName = _createdAlertFolderName!;
+
+  // Find alert paths on all three instances
+  String? clientAAlertPath;
+  String? stationAlertPath;
+  String? clientBAlertPath;
+
+  // Find Client A alert path
+  final clientADir = Directory('$clientADataDir/devices');
+  await for (final entity in clientADir.list(recursive: true)) {
+    if (entity is Directory && entity.path.endsWith(folderName)) {
+      final reportFile = File('${entity.path}/report.txt');
+      if (await reportFile.exists()) {
+        clientAAlertPath = entity.path;
+        break;
+      }
+    }
+  }
+
+  // Find Station alert path
+  final stationDir = Directory('$stationDataDir/devices');
+  await for (final entity in stationDir.list(recursive: true)) {
+    if (entity is Directory && entity.path.endsWith(folderName)) {
+      final reportFile = File('${entity.path}/report.txt');
+      if (await reportFile.exists()) {
+        stationAlertPath = entity.path;
+        break;
+      }
+    }
+  }
+
+  // Find Client B alert path
+  final clientBDir = Directory('$clientBDataDir/devices');
+  await for (final entity in clientBDir.list(recursive: true)) {
+    if (entity is Directory && entity.path.endsWith(folderName)) {
+      final reportFile = File('${entity.path}/report.txt');
+      if (await reportFile.exists()) {
+        clientBAlertPath = entity.path;
+        break;
+      }
+    }
+  }
+
+  if (clientAAlertPath == null || stationAlertPath == null || clientBAlertPath == null) {
+    fail('Find alert paths', 'Could not find alert on all instances: '
+        'ClientA=${clientAAlertPath != null}, Station=${stationAlertPath != null}, ClientB=${clientBAlertPath != null}');
+    return false;
+  }
+
+  info('Client A path: $clientAAlertPath');
+  info('Station path: $stationAlertPath');
+  info('Client B path: $clientBAlertPath');
+
+  // Get relative folder structure for each instance (relative to {callsign}/alerts/)
+  final clientARelPath = _extractRelativeAlertPath(clientAAlertPath);
+  final stationRelPath = _extractRelativeAlertPath(stationAlertPath);
+  final clientBRelPath = _extractRelativeAlertPath(clientBAlertPath);
+
+  info('Client A relative path: $clientARelPath');
+  info('Station relative path: $stationRelPath');
+  info('Client B relative path: $clientBRelPath');
+
+  // Verify all have same structure: active/{regionFolder}/{folderName}
+  if (clientARelPath != stationRelPath || stationRelPath != clientBRelPath) {
+    fail('Verify path consistency', 'Relative paths differ: ClientA=$clientARelPath, Station=$stationRelPath, ClientB=$clientBRelPath');
+    return false;
+  }
+
+  pass('Alert path structure consistent: $clientARelPath');
+
+  // Verify folder name uses timestamp format (YYYY-MM-DD_HH-MM_*)
+  final timestampPattern = RegExp(r'^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}_');
+  if (!timestampPattern.hasMatch(folderName)) {
+    fail('Verify folder naming', 'Folder name does not use timestamp format: $folderName');
+    return false;
+  }
+  pass('Folder uses timestamp format: $folderName');
+
+  // Verify region folder format (e.g., 38.7_-9.1)
+  final regionPattern = RegExp(r'active/(-?\d+\.?\d*)_(-?\d+\.?\d*)/$folderName');
+  if (!regionPattern.hasMatch(clientARelPath)) {
+    // Check if it at least has the active/{something}/{folderName} structure
+    if (!clientARelPath.startsWith('active/') || !clientARelPath.endsWith('/$folderName')) {
+      fail('Verify region folder', 'Path structure incorrect: $clientARelPath');
+      return false;
+    }
+  }
+  pass('Region folder structure correct');
+
+  // Verify internal folder contents match across all instances
+  final clientAContents = await _getAlertFolderContents(clientAAlertPath);
+  final stationContents = await _getAlertFolderContents(stationAlertPath);
+  final clientBContents = await _getAlertFolderContents(clientBAlertPath);
+
+  info('Client A contents: $clientAContents');
+  info('Station contents: $stationContents');
+  info('Client B contents: $clientBContents');
+
+  // All should have these essential items
+  final requiredItems = ['report.txt', 'images/', 'images/photo1.png', 'images/photo2.png', 'comments/'];
+
+  for (final item in requiredItems) {
+    if (!clientAContents.contains(item)) {
+      fail('Verify Client A contents', 'Missing: $item');
+      return false;
+    }
+    if (!stationContents.contains(item)) {
+      fail('Verify Station contents', 'Missing: $item');
+      return false;
+    }
+    if (!clientBContents.contains(item)) {
+      fail('Verify Client B contents', 'Missing: $item');
+      return false;
+    }
+  }
+
+  pass('All instances have required items: ${requiredItems.join(', ')}');
+
+  // Verify comments directory has at least one comment with correct naming format
+  final commentPattern = RegExp(r'comments/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Z0-9]{6}\.txt');
+
+  bool clientAHasComment = clientAContents.any((item) => commentPattern.hasMatch(item));
+  bool stationHasComment = stationContents.any((item) => commentPattern.hasMatch(item));
+  bool clientBHasComment = clientBContents.any((item) => commentPattern.hasMatch(item));
+
+  if (!clientAHasComment || !stationHasComment || !clientBHasComment) {
+    fail('Verify comment files', 'Not all instances have properly named comment files: '
+        'ClientA=$clientAHasComment, Station=$stationHasComment, ClientB=$clientBHasComment');
+    return false;
+  }
+
+  pass('Comment files use correct naming format (YYYY-MM-DD_HH-MM-SS_XXXXXX.txt)');
+
+  // Count comment files - should be the same across all
+  final clientACommentCount = clientAContents.where((item) => commentPattern.hasMatch(item)).length;
+  final stationCommentCount = stationContents.where((item) => commentPattern.hasMatch(item)).length;
+  final clientBCommentCount = clientBContents.where((item) => commentPattern.hasMatch(item)).length;
+
+  if (clientACommentCount != stationCommentCount || stationCommentCount != clientBCommentCount) {
+    warn('Comment count mismatch: ClientA=$clientACommentCount, Station=$stationCommentCount, ClientB=$clientBCommentCount');
+  } else {
+    pass('Comment count consistent: $clientACommentCount');
+  }
+
+  pass('Folder structure is consistent across Client A, Station, and Client B');
+  return true;
+}
+
+/// Extract relative alert path from full path (e.g., active/38.7_-9.1/2025-12-14_15-32_test)
+String _extractRelativeAlertPath(String fullPath) {
+  // Find "alerts/" in the path and return everything after it
+  final alertsIndex = fullPath.indexOf('/alerts/');
+  if (alertsIndex == -1) return fullPath;
+  return fullPath.substring(alertsIndex + '/alerts/'.length);
+}
+
+/// Get list of items in alert folder (files and directories with relative paths)
+Future<List<String>> _getAlertFolderContents(String alertPath) async {
+  final contents = <String>[];
+  final alertDir = Directory(alertPath);
+
+  await for (final entity in alertDir.list(recursive: true)) {
+    // Get relative path
+    var relativePath = entity.path.substring(alertPath.length);
+    if (relativePath.startsWith('/')) relativePath = relativePath.substring(1);
+
+    if (entity is Directory) {
+      contents.add('$relativePath/');
+    } else {
+      contents.add(relativePath);
+    }
+  }
+
+  contents.sort();
+  return contents;
+}
+
+// ============================================================
 // Main Entry Point
 // ============================================================
 
@@ -1684,6 +1942,15 @@ Future<void> main() async {
     }
 
     if (!await testSyncCommentToClientA()) {
+      await cleanup();
+      exit(1);
+    }
+
+    // ==========================================================
+    // Folder Structure Consistency Test
+    // ==========================================================
+
+    if (!await testVerifyFolderStructureConsistency()) {
       await cleanup();
       exit(1);
     }

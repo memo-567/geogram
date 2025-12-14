@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import '../util/alert_folder_utils.dart';
+
 /// Status of station share for an alert
 enum StationShareStatusType {
   pending,
@@ -250,11 +252,7 @@ class Report {
   String get coordinatesString => '$latitude,$longitude';
 
   /// Get region folder (rounded to 1 decimal)
-  String get regionFolder {
-    final roundedLat = (latitude * 10).round() / 10;
-    final roundedLon = (longitude * 10).round() / 10;
-    return '${roundedLat}_$roundedLon';
-  }
+  String get regionFolder => AlertFolderUtils.getRegionFolder(latitude, longitude);
 
   /// Check if user is admin
   bool isAdmin(String npub) {

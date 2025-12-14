@@ -1,5 +1,30 @@
 # Geogram Desktop Changelog
 
+## 2025-12-14 - v1.6.37
+
+### Alert Folder Structure
+- Create centralized `AlertFolderUtils` utility for consistent folder path handling across all components
+- Standardize alert folder structure: `active/{regionFolder}/{folderName}/`
+- Photos stored in `images/` subfolder with sequential naming (`photo1.png`, `photo2.png`, etc.)
+- Comments stored in `comments/` subfolder with format `YYYY-MM-DD_HH-MM-SS_AUTHOR.txt`
+- Region folder calculated as rounded coordinates (e.g., `49.7_8.6`)
+
+### Bug Fixes
+- Fix photo upload to station when creating alerts via desktop UI - photos are now uploaded after being saved locally
+- Fix station alert file path regex to support `images/` subfolder in upload/download paths
+- Fix `_findAlertById` to search recursively within `active/{region}/` directory structure
+- Fix UI photo save path to use correct `active/{regionFolder}/{folderName}/images/` structure
+
+### Code Quality
+- Remove duplicate folder path functions from `report.dart`, `station_alert_service.dart`, `station_alert_api.dart`, and `pure_station.dart`
+- All components now use shared `AlertFolderUtils` for path construction
+
+### Testing
+- Enhanced `app_alert_test.dart` with folder structure consistency checks
+- Verify `images/` subfolder exists on station after photo upload
+- Test sequential photo naming (`photo1.ext`, `photo2.ext`)
+- All 49 folder structure tests passing
+
 ## 2025-12-14 - v1.6.36
 
 ### UI Improvements

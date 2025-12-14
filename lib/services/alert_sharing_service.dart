@@ -437,38 +437,39 @@ class AlertSharingService {
         return 0;
       }
 
-      // Find all photos in the folder
+      // Find all photos in the folder (with relative paths)
       final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-      final photos = <File>[];
+      final photosWithPath = <(File, String)>[]; // (file, relativePath)
 
-      await for (final entity in alertDir.list()) {
-        if (entity is File) {
-          final ext = path.extension(entity.path).toLowerCase();
-          if (photoExtensions.contains(ext)) {
-            photos.add(entity);
-          }
-        }
-      }
-
-      // Also check images subdirectory
+      // Check images subdirectory first (new structure)
       final imagesDir = Directory('$alertPath/images');
       if (await imagesDir.exists()) {
         await for (final entity in imagesDir.list()) {
           if (entity is File) {
             final ext = path.extension(entity.path).toLowerCase();
             if (photoExtensions.contains(ext)) {
-              photos.add(entity);
+              photosWithPath.add((entity, 'images/${path.basename(entity.path)}'));
             }
           }
         }
       }
 
-      if (photos.isEmpty) {
+      // Also check root folder for backwards compatibility
+      await for (final entity in alertDir.list()) {
+        if (entity is File) {
+          final ext = path.extension(entity.path).toLowerCase();
+          if (photoExtensions.contains(ext)) {
+            photosWithPath.add((entity, path.basename(entity.path)));
+          }
+        }
+      }
+
+      if (photosWithPath.isEmpty) {
         LogService().log('AlertSharingService: No photos to upload for ${report.folderName}');
         return 0;
       }
 
-      LogService().log('AlertSharingService: Found ${photos.length} photos to upload');
+      LogService().log('AlertSharingService: Found ${photosWithPath.length} photos to upload');
 
       // Convert WebSocket URL to HTTP URL
       var baseUrl = stationUrl;
@@ -485,13 +486,12 @@ class AlertSharingService {
 
       int uploadedCount = 0;
 
-      for (final photo in photos) {
+      for (final (photo, relativePath) in photosWithPath) {
         try {
-          final filename = path.basename(photo.path);
           final bytes = await photo.readAsBytes();
 
           // Determine content type
-          final ext = path.extension(filename).toLowerCase();
+          final ext = path.extension(relativePath).toLowerCase();
           String contentType = 'application/octet-stream';
           if (ext == '.jpg' || ext == '.jpeg') {
             contentType = 'image/jpeg';
@@ -503,7 +503,10 @@ class AlertSharingService {
             contentType = 'image/webp';
           }
 
-          LogService().log('AlertSharingService: Uploading $filename to $uploadUrl');
+          // Use the filename (not the full relative path) for the upload URL
+          // The station will handle creating the images/ subfolder and sequential naming
+          final filename = path.basename(relativePath);
+          LogService().log('AlertSharingService: Uploading $relativePath to $uploadUrl');
 
           final response = await http.post(
             Uri.parse('$uploadUrl/$filename'),
@@ -516,16 +519,16 @@ class AlertSharingService {
 
           if (response.statusCode == 200 || response.statusCode == 201) {
             uploadedCount++;
-            LogService().log('AlertSharingService: Uploaded $filename successfully');
+            LogService().log('AlertSharingService: Uploaded $relativePath successfully');
           } else {
-            LogService().log('AlertSharingService: Failed to upload $filename: ${response.statusCode}');
+            LogService().log('AlertSharingService: Failed to upload $relativePath: ${response.statusCode}');
           }
         } catch (e) {
           LogService().log('AlertSharingService: Error uploading photo: $e');
         }
       }
 
-      LogService().log('AlertSharingService: Uploaded $uploadedCount/${photos.length} photos');
+      LogService().log('AlertSharingService: Uploaded $uploadedCount/${photosWithPath.length} photos');
       return uploadedCount;
     } catch (e) {
       LogService().log('AlertSharingService: Error in uploadPhotosToStation: $e');

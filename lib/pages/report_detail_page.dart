@@ -26,6 +26,8 @@ import '../services/i18n_service.dart';
 import '../services/alert_feedback_service.dart';
 import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
+import '../services/alert_sharing_service.dart';
+import '../util/alert_folder_utils.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -551,11 +553,14 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null) return;
 
     try {
-      final reportDir = Directory(path.join(
+      // Build correct path: collectionPath/active/{regionFolder}/{folderName}/images
+      final alertPath = path.join(
         widget.collectionPath,
+        'active',
+        _report!.regionFolder,
         _report!.folderName,
-      ));
-      final imagesDir = Directory(path.join(reportDir.path, 'images'));
+      );
+      final imagesDir = Directory(AlertFolderUtils.buildImagesPath(alertPath));
 
       // For station alerts, download photos if they don't exist locally
       if (_isFromStation && !kIsWeb) {
@@ -715,22 +720,26 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null || _imageFilePaths.isEmpty) return;
 
     try {
-      final reportDir = Directory(path.join(
+      // Build correct path: collectionPath/active/{regionFolder}/{folderName}/images
+      final alertPath = path.join(
         widget.collectionPath,
+        'active',
+        _report!.regionFolder,
         _report!.folderName,
-      ));
-      final imagesDir = Directory(path.join(reportDir.path, 'images'));
+      );
+      final imagesDir = Directory(AlertFolderUtils.buildImagesPath(alertPath));
 
       // Create images directory if it doesn't exist
       if (!await imagesDir.exists()) {
         await imagesDir.create(recursive: true);
       }
 
-      // Copy new images to the images folder
+      // Copy new images with sequential naming (photo1.ext, photo2.ext, etc.)
       for (final imagePath in _imageFilePaths) {
         final imageFile = File(imagePath);
-        final fileName = path.basename(imagePath);
-        final destPath = path.join(imagesDir.path, fileName);
+        final ext = path.extension(imagePath).toLowerCase();
+        final sequentialName = await AlertFolderUtils.getNextPhotoFilename(alertPath, ext);
+        final destPath = path.join(imagesDir.path, sequentialName);
         await imageFile.copy(destPath);
       }
 
@@ -799,6 +808,18 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         // Save images
         await _saveImages();
 
+        // Upload photos to station after they're saved locally
+        if (_report != null && !kIsWeb) {
+          final alertService = AlertSharingService();
+          final stationUrls = alertService.getRelayUrls();
+          for (final stationUrl in stationUrls) {
+            final uploaded = await alertService.uploadPhotosToStation(_report!, stationUrl);
+            if (uploaded > 0) {
+              LogService().log('ReportDetailPage: Uploaded $uploaded photos to $stationUrl');
+            }
+          }
+        }
+
         _showSuccess('Report created');
         setState(() {
           _isNew = false;
@@ -822,6 +843,18 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
         // Save images
         await _saveImages();
+
+        // Upload any new photos to station
+        if (_report != null && !kIsWeb && _report!.nostrEventId != null) {
+          final alertService = AlertSharingService();
+          final stationUrls = alertService.getRelayUrls();
+          for (final stationUrl in stationUrls) {
+            final uploaded = await alertService.uploadPhotosToStation(_report!, stationUrl);
+            if (uploaded > 0) {
+              LogService().log('ReportDetailPage: Uploaded $uploaded photos to $stationUrl');
+            }
+          }
+        }
 
         _showSuccess('Report updated');
         setState(() {
@@ -891,6 +924,18 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
       // Save images
       await _saveImages();
+
+      // Upload photos to station after they're saved locally
+      if (_report != null && !kIsWeb) {
+        final alertService = AlertSharingService();
+        final stationUrls = alertService.getRelayUrls();
+        for (final stationUrl in stationUrls) {
+          final uploaded = await alertService.uploadPhotosToStation(_report!, stationUrl);
+          if (uploaded > 0) {
+            LogService().log('ReportDetailPage: Uploaded $uploaded photos to $stationUrl');
+          }
+        }
+      }
 
       _showSuccess('Report created');
 

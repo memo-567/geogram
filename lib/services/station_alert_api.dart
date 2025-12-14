@@ -7,11 +7,11 @@
  * used by both PureStationServer (CLI) and StationServerService (GUI).
  */
 
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
 import '../models/report.dart';
+import '../util/alert_folder_utils.dart';
 
 /// Station info for API responses
 class StationInfo {
@@ -132,15 +132,20 @@ class StationAlertApi {
   /// Handle GET /{callsign}/api/alerts/{alertId} - returns alert details with photos list
   Future<Map<String, dynamic>> getAlertDetails(String callsign, String alertId) async {
     try {
-      final alertPath = '$dataDir/devices/$callsign/alerts/$alertId';
-      final alertDir = Directory(alertPath);
+      // Search recursively for the alert folder
+      final alertPath = await AlertFolderUtils.findAlertPath(
+        '$dataDir/devices/$callsign/alerts',
+        alertId,
+      );
 
-      _log('INFO', 'getAlertDetails: looking for alert at $alertPath');
+      _log('INFO', 'getAlertDetails: looking for alert $alertId under callsign $callsign');
 
-      if (!await alertDir.exists()) {
-        _log('WARN', 'getAlertDetails: alert dir does not exist: $alertPath');
+      if (alertPath == null) {
+        _log('WARN', 'getAlertDetails: alert not found: $alertId');
         return {'error': 'Alert not found', 'http_status': 404};
       }
+
+      final alertDir = Directory(alertPath);
 
       final reportFile = File('${alertDir.path}/report.txt');
       if (!await reportFile.exists()) {
@@ -159,10 +164,25 @@ class StationAlertApi {
         _log('WARN', 'getAlertDetails: failed to parse report, returning raw content: $e');
       }
 
-      // Find all photos
+      // Find all photos (check both root and images/ subfolder)
       final photoExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
       final photos = <String>[];
 
+      // Check images/ subfolder first (new structure)
+      final imagesDir = Directory('${alertDir.path}/images');
+      if (await imagesDir.exists()) {
+        await for (final entity in imagesDir.list()) {
+          if (entity is File) {
+            final filename = entity.path.split('/').last;
+            final ext = filename.toLowerCase();
+            if (photoExtensions.any((e) => ext.endsWith(e))) {
+              photos.add('images/$filename');
+            }
+          }
+        }
+      }
+
+      // Also check root folder for backwards compatibility
       await for (final entity in alertDir.list()) {
         if (entity is File) {
           final filename = entity.path.split('/').last;
@@ -378,9 +398,11 @@ class StationAlertApi {
         await commentsDir.create(recursive: true);
       }
 
-      // Generate comment ID and filename
+      // Generate comment ID and filename: YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
       final now = DateTime.now();
-      final id = '${now.millisecondsSinceEpoch}';
+      final randomId = _generateRandomId(6);
+      final id = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+          '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}_$randomId';
       final createdStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
 
       // Build comment content
@@ -434,29 +456,70 @@ class StationAlertApi {
     String callsign,
     String alertId,
     String filename,
-    List<int> bytes,
-  ) async {
+    List<int> bytes, {
+    double? latitude,
+    double? longitude,
+  }) async {
     try {
-      // Validate filename
-      if (filename.contains('..') || filename.contains('/')) {
+      // Validate filename (allow images/ prefix)
+      final cleanFilename = filename.replaceFirst('images/', '');
+      if (cleanFilename.contains('..') || cleanFilename.contains('/')) {
         return {'error': 'Invalid filename', 'http_status': 400};
       }
 
-      final alertDir = Directory('$dataDir/devices/$callsign/alerts/$alertId');
-      if (!await alertDir.exists()) {
-        await alertDir.create(recursive: true);
+      // Try to find existing alert folder
+      var alertPath = await AlertFolderUtils.findAlertPath(
+        '$dataDir/devices/$callsign/alerts',
+        alertId,
+      );
+
+      if (alertPath == null) {
+        // Create new alert directory with proper structure
+        // If coordinates provided, use region folder; otherwise use flat structure
+        if (latitude != null && longitude != null) {
+          alertPath = AlertFolderUtils.buildAlertPathFromCoords(
+            baseDir: '$dataDir/devices',
+            callsign: callsign,
+            latitude: latitude,
+            longitude: longitude,
+            folderName: alertId,
+          );
+        } else {
+          // Fallback: flat structure without region folder
+          alertPath = '$dataDir/devices/$callsign/alerts/active/$alertId';
+        }
+        final alertDir = Directory(alertPath);
+        if (!await alertDir.exists()) {
+          await alertDir.create(recursive: true);
+        }
       }
 
-      final photoFile = File('${alertDir.path}/$filename');
+      // Create images subfolder and use sequential naming
+      final imagesDir = Directory('$alertPath/images');
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
+      // Get next sequential photo number
+      final nextPhotoNum = await _getNextPhotoNumber(alertPath);
+
+      // Determine file extension from provided filename
+      final ext = cleanFilename.contains('.')
+          ? cleanFilename.substring(cleanFilename.lastIndexOf('.'))
+          : '.png';
+
+      // Use sequential naming: photo{number}.{ext}
+      final sequentialFilename = 'photo$nextPhotoNum$ext';
+      final photoFile = File('${imagesDir.path}/$sequentialFilename');
       await photoFile.writeAsBytes(bytes);
 
-      _log('INFO', 'Uploaded alert photo: $filename (${bytes.length} bytes)');
+      _log('INFO', 'Uploaded alert photo: images/$sequentialFilename (${bytes.length} bytes)');
 
       return {
         'success': true,
-        'filename': filename,
+        'filename': 'images/$sequentialFilename',
         'size': bytes.length,
-        'path': '/api/alerts/$alertId/files/$filename',
+        'path': '/api/alerts/$alertId/files/images/$sequentialFilename',
       };
     } catch (e) {
       _log('ERROR', 'Error uploading alert photo: $e');
@@ -468,23 +531,74 @@ class StationAlertApi {
     }
   }
 
+  /// Get the next sequential photo number in an alert's images folder
+  Future<int> _getNextPhotoNumber(String alertPath) async {
+    int maxNumber = 0;
+    final imagesDir = Directory('$alertPath/images');
+    if (await imagesDir.exists()) {
+      await for (final entity in imagesDir.list()) {
+        if (entity is File) {
+          final filename = entity.path.split('/').last;
+          final baseName = filename.contains('.')
+              ? filename.substring(0, filename.lastIndexOf('.'))
+              : filename;
+          final match = RegExp(r'^photo(\d+)$').firstMatch(baseName);
+          if (match != null) {
+            final num = int.tryParse(match.group(1)!) ?? 0;
+            if (num > maxNumber) maxNumber = num;
+          }
+        }
+      }
+    }
+    return maxNumber + 1;
+  }
+
   /// Get alert photo file path (returns null if not found)
+  /// Supports both new structure (images/filename) and legacy (filename in root)
   Future<String?> getAlertPhotoPath(String callsign, String alertId, String filename) async {
+    // Handle images/ prefix
+    final isInImagesFolder = filename.startsWith('images/');
+    final cleanFilename = isInImagesFolder ? filename.substring(7) : filename;
+
     // Validate filename
-    if (filename.contains('..') || filename.contains('/')) {
+    if (cleanFilename.contains('..') || cleanFilename.contains('/')) {
       return null;
     }
 
-    final photoFile = File('$dataDir/devices/$callsign/alerts/$alertId/$filename');
-    if (await photoFile.exists()) {
-      return photoFile.path;
+    // Find the alert folder first
+    final alertPath = await AlertFolderUtils.findAlertPath(
+      '$dataDir/devices/$callsign/alerts',
+      alertId,
+    );
+    if (alertPath == null) return null;
+
+    // Check images/ subfolder first (new structure)
+    final imagesPhotoFile = File('$alertPath/images/$cleanFilename');
+    if (await imagesPhotoFile.exists()) {
+      return imagesPhotoFile.path;
     }
+
+    // Check root folder for backwards compatibility
+    final rootPhotoFile = File('$alertPath/$cleanFilename');
+    if (await rootPhotoFile.exists()) {
+      return rootPhotoFile.path;
+    }
+
     return null;
   }
 
   // ============================================================
   // Internal helper methods
   // ============================================================
+
+  /// Generate a random alphanumeric ID
+  String _generateRandomId(int length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final random = math.Random();
+    return String.fromCharCodes(
+      Iterable.generate(length, (_) => chars.codeUnitAt(random.nextInt(chars.length))),
+    );
+  }
 
   /// Load all alerts from devices directory
   Future<List<Map<String, dynamic>>> _loadAllAlerts({bool includeAllStatuses = false}) async {

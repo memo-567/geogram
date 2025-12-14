@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import '../models/report.dart';
+import '../util/alert_folder_utils.dart';
 import 'log_service.dart';
 import 'station_service.dart';
 import 'config_service.dart';
@@ -352,15 +353,24 @@ class StationAlertService {
         final callsign = alert.metadata['station_callsign'] ?? 'unknown';
 
         // Search for existing alert folder (may be in active/{region}/ subfolder)
-        String? existingAlertPath = await _findExistingAlertPath(devicesDir, callsign, alert.folderName);
+        String? existingAlertPath = await AlertFolderUtils.findAlertPath(
+          '$devicesDir/$callsign/alerts',
+          alert.folderName,
+        );
 
         final String alertPath;
         if (existingAlertPath != null) {
           alertPath = existingAlertPath;
           LogService().log('StationAlertService: Found existing alert at $alertPath');
         } else {
-          // Create new alert directory
-          alertPath = '$devicesDir/$callsign/alerts/${alert.folderName}';
+          // Create new alert directory with proper structure: active/{regionFolder}/{folderName}
+          alertPath = AlertFolderUtils.buildAlertPathFromCoords(
+            baseDir: devicesDir,
+            callsign: callsign,
+            latitude: alert.latitude,
+            longitude: alert.longitude,
+            folderName: alert.folderName,
+          );
           final alertDir = Directory(alertPath);
           if (!await alertDir.exists()) {
             await alertDir.create(recursive: true);
@@ -421,24 +431,6 @@ class StationAlertService {
         LogService().log('StationAlertService: Error storing alert ${alert.folderName}: $e');
       }
     }
-  }
-
-  /// Search for an existing alert folder by name under the callsign's alerts directory
-  /// This handles the case where alerts may be stored in active/{region}/ subfolders
-  Future<String?> _findExistingAlertPath(String devicesDir, String callsign, String folderName) async {
-    final alertsDir = Directory('$devicesDir/$callsign/alerts');
-    if (!await alertsDir.exists()) return null;
-
-    await for (final entity in alertsDir.list(recursive: true)) {
-      if (entity is Directory && entity.path.endsWith('/$folderName')) {
-        // Verify it has a report.txt
-        final reportFile = File('${entity.path}/report.txt');
-        if (await reportFile.exists()) {
-          return entity.path;
-        }
-      }
-    }
-    return null;
   }
 
   /// Extract LAST_MODIFIED timestamp from report.txt content
@@ -558,25 +550,36 @@ class StationAlertService {
 
       LogService().log('StationAlertService: Downloading ${photos.length} photos for ${alert.folderName}');
 
+      // Create images subfolder if needed
+      final imagesDir = Directory('$alertPath/images');
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
       for (final photoName in photos) {
         try {
-          final photoFile = File('$alertPath/$photoName');
+          // Handle photos that may have images/ prefix or not
+          final isInImagesFolder = photoName.startsWith('images/');
+          final cleanPhotoName = isInImagesFolder ? photoName.substring(7) : photoName;
+
+          // Store all photos in images subfolder (new structure)
+          final photoFile = File('${imagesDir.path}/$cleanPhotoName');
 
           // Skip if already exists
           if (await photoFile.exists()) {
-            LogService().log('StationAlertService: Photo $photoName already exists, skipping');
+            LogService().log('StationAlertService: Photo $cleanPhotoName already exists, skipping');
             continue;
           }
 
-          // Download photo
+          // Download photo (URL uses the full path from station)
           final photoUrl = Uri.parse('$baseUrl/$callsign/api/alerts/${alert.folderName}/files/$photoName');
           final response = await http.get(photoUrl).timeout(const Duration(seconds: 30));
 
           if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
             await photoFile.writeAsBytes(response.bodyBytes);
-            LogService().log('StationAlertService: Downloaded photo $photoName (${response.bodyBytes.length} bytes)');
+            LogService().log('StationAlertService: Downloaded photo $cleanPhotoName (${response.bodyBytes.length} bytes)');
           } else {
-            LogService().log('StationAlertService: Failed to download photo $photoName: ${response.statusCode}');
+            LogService().log('StationAlertService: Failed to download photo $cleanPhotoName: ${response.statusCode}');
           }
         } catch (e) {
           LogService().log('StationAlertService: Error downloading photo $photoName: $e');
@@ -706,7 +709,10 @@ class StationAlertService {
       if (!storageConfig.isInitialized) return;
 
       final devicesDir = storageConfig.devicesDir;
-      final alertPath = await _findExistingAlertPath(devicesDir, stationCallsign, folderName);
+      final alertPath = await AlertFolderUtils.findAlertPath(
+        '$devicesDir/$stationCallsign/alerts',
+        folderName,
+      );
       if (alertPath == null) return;
 
       final alertDetails = await _fetchAlertDetails(folderName, baseUrl, stationCallsign);

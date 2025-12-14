@@ -243,38 +243,56 @@ class ReportService {
     return null;
   }
 
-  /// Find report in directory
+  /// Find report in directory (searches recursively)
   Future<Report?> _findReport(String basePath, String folderName) async {
-    // Extract coordinates from folder name
-    final coords = _extractCoordinates(folderName);
-    if (coords == null) return null;
-
-    final regionFolder = _getRegionFolder(coords[0], coords[1]);
-    final reportFilePath = '$basePath/$regionFolder/$folderName/report.txt';
-
     if (kIsWeb) {
       final fs = FileSystemService.instance;
       if (!await fs.exists(basePath)) return null;
 
-      if (await fs.exists(reportFilePath)) {
-        try {
-          final content = await fs.readAsString(reportFilePath);
-          return Report.fromText(content, folderName);
-        } catch (e) {
-          LogService().log('ReportService: Error loading report: $e');
+      // Search recursively for the folder
+      final entities = await fs.list(basePath);
+      for (var entity in entities) {
+        if (entity.isDirectory) {
+          final dirName = entity.path.split('/').last;
+          // Check if this is a region folder
+          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(dirName)) {
+            // Search within region folder
+            final regionEntities = await fs.list(entity.path);
+            for (var regionEntity in regionEntities) {
+              if (regionEntity.isDirectory) {
+                final alertDirName = regionEntity.path.split('/').last;
+                if (alertDirName == folderName) {
+                  final reportPath = '${regionEntity.path}/report.txt';
+                  if (await fs.exists(reportPath)) {
+                    try {
+                      final content = await fs.readAsString(reportPath);
+                      return Report.fromText(content, folderName);
+                    } catch (e) {
+                      LogService().log('ReportService: Error loading report: $e');
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     } else {
       final baseDir = Directory(basePath);
       if (!await baseDir.exists()) return null;
 
-      final reportFile = File(reportFilePath);
-      if (await reportFile.exists()) {
-        try {
-          final content = await reportFile.readAsString();
-          return Report.fromText(content, folderName);
-        } catch (e) {
-          LogService().log('ReportService: Error loading report: $e');
+      // Search recursively for the folder
+      await for (final entity in baseDir.list(recursive: true)) {
+        if (entity is Directory && entity.path.endsWith('/$folderName')) {
+          final reportFile = File('${entity.path}/report.txt');
+          if (await reportFile.exists()) {
+            try {
+              final content = await reportFile.readAsString();
+              return Report.fromText(content, folderName);
+            } catch (e) {
+              LogService().log('ReportService: Error loading report: $e');
+            }
+          }
         }
       }
     }
@@ -360,7 +378,8 @@ class ReportService {
 
     // Sanitize title for folder name
     final sanitized = _sanitizeFolderName(title);
-    final folderName = '${latitude}_${longitude}_$sanitized';
+    // Use timestamp-based folder name: YYYY-MM-DD_HH-MM_sanitized-title
+    final folderName = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}_$sanitized';
 
     // Calculate expiration if TTL provided
     String? expires;
@@ -781,21 +800,45 @@ class ReportService {
     }
   }
 
-  /// Check if report is in expired folder
+  /// Check if report is in expired folder (searches recursively)
   Future<bool> _isReportExpired(String folderName) async {
     if (_collectionPath == null) return false;
 
-    final coords = _extractCoordinates(folderName);
-    if (coords == null) return false;
-
-    final regionFolder = _getRegionFolder(coords[0], coords[1]);
-    final expiredPath = '$_collectionPath/expired/$regionFolder/$folderName';
+    final expiredBasePath = '$_collectionPath/expired';
 
     if (kIsWeb) {
       final fs = FileSystemService.instance;
-      return await fs.exists(expiredPath);
+      if (!await fs.exists(expiredBasePath)) return false;
+
+      // Search recursively for the folder in expired
+      final entities = await fs.list(expiredBasePath);
+      for (var entity in entities) {
+        if (entity.isDirectory) {
+          final dirName = entity.path.split('/').last;
+          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(dirName)) {
+            final regionEntities = await fs.list(entity.path);
+            for (var regionEntity in regionEntities) {
+              if (regionEntity.isDirectory) {
+                final alertDirName = regionEntity.path.split('/').last;
+                if (alertDirName == folderName) {
+                  return true;
+                }
+              }
+            }
+          }
+        }
+      }
+      return false;
     } else {
-      return await Directory(expiredPath).exists();
+      final expiredDir = Directory(expiredBasePath);
+      if (!await expiredDir.exists()) return false;
+
+      await for (final entity in expiredDir.list(recursive: true)) {
+        if (entity is Directory && entity.path.endsWith('/$folderName')) {
+          return true;
+        }
+      }
+      return false;
     }
   }
 
@@ -819,27 +862,6 @@ class ReportService {
     return degrees * math.pi / 180;
   }
 
-  /// Get region folder from coordinates
-  String _getRegionFolder(double lat, double lon) {
-    final roundedLat = (lat * 10).round() / 10;
-    final roundedLon = (lon * 10).round() / 10;
-    return '${roundedLat}_$roundedLon';
-  }
-
-  /// Extract coordinates from folder name
-  List<double>? _extractCoordinates(String folderName) {
-    final regex = RegExp(r'^(-?\d+\.\d+)_(-?\d+\.\d+)_');
-    final match = regex.firstMatch(folderName);
-    if (match != null) {
-      final lat = double.tryParse(match.group(1)!);
-      final lon = double.tryParse(match.group(2)!);
-      if (lat != null && lon != null) {
-        return [lat, lon];
-      }
-    }
-    return null;
-  }
-
   /// Sanitize text for folder name
   String _sanitizeFolderName(String text) {
     // Convert to lowercase
@@ -857,9 +879,9 @@ class ReportService {
     // Remove leading/trailing hyphens
     sanitized = sanitized.replaceAll(RegExp(r'^-+|-+$'), '');
 
-    // Truncate to 50 characters
-    if (sanitized.length > 50) {
-      sanitized = sanitized.substring(0, 50);
+    // Truncate to 100 characters
+    if (sanitized.length > 100) {
+      sanitized = sanitized.substring(0, 100);
       // Remove trailing hyphen if present
       sanitized = sanitized.replaceAll(RegExp(r'-+$'), '');
     }

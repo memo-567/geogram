@@ -10,6 +10,7 @@ import 'pure_storage_config.dart';
 import '../models/blog_post.dart';
 import '../models/report.dart';
 import '../services/station_alert_api.dart';
+import '../util/alert_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -2419,20 +2420,36 @@ class PureStationServer {
     }
   }
 
-  /// Store alert in devices/{callsign}/alerts/{folderName}/report.txt
+  /// Store alert in devices/{callsign}/alerts/active/{region}/{folderName}/report.txt
   Future<void> _storeAlert(String callsign, String folderName, String content) async {
     final devicesDir = PureStorageConfig().devicesDir;
-    final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+
+    // Extract coordinates from content to determine region folder
+    final regionFolder = AlertFolderUtils.extractRegionFromContent(content);
+
+    // Use proper directory structure: active/{region}/{folderName}
+    final alertPath = AlertFolderUtils.buildAlertPath(
+      baseDir: devicesDir,
+      callsign: callsign,
+      regionFolder: regionFolder,
+      folderName: folderName,
+    );
 
     final alertDir = Directory(alertPath);
     if (!await alertDir.exists()) {
       await alertDir.create(recursive: true);
     }
 
-    final reportFile = File('$alertPath/report.txt');
+    final reportFile = File(AlertFolderUtils.buildReportPath(alertPath));
     await reportFile.writeAsString(content, flush: true);
 
     _log('INFO', 'Alert stored at: $alertPath/report.txt');
+  }
+
+  /// Find alert path by folder name (searches recursively for backwards compatibility)
+  Future<String?> _findAlertPath(String callsign, String folderName) async {
+    final devicesDir = PureStorageConfig().devicesDir;
+    return AlertFolderUtils.findAlertPath('$devicesDir/$callsign/alerts', folderName);
   }
 
   /// Fetch photos from the connected client for an alert
@@ -2504,17 +2521,30 @@ class PureStationServer {
 
       _log('INFO', 'ALERT PHOTOS: Found ${photos.length} photos to fetch: $photos');
 
-      // Download each photo
-      final devicesDir = PureStorageConfig().devicesDir;
-      final alertPath = '$devicesDir/$callsign/alerts/$folderName';
+      // Find alert path (searches recursively)
+      final alertPath = await _findAlertPath(callsign, folderName);
+      if (alertPath == null) {
+        _log('WARN', 'ALERT PHOTOS: Could not find alert folder for $folderName');
+        return;
+      }
+
+      // Create images subfolder
+      final imagesDir = Directory('$alertPath/images');
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
       int downloadedCount = 0;
 
       for (final photoName in photos) {
         try {
-          // Check if photo already exists
-          final photoFile = File('$alertPath/$photoName');
+          // Handle photos that may have images/ prefix
+          final cleanPhotoName = photoName.startsWith('images/') ? photoName.substring(7) : photoName;
+
+          // Check if photo already exists in images/ subfolder
+          final photoFile = File('${imagesDir.path}/$cleanPhotoName');
           if (await photoFile.exists()) {
-            _log('INFO', 'ALERT PHOTOS: $photoName already exists, skipping');
+            _log('INFO', 'ALERT PHOTOS: $cleanPhotoName already exists, skipping');
             continue;
           }
 
@@ -2623,18 +2653,24 @@ class PureStationServer {
         }
 
         if (bytes.isNotEmpty) {
-          final devicesDir = PureStorageConfig().devicesDir;
-          final alertPath = '$devicesDir/$callsign/alerts/$alertId';
-
-          // Ensure directory exists
-          final alertDir = Directory(alertPath);
-          if (!await alertDir.exists()) {
-            await alertDir.create(recursive: true);
+          // Find alert path (searches recursively)
+          var alertPath = await _findAlertPath(callsign, alertId);
+          if (alertPath == null) {
+            _log('WARN', 'ALERT PHOTO: Could not find alert folder for $alertId');
+            return false;
           }
 
-          final photoFile = File('$alertPath/$filename');
+          // Create images subfolder and store photo there
+          final imagesDir = Directory('$alertPath/images');
+          if (!await imagesDir.exists()) {
+            await imagesDir.create(recursive: true);
+          }
+
+          // Handle photos that may have images/ prefix
+          final cleanFilename = filename.startsWith('images/') ? filename.substring(7) : filename;
+          final photoFile = File('${imagesDir.path}/$cleanFilename');
           await photoFile.writeAsBytes(bytes, flush: true);
-          _log('INFO', 'ALERT PHOTO: On-demand fetch successful - $filename (${bytes.length} bytes)');
+          _log('INFO', 'ALERT PHOTO: On-demand fetch successful - images/$cleanFilename (${bytes.length} bytes)');
           return true;
         }
       }
@@ -2860,16 +2896,18 @@ class PureStationServer {
 
       if (!await alertsDir.exists()) continue;
 
-      // Iterate through alert folders
-      await for (final alertEntity in alertsDir.list()) {
-        if (alertEntity is! Directory) continue;
+      // Iterate recursively through alert folders (supports active/{region}/ structure)
+      await for (final entity in alertsDir.list(recursive: true)) {
+        if (entity is! File) continue;
+        if (!entity.path.endsWith('/report.txt')) continue;
 
-        final reportFile = File('${alertEntity.path}/report.txt');
-        if (!await reportFile.exists()) continue;
+        // Extract folder name from path
+        final alertDirPath = entity.path.replaceFirst('/report.txt', '');
+        final folderName = alertDirPath.split('/').last;
 
         try {
-          final content = await reportFile.readAsString();
-          final alert = _parseAlertContent(content, callsign, alertEntity.path.split('/').last);
+          final content = await entity.readAsString();
+          final alert = _parseAlertContent(content, callsign, folderName);
 
           // Include based on status filter
           if (includeAllStatuses ||
@@ -2878,7 +2916,7 @@ class PureStationServer {
             alerts.add(alert);
           }
         } catch (e) {
-          _log('WARN', 'Failed to parse alert: ${alertEntity.path}');
+          _log('WARN', 'Failed to parse alert: ${entity.path}');
         }
       }
     }
@@ -3033,6 +3071,7 @@ class PureStationServer {
   }
 
   /// Find alert by apiId (YYYY-MM-DD_title-slug)
+  /// Searches recursively to support active/{region}/ folder structure
   Future<Map<String, dynamic>?> _findAlertById(String alertId) async {
     final devicesDir = Directory(PureStorageConfig().devicesDir);
     if (!await devicesDir.exists()) return null;
@@ -3044,23 +3083,26 @@ class PureStationServer {
       final alertsDir = Directory('${deviceEntity.path}/alerts');
       if (!await alertsDir.exists()) continue;
 
-      await for (final alertEntity in alertsDir.list()) {
-        if (alertEntity is! Directory) continue;
+      // Search recursively to support active/{region}/ folder structure
+      await for (final entity in alertsDir.list(recursive: true)) {
+        if (entity is! File) continue;
+        if (!entity.path.endsWith('/report.txt')) continue;
 
-        final reportFile = File('${alertEntity.path}/report.txt');
-        if (!await reportFile.exists()) continue;
+        // Extract alert directory path and folder name
+        final alertPath = entity.path.replaceFirst('/report.txt', '');
+        final folderName = alertPath.split('/').last;
 
         try {
-          final content = await reportFile.readAsString();
-          final alert = _parseAlertContent(content, callsign, alertEntity.path.split('/').last);
+          final content = await entity.readAsString();
+          final alert = _parseAlertContent(content, callsign, folderName);
 
           // Generate apiId and compare
           final apiId = _generateApiId(alert['created'] as String, alert['title'] as String);
           if (apiId == alertId) {
             return {
-              'path': alertEntity.path,
+              'path': alertPath,
               'callsign': callsign,
-              'folderName': alertEntity.path.split('/').last,
+              'folderName': folderName,
               'alert': alert,
             };
           }
@@ -3213,14 +3255,14 @@ class PureStationServer {
     }
 
     // Create comments directory
-    final commentsDir = Directory('$alertPath/comments');
+    final commentsDir = Directory(AlertFolderUtils.buildCommentsPath(alertPath));
     if (!await commentsDir.exists()) {
       await commentsDir.create(recursive: true);
     }
 
-    // Generate comment ID and filename
+    // Generate comment ID and filename using centralized utility
     final now = DateTime.now();
-    final id = '${now.millisecondsSinceEpoch}';
+    final id = AlertFolderUtils.generateCommentId(now, author);
     final createdStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
 
     // Build comment content
@@ -3725,9 +3767,11 @@ class PureStationServer {
   }
 
   /// Check if path matches /{callsign}/api/alerts/{alertId}/files/{filename} pattern for photo uploads
+  /// Also matches: /{callsign}/api/alerts/{alertId}/files/images/{filename}
   bool _isAlertFileUploadPath(String path) {
     // Pattern: /{callsign}/api/alerts/{alertId}/files/{filename}
-    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
+    // Also supports: /{callsign}/api/alerts/{alertId}/files/images/{filename}
+    final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/.+$');
     return regex.hasMatch(path);
   }
 
@@ -3855,20 +3899,25 @@ class PureStationServer {
       _log('INFO', '  Size: ${bytes.length} bytes');
       _log('INFO', '═══════════════════════════════════════════════════════');
 
-      // Store the file in devices/{callsign}/alerts/{alertId}/{filename}
-      final devicesDir = PureStorageConfig().devicesDir;
-      final alertPath = '$devicesDir/$callsign/alerts/$alertId';
-      final alertDir = Directory(alertPath);
-
-      // Check if alert folder exists (alert must have been shared first)
-      if (!await alertDir.exists()) {
-        _log('WARN', 'Alert folder does not exist: $alertPath');
-        // Create the folder - the alert may have been received but folder not created
-        await alertDir.create(recursive: true);
+      // Find alert path (searches recursively for backwards compatibility)
+      var alertPath = await _findAlertPath(callsign, alertId);
+      if (alertPath == null) {
+        _log('WARN', 'Alert folder does not exist for: $alertId');
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Alert not found', 'alert_id': alertId}));
+        return;
       }
 
-      // Write the file
-      final filePath = '$alertPath/$filename';
+      // Create images subfolder and store photo there
+      final imagesDir = Directory('$alertPath/images');
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
+      // Handle photos that may have images/ prefix
+      final cleanFilename = filename.startsWith('images/') ? filename.substring(7) : filename;
+      final filePath = '${imagesDir.path}/$cleanFilename';
       final file = File(filePath);
       await file.writeAsBytes(bytes, flush: true);
 
@@ -3894,12 +3943,14 @@ class PureStationServer {
   }
 
   /// Handle GET /{callsign}/api/alerts/{alertId}/files/{filename} - serve alert photo
+  /// Also handles: /{callsign}/api/alerts/{alertId}/files/images/{filename}
   Future<void> _handleAlertFileServe(HttpRequest request) async {
     try {
       final path = request.uri.path;
 
       // Parse path: /{callsign}/api/alerts/{alertId}/files/{filename}
-      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/([^/]+)$');
+      // Also supports: /{callsign}/api/alerts/{alertId}/files/images/{filename}
+      final regex = RegExp(r'^/([A-Za-z0-9]+)/api/alerts/([^/]+)/files/(.+)$');
       final match = regex.firstMatch(path);
 
       if (match == null) {
@@ -3913,22 +3964,40 @@ class PureStationServer {
       final alertId = match.group(2)!;
       final filename = match.group(3)!;
 
+      // Handle filename that may have images/ prefix
+      final isInImagesFolder = filename.startsWith('images/');
+      final cleanFilename = isInImagesFolder ? filename.substring(7) : filename;
+
       // Validate filename (prevent directory traversal)
-      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+      if (cleanFilename.contains('..') || cleanFilename.contains('/') || cleanFilename.contains('\\')) {
         request.response.statusCode = 400;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({'error': 'Invalid filename'}));
         return;
       }
 
-      // Try to find the file in devices/{callsign}/alerts/{alertId}/{filename}
-      final devicesDir = PureStorageConfig().devicesDir;
-      final filePath = '$devicesDir/$callsign/alerts/$alertId/$filename';
-      var file = File(filePath);
+      // Find alert path (searches recursively for backwards compatibility)
+      final alertPath = await _findAlertPath(callsign, alertId);
 
-      if (!await file.exists()) {
+      File? file;
+
+      if (alertPath != null) {
+        // Try images/ subfolder first (new structure)
+        final imagesFilePath = '$alertPath/images/$cleanFilename';
+        if (await File(imagesFilePath).exists()) {
+          file = File(imagesFilePath);
+        } else {
+          // Fall back to root folder (legacy structure)
+          final rootFilePath = '$alertPath/$cleanFilename';
+          if (await File(rootFilePath).exists()) {
+            file = File(rootFilePath);
+          }
+        }
+      }
+
+      if (file == null || !await file.exists()) {
         // File not found on station - try to fetch from the author if they're online
-        _log('INFO', 'ALERT PHOTO: $filename not found locally, checking if author $callsign is online');
+        _log('INFO', 'ALERT PHOTO: $cleanFilename not found locally, checking if author $callsign is online');
 
         // Find the client by callsign
         PureConnectedClient? authorClient;
@@ -3939,31 +4008,31 @@ class PureStationServer {
           }
         }
 
-        if (authorClient != null) {
-          // Author is online - try to fetch the photo
-          _log('INFO', 'ALERT PHOTO: Author $callsign is online, fetching $filename');
-          final fetched = await _fetchSinglePhotoFromClient(authorClient, callsign, alertId, filename);
+        if (authorClient != null && alertPath != null) {
+          // Author is online - try to fetch the photo (will store in images/)
+          _log('INFO', 'ALERT PHOTO: Author $callsign is online, fetching $cleanFilename');
+          final fetched = await _fetchSinglePhotoFromClient(authorClient, callsign, alertId, cleanFilename);
           if (fetched) {
-            file = File(filePath);
-            if (!await file.exists()) {
-              _log('WARN', 'ALERT PHOTO: Fetch succeeded but file not found');
+            final imagesFilePath = '$alertPath/images/$cleanFilename';
+            if (await File(imagesFilePath).exists()) {
+              file = File(imagesFilePath);
             }
           } else {
-            _log('WARN', 'ALERT PHOTO: Failed to fetch $filename from author');
+            _log('WARN', 'ALERT PHOTO: Failed to fetch $cleanFilename from author');
           }
         } else {
-          _log('INFO', 'ALERT PHOTO: Author $callsign is not online');
+          _log('INFO', 'ALERT PHOTO: Author $callsign is not online or alert not found');
         }
 
         // Check again if file exists after potential fetch
-        if (!await file.exists()) {
+        if (file == null || !await file.exists()) {
           request.response.statusCode = 404;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({
             'error': 'File not found',
             'callsign': callsign,
             'alert_id': alertId,
-            'filename': filename,
+            'filename': cleanFilename,
             'author_online': authorClient != null,
           }));
           return;
