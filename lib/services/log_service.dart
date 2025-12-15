@@ -3,7 +3,10 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
-/// Global singleton for logging
+/// Log levels for filtering
+enum LogLevel { debug, info, warn, error }
+
+/// Global singleton for logging with loop detection
 class LogService {
   static final LogService _instance = LogService._internal();
   factory LogService() => _instance;
@@ -15,6 +18,14 @@ class LogService {
   File? _logFile;
   IOSink? _logSink;
   bool _initialized = false;
+
+  // Loop detection: track recent messages to detect tight loops
+  final Map<String, _LogCounter> _recentMessages = {};
+  static const int _loopDetectionWindowMs = 5000; // 5 second window
+  static const int _loopThreshold = 50; // warn if same message > 50 times in window
+  DateTime? _lastLoopWarning;
+  String? _suppressedMessage; // currently suppressed message pattern
+  int _suppressedCount = 0;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -82,11 +93,52 @@ class LogService {
 
   List<String> get messages => _logMessages.toList();
 
-  void log(String message) {
+  void log(String message, {LogLevel level = LogLevel.info}) {
     final now = DateTime.now();
+
+    // Loop detection: extract message pattern (remove numbers/timestamps for grouping)
+    final pattern = _extractPattern(message);
+    final counter = _recentMessages[pattern] ??= _LogCounter();
+
+    // Clean old entries and increment counter
+    counter.cleanOld(now, _loopDetectionWindowMs);
+    counter.increment(now);
+
+    // Check for potential loop
+    if (counter.count >= _loopThreshold) {
+      // If this is a new loop detection or enough time passed, warn
+      if (_suppressedMessage != pattern) {
+        // Emit suppression start warning
+        if (_suppressedMessage != null && _suppressedCount > 0) {
+          _emitLog(now, '[LOOP] Suppressed $_suppressedCount repetitions of: $_suppressedMessage', LogLevel.warn);
+        }
+        _suppressedMessage = pattern;
+        _suppressedCount = 0;
+        _emitLog(now, '[LOOP DETECTED] Message repeated ${counter.count}x in ${_loopDetectionWindowMs}ms: $message', LogLevel.warn);
+      }
+      _suppressedCount++;
+
+      // Only log every 100th message during loop
+      if (_suppressedCount % 100 != 0) {
+        return;
+      }
+    } else if (_suppressedMessage == pattern && counter.count < _loopThreshold ~/ 2) {
+      // Loop ended, emit summary
+      if (_suppressedCount > 0) {
+        _emitLog(now, '[LOOP ENDED] Suppressed $_suppressedCount repetitions of: $_suppressedMessage', LogLevel.info);
+      }
+      _suppressedMessage = null;
+      _suppressedCount = 0;
+    }
+
+    _emitLog(now, message, level);
+  }
+
+  void _emitLog(DateTime now, String message, LogLevel level) {
     final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}.${now.millisecond.toString().padLeft(3, '0')}';
-    final logEntry = '$date $time | $message';
+    final levelStr = level.name.toUpperCase().padRight(5);
+    final logEntry = '$date $time [$levelStr] $message';
 
     _logMessages.add(logEntry);
 
@@ -104,10 +156,45 @@ class LogService {
     }
   }
 
+  /// Extract a pattern from message by removing variable parts (numbers, timestamps, IDs)
+  String _extractPattern(String message) {
+    // Replace hex strings, numbers, UUIDs with placeholders
+    return message
+        .replaceAll(RegExp(r'\b[0-9a-fA-F]{8,}\b'), '<HEX>')
+        .replaceAll(RegExp(r'\b\d+\.\d+\b'), '<NUM>')
+        .replaceAll(RegExp(r'\b\d{4,}\b'), '<ID>')
+        .replaceAll(RegExp(r'\b\d+\b'), '<N>');
+  }
+
+  /// Log with specific level shortcuts
+  void debug(String message) => log(message, level: LogLevel.debug);
+  void info(String message) => log(message, level: LogLevel.info);
+  void warn(String message) => log(message, level: LogLevel.warn);
+  void error(String message) => log(message, level: LogLevel.error);
+
   void clear() {
     _logMessages.clear();
+    _recentMessages.clear();
+    _suppressedMessage = null;
+    _suppressedCount = 0;
     for (var listener in _listeners) {
       listener('');
     }
+  }
+}
+
+/// Helper class for counting log message occurrences within a time window
+class _LogCounter {
+  final List<DateTime> _timestamps = [];
+
+  int get count => _timestamps.length;
+
+  void increment(DateTime now) {
+    _timestamps.add(now);
+  }
+
+  void cleanOld(DateTime now, int windowMs) {
+    final cutoff = now.subtract(Duration(milliseconds: windowMs));
+    _timestamps.removeWhere((t) => t.isBefore(cutoff));
   }
 }

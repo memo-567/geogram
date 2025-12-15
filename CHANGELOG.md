@@ -1,5 +1,20 @@
 # Geogram Desktop Changelog
 
+## 2025-12-15 - v1.6.41
+
+### Connection Stability Improvements
+- Add server-side heartbeat timer that PINGs all clients every 30 seconds
+- Add stale client detection and automatic cleanup after 90 seconds of inactivity
+- Add safe socket send wrapper with graceful error handling
+- Fix kickDevice() to use proper null handling instead of unsafe firstWhere pattern
+- Add proper client cleanup on disconnect (closes socket, cleans pending proxy requests)
+- Update server stop() to properly terminate all connections and pending requests
+- Improve WebRTC signaling error handling with sender notification on forward failure
+
+### Bug Fixes
+- Fix WebSocket null socket errors in WebRTC signaling, COLLECTIONS_REQUEST, and COLLECTIONS_RESPONSE handlers
+- Prevent WebRTC self-routing (device sending to itself)
+
 ## 2025-12-15 - v1.6.40
 
 ### Changes

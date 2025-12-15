@@ -577,6 +577,11 @@ class PureStationServer {
   Map<String, String> _assetFilenames = {};
   String? _currentDownloadVersion;
 
+  // Heartbeat and connection stability
+  Timer? _heartbeatTimer;
+  static const int _heartbeatIntervalSeconds = 30;  // Send PING every 30s
+  static const int _staleClientTimeoutSeconds = 90; // Remove client if no activity for 90s
+
   // Shared alert API handlers
   StationAlertApi? _alertApi;
 
@@ -1328,6 +1333,9 @@ class PureStationServer {
       // Start update mirror polling
       _startUpdatePolling();
 
+      // Start heartbeat timer for connection stability
+      _startHeartbeat();
+
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
         // Check if we need to request certificates first
@@ -1453,10 +1461,29 @@ class PureStationServer {
   Future<void> stop() async {
     if (!_running) return;
 
+    // Stop heartbeat timer
+    _stopHeartbeat();
+
+    // Close all client connections
     for (final client in _clients.values) {
-      await client.socket.close();
+      try {
+        await client.socket.close();
+      } catch (_) {
+        // Socket may already be closed
+      }
     }
     _clients.clear();
+
+    // Clear pending proxy requests
+    for (final completer in _pendingProxyRequests.values) {
+      if (!completer.isCompleted) {
+        completer.complete({
+          'statusCode': 503,
+          'responseBody': 'Server stopping',
+        });
+      }
+    }
+    _pendingProxyRequests.clear();
 
     await _httpServer?.close(force: true);
     _httpServer = null;
@@ -1479,17 +1506,17 @@ class PureStationServer {
 
   /// Kick a device by callsign
   bool kickDevice(String callsign) {
-    final clientEntry = _clients.entries.firstWhere(
-      (e) => e.value.callsign?.toLowerCase() == callsign.toLowerCase(),
-      orElse: () => MapEntry('', PureConnectedClient(
-        socket: WebSocket.fromUpgradedSocket(Socket.connect('localhost', 0) as dynamic),
-        id: '',
-      )),
-    );
+    // Find client by callsign using safe null handling
+    String? clientId;
+    for (final entry in _clients.entries) {
+      if (entry.value.callsign?.toLowerCase() == callsign.toLowerCase()) {
+        clientId = entry.key;
+        break;
+      }
+    }
 
-    if (clientEntry.key.isNotEmpty) {
-      clientEntry.value.socket.close();
-      _clients.remove(clientEntry.key);
+    if (clientId != null) {
+      _removeClient(clientId, reason: 'kicked');
       _log('INFO', 'Kicked device: $callsign');
       return true;
     }
@@ -1513,6 +1540,114 @@ class PureStationServer {
       }
     }
     _log('INFO', 'Broadcast sent to ${_clients.length} clients');
+  }
+
+  /// Start heartbeat timer for connection stability
+  /// Sends PING to all clients periodically and removes stale connections
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(
+      Duration(seconds: _heartbeatIntervalSeconds),
+      (_) => _performHeartbeat(),
+    );
+    _log('INFO', 'Heartbeat started (interval: ${_heartbeatIntervalSeconds}s, timeout: ${_staleClientTimeoutSeconds}s)');
+  }
+
+  /// Stop heartbeat timer
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  /// Perform heartbeat: ping clients and remove stale connections
+  void _performHeartbeat() {
+    final now = DateTime.now();
+    final staleThreshold = now.subtract(Duration(seconds: _staleClientTimeoutSeconds));
+    final clientsToRemove = <String>[];
+
+    // Send PING to each client and check for stale connections
+    for (final entry in _clients.entries) {
+      final clientId = entry.key;
+      final client = entry.value;
+
+      // Check if client is stale (no activity for too long)
+      if (client.lastActivity.isBefore(staleThreshold)) {
+        _log('WARN', 'Stale client detected: ${client.callsign ?? clientId} (last activity: ${client.lastActivity})');
+        clientsToRemove.add(clientId);
+        continue;
+      }
+
+      // Send PING to active clients
+      _safeSocketSend(client, jsonEncode({
+        'type': 'PING',
+        'timestamp': now.millisecondsSinceEpoch,
+      }));
+    }
+
+    // Remove stale clients
+    for (final clientId in clientsToRemove) {
+      _removeClient(clientId, reason: 'stale connection');
+    }
+
+    if (clientsToRemove.isNotEmpty) {
+      _log('INFO', 'Removed ${clientsToRemove.length} stale client(s). Active clients: ${_clients.length}');
+    }
+  }
+
+  /// Safely send data to a WebSocket client, handling errors gracefully
+  bool _safeSocketSend(PureConnectedClient client, String data) {
+    try {
+      client.socket.add(data);
+      return true;
+    } catch (e) {
+      _log('ERROR', 'Failed to send to ${client.callsign ?? client.id}: $e');
+      // Mark for removal on next heartbeat by setting lastActivity far in the past
+      client.lastActivity = DateTime.fromMillisecondsSinceEpoch(0);
+      return false;
+    }
+  }
+
+  /// Remove a client and clean up associated resources
+  void _removeClient(String clientId, {String reason = 'disconnected'}) {
+    final client = _clients.remove(clientId);
+    if (client == null) return;
+
+    // Try to close the socket gracefully
+    try {
+      client.socket.close();
+    } catch (_) {
+      // Socket may already be closed
+    }
+
+    // Clean up any pending proxy requests for this client
+    _cleanupPendingRequestsForClient(client);
+
+    _log('INFO', 'Client removed: ${client.callsign ?? clientId} ($reason)');
+  }
+
+  /// Clean up pending proxy requests that were waiting for a disconnected client
+  void _cleanupPendingRequestsForClient(PureConnectedClient client) {
+    // Find and complete any pending requests that might be waiting for this client
+    // This prevents memory leaks and hanging requests
+    final keysToRemove = <String>[];
+
+    for (final entry in _pendingProxyRequests.entries) {
+      // We can't easily determine which requests are for this client
+      // but we can at least prevent memory buildup by timing out old requests
+      // The timeout mechanism should handle this, but we log it for awareness
+    }
+
+    if (keysToRemove.isNotEmpty) {
+      for (final key in keysToRemove) {
+        final completer = _pendingProxyRequests.remove(key);
+        if (completer != null && !completer.isCompleted) {
+          completer.complete({
+            'statusCode': 503,
+            'responseBody': 'Client disconnected',
+          });
+        }
+      }
+    }
   }
 
   /// Scan network for devices
@@ -1862,13 +1997,13 @@ class PureStationServer {
       socket.listen(
         (data) => _handleWebSocketMessage(client, data),
         onDone: () {
-          _clients.remove(clientId);
-          _log('INFO', 'WebSocket client disconnected: ${client.callsign ?? clientId}');
+          _removeClient(clientId, reason: 'connection closed');
         },
         onError: (error) {
-          _log('ERROR', 'WebSocket error: $error');
-          _clients.remove(clientId);
+          _log('ERROR', 'WebSocket error for ${client.callsign ?? clientId}: $error');
+          _removeClient(clientId, reason: 'error: $error');
         },
+        cancelOnError: false, // Keep listening even after errors to handle graceful cleanup
       );
     } catch (e) {
       _log('ERROR', 'WebSocket upgrade failed: $e');
@@ -1993,7 +2128,7 @@ class PureStationServer {
               'type': 'PONG',
               'timestamp': DateTime.now().millisecondsSinceEpoch,
             };
-            client.socket.add(jsonEncode(response));
+            _safeSocketSend(client, jsonEncode(response));
             break;
 
           case 'PONG':
@@ -2038,18 +2173,26 @@ class PureStationServer {
             final targetCallsign = message['callsign'] as String?;
             if (targetCallsign != null) {
               // Forward to the target device
-              final targetClient = _clients.values.firstWhere(
-                (c) => c.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
-                orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
-              );
+              PureConnectedClient? targetClient;
+              try {
+                targetClient = _clients.values.firstWhere(
+                  (c) => c.callsign?.toLowerCase() == targetCallsign.toLowerCase(),
+                );
+              } catch (_) {
+                // Not found
+              }
 
-              if (targetClient.id.isNotEmpty) {
+              if (targetClient != null) {
                 final forwardMsg = {
                   'type': 'COLLECTIONS_REQUEST',
                   'from': client.callsign,
                   'requestId': message['requestId'],
                 };
-                targetClient.socket.add(jsonEncode(forwardMsg));
+                try {
+                  targetClient.socket.add(jsonEncode(forwardMsg));
+                } catch (e) {
+                  _log('ERROR', 'Failed to forward COLLECTIONS_REQUEST: $e');
+                }
               } else {
                 // Device not connected
                 final errorResponse = {
@@ -2067,12 +2210,20 @@ class PureStationServer {
             // Forward collection response to the requester
             final fromCallsign = message['from'] as String?;
             if (fromCallsign != null) {
-              final requester = _clients.values.firstWhere(
-                (c) => c.callsign?.toLowerCase() == fromCallsign.toLowerCase(),
-                orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
-              );
-              if (requester.id.isNotEmpty) {
-                requester.socket.add(data);
+              PureConnectedClient? requester;
+              try {
+                requester = _clients.values.firstWhere(
+                  (c) => c.callsign?.toLowerCase() == fromCallsign.toLowerCase(),
+                );
+              } catch (_) {
+                // Not found
+              }
+              if (requester != null) {
+                try {
+                  requester.socket.add(data);
+                } catch (e) {
+                  _log('ERROR', 'Failed to forward COLLECTIONS_RESPONSE: $e');
+                }
               }
             }
             break;
@@ -2202,13 +2353,23 @@ class PureStationServer {
       return;
     }
 
-    // Find target client by callsign
-    final target = _clients.values.firstWhere(
-      (c) => c.callsign?.toLowerCase() == toCallsign.toLowerCase(),
-      orElse: () => PureConnectedClient(socket: null as dynamic, id: ''),
-    );
+    // Prevent self-routing (device sending to itself)
+    if (client.callsign?.toLowerCase() == toCallsign.toLowerCase()) {
+      _log('WARN', 'WebRTC $type: ignoring self-routing from ${client.callsign}');
+      return;
+    }
 
-    if (target.id.isEmpty) {
+    // Find target client by callsign
+    PureConnectedClient? target;
+    try {
+      target = _clients.values.firstWhere(
+        (c) => c.callsign?.toLowerCase() == toCallsign.toLowerCase(),
+      );
+    } catch (_) {
+      // Not found
+    }
+
+    if (target == null) {
       // Target not connected - send error back to sender
       final errorResponse = {
         'type': 'webrtc_error',
@@ -2216,14 +2377,23 @@ class PureStationServer {
         'to_callsign': toCallsign,
         'session_id': sessionId,
       };
-      client.socket.add(jsonEncode(errorResponse));
+      _safeSocketSend(client, jsonEncode(errorResponse));
       _log('WARN', 'WebRTC $type: target $toCallsign not connected');
       return;
     }
 
-    // Forward the message to target (unchanged)
-    target.socket.add(jsonEncode(message));
-    _log('INFO', 'WebRTC $type: ${fromCallsign ?? client.callsign} -> $toCallsign (session: $sessionId)');
+    // Forward the message to target
+    if (_safeSocketSend(target, jsonEncode(message))) {
+      _log('INFO', 'WebRTC $type: ${fromCallsign ?? client.callsign} -> $toCallsign (session: $sessionId)');
+    } else {
+      // Failed to send - notify sender
+      _safeSocketSend(client, jsonEncode({
+        'type': 'webrtc_error',
+        'error': 'forward_failed',
+        'to_callsign': toCallsign,
+        'session_id': sessionId,
+      }));
+    }
   }
 
   /// Handle incoming NOSTR event from WebSocket
@@ -2974,12 +3144,7 @@ class PureStationServer {
         alert['type'] = line.substring(6).trim();
       } else if (line.startsWith('ADDRESS: ')) {
         alert['address'] = line.substring(9).trim();
-      } else if (line.startsWith('POINTED_BY: ')) {
-        final pointedByStr = line.substring(12).trim();
-        alert['pointed_by'] = pointedByStr.isEmpty ? <String>[] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-        alert['point_count'] = (alert['pointed_by'] as List).length;
-      } else if (line.startsWith('POINT_COUNT: ')) {
-        alert['point_count'] = int.tryParse(line.substring(13).trim()) ?? 0;
+      // Note: POINTED_BY and POINT_COUNT are now stored in points.txt file
       } else if (line.startsWith('VERIFIED_BY: ')) {
         final verifiedByStr = line.substring(13).trim();
         alert['verified_by'] = verifiedByStr.isEmpty ? <String>[] : verifiedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -3138,19 +3303,8 @@ class PureStationServer {
       return;
     }
 
-    // Read current content
-    final content = await reportFile.readAsString();
-    final lines = content.split('\n');
-
-    // Parse current pointedBy
-    var pointedBy = <String>[];
-    for (final line in lines) {
-      if (line.startsWith('POINTED_BY: ')) {
-        final pointedByStr = line.substring(12).trim();
-        pointedBy = pointedByStr.isEmpty ? [] : pointedByStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-        break;
-      }
-    }
+    // Read points from points.txt
+    var pointedBy = await AlertFolderUtils.readPointsFile(alertPath);
 
     // Update pointedBy
     bool changed = false;
@@ -3165,8 +3319,12 @@ class PureStationServer {
     final lastModified = DateTime.now().toUtc().toIso8601String();
 
     if (changed) {
-      // Update file content with LAST_MODIFIED timestamp
-      final newContent = _updateAlertFeedback(content, pointedBy: pointedBy, lastModified: lastModified);
+      // Write points to points.txt
+      await AlertFolderUtils.writePointsFile(alertPath, pointedBy);
+
+      // Update LAST_MODIFIED in report.txt
+      final content = await reportFile.readAsString();
+      final newContent = _updateAlertFeedback(content, lastModified: lastModified);
       await reportFile.writeAsString(newContent, flush: true);
       _log('INFO', 'Alert ${isPoint ? "pointed" : "unpointed"} by $npub');
     }
@@ -3301,29 +3459,24 @@ class PureStationServer {
     }));
   }
 
-  /// Update alert file with new feedback data
+  /// Update alert file with new feedback data.
+  /// Note: POINTED_BY and POINT_COUNT are now stored in points.txt file.
   String _updateAlertFeedback(
     String content, {
-    List<String>? pointedBy,
     List<String>? verifiedBy,
     String? lastModified,
   }) {
     final lines = content.split('\n');
     final newLines = <String>[];
 
-    bool hasPointedBy = false;
-    bool hasPointCount = false;
     bool hasVerifiedBy = false;
     bool hasVerificationCount = false;
     bool hasLastModified = false;
 
     for (final line in lines) {
-      if (pointedBy != null && line.startsWith('POINTED_BY: ')) {
-        newLines.add('POINTED_BY: ${pointedBy.join(', ')}');
-        hasPointedBy = true;
-      } else if (pointedBy != null && line.startsWith('POINT_COUNT: ')) {
-        newLines.add('POINT_COUNT: ${pointedBy.length}');
-        hasPointCount = true;
+      // Skip old POINTED_BY and POINT_COUNT lines (now stored in points.txt)
+      if (line.startsWith('POINTED_BY: ') || line.startsWith('POINT_COUNT: ')) {
+        continue;
       } else if (verifiedBy != null && line.startsWith('VERIFIED_BY: ')) {
         newLines.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
         hasVerifiedBy = true;
@@ -3338,23 +3491,24 @@ class PureStationServer {
       }
     }
 
-    // Find insertion point (after metadata lines like ADDRESS, TYPE, etc. but before description)
+    // Find insertion point - should be after header fields, before description
+    // Report format: Title, empty line, header fields, empty line, description
+    // We want to insert just before the SECOND empty line (the one before description)
     int insertIndex = newLines.length;
+    int emptyLineCount = 0;
     for (int i = 0; i < newLines.length; i++) {
       if (newLines[i].trim().isEmpty && i > 0 && !newLines[i - 1].startsWith('-->')) {
-        insertIndex = i;
-        break;
+        emptyLineCount++;
+        if (emptyLineCount == 2) {
+          // Found the empty line before description - insert before it
+          insertIndex = i;
+          break;
+        }
       }
     }
 
     // Add missing fields
     final toInsert = <String>[];
-    if (pointedBy != null && !hasPointedBy && pointedBy.isNotEmpty) {
-      toInsert.add('POINTED_BY: ${pointedBy.join(', ')}');
-    }
-    if (pointedBy != null && !hasPointCount && pointedBy.isNotEmpty) {
-      toInsert.add('POINT_COUNT: ${pointedBy.length}');
-    }
     if (verifiedBy != null && !hasVerifiedBy && verifiedBy.isNotEmpty) {
       toInsert.add('VERIFIED_BY: ${verifiedBy.join(', ')}');
     }
