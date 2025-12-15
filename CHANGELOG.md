@@ -1,5 +1,12 @@
 # Geogram Desktop Changelog
 
+## 2025-12-15 - v1.6.40
+
+### Changes
+- Update version file to 1.6.39
+- Add blog debug API and p2p.radio proxy support
+
+
 ## 2025-12-14 - v1.6.38
 
 ### Bug Fixes
