@@ -672,6 +672,13 @@ class WebSocketService {
         return;
       }
 
+      // Handle blog HTML requests with device identifier prefix
+      // Path format: /{callsign}/blog/{filename}.html
+      if (path.contains('/blog/') && path.endsWith('.html')) {
+        await _forwardToLocalApi(requestId, method, path, headersJson, body);
+        return;
+      }
+
       // Parse path: should be /collections/{collectionName}/{filePath}
       final parts = path.split('/').where((p) => p.isNotEmpty).toList();
       if (parts.length < 2 || parts[0] != 'collections') {

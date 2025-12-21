@@ -503,6 +503,11 @@ class StationServerService {
     final method = request.method;
 
     try {
+      // Log all blog-related requests for debugging
+      if (path.contains('/blog/')) {
+        LogService().log('Incoming request: $method $path');
+      }
+
       // WebSocket upgrade
       if (WebSocketTransformer.isUpgradeRequest(request)) {
         await _handleWebSocket(request);
@@ -1118,7 +1123,11 @@ class StationServerService {
   bool _isBlogPath(String path) {
     // Pattern: /{identifier}/blog/{filename}.html
     final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
-    return regex.hasMatch(path);
+    final matches = regex.hasMatch(path);
+    if (path.contains('/blog/')) {
+      LogService().log('_isBlogPath check: path="$path", matches=$matches');
+    }
+    return matches;
   }
 
   /// Check if path is a device proxy path (/{callsign}/api/*)
@@ -1620,6 +1629,7 @@ class StationServerService {
   /// Handle blog post request - serves markdown as HTML
   Future<void> _handleBlogRequest(HttpRequest request) async {
     final path = request.uri.path;
+    LogService().log('Blog handler: Processing request for path: $path');
     final regex = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$');
     final match = regex.firstMatch(path);
 
@@ -1633,14 +1643,30 @@ class StationServerService {
     final filename = match.group(2)!;   // blog filename without .html
 
     try {
+      // Check if identifier matches a connected client first - if so, proxy immediately
+      // This ensures we serve live content from connected devices rather than stale cache
+      LogService().log('Blog handler: Looking for connected client matching: $identifier');
+      LogService().log('Blog handler: Currently connected clients: ${_clients.length}');
+      for (final client in _clients.values) {
+        LogService().log('Blog handler: Checking client ${client.callsign}/${client.nickname}');
+        if ((client.callsign != null && client.callsign!.toLowerCase() == identifier.toLowerCase()) ||
+            (client.nickname != null && client.nickname!.toLowerCase() == identifier.toLowerCase())) {
+          LogService().log('Blog handler: Found matching client, proxying to ${client.callsign}');
+          final proxyResult = await _proxyBlogRequest(request, identifier, filename);
+          LogService().log('Blog handler: Proxy result: $proxyResult');
+          if (proxyResult) {
+            return; // Proxy handled the response
+          }
+          // If proxy failed, fall through to local search as fallback
+          break;
+        }
+      }
+      LogService().log('Blog handler: No matching connected client found');
+
       // Find the callsign for this identifier (could be nickname or callsign)
       final callsign = await _findCallsignByIdentifier(identifier);
       if (callsign == null) {
-        // No local user found - try to proxy to connected client
-        final proxyResult = await _proxyBlogRequest(request, identifier, filename);
-        if (proxyResult) {
-          return; // Proxy handled the response
-        }
+        // No local user found and no connected client - 404
         request.response.statusCode = 404;
         request.response.write('User not found');
         return;
@@ -1772,20 +1798,26 @@ class StationServerService {
   /// Proxy blog request to a connected client
   /// Returns true if the request was handled (success or error), false if no client found
   Future<bool> _proxyBlogRequest(HttpRequest request, String identifier, String filename) async {
+    LogService().log('_proxyBlogRequest: Called with identifier=$identifier, filename=$filename');
+    LogService().log('_proxyBlogRequest: Connected clients count: ${_clients.length}');
+
     // Find connected client by callsign or nickname
     ConnectedClient? targetClient;
 
     for (final client in _clients.values) {
+      LogService().log('_proxyBlogRequest: Checking client callsign=${client.callsign}, nickname=${client.nickname}');
       // Check callsign match (case-insensitive)
       if (client.callsign != null &&
           client.callsign!.toLowerCase() == identifier.toLowerCase()) {
         targetClient = client;
+        LogService().log('_proxyBlogRequest: Found match by callsign!');
         break;
       }
       // Check nickname match (case-insensitive)
       if (client.nickname != null &&
           client.nickname!.toLowerCase() == identifier.toLowerCase()) {
         targetClient = client;
+        LogService().log('_proxyBlogRequest: Found match by nickname!');
         break;
       }
     }
@@ -1808,8 +1840,8 @@ class StationServerService {
     try {
       // Send HTTP_REQUEST to the target client via WebSocket
       // Request the blog as HTML from the client's local API
-      // The client expects path format: /api/blog/{filename}.html
-      final blogApiPath = '/api/blog/$filename.html';
+      // Use the full path format that routes to LogApiService _handleBlogHtmlRequest
+      final blogApiPath = '/$targetCallsign/blog/$filename.html';
       final httpRequestMessage = {
         'type': 'HTTP_REQUEST',
         'requestId': requestId,
