@@ -295,6 +295,37 @@ class DirectMessageReceivedEvent extends AppEvent {
 }
 ```
 
+### DMNotificationTappedEvent
+
+Fired when a user taps on a direct message push notification (mobile only).
+
+```dart
+class DMNotificationTappedEvent extends AppEvent {
+  final String targetCallsign;  // The callsign to open DM conversation with
+}
+```
+
+**Usage Example:**
+
+```dart
+// Listen for notification taps and navigate to DM conversation
+EventBus().on<DMNotificationTappedEvent>((event) {
+  // Navigate to DM chat page with the target callsign
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (context) => DMChatPage(targetCallsign: event.targetCallsign),
+    ),
+  );
+});
+```
+
+**Publishers:**
+
+| Service | Event | Trigger |
+|---------|-------|---------|
+| `DMNotificationService` | DMNotificationTappedEvent | User taps on a DM push notification on Android/iOS |
+
 ### DirectMessageSyncEvent
 
 Fired when a DM sync operation completes with another device.

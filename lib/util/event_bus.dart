@@ -258,6 +258,15 @@ class DirectMessageReceivedEvent extends AppEvent {
   });
 }
 
+/// DM notification tapped (user tapped on notification)
+class DMNotificationTappedEvent extends AppEvent {
+  final String targetCallsign;  // The callsign to open DM conversation with
+
+  DMNotificationTappedEvent({
+    required this.targetCallsign,
+  });
+}
+
 /// Direct message sync completed
 class DirectMessageSyncEvent extends AppEvent {
   final String otherCallsign;   // The callsign we synced with

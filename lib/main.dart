@@ -18,6 +18,7 @@ import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
+import 'services/dm_notification_service.dart';
 import 'services/update_service.dart';
 import 'services/devices_service.dart';
 import 'services/ble_permission_service.dart';
@@ -193,6 +194,10 @@ void main() async {
     // Initialize chat notification service (needed for unread counts)
     ChatNotificationService().initialize();
     LogService().log('ChatNotificationService initialized');
+
+    // Initialize DM notification service (for push notifications on mobile)
+    await DMNotificationService().initialize();
+    LogService().log('DMNotificationService initialized');
 
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');
