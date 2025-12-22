@@ -2135,6 +2135,81 @@ class LogApiService {
     }
   }
 
+  /// Handle chat messages request for a remote device (via X-Device-Callsign header)
+  Future<shelf.Response> _handleRemoteDeviceChatMessages(
+    String deviceCallsign,
+    String roomId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      // Path to remote device's chat room directory
+      final roomPath = '$dataDir/devices/$deviceCallsign/chat/$roomId';
+      final roomDir = io.Directory(roomPath);
+
+      if (!await roomDir.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Room not found', 'roomId': roomId}),
+          headers: headers,
+        );
+      }
+
+      // Parse query parameters
+      final queryParams = request.url.queryParameters;
+      final limitParam = queryParams['limit'];
+      int limit = 100;
+      if (limitParam != null) {
+        limit = int.tryParse(limitParam) ?? 100;
+        limit = limit.clamp(1, 500);
+      }
+
+      // Read messages from disk
+      final messages = <Map<String, dynamic>>[];
+      final messageFiles = <io.File>[];
+
+      await for (final entity in roomDir.list()) {
+        if (entity is io.File && entity.path.endsWith('.json') && !entity.path.endsWith('config.json')) {
+          messageFiles.add(entity);
+        }
+      }
+
+      // Sort by filename (which should be timestamp-based)
+      messageFiles.sort((a, b) => b.path.compareTo(a.path)); // Newest first
+
+      // Read message files
+      for (final file in messageFiles.take(limit)) {
+        try {
+          final content = await file.readAsString();
+          final msgData = json.decode(content) as Map<String, dynamic>;
+          messages.add(msgData);
+        } catch (e) {
+          LogService().log('Error reading message file ${file.path}: $e');
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode(messages),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling remote device chat messages: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
   /// Handle GET /api/chat/rooms/{roomId}/messages - Get messages from a room
   Future<shelf.Response> _handleChatMessagesRequest(
     shelf.Request request,
@@ -2142,6 +2217,14 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
+      // Check for X-Device-Callsign header (used by proxy)
+      // If present, serve that device's chat messages instead of current user's
+      final deviceCallsign = request.headers['x-device-callsign'];
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        LogService().log('Chat Messages API: Serving messages for device $deviceCallsign (from proxy header)');
+        return await _handleRemoteDeviceChatMessages(deviceCallsign, roomId, request, headers);
+      }
+
       // Check if roomId looks like a callsign (uppercase alphanumeric)
       // If so, this is a DM channel - use DirectMessageService
       final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
