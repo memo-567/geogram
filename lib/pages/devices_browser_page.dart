@@ -23,6 +23,7 @@ import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
+import 'device_detail_page.dart';
 import 'dm_chat_page.dart';
 import 'events_browser_page.dart';
 import 'report_browser_page.dart';
@@ -347,26 +348,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
-    setState(() {
-      _selectedDevice = device;
-      _isLoadingCollections = true;
-      _collections = [];
-    });
-
-    try {
-      final collections = await _devicesService.fetchCollections(device.callsign);
-      if (mounted) {
-        setState(() {
-          _collections = collections;
-          _isLoadingCollections = false;
-        });
-      }
-    } catch (e) {
-      LogService().log('DevicesBrowserPage: Error fetching collections: $e');
-      if (mounted) {
-        setState(() => _isLoadingCollections = false);
-      }
-    }
+    // Navigate to device detail page showing available apps
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DeviceDetailPage(device: device),
+      ),
+    );
   }
 
   void _openCollection(RemoteCollection collection) {
