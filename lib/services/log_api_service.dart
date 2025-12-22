@@ -11,6 +11,7 @@ import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'signing_service.dart';
 import 'collection_service.dart';
 import 'debug_controller.dart';
 import 'security_service.dart';
@@ -19,8 +20,10 @@ import 'user_location_service.dart';
 import 'chat_service.dart';
 import 'direct_message_service.dart';
 import 'devices_service.dart';
+import 'device_apps_service.dart';
 import 'app_args.dart';
 import '../version.dart';
+import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../util/nostr_event.dart';
 import 'audio_service.dart';
@@ -1152,6 +1155,11 @@ class LogApiService {
         return await _handleStationAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle device actions separately (they are async)
+      if (action.toLowerCase().startsWith('device_')) {
+        return await _handleDeviceAction(action.toLowerCase(), params, headers);
+      }
+
       final debugController = DebugController();
       final result = debugController.executeAction(action, params);
 
@@ -1957,21 +1965,38 @@ class LogApiService {
       }
 
       // Try to lazily initialize ChatService if not already done
-      await _initializeChatServiceIfNeeded();
+      // Create chat collection if it doesn't exist
+      final initialized = await _initializeChatServiceIfNeeded(createIfMissing: true);
 
       final chatService = ChatService();
 
       // Check if chat service is initialized
-      if (chatService.collectionPath == null) {
+      if (!initialized || chatService.collectionPath == null) {
+        LogService().log('LogApiService: Failed to initialize chat service');
         return shelf.Response.ok(
           jsonEncode({
             'rooms': [],
             'total': 0,
             'authenticated': false,
-            'message': 'No chat collection loaded',
+            'message': 'Chat service not available',
           }),
           headers: headers,
         );
+      }
+
+      // Ensure default "main" channel exists
+      if (chatService.channels.isEmpty) {
+        try {
+          LogService().log('LogApiService: Creating default main channel');
+          final mainChannel = ChatChannel.main(
+            name: 'Main',
+            description: 'Public group chat',
+          );
+          await chatService.createChannel(mainChannel);
+          LogService().log('LogApiService: Default main channel created');
+        } catch (e) {
+          LogService().log('LogApiService: Error creating main channel: $e');
+        }
       }
 
       // Get authenticated npub (if any)
@@ -6225,6 +6250,367 @@ class LogApiService {
   }
 
   // ============================================================
+  // Debug API - Device Actions (for testing remote device browsing)
+  // ============================================================
+
+  /// Handle device debug actions asynchronously
+  Future<shelf.Response> _handleDeviceAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      switch (action) {
+        case 'device_browse_apps':
+          // Browse available apps on a remote device
+          final callsign = params['callsign'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if device exists first
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(callsign);
+
+          if (device == null) {
+            LogService().log('LogApiService: Device $callsign not found in device list');
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Device not found: $callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Device $callsign found - URL: ${device.url}, isOnline: ${device.isOnline}');
+          print('DEBUG: Device $callsign found - URL: ${device.url}, isOnline: ${device.isOnline}');
+
+          final deviceAppsService = DeviceAppsService();
+          final apps = await deviceAppsService.discoverApps(
+            callsign,
+            useCache: false, // Force fresh API check for testing
+            refreshInBackground: false,
+          );
+
+          final availableApps = apps.entries
+              .where((e) => e.value.isAvailable)
+              .map((e) => {
+                    'type': e.key,
+                    'name': e.value.displayName,
+                    'itemCount': e.value.itemCount,
+                  })
+              .toList();
+
+          LogService().log(
+              'LogApiService: Browsed apps for $callsign: ${availableApps.map((a) => a['type']).toList()}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'callsign': callsign,
+              'apps': availableApps,
+              'app_count': availableApps.length,
+            }),
+            headers: headers,
+          );
+
+        case 'device_open_detail':
+          // Open device detail page in the UI
+          final callsign = params['callsign'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if device exists first
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(callsign);
+
+          if (device == null) {
+            LogService().log('LogApiService: Device $callsign not found in device list');
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Device not found: $callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Opening device detail page for $callsign');
+          print('DEBUG: Opening device detail page for $callsign');
+
+          // Trigger the debug action to open device detail
+          final debugController = DebugController();
+          debugController.triggerAction(
+            DebugAction.openDeviceDetail,
+            params: {'callsign': callsign, 'device': device},
+          );
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Device detail page opened for $callsign',
+              'callsign': callsign,
+            }),
+            headers: headers,
+          );
+
+        case 'device_test_remote_chat':
+          // Full test: navigate to device -> open chat app -> open room -> send message
+          final callsign = params['callsign'] as String?;
+          final room = params['room'] as String? ?? 'main';
+          final content = params['content'] as String?;
+
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing content parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if device exists
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(callsign);
+
+          if (device == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Device not found: $callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Testing remote chat flow for $callsign');
+
+          // Step 1: Navigate to devices panel
+          final debugController = DebugController();
+          debugController.triggerAction(
+            DebugAction.navigateToPanel,
+            params: {'panel': 'devices'},
+          );
+          await Future.delayed(Duration(milliseconds: 500));
+
+          // Step 2: Open device detail
+          debugController.triggerAction(
+            DebugAction.openDeviceDetail,
+            params: {'callsign': callsign, 'device': device},
+          );
+          await Future.delayed(Duration(milliseconds: 500));
+
+          // Step 3: Open remote chat app
+          debugController.triggerAction(
+            DebugAction.openRemoteChatApp,
+            params: {'callsign': callsign, 'device': device},
+          );
+          await Future.delayed(Duration(milliseconds: 500));
+
+          // Step 4: Open chat room
+          debugController.triggerAction(
+            DebugAction.openRemoteChatRoom,
+            params: {'callsign': callsign, 'device': device, 'room': room},
+          );
+          await Future.delayed(Duration(milliseconds: 500));
+
+          // Step 5: Send message
+          debugController.triggerAction(
+            DebugAction.sendRemoteChatMessage,
+            params: {'callsign': callsign, 'device': device, 'room': room, 'content': content},
+          );
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Remote chat test flow triggered',
+              'callsign': callsign,
+              'room': room,
+              'steps': [
+                'Navigate to devices',
+                'Open device detail',
+                'Open chat app',
+                'Open chat room',
+                'Send message',
+              ],
+            }),
+            headers: headers,
+          );
+
+        case 'device_send_remote_chat':
+          // Send a message to a remote device's chat room
+          final callsign = params['callsign'] as String?;
+          final room = params['room'] as String? ?? 'main';
+          final content = params['content'] as String?;
+
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing content parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if device exists
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(callsign);
+
+          if (device == null) {
+            LogService().log('LogApiService: Device $callsign not found');
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Device not found: $callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Sending message to $callsign room $room: $content');
+
+          // Get profile and signing service
+          final profile = ProfileService().getProfile();
+          final signingService = SigningService();
+          await signingService.initialize();
+
+          if (!signingService.canSign(profile)) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Cannot sign message: NOSTR keys not configured',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Generate signed event
+          final signedEvent = await signingService.generateSignedEvent(
+            content,
+            {
+              'room': room,
+              'callsign': profile.callsign,
+            },
+            profile,
+          );
+
+          if (signedEvent == null || signedEvent.sig == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Failed to sign message',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Created signed event id=${signedEvent.id}');
+
+          // Send to remote device
+          final payload = {'event': signedEvent.toJson()};
+          final response = await devicesService.makeDeviceApiRequest(
+            callsign: callsign,
+            method: 'POST',
+            path: '/api/chat/$room/messages',
+            body: jsonEncode(payload),
+            headers: {'Content-Type': 'application/json'},
+          );
+
+          if (response == null) {
+            LogService().log('LogApiService: No route to device $callsign');
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'No route to device $callsign',
+              }),
+              headers: headers,
+            );
+          }
+
+          LogService().log('LogApiService: Response status=${response.statusCode}, body=${response.body}');
+
+          if (response.statusCode == 200 || response.statusCode == 201) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Message sent successfully',
+                'callsign': callsign,
+                'room': room,
+                'eventId': signedEvent.id,
+              }),
+              headers: headers,
+            );
+          } else {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Failed to send message: HTTP ${response.statusCode}',
+                'response_body': response.body,
+              }),
+              headers: headers,
+            );
+          }
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown device action: $action',
+              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Device action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
   // Debug API - Station Actions (for testing station connectivity)
   // ============================================================
 
@@ -8017,8 +8403,7 @@ class LogApiService {
 
     // Footer
     buffer.writeln('  <div class="footer">');
-    buffer.writeln('    <p>Posted via geogram | ');
-    buffer.writeln('    <a href="https://p2p.radio">p2p.radio</a></p>');
+    buffer.writeln('    <p>Posted via geogram</p>');
     buffer.writeln('  </div>');
 
     buffer.writeln('</body>');

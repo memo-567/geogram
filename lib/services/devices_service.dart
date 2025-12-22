@@ -230,6 +230,16 @@ class DevicesService {
       case DebugAction.backupListSnapshots:
         // Backup actions are handled directly by LogApiService
         break;
+
+      case DebugAction.openDeviceDetail:
+        // Device detail page navigation is handled by DevicesBrowserPage
+        break;
+
+      case DebugAction.openRemoteChatApp:
+      case DebugAction.openRemoteChatRoom:
+      case DebugAction.sendRemoteChatMessage:
+        // Remote chat navigation is handled by DeviceDetailPage and RemoteChatBrowserPage
+        break;
     }
   }
 

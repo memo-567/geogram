@@ -3,7 +3,9 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/debug_controller.dart';
 import '../services/device_apps_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
@@ -33,11 +35,46 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Map<String, DeviceAppInfo> _apps = {};
   bool _isLoading = true;
   String? _error;
+  StreamSubscription<DebugActionEvent>? _debugActionSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadApps();
+    _subscribeToDebugActions();
+  }
+
+  @override
+  void dispose() {
+    _debugActionSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _subscribeToDebugActions() {
+    final debugController = DebugController();
+    _debugActionSubscription = debugController.actionStream.listen((event) {
+      if (event.action == DebugAction.openRemoteChatApp ||
+          event.action == DebugAction.openRemoteChatRoom ||
+          event.action == DebugAction.sendRemoteChatMessage) {
+        final callsign = event.params['callsign'] as String?;
+
+        if (callsign == widget.device.callsign) {
+          LogService().log('DeviceDetailPage: Received debug action ${event.action} for ${widget.device.callsign}');
+
+          // Open chat app
+          _openRemoteChat();
+        }
+      }
+    });
+  }
+
+  void _openRemoteChat() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RemoteChatBrowserPage(device: widget.device),
+      ),
+    );
   }
 
   Future<void> _loadApps() async {
@@ -47,7 +84,24 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     });
 
     try {
-      final apps = await _appsService.discoverApps(widget.device.callsign);
+      LogService().log('DeviceDetailPage._loadApps: START for ${widget.device.callsign}');
+
+      // Force fresh API check (don't use cache) to ensure we get current data
+      final apps = await _appsService.discoverApps(
+        widget.device.callsign,
+        useCache: false,
+        refreshInBackground: false,
+      );
+
+      // Log detailed app info
+      LogService().log('DeviceDetailPage: Received ${apps.length} app entries for ${widget.device.callsign}');
+      for (var entry in apps.entries) {
+        LogService().log('DeviceDetailPage:   - ${entry.key}: isAvailable=${entry.value.isAvailable}, itemCount=${entry.value.itemCount}');
+      }
+
+      final availableCount = apps.values.where((a) => a.isAvailable).length;
+      LogService().log('DeviceDetailPage: ${availableCount} available apps for ${widget.device.callsign}');
+
       setState(() {
         _apps = apps;
         _isLoading = false;
@@ -139,6 +193,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    LogService().log('DeviceDetailPage.build: _isLoading=$_isLoading, _error=$_error, _apps.length=${_apps.length}');
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.device.displayName),
@@ -188,7 +244,13 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Widget _buildAppsList(ThemeData theme) {
     final availableApps = _apps.values.where((app) => app.isAvailable).toList();
 
+    LogService().log('DeviceDetailPage._buildAppsList: _apps has ${_apps.length} entries, availableApps has ${availableApps.length} entries');
+    for (var app in availableApps) {
+      LogService().log('DeviceDetailPage._buildAppsList: Available app: ${app.type} (${app.itemCount} items)');
+    }
+
     if (availableApps.isEmpty) {
+      LogService().log('DeviceDetailPage._buildAppsList: Showing empty state');
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -215,6 +277,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         ),
       );
     }
+
+    LogService().log('DeviceDetailPage._buildAppsList: Building grid with ${availableApps.length} apps');
 
     return GridView.builder(
       padding: const EdgeInsets.all(16),

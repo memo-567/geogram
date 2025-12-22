@@ -130,15 +130,22 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
   /// Fetch fresh rooms from API
   Future<void> _fetchFromApi() async {
     try {
+      LogService().log('RemoteChatBrowserPage: Fetching rooms from ${widget.device.callsign}');
+
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
         path: '/api/chat/rooms',
       );
 
+      LogService().log('RemoteChatBrowserPage: Response status=${response?.statusCode}, body length=${response?.body.length}');
+
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
+        LogService().log('RemoteChatBrowserPage: Decoded data type=${data.runtimeType}');
+
         final List<dynamic> roomsData = data is Map ? (data['rooms'] ?? data) : data;
+        LogService().log('RemoteChatBrowserPage: roomsData has ${roomsData.length} items');
 
         setState(() {
           _rooms = roomsData.map((json) => ChatRoom.fromJson(json)).toList();
@@ -149,6 +156,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
         throw Exception('HTTP ${response?.statusCode ?? "null"}: ${response?.body ?? "no response"}');
       }
     } catch (e) {
+      LogService().log('RemoteChatBrowserPage: ERROR fetching rooms: $e');
       throw e;
     }
   }
@@ -347,11 +355,22 @@ class ChatRoom {
   });
 
   factory ChatRoom.fromJson(Map<String, dynamic> json) {
+    // Handle both memberCount (direct) and participants (array) formats
+    int memberCount = 0;
+    if (json.containsKey('memberCount')) {
+      memberCount = json['memberCount'] as int? ?? 0;
+    } else if (json.containsKey('participants')) {
+      final participants = json['participants'];
+      if (participants is List) {
+        memberCount = participants.length;
+      }
+    }
+
     return ChatRoom(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? 'Unnamed Room',
       description: json['description'] as String?,
-      memberCount: json['memberCount'] as int? ?? 0,
+      memberCount: memberCount,
       visibility: json['visibility'] as String? ?? 'PUBLIC',
     );
   }

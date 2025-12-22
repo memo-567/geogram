@@ -80,6 +80,18 @@ enum DebugAction {
 
   /// List backup snapshots from a provider
   backupListSnapshots,
+
+  /// Open device detail page for a specific device
+  openDeviceDetail,
+
+  /// Open remote chat app on a device
+  openRemoteChatApp,
+
+  /// Open a specific remote chat room
+  openRemoteChatRoom,
+
+  /// Send message to remote chat room
+  sendRemoteChatMessage,
 }
 
 /// Toast message to be displayed

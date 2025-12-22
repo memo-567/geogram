@@ -978,24 +978,29 @@ Returns list of available chat rooms.
 }
 ```
 
-#### GET /api/chat/rooms/{roomId}/messages
+#### GET /api/chat/{roomId}/messages
 
 Returns messages for a specific chat room.
 
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| `roomId` | Room identifier (e.g., `general`) |
+| `roomId` | Room identifier (e.g., `main`) |
 
 **Response (200 OK):**
 ```json
 {
-  "room": "general",
-  "messages": []
+  "roomId": "main",
+  "messages": [],
+  "count": 0,
+  "hasMore": false,
+  "limit": 50
 }
 ```
 
-#### POST /api/chat/rooms/{roomId}/messages
+**Note:** Only PUBLIC rooms are accessible without authentication. PRIVATE and RESTRICTED rooms require NOSTR authentication.
+
+#### POST /api/chat/{roomId}/messages
 
 Posts a message to a chat room.
 
@@ -1005,6 +1010,8 @@ Posts a message to a chat room.
   "status": "ok"
 }
 ```
+
+**Note:** Posting to RESTRICTED rooms requires NOSTR authentication with the sender's npub in the authorized participants list.
 
 ---
 

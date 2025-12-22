@@ -21,6 +21,7 @@ import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
 import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
+import '../services/debug_controller.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'device_detail_page.dart';
@@ -73,6 +74,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   // Connection state subscription
   EventSubscription<ConnectionStateChangedEvent>? _connectionStateSubscription;
   EventSubscription<BLEStatusEvent>? _bleStatusSubscription;
+  StreamSubscription<DebugActionEvent>? _debugActionSubscription;
 
   static const Duration _refreshInterval = Duration(seconds: 30);
 
@@ -83,10 +85,37 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _subscribeToUnreadCounts();
     _subscribeToConnectionStateChanges();
     _subscribeToBLEStatus();
+    _subscribeToDebugActions();
     _startAutoRefresh();
 
     // Register back button handler for HomePage to call
     DevicesBrowserPage.onBackPressed = _handleBackFromHomePage;
+  }
+
+  void _subscribeToDebugActions() {
+    final debugController = DebugController();
+    _debugActionSubscription = debugController.actionStream.listen((event) {
+      if (event.action == DebugAction.openDeviceDetail ||
+          event.action == DebugAction.openRemoteChatApp ||
+          event.action == DebugAction.openRemoteChatRoom ||
+          event.action == DebugAction.sendRemoteChatMessage) {
+        final callsign = event.params['callsign'] as String?;
+        final device = event.params['device'] as RemoteDevice?;
+
+        if (callsign != null && device != null) {
+          LogService().log('DevicesBrowserPage: Opening device detail for $callsign via debug action ${event.action}');
+
+          // Navigate to device detail page showing available apps
+          // This is the same as clicking on a device in the UI
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DeviceDetailPage(device: device),
+            ),
+          );
+        }
+      }
+    });
   }
 
   /// Handle back button press from HomePage
@@ -239,6 +268,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _dmUnreadSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _bleStatusSubscription?.cancel();
+    _debugActionSubscription?.cancel();
     // Clear back button handler
     DevicesBrowserPage.onBackPressed = null;
     super.dispose();
