@@ -7832,7 +7832,7 @@ class LogApiService {
 
     // Footer
     buffer.writeln('  <div class="footer">');
-    buffer.writeln('    <p>Posted via <a href="https://geogram.app">Geogram</a> | ');
+    buffer.writeln('    <p>Posted via geogram | ');
     buffer.writeln('    <a href="https://p2p.radio">p2p.radio</a></p>');
     buffer.writeln('  </div>');
 
