@@ -1,7 +1,7 @@
 # Places Format Specification
 
-**Version**: 1.2
-**Last Updated**: 2025-11-22
+**Version**: 1.3
+**Last Updated**: 2025-12-23
 **Status**: Active
 
 ## Table of Contents
@@ -421,19 +421,21 @@ Información histórica en Español.
 
 6. **Radius** (required)
    - **Format**: `RADIUS: <meters>`
-   - **Example**: `RADIUS: 50`
-   - **Constraints**: 10 to 1000 meters
+   - **Example**: `RADIUS: 5`
+   - **Constraints**: 1 to 1000 meters
    - **Purpose**: Defines the area covered by this place
+   - **Default**: 5 meters for precise locations
 
-7. **Address** (optional)
-   - **Format**: `ADDRESS: <full address>`
-   - **Example**: `ADDRESS: 123 Main Street, Lisbon, Portugal`
-   - **Purpose**: Human-readable location description
-
-8. **Type** (optional)
+7. **Type** (required)
    - **Format**: `TYPE: <category>`
    - **Examples**: `TYPE: restaurant`, `TYPE: monument`, `TYPE: park`
    - **Purpose**: Categorize place for filtering/searching
+   - **Note**: See [Place Types Reference](#place-types-reference) for comprehensive list
+
+8. **Address** (optional)
+   - **Format**: `ADDRESS: <full address>`
+   - **Example**: `ADDRESS: 123 Main Street, Lisbon, Portugal`
+   - **Purpose**: Human-readable location description
 
 9. **Founded** (optional)
    - **Format**: `FOUNDED: <year or century>`
@@ -922,7 +924,12 @@ The radius defines the geographic coverage area of the place:
 
 ### Radius Constraints
 
-**Minimum**: 10 meters
+**Minimum**: 1 meter
+- Very precise locations (trees, signs, small features)
+- Fruit trees and small natural features
+- Specific points of interest
+
+**Default**: 5 meters
 - Small features like statues, fountains
 - Single buildings
 - Specific landmarks
@@ -935,7 +942,8 @@ The radius defines the geographic coverage area of the place:
 
 **Format**: Integer value in meters
 ```
-RADIUS: 10      # Minimum
+RADIUS: 1       # Minimum (very precise)
+RADIUS: 5       # Default (precise locations)
 RADIUS: 50      # Small
 RADIUS: 200     # Medium
 RADIUS: 500     # Large
@@ -943,6 +951,11 @@ RADIUS: 1000    # Maximum
 ```
 
 ### Radius Use Cases
+
+**1-10 meters**:
+- Fruit trees and plants
+- Small signs and markers
+- Individual features
 
 **10-50 meters**:
 - Restaurants and cafes
@@ -982,27 +995,41 @@ RADIUS: 1000    # Maximum
 ### Photo Organization
 
 Photos can be stored:
-1. Directly in place folder (main photos)
-2. In subfolders (organized by category)
-3. In contributor folders (user submissions)
+1. In the `images/` subfolder (recommended, standard location)
+2. Directly in place folder (legacy support)
+3. In thematic subfolders (organized by category)
+4. In contributor folders (user submissions)
 
-**Example**:
+**Standard Structure (images/ folder)**:
 ```
 38.7223_-9.1393_cafe-landmark/
 ├── place.txt
-├── main-entrance.jpg       # Main photos
-├── interior.jpg
-├── menu-board.jpg
-├── exterior/               # Organized subfolder
+├── images/                 # Standard photo location
+│   ├── photo1.jpg          # Sequential naming
+│   ├── photo2.jpg
+│   ├── photo3.png
+│   └── photo4.webp
+├── exterior/               # Thematic subfolder
 │   ├── subfolder.txt
 │   ├── front-view.jpg
-│   ├── side-view.jpg
-│   └── rooftop-view.jpg
+│   └── side-view.jpg
 └── contributors/           # User submissions
     └── CR7BBQ/
         ├── contributor.txt
         ├── sunset-photo.jpg
         └── night-view.jpg
+```
+
+**Legacy Structure (direct in folder)**:
+```
+38.7223_-9.1393_cafe-landmark/
+├── place.txt
+├── main-entrance.jpg       # Direct photos (legacy)
+├── interior.jpg
+├── menu-board.jpg
+└── contributors/
+    └── CR7BBQ/
+        └── sunset-photo.jpg
 ```
 
 ### Supported Media Types
@@ -2483,7 +2510,9 @@ After 10,000th place added:
 - [x] CREATED line must have valid timestamp
 - [x] AUTHOR line must have non-empty callsign
 - [x] COORDINATES must be valid lat,lon
-- [x] RADIUS must be integer 10-1000
+- [x] RADIUS must be integer 1-1000
+- [x] TYPE field is required (categorization)
+- [x] Description is required (content section must have text)
 - [x] Header must end with blank line
 - [x] Signature must be last metadata if present
 - [x] Folder name must match {lat}_{lon}_* pattern
@@ -2516,8 +2545,9 @@ After 10,000th place added:
 ### Radius Validation
 
 - Must be integer
-- Minimum: 10 meters
+- Minimum: 1 meter
 - Maximum: 1000 meters
+- Default: 5 meters
 - Format: `RADIUS: <number>` (no units in value)
 
 ### Founded Validation
@@ -2690,6 +2720,23 @@ After 10,000th place added:
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.3 (2025-12-23)
+
+**Breaking Changes**:
+- **TYPE is now required**: Place type field is mandatory for all new places
+- **Description is now required**: Content section must contain a description
+
+**Improvements**:
+- **Minimum Radius Reduced**: Reduced from 10m to 1m for precise locations (fruit trees, markers)
+- **Default Radius**: Changed default radius to 5m for better precision
+- **Standard Images Folder**: Photos should be stored in `images/` subfolder (sequential naming: photo1.jpg, photo2.jpg)
+- **Photo Management**: Added UI support for adding, viewing, and removing photos
+
+**Documentation Updates**:
+- Updated radius constraints and validation
+- Added images/ folder as standard photo location
+- Updated validation rules for required fields
 
 ### Version 1.2 (2025-11-22)
 

@@ -7,11 +7,14 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../models/blog_post.dart' as models;
+import '../models/blog_comment.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
+import '../widgets/blog_post_detail_widget.dart';
 
 /// Page for browsing blog posts from a remote device
 class RemoteBlogBrowserPage extends StatefulWidget {
@@ -140,43 +143,133 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
   }
 
   Future<void> _openPost(BlogPost post) async {
-    // Get station URL - use device's station if available, otherwise use preferred station
-    String? stationUrl = widget.device.url;
+    // Try to load full post content from cache first
+    models.BlogPost? fullPost = await _loadFullPostFromCache(post.id);
 
-    if (stationUrl == null || stationUrl.isEmpty) {
-      // Fall back to preferred station
-      final preferredStation = StationService().getPreferredStation();
-      stationUrl = preferredStation?.url;
+    // If not in cache, try to fetch from API
+    if (fullPost == null) {
+      fullPost = await _loadFullPostFromApi(post.id);
     }
 
-    if (stationUrl == null || stationUrl.isEmpty) {
+    if (fullPost == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No station available to access blog')),
+          const SnackBar(content: Text('Could not load blog post')),
         );
       }
       return;
     }
 
-    // Convert WebSocket URL to HTTP URL (wss:// -> https://, ws:// -> http://)
-    final httpUrl = stationUrl
-        .replaceFirst('wss://', 'https://')
-        .replaceFirst('ws://', 'http://');
+    if (!mounted) return;
 
-    // Build URL to the blog HTML page via station proxy
-    final url = '$httpUrl/${widget.device.callsign}/blog/${post.id}.html';
+    // Capture non-null value for navigation
+    final loadedPost = fullPost;
 
-    LogService().log('RemoteBlogBrowserPage: Opening blog post: $url');
+    // Navigate to detail page
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _RemoteBlogPostDetailPage(
+          post: loadedPost,
+          device: widget.device,
+        ),
+      ),
+    );
+  }
 
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open: $url')),
+  /// Load full post content from cached markdown file
+  Future<models.BlogPost?> _loadFullPostFromCache(String postId) async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final devicePath = '$dataDir/devices/${widget.device.callsign}';
+      final blogPath = '$devicePath/blog';
+
+      // Check if blog directory exists
+      final blogDir = Directory(blogPath);
+      if (!await blogDir.exists()) return null;
+
+      // Blog posts are stored in blog/YYYY/postId/post.md
+      await for (final yearEntity in blogDir.list()) {
+        if (yearEntity is Directory) {
+          final postDir = Directory('${yearEntity.path}/$postId');
+          final postFile = File('${postDir.path}/post.md');
+
+          if (await postFile.exists()) {
+            final content = await postFile.readAsString();
+            return models.BlogPost.fromText(content, postId);
+          }
+        }
+      }
+
+      return null;
+    } catch (e) {
+      LogService().log('RemoteBlogBrowserPage: Error loading post from cache: $e');
+      return null;
+    }
+  }
+
+  /// Load full post content from API
+  Future<models.BlogPost?> _loadFullPostFromApi(String postId) async {
+    try {
+      // Fetch the post details via JSON API
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'GET',
+        path: '/api/blog/$postId',
+      );
+
+      if (response != null && response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+
+        if (data['success'] != true) {
+          LogService().log('RemoteBlogBrowserPage: API returned error: ${data['error']}');
+          return null;
+        }
+
+        // Convert JSON to BlogPost model
+        final commentsList = <BlogComment>[];
+        if (data['comments'] != null) {
+          for (final c in data['comments'] as List) {
+            final commentData = c as Map<String, dynamic>;
+            final commentMetadata = <String, String>{};
+            if (commentData['npub'] != null) commentMetadata['npub'] = commentData['npub'] as String;
+            if (commentData['signature'] != null) commentMetadata['signature'] = commentData['signature'] as String;
+
+            commentsList.add(BlogComment(
+              id: commentData['id'] as String?,
+              author: commentData['author'] as String? ?? 'Unknown',
+              timestamp: commentData['timestamp'] as String? ?? '',
+              content: commentData['content'] as String? ?? '',
+              metadata: commentMetadata,
+            ));
+          }
+        }
+
+        // Build metadata map
+        final postMetadata = <String, String>{};
+        if (data['npub'] != null) postMetadata['npub'] = data['npub'] as String;
+        if (data['signature'] != null) postMetadata['signature'] = data['signature'] as String;
+
+        return models.BlogPost(
+          id: data['id'] as String? ?? postId,
+          author: data['author'] as String? ?? 'Unknown',
+          timestamp: data['timestamp'] as String? ?? '',
+          edited: data['edited'] as String?,
+          title: data['title'] as String? ?? 'Untitled',
+          description: data['description'] as String?,
+          location: data['location'] as String?,
+          status: models.BlogStatus.fromString(data['status'] as String? ?? 'draft'),
+          tags: (data['tags'] as List?)?.map((t) => t.toString()).toList() ?? [],
+          content: data['content'] as String? ?? '',
+          comments: commentsList,
+          metadata: postMetadata,
         );
       }
+
+      return null;
+    } catch (e) {
+      LogService().log('RemoteBlogBrowserPage: Error loading post from API: $e');
+      return null;
     }
   }
 
@@ -359,6 +452,120 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Detail page for viewing a remote blog post
+class _RemoteBlogPostDetailPage extends StatelessWidget {
+  final models.BlogPost post;
+  final RemoteDevice device;
+
+  const _RemoteBlogPostDetailPage({
+    required this.post,
+    required this.device,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final i18n = I18nService();
+    final theme = Theme.of(context);
+
+    // Get station URL for shareable link
+    String? stationUrl = device.url;
+    if (stationUrl == null || stationUrl.isEmpty) {
+      final preferredStation = StationService().getPreferredStation();
+      stationUrl = preferredStation?.url;
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(i18n.t('blog_post')),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          BlogPostDetailWidget(
+            post: post,
+            collectionPath: '', // Not used for remote posts
+            canEdit: false, // Read-only for remote posts
+            stationUrl: stationUrl,
+            profileIdentifier: device.callsign,
+          ),
+          const SizedBox(height: 24),
+          // Show comments section (read-only)
+          if (post.comments.isNotEmpty) ...[
+            const Divider(),
+            const SizedBox(height: 16),
+            Text(
+              '${i18n.t('comments')} (${post.comments.length})',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ...post.comments.map((comment) {
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.person,
+                            size: 16,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            comment.author,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.schedule,
+                            size: 16,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            comment.timestamp,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        comment.content,
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ] else ...[
+            const Divider(),
+            const SizedBox(height: 16),
+            Text(
+              i18n.t('no_comments_yet'),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ],
       ),
     );
   }

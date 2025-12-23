@@ -7,6 +7,9 @@ Quick reference guide to all documentation files. Use this to quickly find which
 ### API.md
 HTTP API endpoints for the Geogram server. Covers station API, device API, log API, file browsing, status endpoints, and debug API. Essential for understanding how devices communicate with the station and with each other.
 
+### API_feedback.md
+Centralized feedback API system for all Geogram apps. Defines a reusable `/api/feedback` endpoint supporting likes, points, dislikes, subscriptions, verifications, emoji reactions, and comments across all content types (alerts, blog posts, forum threads, events, etc.). Uses NOSTR-signed messages for authentication and interoperability. Includes complete folder structure specification, file formats, NOSTR event kinds, authentication rules, request/response examples, error handling, and migration guides.
+
 ### BLE.md
 Bluetooth Low Energy implementation details. Describes the BLE advertisement format, HELLO handshake protocol, device discovery, GATT characteristics, and how devices exchange data over Bluetooth.
 
@@ -109,6 +112,7 @@ Station/relay configuration and metadata. Network information, node registration
 
 **Need to know about...**
 - HTTP endpoints? → API.md, chat-api.md
+- Feedback API (likes, comments, reactions)? → API_feedback.md
 - Bluetooth? → BLE.md
 - Connection types? → device-connection-labels.md
 - Privacy settings? → security-settings.md

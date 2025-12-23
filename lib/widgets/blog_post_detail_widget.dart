@@ -25,6 +25,13 @@ class BlogPostDetailWidget extends StatelessWidget {
   final String? profileIdentifier; // nickname or callsign for URL
   final void Function(String tag)? onTagTap; // Callback when a tag is tapped
 
+  // Feedback callbacks
+  final VoidCallback? onLike;
+  final VoidCallback? onPoint;
+  final VoidCallback? onDislike;
+  final VoidCallback? onSubscribe;
+  final void Function(String emoji)? onReaction;
+
   const BlogPostDetailWidget({
     Key? key,
     required this.post,
@@ -36,6 +43,11 @@ class BlogPostDetailWidget extends StatelessWidget {
     this.stationUrl,
     this.profileIdentifier,
     this.onTagTap,
+    this.onLike,
+    this.onPoint,
+    this.onDislike,
+    this.onSubscribe,
+    this.onReaction,
   }) : super(key: key);
 
   /// Get shareable URL for this blog post
@@ -277,6 +289,13 @@ class BlogPostDetailWidget extends StatelessWidget {
           const SizedBox(height: 16),
           _buildMetadataChips(context, theme),
         ],
+        // Feedback bar (likes, points, reactions)
+        if (!post.isDraft) ...[
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 12),
+          _buildFeedbackBar(context, theme),
+        ],
         // Signature indicator
         if (post.isSigned) ...[
           const SizedBox(height: 12),
@@ -346,6 +365,222 @@ class BlogPostDetailWidget extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+
+  /// Build feedback bar with likes, points, dislikes, subscribe, and emoji reactions
+  Widget _buildFeedbackBar(BuildContext context, ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Primary feedback actions
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            // Like button
+            _buildFeedbackButton(
+              theme: theme,
+              icon: Icons.thumb_up,
+              label: 'Like',
+              count: post.likesCount,
+              isActive: post.hasLiked,
+              onPressed: onLike,
+              activeColor: Colors.blue,
+            ),
+            // Point button
+            _buildFeedbackButton(
+              theme: theme,
+              icon: Icons.push_pin,
+              label: 'Point',
+              count: post.pointsCount,
+              isActive: post.hasPointed,
+              onPressed: onPoint,
+              activeColor: Colors.orange,
+            ),
+            // Dislike button
+            _buildFeedbackButton(
+              theme: theme,
+              icon: Icons.thumb_down,
+              label: 'Dislike',
+              count: post.dislikesCount,
+              isActive: post.hasDisliked,
+              onPressed: onDislike,
+              activeColor: Colors.red,
+            ),
+            // Subscribe button
+            _buildFeedbackButton(
+              theme: theme,
+              icon: Icons.notifications,
+              label: 'Subscribe',
+              count: post.subscribeCount,
+              isActive: post.hasSubscribed,
+              onPressed: onSubscribe,
+              activeColor: Colors.green,
+            ),
+          ],
+        ),
+        // Emoji reactions
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '❤️',
+              count: post.heartCount,
+              isActive: post.hasHearted,
+              onPressed: () => onReaction?.call('heart'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '👍',
+              count: post.thumbsUpCount,
+              isActive: post.hasThumbsUp,
+              onPressed: () => onReaction?.call('thumbs-up'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '🔥',
+              count: post.fireCount,
+              isActive: post.hasFired,
+              onPressed: () => onReaction?.call('fire'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '🎉',
+              count: post.celebrateCount,
+              isActive: post.hasCelebrated,
+              onPressed: () => onReaction?.call('celebrate'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '😂',
+              count: post.laughCount,
+              isActive: post.hasLaughed,
+              onPressed: () => onReaction?.call('laugh'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '😢',
+              count: post.sadCount,
+              isActive: post.hasSad,
+              onPressed: () => onReaction?.call('sad'),
+            ),
+            _buildEmojiReactionButton(
+              theme: theme,
+              emoji: '😲',
+              count: post.surpriseCount,
+              isActive: post.hasSurprised,
+              onPressed: () => onReaction?.call('surprise'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Build a feedback button (like, point, dislike, subscribe)
+  Widget _buildFeedbackButton({
+    required ThemeData theme,
+    required IconData icon,
+    required String label,
+    required int count,
+    required bool isActive,
+    required VoidCallback? onPressed,
+    required Color activeColor,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(
+        icon,
+        size: 18,
+        color: isActive ? activeColor : theme.colorScheme.onSurfaceVariant,
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: isActive ? activeColor : theme.colorScheme.onSurface,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          if (count > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: isActive ? activeColor.withOpacity(0.2) : theme.colorScheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                count.toString(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: isActive ? activeColor : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        side: BorderSide(
+          color: isActive ? activeColor : theme.colorScheme.outline,
+          width: isActive ? 2 : 1,
+        ),
+        backgroundColor: isActive ? activeColor.withOpacity(0.1) : null,
+      ),
+    );
+  }
+
+  /// Build an emoji reaction button
+  Widget _buildEmojiReactionButton({
+    required ThemeData theme,
+    required String emoji,
+    required int count,
+    required bool isActive,
+    required VoidCallback? onPressed,
+  }) {
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isActive ? theme.colorScheme.primaryContainer : theme.colorScheme.surfaceVariant,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? theme.colorScheme.primary : Colors.transparent,
+            width: isActive ? 2 : 0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              emoji,
+              style: const TextStyle(fontSize: 18),
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 4),
+              Text(
+                count.toString(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: isActive ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -503,6 +738,7 @@ class BlogPostDetailWidget extends StatelessWidget {
       MaterialPageRoute(
         builder: (context) => LocationPickerPage(
           initialPosition: LatLng(lat, lon),
+          viewOnly: true, // View-only mode: no selection controls
         ),
       ),
     );

@@ -10,7 +10,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/blog_post.dart';
 import '../platform/file_system_service.dart';
 import '../util/blog_folder_utils.dart';
+import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import 'log_service.dart';
 
 /// Model for chat security (reused for blog)
@@ -698,7 +700,7 @@ class BlogService {
     }
   }
 
-  /// Add comment to blog post
+  /// Add comment to blog post with NOSTR signature
   ///
   /// Comments are stored as separate files in: {year}/{postId}/comments/
   /// Returns the comment ID if successful, null otherwise.
@@ -706,10 +708,21 @@ class BlogService {
     required String postId,
     required String author,
     required String content,
-    String? npub,
-    String? signature,
+    required String npub,
+    required String nsec,
   }) async {
     if (_collectionPath == null) return null;
+
+    // Validate npub and nsec format
+    if (!npub.startsWith('npub1') || npub.length != 63) {
+      LogService().log('BlogService: Invalid npub format for comment');
+      return null;
+    }
+
+    if (!nsec.startsWith('nsec1') || nsec.length != 63) {
+      LogService().log('BlogService: Invalid nsec format for comment');
+      return null;
+    }
 
     // Load post to verify it exists and is published
     final post = await loadFullPost(postId);
@@ -722,19 +735,37 @@ class BlogService {
     }
 
     try {
+      // Create and sign NOSTR event for comment
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final event = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: 1, // Text note
+        tags: [
+          ['e', postId], // Reference to blog post
+          ['t', 'blog-comment'],
+          ['callsign', author],
+        ],
+        content: content,
+      );
+
+      // Calculate ID and sign
+      event.calculateId();
+      event.signWithNsec(nsec);
+
       final year = post.year;
       final postFolderPath = '$_collectionPath/$year/$postId';
 
-      // Write comment to separate file
+      // Write comment to separate file with signature
       final commentId = await BlogFolderUtils.writeComment(
         postFolderPath: postFolderPath,
         author: author,
         content: content,
         npub: npub,
-        signature: signature,
+        signature: event.sig!,
       );
 
-      LogService().log('BlogService: Added comment $commentId to post: $postId');
+      LogService().log('BlogService: Added signed comment $commentId to post: $postId');
       return commentId;
     } catch (e) {
       LogService().log('BlogService: Error adding comment: $e');
@@ -806,6 +837,254 @@ class BlogService {
     final minute = dt.minute.toString().padLeft(2, '0');
     return '$year-$month-$day $hour:$minute';
   }
+
+  // ============================================================
+  // Feedback Operations
+  // ============================================================
+
+  /// Load feedback counts for a blog post
+  ///
+  /// Returns feedback counts and user state for populating BlogPost model
+  Future<Map<String, dynamic>> loadFeedback(String postId, {String? userNpub}) async {
+    if (_collectionPath == null) {
+      return {
+        'counts': {},
+        'userState': {},
+      };
+    }
+
+    final postFolderPath = getPostFolderPath(postId);
+    if (postFolderPath == null) {
+      return {
+        'counts': {},
+        'userState': {},
+      };
+    }
+
+    try {
+      // Get all feedback counts
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postFolderPath);
+
+      // Get user state if npub provided
+      Map<String, bool>? userState;
+      if (userNpub != null && userNpub.isNotEmpty) {
+        userState = await FeedbackFolderUtils.getUserFeedbackState(postFolderPath, userNpub);
+      }
+
+      return {
+        'counts': counts,
+        'userState': userState ?? {},
+      };
+    } catch (e) {
+      LogService().log('BlogService: Error loading feedback: $e');
+      return {
+        'counts': {},
+        'userState': {},
+      };
+    }
+  }
+
+  /// Load full post with comments and feedback
+  ///
+  /// Enhanced version of loadFullPost that includes feedback counts and user state
+  Future<BlogPost?> loadFullPostWithFeedback(String postId, {String? userNpub}) async {
+    final post = await loadFullPost(postId);
+    if (post == null) return null;
+
+    try {
+      // Load feedback
+      final feedback = await loadFeedback(postId, userNpub: userNpub);
+      final counts = feedback['counts'] as Map<String, int>;
+      final userState = feedback['userState'] as Map<String, bool>;
+
+      // Return post with feedback counts and user state
+      return post.copyWith(
+        likesCount: counts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+        pointsCount: counts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+        dislikesCount: counts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+        subscribeCount: counts[FeedbackFolderUtils.feedbackTypeSubscribe] ?? 0,
+        verificationsCount: counts[FeedbackFolderUtils.feedbackTypeVerifications] ?? 0,
+        heartCount: counts[FeedbackFolderUtils.reactionHeart] ?? 0,
+        thumbsUpCount: counts[FeedbackFolderUtils.reactionThumbsUp] ?? 0,
+        fireCount: counts[FeedbackFolderUtils.reactionFire] ?? 0,
+        celebrateCount: counts[FeedbackFolderUtils.reactionCelebrate] ?? 0,
+        laughCount: counts[FeedbackFolderUtils.reactionLaugh] ?? 0,
+        sadCount: counts[FeedbackFolderUtils.reactionSad] ?? 0,
+        surpriseCount: counts[FeedbackFolderUtils.reactionSurprise] ?? 0,
+        hasLiked: userState[FeedbackFolderUtils.feedbackTypeLikes] ?? false,
+        hasPointed: userState[FeedbackFolderUtils.feedbackTypePoints] ?? false,
+        hasDisliked: userState[FeedbackFolderUtils.feedbackTypeDislikes] ?? false,
+        hasSubscribed: userState[FeedbackFolderUtils.feedbackTypeSubscribe] ?? false,
+        hasVerified: userState[FeedbackFolderUtils.feedbackTypeVerifications] ?? false,
+        hasHearted: userState[FeedbackFolderUtils.reactionHeart] ?? false,
+        hasThumbsUp: userState[FeedbackFolderUtils.reactionThumbsUp] ?? false,
+        hasFired: userState[FeedbackFolderUtils.reactionFire] ?? false,
+        hasCelebrated: userState[FeedbackFolderUtils.reactionCelebrate] ?? false,
+        hasLaughed: userState[FeedbackFolderUtils.reactionLaugh] ?? false,
+        hasSad: userState[FeedbackFolderUtils.reactionSad] ?? false,
+        hasSurprised: userState[FeedbackFolderUtils.reactionSurprise] ?? false,
+      );
+    } catch (e) {
+      LogService().log('BlogService: Error loading feedback for post: $e');
+      return post;
+    }
+  }
+
+  /// Toggle like on a blog post with NOSTR signature
+  ///
+  /// Returns true if like was added, false if removed, null if error
+  Future<bool?> toggleLike(String postId, String npub, String nsec) async {
+    return _toggleFeedback(postId, npub, nsec, FeedbackFolderUtils.feedbackTypeLikes, 'like');
+  }
+
+  /// Toggle point on a blog post with NOSTR signature
+  ///
+  /// Returns true if point was added, false if removed, null if error
+  Future<bool?> togglePoint(String postId, String npub, String nsec) async {
+    return _toggleFeedback(postId, npub, nsec, FeedbackFolderUtils.feedbackTypePoints, 'point');
+  }
+
+  /// Toggle dislike on a blog post with NOSTR signature
+  ///
+  /// Returns true if dislike was added, false if removed, null if error
+  Future<bool?> toggleDislike(String postId, String npub, String nsec) async {
+    return _toggleFeedback(postId, npub, nsec, FeedbackFolderUtils.feedbackTypeDislikes, 'dislike');
+  }
+
+  /// Toggle subscription on a blog post with NOSTR signature
+  ///
+  /// Returns true if subscribed, false if unsubscribed, null if error
+  Future<bool?> toggleSubscribe(String postId, String npub, String nsec) async {
+    return _toggleFeedback(postId, npub, nsec, FeedbackFolderUtils.feedbackTypeSubscribe, 'subscribe');
+  }
+
+  /// Toggle emoji reaction on a blog post with NOSTR signature
+  ///
+  /// Returns true if reaction was added, false if removed, null if error
+  /// Returns null if emoji is not supported
+  Future<bool?> toggleReaction(String postId, String npub, String nsec, String emoji) async {
+    // Validate emoji is supported
+    if (!FeedbackFolderUtils.supportedReactions.contains(emoji)) {
+      LogService().log('BlogService: Unsupported reaction: $emoji');
+      return null;
+    }
+
+    return _toggleFeedback(postId, npub, nsec, emoji, 'reaction');
+  }
+
+  /// Generic method to toggle any feedback type with NOSTR signature
+  ///
+  /// Returns true if added, false if removed, null if error
+  Future<bool?> _toggleFeedback(
+    String postId,
+    String npub,
+    String nsec,
+    String feedbackType,
+    String actionName,
+  ) async {
+    if (_collectionPath == null) return null;
+
+    // Validate npub format
+    if (!npub.startsWith('npub1') || npub.length != 63) {
+      LogService().log('BlogService: Invalid npub format');
+      return null;
+    }
+
+    // Validate nsec format
+    if (!nsec.startsWith('nsec1') || nsec.length != 63) {
+      LogService().log('BlogService: Invalid nsec format');
+      return null;
+    }
+
+    final postFolderPath = getPostFolderPath(postId);
+    if (postFolderPath == null) {
+      LogService().log('BlogService: Post folder not found: $postId');
+      return null;
+    }
+
+    try {
+      // Verify post exists and is published
+      final post = await loadFullPost(postId);
+      if (post == null) {
+        LogService().log('BlogService: Post not found: $postId');
+        return null;
+      }
+
+      if (!post.isPublished) {
+        LogService().log('BlogService: Cannot interact with unpublished post');
+        return null;
+      }
+
+      // Create and sign NOSTR event for feedback
+      // Use kind 7 (reaction) for all feedback types per NIP-25
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final event = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: NostrEventKind.reaction,
+        tags: [
+          ['p', post.npub ?? ''], // Tag the post author
+          ['e', postId], // Reference the post ID
+          ['type', feedbackType], // Feedback type (likes, points, etc.)
+        ],
+        content: actionName, // Content is the action name
+      );
+
+      // Calculate ID and sign
+      event.calculateId();
+      event.signWithNsec(nsec);
+
+      // Toggle the feedback with signed event
+      final isNowActive = await FeedbackFolderUtils.toggleFeedbackEvent(
+        postFolderPath,
+        feedbackType,
+        event,
+      );
+
+      if (isNowActive == null) {
+        LogService().log('BlogService: Signature verification failed for $actionName');
+        return null;
+      }
+
+      final action = isNowActive ? 'added' : 'removed';
+      LogService().log('BlogService: $actionName $action for post $postId by $npub (verified)');
+
+      return isNowActive;
+    } catch (e) {
+      LogService().log('BlogService: Error toggling $actionName: $e');
+      return null;
+    }
+  }
+
+  /// Get feedback count for a specific type
+  Future<int> getFeedbackCount(String postId, String feedbackType) async {
+    final postFolderPath = getPostFolderPath(postId);
+    if (postFolderPath == null) return 0;
+
+    try {
+      return await FeedbackFolderUtils.getFeedbackCount(postFolderPath, feedbackType);
+    } catch (e) {
+      LogService().log('BlogService: Error getting feedback count: $e');
+      return 0;
+    }
+  }
+
+  /// Check if user has provided specific feedback
+  Future<bool> hasFeedback(String postId, String feedbackType, String npub) async {
+    final postFolderPath = getPostFolderPath(postId);
+    if (postFolderPath == null) return false;
+
+    try {
+      return await FeedbackFolderUtils.hasFeedback(postFolderPath, feedbackType, npub);
+    } catch (e) {
+      LogService().log('BlogService: Error checking feedback: $e');
+      return false;
+    }
+  }
+
+  // ============================================================
+  // Getters and utility methods
+  // ============================================================
 
   /// Get current security settings
   ChatSecurity getSecurity() => _security;

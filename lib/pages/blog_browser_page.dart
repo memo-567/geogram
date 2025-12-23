@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
+import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_service.dart';
 import '../services/i18n_service.dart';
@@ -136,16 +137,16 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Future<void> _selectPost(BlogPost post) async {
-    // Load full post with comments
-    final fullPost = await _blogService.loadFullPost(post.id);
+    // Load full post with comments and feedback
+    final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
     setState(() {
       _selectedPost = fullPost;
     });
   }
 
   Future<void> _selectPostMobile(BlogPost post) async {
-    // Load full post with comments
-    final fullPost = await _blogService.loadFullPost(post.id);
+    // Load full post with comments and feedback
+    final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
 
     if (!mounted || fullPost == null) return;
 
@@ -191,46 +192,68 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Future<void> _createNewPost() async {
-    // Get existing tags for autocomplete
-    final existingTags = await _blogService.getAllTags();
+    try {
+      LogService().log('BlogBrowserPage: Create new post button pressed');
 
-    if (!mounted) return;
+      // Get existing tags for autocomplete
+      final existingTags = await _blogService.getAllTags();
 
-    final result = await Navigator.push<Map<String, dynamic>>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => NewBlogPostDialog(existingTags: existingTags),
-        fullscreenDialog: true,
-      ),
-    );
+      if (!mounted) return;
 
-    if (result != null && mounted) {
-      final profile = _profileService.getProfile();
-      final post = await _blogService.createPost(
-        author: profile.callsign,
-        title: result['title'] as String,
-        description: result['description'] as String?,
-        content: result['content'] as String,
-        tags: result['tags'] as List<String>?,
-        status: result['status'] as BlogStatus,
-        npub: profile.npub,
-        nsec: profile.nsec,
-        imagePaths: result['imagePaths'] as List<String>?,
-        latitude: result['latitude'] as double?,
-        longitude: result['longitude'] as double?,
+      LogService().log('BlogBrowserPage: Opening new post dialog');
+      final result = await Navigator.push<Map<String, dynamic>>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => NewBlogPostDialog(existingTags: existingTags),
+          fullscreenDialog: true,
+        ),
       );
 
-      if (post != null && mounted) {
+      if (result != null && mounted) {
+        LogService().log('BlogBrowserPage: Creating post from dialog result');
+        final profile = _profileService.getProfile();
+        final post = await _blogService.createPost(
+          author: profile.callsign,
+          title: result['title'] as String,
+          description: result['description'] as String?,
+          content: result['content'] as String,
+          tags: result['tags'] as List<String>?,
+          status: result['status'] as BlogStatus,
+          npub: profile.npub,
+          nsec: profile.nsec,
+          imagePaths: result['imagePaths'] as List<String>?,
+          latitude: result['latitude'] as double?,
+          longitude: result['longitude'] as double?,
+        );
+
+        if (post != null && mounted) {
+          LogService().log('BlogBrowserPage: Post created successfully: ${post.title}');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                post.isPublished ? _i18n.t('post_published') : _i18n.t('draft_saved'),
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+          await _loadPosts();
+          await _selectPost(post);
+        } else {
+          LogService().log('BlogBrowserPage: Post creation returned null');
+        }
+      } else {
+        LogService().log('BlogBrowserPage: Dialog cancelled or returned null');
+      }
+    } catch (e, stack) {
+      LogService().log('BlogBrowserPage: ERROR creating post: $e');
+      LogService().log('BlogBrowserPage: Stack trace: $stack');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              post.isPublished ? _i18n.t('post_published') : _i18n.t('draft_saved'),
-            ),
-            backgroundColor: Colors.green,
+            content: Text('Error creating post: $e'),
+            backgroundColor: Colors.red,
           ),
         );
-        await _loadPosts();
-        await _selectPost(post);
       }
     }
   }
@@ -274,8 +297,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         );
         await _loadPosts();
 
-        // Reload selected post
-        final updatedPost = await _blogService.loadFullPost(_selectedPost!.id);
+        // Reload selected post with feedback
+        final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: _currentUserNpub);
         setState(() {
           _selectedPost = updatedPost;
         });
@@ -300,8 +323,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       );
       await _loadPosts();
 
-      // Reload selected post
-      final updatedPost = await _blogService.loadFullPost(_selectedPost!.id);
+      // Reload selected post with feedback
+      final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: _currentUserNpub);
       setState(() {
         _selectedPost = updatedPost;
       });
@@ -353,22 +376,112 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     }
   }
 
+  Future<void> _handleFeedback(String type) async {
+    if (_selectedPost == null) return;
+
+    final profile = _profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required for feedback')),
+      );
+      return;
+    }
+
+    LogService().log('BlogBrowserPage: Feedback $type on post ${_selectedPost!.id}');
+
+    bool? result;
+    switch (type) {
+      case 'like':
+        result = await _blogService.toggleLike(_selectedPost!.id, profile.npub, profile.nsec);
+        break;
+      case 'point':
+        result = await _blogService.togglePoint(_selectedPost!.id, profile.npub, profile.nsec);
+        break;
+      case 'dislike':
+        result = await _blogService.toggleDislike(_selectedPost!.id, profile.npub, profile.nsec);
+        break;
+      case 'subscribe':
+        result = await _blogService.toggleSubscribe(_selectedPost!.id, profile.npub, profile.nsec);
+        break;
+    }
+
+    if (result != null) {
+      // Reload post to get updated counts
+      final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: profile.npub);
+      if (updatedPost != null && mounted) {
+        setState(() {
+          _selectedPost = updatedPost;
+        });
+      }
+    } else {
+      // Signature verification failed
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Feedback failed: signature verification error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleReaction(String emoji) async {
+    if (_selectedPost == null) return;
+
+    final profile = _profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required for reactions')),
+      );
+      return;
+    }
+
+    LogService().log('BlogBrowserPage: Reaction $emoji on post ${_selectedPost!.id}');
+
+    final result = await _blogService.toggleReaction(_selectedPost!.id, profile.npub, profile.nsec, emoji);
+
+    if (result != null) {
+      // Reload post to get updated counts
+      final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: profile.npub);
+      if (updatedPost != null && mounted) {
+        setState(() {
+          _selectedPost = updatedPost;
+        });
+      }
+    } else {
+      // Signature verification failed
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Reaction failed: signature verification error')),
+        );
+      }
+    }
+  }
+
   Future<void> _addComment() async{
     if (_selectedPost == null || _commentController.text.trim().isEmpty) return;
 
     final profile = _profileService.getProfile();
+
+    // Require NOSTR keys for comments
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required to add comments')),
+      );
+      return;
+    }
+
     final commentId = await _blogService.addComment(
       postId: _selectedPost!.id,
       author: profile.callsign,
       content: _commentController.text.trim(),
       npub: profile.npub,
+      nsec: profile.nsec,
     );
 
     if (commentId != null && mounted) {
       _commentController.clear();
 
-      // Reload post with new comment
-      final updatedPost = await _blogService.loadFullPost(_selectedPost!.id);
+      // Reload post with new comment and feedback
+      final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: _currentUserNpub);
       setState(() {
         _selectedPost = updatedPost;
       });
@@ -383,6 +496,11 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           );
         }
       });
+    } else if (mounted) {
+      // Comment failed to add
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to add comment: signature verification error')),
+      );
     }
   }
 
@@ -403,8 +521,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         ),
       );
 
-      // Reload post
-      final updatedPost = await _blogService.loadFullPost(_selectedPost!.id);
+      // Reload post with feedback
+      final updatedPost = await _blogService.loadFullPostWithFeedback(_selectedPost!.id, userNpub: _currentUserNpub);
       setState(() {
         _selectedPost = updatedPost;
       });
@@ -656,6 +774,11 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
                 stationUrl: _stationUrl,
                 profileIdentifier: _profileIdentifier,
                 onTagTap: _searchByTag,
+                onLike: () => _handleFeedback('like'),
+                onPoint: () => _handleFeedback('point'),
+                onDislike: () => _handleFeedback('dislike'),
+                onSubscribe: () => _handleFeedback('subscribe'),
+                onReaction: (emoji) => _handleReaction(emoji),
               ),
               const SizedBox(height: 24),
               // Comments section
@@ -853,8 +976,8 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
         );
         _hasChanges = true;
 
-        // Reload post
-        final updatedPost = await widget.blogService.loadFullPost(_post.id);
+        // Reload post with feedback
+        final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: widget.currentUserNpub);
         if (updatedPost != null) {
           final post = updatedPost; // Capture non-null value
           setState(() {
@@ -882,8 +1005,8 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
       );
       _hasChanges = true;
 
-      // Reload post
-      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      // Reload post with feedback
+      final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: widget.currentUserNpub);
       if (updatedPost != null) {
         final post = updatedPost; // Capture non-null value
         setState(() {
@@ -933,23 +1056,111 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
     }
   }
 
+  Future<void> _handleFeedback(String type) async {
+    final profile = widget.profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required for feedback')),
+      );
+      return;
+    }
+
+    LogService().log('BlogPostDetailPage: Feedback $type on post ${_post.id}');
+
+    bool? result;
+    switch (type) {
+      case 'like':
+        result = await widget.blogService.toggleLike(_post.id, profile.npub, profile.nsec);
+        break;
+      case 'point':
+        result = await widget.blogService.togglePoint(_post.id, profile.npub, profile.nsec);
+        break;
+      case 'dislike':
+        result = await widget.blogService.toggleDislike(_post.id, profile.npub, profile.nsec);
+        break;
+      case 'subscribe':
+        result = await widget.blogService.toggleSubscribe(_post.id, profile.npub, profile.nsec);
+        break;
+    }
+
+    if (result != null) {
+      _hasChanges = true;
+      // Reload post to get updated counts
+      final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: profile.npub);
+      if (updatedPost != null && mounted) {
+        setState(() {
+          _post = updatedPost;
+        });
+      }
+    } else {
+      // Signature verification failed
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Feedback failed: signature verification error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleReaction(String emoji) async {
+    final profile = widget.profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required for reactions')),
+      );
+      return;
+    }
+
+    LogService().log('BlogPostDetailPage: Reaction $emoji on post ${_post.id}');
+
+    final result = await widget.blogService.toggleReaction(_post.id, profile.npub, profile.nsec, emoji);
+
+    if (result != null) {
+      _hasChanges = true;
+      // Reload post to get updated counts
+      final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: profile.npub);
+      if (updatedPost != null && mounted) {
+        setState(() {
+          _post = updatedPost;
+        });
+      }
+    } else {
+      // Signature verification failed
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Reaction failed: signature verification error')),
+        );
+      }
+    }
+  }
+
   Future<void> _addComment() async {
     if (_commentController.text.trim().isEmpty) return;
 
     final profile = widget.profileService.getProfile();
+
+    // Require NOSTR keys for comments
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required to add comments')),
+      );
+      return;
+    }
+
     final commentId = await widget.blogService.addComment(
       postId: _post.id,
       author: profile.callsign,
       content: _commentController.text.trim(),
       npub: profile.npub,
+      nsec: profile.nsec,
     );
 
     if (commentId != null && mounted) {
       _commentController.clear();
       _hasChanges = true;
 
-      // Reload post with new comment
-      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      // Reload post with new comment and feedback
+      final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: widget.currentUserNpub);
       if (updatedPost != null) {
         final post = updatedPost; // Capture non-null value
         setState(() {
@@ -967,6 +1178,11 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
           }
         });
       }
+    } else if (mounted) {
+      // Comment failed to add
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to add comment: signature verification error')),
+      );
     }
   }
 
@@ -986,8 +1202,8 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
       );
       _hasChanges = true;
 
-      // Reload post
-      final updatedPost = await widget.blogService.loadFullPost(_post.id);
+      // Reload post with feedback
+      final updatedPost = await widget.blogService.loadFullPostWithFeedback(_post.id, userNpub: widget.currentUserNpub);
       if (updatedPost != null) {
         final post = updatedPost; // Capture non-null value
         setState(() {
@@ -1035,6 +1251,11 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
                       // Pop back to the list and trigger tag search
                       Navigator.pop(context, {'searchTag': tag});
                     } : null,
+                    onLike: () => _handleFeedback('like'),
+                    onPoint: () => _handleFeedback('point'),
+                    onDislike: () => _handleFeedback('dislike'),
+                    onSubscribe: () => _handleFeedback('subscribe'),
+                    onReaction: (emoji) => _handleReaction(emoji),
                   ),
                   const SizedBox(height: 24),
                   _buildCommentsSection(theme),

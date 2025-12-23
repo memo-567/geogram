@@ -33,6 +33,36 @@ class BlogPost {
   final List<BlogComment> comments;
   final Map<String, String> metadata;
 
+  // Feedback counts
+  final int likesCount;
+  final int pointsCount;
+  final int dislikesCount;
+  final int subscribeCount;
+  final int verificationsCount;
+
+  // Emoji reaction counts
+  final int heartCount;
+  final int thumbsUpCount;
+  final int fireCount;
+  final int celebrateCount;
+  final int laughCount;
+  final int sadCount;
+  final int surpriseCount;
+
+  // User-specific feedback state (optional, only populated for current user)
+  final bool hasLiked;
+  final bool hasPointed;
+  final bool hasDisliked;
+  final bool hasSubscribed;
+  final bool hasVerified;
+  final bool hasHearted;
+  final bool hasThumbsUp;
+  final bool hasFired;
+  final bool hasCelebrated;
+  final bool hasLaughed;
+  final bool hasSad;
+  final bool hasSurprised;
+
   BlogPost({
     required this.id,
     required this.author,
@@ -46,6 +76,32 @@ class BlogPost {
     required this.content,
     this.comments = const [],
     this.metadata = const {},
+    // Feedback counts with defaults
+    this.likesCount = 0,
+    this.pointsCount = 0,
+    this.dislikesCount = 0,
+    this.subscribeCount = 0,
+    this.verificationsCount = 0,
+    this.heartCount = 0,
+    this.thumbsUpCount = 0,
+    this.fireCount = 0,
+    this.celebrateCount = 0,
+    this.laughCount = 0,
+    this.sadCount = 0,
+    this.surpriseCount = 0,
+    // User feedback state with defaults
+    this.hasLiked = false,
+    this.hasPointed = false,
+    this.hasDisliked = false,
+    this.hasSubscribed = false,
+    this.hasVerified = false,
+    this.hasHearted = false,
+    this.hasThumbsUp = false,
+    this.hasFired = false,
+    this.hasCelebrated = false,
+    this.hasLaughed = false,
+    this.hasSad = false,
+    this.hasSurprised = false,
   });
 
   /// Parse timestamp to DateTime
@@ -367,6 +423,30 @@ class BlogPost {
     String? content,
     List<BlogComment>? comments,
     Map<String, String>? metadata,
+    int? likesCount,
+    int? pointsCount,
+    int? dislikesCount,
+    int? subscribeCount,
+    int? verificationsCount,
+    int? heartCount,
+    int? thumbsUpCount,
+    int? fireCount,
+    int? celebrateCount,
+    int? laughCount,
+    int? sadCount,
+    int? surpriseCount,
+    bool? hasLiked,
+    bool? hasPointed,
+    bool? hasDisliked,
+    bool? hasSubscribed,
+    bool? hasVerified,
+    bool? hasHearted,
+    bool? hasThumbsUp,
+    bool? hasFired,
+    bool? hasCelebrated,
+    bool? hasLaughed,
+    bool? hasSad,
+    bool? hasSurprised,
   }) {
     return BlogPost(
       id: id ?? this.id,
@@ -381,6 +461,30 @@ class BlogPost {
       content: content ?? this.content,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
+      likesCount: likesCount ?? this.likesCount,
+      pointsCount: pointsCount ?? this.pointsCount,
+      dislikesCount: dislikesCount ?? this.dislikesCount,
+      subscribeCount: subscribeCount ?? this.subscribeCount,
+      verificationsCount: verificationsCount ?? this.verificationsCount,
+      heartCount: heartCount ?? this.heartCount,
+      thumbsUpCount: thumbsUpCount ?? this.thumbsUpCount,
+      fireCount: fireCount ?? this.fireCount,
+      celebrateCount: celebrateCount ?? this.celebrateCount,
+      laughCount: laughCount ?? this.laughCount,
+      sadCount: sadCount ?? this.sadCount,
+      surpriseCount: surpriseCount ?? this.surpriseCount,
+      hasLiked: hasLiked ?? this.hasLiked,
+      hasPointed: hasPointed ?? this.hasPointed,
+      hasDisliked: hasDisliked ?? this.hasDisliked,
+      hasSubscribed: hasSubscribed ?? this.hasSubscribed,
+      hasVerified: hasVerified ?? this.hasVerified,
+      hasHearted: hasHearted ?? this.hasHearted,
+      hasThumbsUp: hasThumbsUp ?? this.hasThumbsUp,
+      hasFired: hasFired ?? this.hasFired,
+      hasCelebrated: hasCelebrated ?? this.hasCelebrated,
+      hasLaughed: hasLaughed ?? this.hasLaughed,
+      hasSad: hasSad ?? this.hasSad,
+      hasSurprised: hasSurprised ?? this.hasSurprised,
     );
   }
 

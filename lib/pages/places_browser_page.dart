@@ -117,6 +117,22 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     _filterPlaces();
   }
 
+  Future<void> _editPlace(Place place) async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddEditPlacePage(
+          collectionPath: widget.collectionPath,
+          place: place,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _loadPlaces();
+    }
+  }
+
   Future<void> _deletePlace(Place place) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -335,9 +351,11 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       onTap: () => isMobileView ? _selectPlaceMobile(place) : _selectPlace(place),
       trailing: PopupMenuButton(
         itemBuilder: (context) => [
+          PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
           PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
         ],
         onSelected: (value) {
+          if (value == 'edit') _editPlace(place);
           if (value == 'delete') _deletePlace(place);
         },
       ),
@@ -480,13 +498,24 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           const SizedBox(height: 24),
 
           // Actions
-          FilledButton.icon(
-            icon: const Icon(Icons.delete),
-            label: Text(_i18n.t('delete')),
-            onPressed: () => _deletePlace(place),
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                icon: const Icon(Icons.edit),
+                label: Text(_i18n.t('edit')),
+                onPressed: () => _editPlace(place),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.delete),
+                label: Text(_i18n.t('delete')),
+                onPressed: () => _deletePlace(place),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                ),
+              ),
+            ],
           ),
         ],
       ),

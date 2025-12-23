@@ -12,14 +12,16 @@ import '../services/config_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
 import '../util/geolocation_utils.dart';
 
-/// Full-page reusable location picker
-/// Can be used throughout the app for selecting coordinates
+/// Full-page reusable location picker/viewer
+/// Can be used throughout the app for selecting or viewing coordinates
 class LocationPickerPage extends StatefulWidget {
   final LatLng? initialPosition;
+  final bool viewOnly; // If true, shows location without selection controls
 
   const LocationPickerPage({
     Key? key,
     this.initialPosition,
+    this.viewOnly = false,
   }) : super(key: key);
 
   @override
@@ -36,7 +38,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   late LatLng _selectedPosition;
   bool _isOnline = true;
   bool _isDetectingLocation = false;
-  double _currentZoom = 17.0; // Default zoom level for usable location selection
+  double _currentZoom = 18.0; // Default zoom level - maximum zoom for precise location selection
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
@@ -46,11 +48,9 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     super.initState();
     _initializeMap();
 
-    // Load saved zoom level preference
-    final savedZoom = _configService.get('lastLocationPickerZoom');
-    if (savedZoom != null) {
-      _currentZoom = (savedZoom as num).toDouble();
-    }
+    // Always start at maximum zoom for precise location picking
+    // Don't restore saved zoom - users need precision when selecting locations
+    _currentZoom = 18.0;
 
     // Priority: 1) provided initialPosition, 2) auto-detect current location, 3) last saved, 4) default
     if (widget.initialPosition != null) {
@@ -61,8 +61,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       _selectedPosition = _defaultPosition;
       _initializeControllers();
 
-      // Automatically try to detect the user's current location
-      _autoDetectLocationOnStart();
+      // Automatically try to detect the user's current location (only if not in view-only mode)
+      if (!widget.viewOnly) {
+        _autoDetectLocationOnStart();
+      }
     }
   }
 
@@ -101,13 +103,15 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   }
 
   /// Set location and update UI
-  void _setLocation(double lat, double lon) {
+  /// If preserveZoom is true, keeps the current map zoom level instead of resetting
+  void _setLocation(double lat, double lon, {bool preserveZoom = false}) {
+    final zoomToUse = preserveZoom ? _mapController.camera.zoom : _currentZoom;
     setState(() {
       _selectedPosition = LatLng(lat, lon);
       _latController.text = lat.toStringAsFixed(6);
       _lonController.text = lon.toStringAsFixed(6);
     });
-    _mapController.move(_selectedPosition, _currentZoom);
+    _mapController.move(_selectedPosition, zoomToUse);
   }
 
   Future<void> _initializeMap() async {
@@ -146,7 +150,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       final result = await GeolocationUtils.getCurrentLocation(useProfile: true);
 
       if (result != null && result.isValid && mounted) {
-        _setLocation(result.latitude, result.longitude);
+        // Preserve current zoom level when manually detecting location
+        _setLocation(result.latitude, result.longitude, preserveZoom: true);
         LogService().log('Manual detect: location via ${result.source}: ${result.latitude}, ${result.longitude}');
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -202,13 +207,17 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('select_location_on_map')),
+        title: Text(widget.viewOnly
+          ? _i18n.t('view_location')
+          : _i18n.t('select_location_on_map')),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _confirmSelection,
-        icon: const Icon(Icons.check),
-        label: Text(_i18n.t('confirm_location')),
-      ),
+      floatingActionButton: widget.viewOnly
+        ? null
+        : FloatingActionButton.extended(
+            onPressed: _confirmSelection,
+            icon: const Icon(Icons.check),
+            label: Text(_i18n.t('confirm_location')),
+          ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -237,7 +246,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                           interactionOptions: const InteractionOptions(
                             flags: InteractiveFlag.all,
                           ),
-                          onTap: _onMapTap,
+                          onTap: widget.viewOnly ? null : _onMapTap,
                         ),
                         children: [
                           ValueListenableBuilder<MapLayerType>(
@@ -427,20 +436,22 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               tooltip: _i18n.t('reset_north'),
                               child: const Icon(Icons.explore),
                             ),
-                            const SizedBox(height: 8),
-                            // Auto-detect location button
-                            FloatingActionButton.small(
-                              heroTag: 'auto_detect',
-                              onPressed: _isDetectingLocation ? null : _autoDetectLocation,
-                              tooltip: _i18n.t('auto_detect_location'),
-                              child: _isDetectingLocation
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.my_location),
-                            ),
+                            // Auto-detect location button (only in picker mode)
+                            if (!widget.viewOnly) ...[
+                              const SizedBox(height: 8),
+                              FloatingActionButton.small(
+                                heroTag: 'auto_detect',
+                                onPressed: _isDetectingLocation ? null : _autoDetectLocation,
+                                tooltip: _i18n.t('auto_detect_location'),
+                                child: _isDetectingLocation
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.my_location),
+                              ),
+                            ],
                           ],
                         ),
                       ),

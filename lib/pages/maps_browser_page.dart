@@ -16,6 +16,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import '../models/map_item.dart';
 import '../models/report.dart';
+import '../models/place.dart';
 import '../services/maps_service.dart';
 import '../services/profile_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
@@ -24,6 +25,7 @@ import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
 import 'report_detail_page.dart';
+import 'place_detail_page.dart';
 
 /// Maps browser page showing geo-located items
 class MapsBrowserPage extends StatefulWidget {
@@ -389,8 +391,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _showItemSnackbar(item);
         break;
       case MapItemType.place:
-        // TODO: Open place detail page when available
-        _showItemSnackbar(item);
+        if (item.sourceItem is Place) {
+          final place = item.sourceItem as Place;
+          final collectionPath = item.collectionPath ?? '';
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PlaceDetailPage(
+                collectionPath: collectionPath,
+                place: place,
+              ),
+            ),
+          );
+        }
         break;
       case MapItemType.news:
         // TODO: Open news detail page when available

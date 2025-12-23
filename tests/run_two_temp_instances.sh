@@ -35,6 +35,7 @@ TEMP_DIR_A="/tmp/geogram-A-${PORT_A}"
 TEMP_DIR_B="/tmp/geogram-B-${PORT_B}"
 NICKNAME_A="Instance-A"
 NICKNAME_B="Instance-B"
+SKIP_BUILD=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -55,6 +56,7 @@ show_help() {
     echo "  --port-b=PORT     Port for Instance B (default: $PORT_B)"
     echo "  --name-a=NAME     Nickname for Instance A (default: $NICKNAME_A)"
     echo "  --name-b=NAME     Nickname for Instance B (default: $NICKNAME_B)"
+    echo "  --skip-build      Skip rebuilding the app (use existing binary)"
     echo "  --help            Show this help message"
     echo ""
     echo "Temp directories:"
@@ -62,7 +64,8 @@ show_help() {
     echo "  Instance B: /tmp/geogram-B-{PORT_B}"
     echo ""
     echo "Examples:"
-    echo "  $0                              # Use defaults"
+    echo "  $0                              # Build latest code and use defaults"
+    echo "  $0 --skip-build                 # Use existing binary without rebuilding"
     echo "  $0 --port-a=6000 --port-b=6001  # Custom ports"
     echo "  $0 --name-a=Alice --name-b=Bob  # Custom names"
     exit 0
@@ -87,6 +90,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --name-b=*)
             NICKNAME_B="${1#*=}"
+            shift
+            ;;
+        --skip-build)
+            SKIP_BUILD=true
             shift
             ;;
         --help|-h)
@@ -117,15 +124,29 @@ else
     exit 1
 fi
 
-# Build the app if needed
+# Build the app with latest code
 BINARY_PATH="$PROJECT_DIR/build/linux/x64/release/bundle/geogram_desktop"
-if [ ! -f "$BINARY_PATH" ]; then
-    echo -e "${YELLOW}Building Geogram...${NC}"
+
+if [ "$SKIP_BUILD" = true ]; then
+    echo -e "${YELLOW}Skipping build (using existing binary)...${NC}"
+    if [ ! -f "$BINARY_PATH" ]; then
+        echo -e "${RED}✗ Error: Binary not found at $BINARY_PATH${NC}"
+        echo -e "${YELLOW}Run without --skip-build to build the app${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Using existing binary${NC}"
+else
+    echo -e "${YELLOW}Building Geogram with latest code...${NC}"
     cd "$PROJECT_DIR"
     $FLUTTER_CMD build linux --release
-    echo -e "${GREEN}Build complete${NC}"
-    echo ""
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ Build complete${NC}"
+    else
+        echo -e "${RED}✗ Build failed${NC}"
+        exit 1
+    fi
 fi
+echo ""
 
 # Clean up and create fresh temp directories
 echo -e "${BLUE}Preparing temp directories...${NC}"

@@ -3,13 +3,20 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:path/path.dart' as path;
 import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 import 'location_picker_page.dart';
+import 'photo_viewer_page.dart';
 
 /// Full-page form for adding or editing a place
 class AddEditPlacePage extends StatefulWidget {
@@ -44,29 +51,50 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   late TextEditingController _descriptionController;
   late TextEditingController _historyController;
 
+  // Photo state
+  List<String> _imageFilePaths = [];  // New photos to add
+  List<String> _existingImages = [];  // Already saved photos
+
   bool _isSaving = false;
 
-  // Common place types for quick selection
+  // Supported languages for multilingual content
+  static const List<String> _supportedLanguages = ['EN', 'PT', 'ES', 'FR', 'DE', 'IT'];
+
+  // Language selection for description and history
+  String _descriptionLanguage = 'EN';
+  String _historyLanguage = 'EN';
+
+  // Store translations for description and history
+  Map<String, String> _descriptions = {};
+  Map<String, String> _histories = {};
+
+  // Common place types for quick selection (sorted alphabetically, 'other' last)
   final List<String> _commonTypes = [
-    'restaurant',
+    'beach',
     'cafe',
-    'monument',
+    'church',
+    'cinema',
+    'firefighters',
+    'fruit-tree',
+    'gallery',
+    'grocery',
+    'hospital',
+    'hotel',
     'landmark',
-    'park',
+    'library',
+    'market',
+    'monument',
     'museum',
+    'park',
+    'pharmacy',
+    'police',
+    'restaurant',
+    'school',
     'shop',
     'store',
-    'hotel',
-    'hospital',
-    'school',
-    'church',
-    'library',
     'theater',
-    'cinema',
-    'gallery',
-    'beach',
+    'veterinary',
     'viewpoint',
-    'market',
     'other',
   ];
 
@@ -74,21 +102,174 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   void initState() {
     super.initState();
     _initializeControllers();
+    _loadExistingImages();
   }
 
   void _initializeControllers() {
     final place = widget.place;
 
+    // Determine user's current language (default to EN)
+    final currentLang = _i18n.currentLanguage.toUpperCase().split('_').first;
+    _descriptionLanguage = _supportedLanguages.contains(currentLang) ? currentLang : 'EN';
+    _historyLanguage = _descriptionLanguage;
+
     _nameController = TextEditingController(text: place?.name ?? '');
     _latitudeController = TextEditingController(text: place?.latitude.toString() ?? '');
     _longitudeController = TextEditingController(text: place?.longitude.toString() ?? '');
-    _radiusController = TextEditingController(text: place?.radius.toString() ?? '50');
+    _radiusController = TextEditingController(text: place?.radius.toString() ?? '5');
     _addressController = TextEditingController(text: place?.address ?? '');
     _typeController = TextEditingController(text: place?.type ?? '');
     _foundedController = TextEditingController(text: place?.founded ?? '');
     _hoursController = TextEditingController(text: place?.hours ?? '');
-    _descriptionController = TextEditingController(text: place?.description ?? '');
-    _historyController = TextEditingController(text: place?.history ?? '');
+
+    // Load existing translations when editing
+    if (place != null) {
+      _descriptions = Map<String, String>.from(place.descriptions);
+      _histories = Map<String, String>.from(place.histories);
+
+      // If no translations exist, use primary description/history
+      if (_descriptions.isEmpty && place.description.isNotEmpty) {
+        _descriptions[_descriptionLanguage] = place.description;
+      }
+      if (_histories.isEmpty && place.history != null && place.history!.isNotEmpty) {
+        _histories[_historyLanguage] = place.history!;
+      }
+    }
+
+    // Set controllers to current language content
+    _descriptionController = TextEditingController(
+      text: _descriptions[_descriptionLanguage] ?? place?.description ?? '',
+    );
+    _historyController = TextEditingController(
+      text: _histories[_historyLanguage] ?? place?.history ?? '',
+    );
+  }
+
+  /// Switch description language - save current content and load new language
+  void _switchDescriptionLanguage(String newLang) {
+    // Save current content before switching
+    final currentContent = _descriptionController.text.trim();
+    if (currentContent.isNotEmpty) {
+      _descriptions[_descriptionLanguage] = currentContent;
+    }
+
+    // Switch to new language
+    setState(() {
+      _descriptionLanguage = newLang;
+      _descriptionController.text = _descriptions[newLang] ?? '';
+    });
+  }
+
+  /// Switch history language - save current content and load new language
+  void _switchHistoryLanguage(String newLang) {
+    // Save current content before switching
+    final currentContent = _historyController.text.trim();
+    if (currentContent.isNotEmpty) {
+      _histories[_historyLanguage] = currentContent;
+    }
+
+    // Switch to new language
+    setState(() {
+      _historyLanguage = newLang;
+      _historyController.text = _histories[newLang] ?? '';
+    });
+  }
+
+  /// Get list of languages with existing translations
+  List<String> _getDescriptionLanguagesWithContent() {
+    final current = _descriptionController.text.trim();
+    if (current.isNotEmpty) {
+      _descriptions[_descriptionLanguage] = current;
+    }
+    return _descriptions.keys.where((k) => _descriptions[k]?.isNotEmpty ?? false).toList();
+  }
+
+  List<String> _getHistoryLanguagesWithContent() {
+    final current = _historyController.text.trim();
+    if (current.isNotEmpty) {
+      _histories[_historyLanguage] = current;
+    }
+    return _histories.keys.where((k) => _histories[k]?.isNotEmpty ?? false).toList();
+  }
+
+  /// Load existing images from the place folder
+  Future<void> _loadExistingImages() async {
+    if (kIsWeb || widget.place?.folderPath == null) return;
+
+    try {
+      final imagesDir = Directory('${widget.place!.folderPath}/images');
+      if (await imagesDir.exists()) {
+        final entities = await imagesDir.list().toList();
+        setState(() {
+          _existingImages = entities
+              .where((e) => e is File && _isImageFile(e.path))
+              .map((e) => e.path)
+              .toList();
+        });
+      }
+    } catch (e) {
+      LogService().log('Error loading place images: $e');
+    }
+  }
+
+  bool _isImageFile(String path) {
+    final ext = path.toLowerCase();
+    return ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
+           ext.endsWith('.png') || ext.endsWith('.gif') ||
+           ext.endsWith('.webp');
+  }
+
+  /// Pick images from file system
+  Future<void> _pickImages() async {
+    if (kIsWeb) return;
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: true,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        setState(() {
+          _imageFilePaths.addAll(
+            result.files.where((f) => f.path != null).map((file) => file.path!).toList(),
+          );
+        });
+      }
+    } catch (e) {
+      LogService().log('Error picking images: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error picking images: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _removeImage(int index, {bool isExisting = false}) {
+    setState(() {
+      if (isExisting) {
+        _existingImages.removeAt(index);
+      } else {
+        _imageFilePaths.removeAt(index);
+      }
+    });
+  }
+
+  /// Open the photo viewer at the specified index
+  void _openPhotoViewer(int index, {bool isExisting = true}) {
+    final allImages = [..._existingImages, ..._imageFilePaths];
+    final actualIndex = isExisting ? index : _existingImages.length + index;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: allImages,
+          initialIndex: actualIndex,
+        ),
+      ),
+    );
   }
 
   @override
@@ -111,13 +292,29 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       return;
     }
 
+    // Validate location is selected
+    final latText = _latitudeController.text.trim();
+    final lonText = _longitudeController.text.trim();
+    final latitude = double.tryParse(latText);
+    final longitude = double.tryParse(lonText);
+
+    if (latitude == null || longitude == null ||
+        latitude < -90 || latitude > 90 ||
+        longitude < -180 || longitude > 180) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('location_required_hint')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
 
     try {
       // Collect values
       final name = _nameController.text.trim();
-      final latitude = double.parse(_latitudeController.text.trim());
-      final longitude = double.parse(_longitudeController.text.trim());
       final radius = int.parse(_radiusController.text.trim());
       final address = _addressController.text.trim();
       final type = _typeController.text.trim();
@@ -125,6 +322,32 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       final hours = _hoursController.text.trim();
       final description = _descriptionController.text.trim();
       final history = _historyController.text.trim();
+
+      // Save current content to translations map
+      if (description.isNotEmpty) {
+        _descriptions[_descriptionLanguage] = description;
+      }
+      if (history.isNotEmpty) {
+        _histories[_historyLanguage] = history;
+      }
+
+      // Get primary description (first available)
+      final primaryDescription = _descriptions.values.firstWhere(
+        (v) => v.isNotEmpty,
+        orElse: () => description,
+      );
+
+      // Get primary history (first available or null)
+      String? primaryHistory;
+      if (_histories.isNotEmpty) {
+        primaryHistory = _histories.values.firstWhere(
+          (v) => v.isNotEmpty,
+          orElse: () => '',
+        );
+        if (primaryHistory.isEmpty) primaryHistory = null;
+      } else if (history.isNotEmpty) {
+        primaryHistory = history;
+      }
 
       // Create timestamp
       final now = DateTime.now();
@@ -134,7 +357,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       final profile = _profileService.getProfile();
       final author = profile.callsign.isNotEmpty ? profile.callsign : 'ANONYMOUS';
 
-      // Create place object
+      // Create place object with translations
       final place = Place(
         name: name,
         created: widget.place?.created ?? timestamp,
@@ -143,11 +366,13 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         longitude: longitude,
         radius: radius,
         address: address.isNotEmpty ? address : null,
-        type: type.isNotEmpty ? type : null,
+        type: type, // Now required
         founded: founded.isNotEmpty ? founded : null,
         hours: hours.isNotEmpty ? hours : null,
-        description: description,
-        history: history.isNotEmpty ? history : null,
+        description: primaryDescription, // Primary description
+        descriptions: Map<String, String>.from(_descriptions), // All translations
+        history: primaryHistory,
+        histories: Map<String, String>.from(_histories), // All translations
       );
 
       // Save place
@@ -160,6 +385,9 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
           );
         }
       } else {
+        // Save images after place is saved
+        await _saveImages(place);
+
         if (mounted) {
           Navigator.pop(context, true);
         }
@@ -177,11 +405,46 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     }
   }
 
-  void _getCurrentLocation() {
-    // TODO: Implement GPS location fetching
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_i18n.t('gps_not_implemented'))),
-    );
+  /// Save photos to the place folder
+  Future<void> _saveImages(Place place) async {
+    if (kIsWeb || _imageFilePaths.isEmpty) return;
+
+    try {
+      // Build the place folder path
+      final placeFolderPath = await _placeService.getPlaceFolderPath(place);
+      if (placeFolderPath == null) return;
+
+      final imagesDir = Directory('$placeFolderPath/images');
+
+      // Create images directory if it doesn't exist
+      if (!await imagesDir.exists()) {
+        await imagesDir.create(recursive: true);
+      }
+
+      // Get existing photo count for sequential naming
+      int photoNumber = 1;
+      if (await imagesDir.exists()) {
+        final entities = await imagesDir.list().toList();
+        final existingPhotos = entities.where((e) =>
+          e is File && e.path.contains('photo') && _isImageFile(e.path)
+        ).toList();
+        photoNumber = existingPhotos.length + 1;
+      }
+
+      // Copy new images with sequential naming (photo1.ext, photo2.ext, etc.)
+      for (final imagePath in _imageFilePaths) {
+        final imageFile = File(imagePath);
+        final ext = path.extension(imagePath).toLowerCase();
+        final destPath = '${imagesDir.path}/photo$photoNumber$ext';
+        await imageFile.copy(destPath);
+        photoNumber++;
+      }
+
+      _imageFilePaths.clear();
+      LogService().log('Saved ${photoNumber - 1} photos for place ${place.name}');
+    } catch (e) {
+      LogService().log('Error saving place images: $e');
+    }
   }
 
   Future<void> _openMapPicker() async {
@@ -271,89 +534,350 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
             ),
             const SizedBox(height: 16),
 
-            // Coordinates Section
+            // Location Section
+            Text(
+              '${_i18n.t('location')} *',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Pick Location on Map Button
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _openMapPicker,
+                icon: const Icon(Icons.map),
+                label: Text(_i18n.t('pick_location_on_map')),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Show selected coordinates if available
+            if (_latitudeController.text.isNotEmpty && _longitudeController.text.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.location_on,
+                      color: Theme.of(context).colorScheme.primary,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_latitudeController.text}, ${_longitudeController.text}',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () {
+                        setState(() {
+                          _latitudeController.clear();
+                          _longitudeController.clear();
+                        });
+                      },
+                      tooltip: _i18n.t('clear'),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+              )
+            else
+              // Show hint when no location selected
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.error.withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber,
+                      color: Theme.of(context).colorScheme.error,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _i18n.t('location_required_hint'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 16),
+
+            // Radius and Type on same row
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Radius
                 Expanded(
+                  flex: 1,
                   child: TextFormField(
-                    controller: _latitudeController,
+                    controller: _radiusController,
                     decoration: InputDecoration(
-                      labelText: '${_i18n.t('latitude')} *',
+                      labelText: '${_i18n.t('radius')} (m) *',
                       border: const OutlineInputBorder(),
-                      hintText: '38.7223',
+                      hintText: '5',
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                      signed: true,
-                    ),
+                    keyboardType: TextInputType.number,
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return _i18n.t('field_required');
                       }
-                      final lat = double.tryParse(value.trim());
-                      if (lat == null || lat < -90 || lat > 90) {
-                        return _i18n.t('invalid_latitude');
+                      final radius = int.tryParse(value.trim());
+                      if (radius == null || radius < 1 || radius > 1000) {
+                        return _i18n.t('radius_range_error');
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Type (with suggestions)
+                Expanded(
+                  flex: 2,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _typeController,
+                          decoration: InputDecoration(
+                            labelText: '${_i18n.t('place_type')} *',
+                            border: const OutlineInputBorder(),
+                            hintText: 'restaurant, monument...',
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return _i18n.t('field_required');
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.arrow_drop_down),
+                        tooltip: _i18n.t('select_type'),
+                        onSelected: (type) {
+                          setState(() {
+                            _typeController.text = type;
+                          });
+                        },
+                        itemBuilder: (context) => _commonTypes.map((type) {
+                          return PopupMenuItem<String>(
+                            value: type,
+                            child: Text(_i18n.t('place_type_$type')),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Description (required) with language selector
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _descriptionController,
+                    decoration: InputDecoration(
+                      labelText: '${_i18n.t('description')} *',
+                      border: const OutlineInputBorder(),
+                      helperText: _i18n.t('place_description_help'),
+                    ),
+                    maxLines: 4,
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return _i18n.t('field_required');
                       }
                       return null;
                     },
                   ),
                 ),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: TextFormField(
-                    controller: _longitudeController,
-                    decoration: InputDecoration(
-                      labelText: '${_i18n.t('longitude')} *',
-                      border: const OutlineInputBorder(),
-                      hintText: '-9.1393',
+                Column(
+                  children: [
+                    PopupMenuButton<String>(
+                      initialValue: _descriptionLanguage,
+                      onSelected: _switchDescriptionLanguage,
+                      tooltip: _i18n.t('select_language'),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Theme.of(context).colorScheme.outline),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _descriptionLanguage,
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_drop_down, size: 20),
+                          ],
+                        ),
+                      ),
+                      itemBuilder: (context) => _supportedLanguages.map((lang) {
+                        final hasContent = _descriptions[lang]?.isNotEmpty ?? false;
+                        return PopupMenuItem<String>(
+                          value: lang,
+                          child: Row(
+                            children: [
+                              Text(lang),
+                              if (hasContent) ...[
+                                const SizedBox(width: 8),
+                                Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+                              ],
+                            ],
+                          ),
+                        );
+                      }).toList(),
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                      signed: true,
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return _i18n.t('field_required');
-                      }
-                      final lon = double.tryParse(value.trim());
-                      if (lon == null || lon < -180 || lon > 180) {
-                        return _i18n.t('invalid_longitude');
-                      }
-                      return null;
-                    },
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.my_location),
-                  onPressed: _getCurrentLocation,
-                  tooltip: _i18n.t('use_current_location'),
+                    // Show languages with content
+                    if (widget.place != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_getDescriptionLanguagesWithContent().length}/${_supportedLanguages.length}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-
-            // Radius
-            TextFormField(
-              controller: _radiusController,
-              decoration: InputDecoration(
-                labelText: '${_i18n.t('radius')} (${_i18n.t('meters')}) *',
-                border: const OutlineInputBorder(),
-                hintText: '50',
-                helperText: _i18n.t('radius_help'),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return _i18n.t('field_required');
-                }
-                final radius = int.tryParse(value.trim());
-                if (radius == null || radius < 10 || radius > 1000) {
-                  return _i18n.t('radius_range_error');
-                }
-                return null;
-              },
-            ),
             const SizedBox(height: 24),
+
+            // Photos Section
+            if (!kIsWeb) ...[
+              Text(
+                _i18n.t('photos'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _pickImages,
+                icon: const Icon(Icons.add_photo_alternate),
+                label: Text(_i18n.t('add_photos')),
+              ),
+              const SizedBox(height: 12),
+              if (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty)
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    // Existing images
+                    ..._existingImages.asMap().entries.map((entry) {
+                      final imageWidget = file_helper.buildFileImage(
+                        entry.value,
+                        width: 100,
+                        height: 100,
+                        fit: BoxFit.cover,
+                      );
+                      if (imageWidget == null) return const SizedBox.shrink();
+                      return GestureDetector(
+                        onTap: () => _openPhotoViewer(entry.key, isExisting: true),
+                        child: Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: imageWidget,
+                            ),
+                            Positioned(
+                              top: 4,
+                              right: 4,
+                              child: GestureDetector(
+                                onTap: () => _removeImage(entry.key, isExisting: true),
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    // New images
+                    ..._imageFilePaths.asMap().entries.map((entry) {
+                      final imageWidget = file_helper.buildFileImage(
+                        entry.value,
+                        width: 100,
+                        height: 100,
+                        fit: BoxFit.cover,
+                      );
+                      if (imageWidget == null) return const SizedBox.shrink();
+                      return GestureDetector(
+                        onTap: () => _openPhotoViewer(entry.key, isExisting: false),
+                        child: Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: imageWidget,
+                            ),
+                            Positioned(
+                              top: 4,
+                              right: 4,
+                              child: GestureDetector(
+                                onTap: () => _removeImage(entry.key, isExisting: false),
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              const SizedBox(height: 24),
+            ],
 
             // Optional Fields Section
             Text(
@@ -371,39 +895,6 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 hintText: '123 Main Street, Lisbon, Portugal',
               ),
               maxLines: 2,
-            ),
-            const SizedBox(height: 16),
-
-            // Type (with suggestions)
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _typeController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('place_type'),
-                      border: const OutlineInputBorder(),
-                      hintText: 'restaurant, monument, park...',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.arrow_drop_down),
-                  tooltip: _i18n.t('select_type'),
-                  onSelected: (type) {
-                    setState(() {
-                      _typeController.text = type;
-                    });
-                  },
-                  itemBuilder: (context) => _commonTypes.map((type) {
-                    return PopupMenuItem<String>(
-                      value: type,
-                      child: Text(type),
-                    );
-                  }).toList(),
-                ),
-              ],
             ),
             const SizedBox(height: 16),
 
@@ -430,27 +921,75 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
             ),
             const SizedBox(height: 16),
 
-            // Description
-            TextFormField(
-              controller: _descriptionController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('description'),
-                border: const OutlineInputBorder(),
-                helperText: _i18n.t('place_description_help'),
-              ),
-              maxLines: 8,
-            ),
-            const SizedBox(height: 16),
-
-            // History
-            TextFormField(
-              controller: _historyController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('history'),
-                border: const OutlineInputBorder(),
-                helperText: _i18n.t('place_history_help'),
-              ),
-              maxLines: 8,
+            // History with language selector
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _historyController,
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('history'),
+                      border: const OutlineInputBorder(),
+                      helperText: _i18n.t('place_history_help'),
+                    ),
+                    maxLines: 6,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  children: [
+                    PopupMenuButton<String>(
+                      initialValue: _historyLanguage,
+                      onSelected: _switchHistoryLanguage,
+                      tooltip: _i18n.t('select_language'),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Theme.of(context).colorScheme.outline),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _historyLanguage,
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_drop_down, size: 20),
+                          ],
+                        ),
+                      ),
+                      itemBuilder: (context) => _supportedLanguages.map((lang) {
+                        final hasContent = _histories[lang]?.isNotEmpty ?? false;
+                        return PopupMenuItem<String>(
+                          value: lang,
+                          child: Row(
+                            children: [
+                              Text(lang),
+                              if (hasContent) ...[
+                                const SizedBox(width: 8),
+                                Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+                              ],
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    // Show languages with content
+                    if (widget.place != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_getHistoryLanguagesWithContent().length}/${_supportedLanguages.length}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
             ),
 
             const SizedBox(height: 32),

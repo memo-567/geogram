@@ -7948,12 +7948,38 @@ class LogApiService {
       // Parse the sub-path to determine the operation
       final pathParts = subPath.isEmpty ? <String>[] : subPath.split('/');
 
-      // Handle POST methods for comments
+      // Handle POST methods for comments and feedback
       if (request.method == 'POST') {
         if (pathParts.length == 2 && pathParts[1] == 'comment') {
           // POST /api/blog/{postId}/comment
           final postId = pathParts[0];
           return await _handleBlogAddComment(request, postId, blogApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'like') {
+          // POST /api/blog/{postId}/like
+          final postId = pathParts[0];
+          return await _handleBlogToggleLike(request, postId, blogApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'point') {
+          // POST /api/blog/{postId}/point
+          final postId = pathParts[0];
+          return await _handleBlogTogglePoint(request, postId, blogApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'dislike') {
+          // POST /api/blog/{postId}/dislike
+          final postId = pathParts[0];
+          return await _handleBlogToggleDislike(request, postId, blogApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'subscribe') {
+          // POST /api/blog/{postId}/subscribe
+          final postId = pathParts[0];
+          return await _handleBlogToggleSubscribe(request, postId, blogApi, headers);
+        }
+        if (pathParts.length == 3 && pathParts[1] == 'react') {
+          // POST /api/blog/{postId}/react/{emoji}
+          final postId = pathParts[0];
+          final emoji = pathParts[2];
+          return await _handleBlogToggleReaction(request, postId, emoji, blogApi, headers);
         }
         return shelf.Response(
           405,
@@ -7995,6 +8021,13 @@ class LogApiService {
         // GET /api/blog/{postId} - Get single post with comments
         final postId = pathParts[0];
         return await _handleBlogGetPost(postId, blogApi, headers);
+      }
+
+      if (pathParts.length == 2 && pathParts[1] == 'feedback') {
+        // GET /api/blog/{postId}/feedback - Get feedback counts and user state
+        final postId = pathParts[0];
+        final npub = request.url.queryParameters['npub'];
+        return await _handleBlogGetFeedback(postId, npub, blogApi, headers);
       }
 
       if (pathParts.length >= 3 && pathParts[1] == 'files') {
@@ -8227,6 +8260,246 @@ class LogApiService {
     } catch (e) {
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': 'Error deleting comment: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/blog/{postId}/feedback - Get all feedback counts and user state
+  Future<shelf.Response> _handleBlogGetFeedback(
+    String postId,
+    String? npub,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    final result = await blogApi.getFeedback(postId, npub: npub);
+
+    if (result['success'] == true) {
+      return shelf.Response.ok(
+        jsonEncode(result),
+        headers: headers,
+      );
+    } else {
+      final httpStatus = result['http_status'] as int? ?? 500;
+      return shelf.Response(
+        httpStatus,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/like - Toggle like
+  Future<shelf.Response> _handleBlogToggleLike(
+    shelf.Request request,
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      // Validate required fields
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.toggleLike(postId, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/point - Toggle point
+  Future<shelf.Response> _handleBlogTogglePoint(
+    shelf.Request request,
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      // Validate required fields
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.togglePoint(postId, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/dislike - Toggle dislike
+  Future<shelf.Response> _handleBlogToggleDislike(
+    shelf.Request request,
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      // Validate required fields
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.toggleDislike(postId, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/subscribe - Toggle subscribe
+  Future<shelf.Response> _handleBlogToggleSubscribe(
+    shelf.Request request,
+    String postId,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      // Validate required fields
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.toggleSubscribe(postId, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/blog/{postId}/react/{emoji} - Toggle emoji reaction
+  Future<shelf.Response> _handleBlogToggleReaction(
+    shelf.Request request,
+    String postId,
+    String emoji,
+    StationBlogApi blogApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      // Validate required fields
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await blogApi.toggleReaction(postId, eventJson, emoji);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(
+          jsonEncode(result),
+          headers: headers,
+        );
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(
+          httpStatus,
+          body: jsonEncode(result),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
         headers: headers,
       );
     }

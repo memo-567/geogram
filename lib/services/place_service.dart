@@ -422,6 +422,33 @@ class PlaceService {
     }
   }
 
+  /// Get the folder path for a place (used for saving photos)
+  Future<String?> getPlaceFolderPath(Place place) async {
+    if (_collectionPath == null) {
+      return null;
+    }
+
+    try {
+      final locationService = LocationService();
+      final nearestCity = await locationService.findNearestCity(
+        place.latitude,
+        place.longitude,
+      );
+
+      if (nearestCity == null) {
+        return null;
+      }
+
+      final locationPath = nearestCity.folderPath;
+      final fullPath = '$_collectionPath/places/$locationPath';
+      final placeFolderName = place.placeFolderName;
+      return '$fullPath/$placeFolderName';
+    } catch (e) {
+      LogService().log('Error getting place folder path: $e');
+      return null;
+    }
+  }
+
 
   /// Delete a place
   Future<bool> deletePlace(Place place) async {

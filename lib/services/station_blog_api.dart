@@ -7,9 +7,13 @@
  */
 
 import 'dart:io';
+import 'dart:convert';
 
 import '../models/blog_post.dart';
 import '../util/blog_folder_utils.dart';
+import '../util/feedback_folder_utils.dart';
+import '../util/nostr_event.dart';
+import '../util/nostr_crypto.dart';
 
 /// Blog API handlers for device-hosted blogs
 class StationBlogApi {
@@ -183,14 +187,34 @@ class StationBlogApi {
   // ============================================================
 
   /// Handle POST /api/blog/{postId}/comment
+  /// Verifies NOSTR signature before accepting comment
   Future<Map<String, dynamic>> addComment(
     String postId,
     String author,
     String content, {
     String? npub,
     String? signature,
+    int? createdAt,
   }) async {
     try {
+      // Require signature for comments
+      if (npub == null || signature == null) {
+        return {
+          'error': 'Signature required',
+          'message': 'Comments must be signed with NOSTR keys',
+          'http_status': 401,
+        };
+      }
+
+      // Verify npub format
+      if (!npub.startsWith('npub1') || npub.length != 63) {
+        return {
+          'error': 'Invalid npub format',
+          'message': 'npub must start with "npub1" and be exactly 63 characters',
+          'http_status': 400,
+        };
+      }
+
       // Find the post folder
       final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
 
@@ -212,6 +236,40 @@ class StationBlogApi {
         }
       }
 
+      // Verify signature
+      try {
+        final pubkeyHex = NostrCrypto.decodeNpub(npub);
+        final event = NostrEvent(
+          pubkey: pubkeyHex,
+          createdAt: createdAt ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+          kind: 1, // Text note
+          tags: [
+            ['e', postId], // Reference to blog post
+            ['t', 'blog-comment'],
+            ['callsign', author],
+          ],
+          content: content,
+          sig: signature,
+        );
+        event.calculateId();
+
+        if (!event.verify()) {
+          _log('WARN', 'addComment: Signature verification failed for comment by $author');
+          return {
+            'error': 'Invalid signature',
+            'message': 'Comment signature verification failed',
+            'http_status': 401,
+          };
+        }
+      } catch (e) {
+        _log('ERROR', 'addComment: Error verifying signature: $e');
+        return {
+          'error': 'Signature verification error',
+          'message': e.toString(),
+          'http_status': 400,
+        };
+      }
+
       // Write comment
       final commentId = await BlogFolderUtils.writeComment(
         postFolderPath: postPath,
@@ -221,7 +279,7 @@ class StationBlogApi {
         signature: signature,
       );
 
-      _log('INFO', 'Comment added to post $postId by $author');
+      _log('INFO', 'Comment added to post $postId by $author (verified)');
 
       return {
         'success': true,
@@ -330,8 +388,268 @@ class StationBlogApi {
   }
 
   // ============================================================
+  // GET /api/blog/{postId}/feedback - Get all feedback counts
+  // ============================================================
+
+  /// Handle GET /api/blog/{postId}/feedback - returns all feedback counts and user state
+  Future<Map<String, dynamic>> getFeedback(String postId, {String? npub}) async {
+    try {
+      // Find the post folder
+      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+
+      if (postPath == null) {
+        return {'error': 'Post not found', 'http_status': 404};
+      }
+
+      // Verify post is published
+      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
+      if (await postFile.exists()) {
+        final postContent = await postFile.readAsString();
+        try {
+          final post = BlogPost.fromText(postContent, postId);
+          if (!post.isPublished) {
+            return {'error': 'Post not available', 'http_status': 403};
+          }
+        } catch (e) {
+          _log('WARN', 'getFeedback: could not verify post status: $e');
+        }
+      }
+
+      // Get all feedback counts
+      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(postPath);
+
+      final response = {
+        'success': true,
+        'post_id': postId,
+        'feedback': {
+          'likes': counts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+          'points': counts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+          'dislikes': counts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+          'subscribe': counts[FeedbackFolderUtils.feedbackTypeSubscribe] ?? 0,
+          'verifications': counts[FeedbackFolderUtils.feedbackTypeVerifications] ?? 0,
+          'reactions': {
+            'heart': counts[FeedbackFolderUtils.reactionHeart] ?? 0,
+            'thumbs-up': counts[FeedbackFolderUtils.reactionThumbsUp] ?? 0,
+            'fire': counts[FeedbackFolderUtils.reactionFire] ?? 0,
+            'celebrate': counts[FeedbackFolderUtils.reactionCelebrate] ?? 0,
+            'laugh': counts[FeedbackFolderUtils.reactionLaugh] ?? 0,
+            'sad': counts[FeedbackFolderUtils.reactionSad] ?? 0,
+            'surprise': counts[FeedbackFolderUtils.reactionSurprise] ?? 0,
+          },
+        },
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+      };
+
+      // Add user state if npub provided
+      if (npub != null && npub.isNotEmpty) {
+        final userState = await FeedbackFolderUtils.getUserFeedbackState(postPath, npub);
+        response['user_state'] = {
+          'has_liked': userState[FeedbackFolderUtils.feedbackTypeLikes] ?? false,
+          'has_pointed': userState[FeedbackFolderUtils.feedbackTypePoints] ?? false,
+          'has_disliked': userState[FeedbackFolderUtils.feedbackTypeDislikes] ?? false,
+          'has_subscribed': userState[FeedbackFolderUtils.feedbackTypeSubscribe] ?? false,
+          'has_verified': userState[FeedbackFolderUtils.feedbackTypeVerifications] ?? false,
+          'reactions': {
+            'heart': userState[FeedbackFolderUtils.reactionHeart] ?? false,
+            'thumbs-up': userState[FeedbackFolderUtils.reactionThumbsUp] ?? false,
+            'fire': userState[FeedbackFolderUtils.reactionFire] ?? false,
+            'celebrate': userState[FeedbackFolderUtils.reactionCelebrate] ?? false,
+            'laugh': userState[FeedbackFolderUtils.reactionLaugh] ?? false,
+            'sad': userState[FeedbackFolderUtils.reactionSad] ?? false,
+            'surprise': userState[FeedbackFolderUtils.reactionSurprise] ?? false,
+          },
+        };
+      }
+
+      return response;
+    } catch (e) {
+      _log('ERROR', 'Error getting feedback: $e');
+      return {
+        'error': 'Internal server error',
+        'message': e.toString(),
+        'http_status': 500,
+      };
+    }
+  }
+
+  // ============================================================
+  // POST /api/blog/{postId}/like - Toggle like
+  // ============================================================
+
+  /// Handle POST /api/blog/{postId}/like
+  /// Expects a signed NOSTR event in the request body
+  Future<Map<String, dynamic>> toggleLike(String postId, Map<String, dynamic> eventJson) async {
+    return _toggleFeedback(
+      postId,
+      eventJson,
+      FeedbackFolderUtils.feedbackTypeLikes,
+      'like',
+    );
+  }
+
+  // ============================================================
+  // POST /api/blog/{postId}/point - Toggle point
+  // ============================================================
+
+  /// Handle POST /api/blog/{postId}/point
+  /// Expects a signed NOSTR event in the request body
+  Future<Map<String, dynamic>> togglePoint(String postId, Map<String, dynamic> eventJson) async {
+    return _toggleFeedback(
+      postId,
+      eventJson,
+      FeedbackFolderUtils.feedbackTypePoints,
+      'point',
+    );
+  }
+
+  // ============================================================
+  // POST /api/blog/{postId}/dislike - Toggle dislike
+  // ============================================================
+
+  /// Handle POST /api/blog/{postId}/dislike
+  /// Expects a signed NOSTR event in the request body
+  Future<Map<String, dynamic>> toggleDislike(String postId, Map<String, dynamic> eventJson) async {
+    return _toggleFeedback(
+      postId,
+      eventJson,
+      FeedbackFolderUtils.feedbackTypeDislikes,
+      'dislike',
+    );
+  }
+
+  // ============================================================
+  // POST /api/blog/{postId}/subscribe - Toggle subscription
+  // ============================================================
+
+  /// Handle POST /api/blog/{postId}/subscribe
+  /// Expects a signed NOSTR event in the request body
+  Future<Map<String, dynamic>> toggleSubscribe(String postId, Map<String, dynamic> eventJson) async {
+    return _toggleFeedback(
+      postId,
+      eventJson,
+      FeedbackFolderUtils.feedbackTypeSubscribe,
+      'subscribe',
+    );
+  }
+
+  // ============================================================
+  // POST /api/blog/{postId}/react/{emoji} - Toggle emoji reaction
+  // ============================================================
+
+  /// Handle POST /api/blog/{postId}/react/{emoji}
+  /// Expects a signed NOSTR event in the request body
+  Future<Map<String, dynamic>> toggleReaction(
+    String postId,
+    Map<String, dynamic> eventJson,
+    String emoji,
+  ) async {
+    // Validate emoji is supported
+    if (!FeedbackFolderUtils.supportedReactions.contains(emoji)) {
+      return {
+        'error': 'Unsupported reaction',
+        'message': 'Reaction "$emoji" is not supported',
+        'supported_reactions': FeedbackFolderUtils.supportedReactions,
+        'http_status': 400,
+      };
+    }
+
+    return _toggleFeedback(postId, eventJson, emoji, 'reaction');
+  }
+
+  // ============================================================
   // Internal helper methods
   // ============================================================
+
+  /// Generic method to toggle any feedback type with signature verification
+  Future<Map<String, dynamic>> _toggleFeedback(
+    String postId,
+    Map<String, dynamic> eventJson,
+    String feedbackType,
+    String actionName,
+  ) async {
+    try {
+      // Parse and verify the NOSTR event
+      NostrEvent event;
+      try {
+        event = NostrEvent.fromJson(eventJson);
+      } catch (e) {
+        return {
+          'error': 'Invalid NOSTR event format',
+          'message': e.toString(),
+          'http_status': 400,
+        };
+      }
+
+      // Verify signature
+      if (!event.verify()) {
+        _log('WARN', '_toggleFeedback: Signature verification failed for $actionName');
+        return {
+          'error': 'Invalid signature',
+          'message': 'NOSTR event signature verification failed',
+          'http_status': 401,
+        };
+      }
+
+      final npub = event.npub;
+
+      // Find the post folder
+      final postPath = await BlogFolderUtils.findPostPath(_blogPath, postId);
+
+      if (postPath == null) {
+        return {'error': 'Post not found', 'http_status': 404};
+      }
+
+      // Verify post is published
+      final postFile = File(BlogFolderUtils.buildPostFilePath(postPath));
+      if (await postFile.exists()) {
+        final postContent = await postFile.readAsString();
+        try {
+          final post = BlogPost.fromText(postContent, postId);
+          if (!post.isPublished) {
+            return {'error': 'Cannot interact with unpublished post', 'http_status': 403};
+          }
+        } catch (e) {
+          _log('WARN', '_toggleFeedback: could not verify post status: $e');
+        }
+      }
+
+      // Toggle the feedback with verified event
+      final isNowActive = await FeedbackFolderUtils.toggleFeedbackEvent(
+        postPath,
+        feedbackType,
+        event,
+      );
+
+      if (isNowActive == null) {
+        return {
+          'error': 'Signature verification failed',
+          'message': 'Event signature could not be verified',
+          'http_status': 401,
+        };
+      }
+
+      // Get updated count
+      final count = await FeedbackFolderUtils.getFeedbackCount(postPath, feedbackType);
+
+      final action = isNowActive ? 'added' : 'removed';
+      _log('INFO', '$actionName $action for post $postId by $npub (verified)');
+
+      return {
+        'success': true,
+        'action': action,
+        '${actionName}d': isNowActive, // e.g., "liked": true
+        '${actionName}_count': count,
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+      };
+    } catch (e) {
+      _log('ERROR', 'Error toggling $actionName: $e');
+      return {
+        'error': 'Internal server error',
+        'message': e.toString(),
+        'http_status': 500,
+      };
+    }
+  }
 
   /// Load all posts from blog directory
   Future<List<Map<String, dynamic>>> _loadAllPosts({bool publishedOnly = false}) async {
