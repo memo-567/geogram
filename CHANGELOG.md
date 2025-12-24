@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-24 - v1.6.53
+
+### Changes
+- Minor updates and improvements
+
+
 ## 2025-12-24 - v1.6.42
 
 ### Changes
