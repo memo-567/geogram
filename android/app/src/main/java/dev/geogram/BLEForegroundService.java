@@ -1,5 +1,6 @@
 package dev.geogram;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -16,6 +18,7 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import io.flutter.plugin.common.MethodChannel;
 
@@ -126,10 +129,21 @@ public class BLEForegroundService extends Service {
 
         // Use both connectedDevice (for BLE) and dataSync (for WebSocket/network) service types
         // This ensures network operations continue even when the display is off
+        // Note: On Android 14+ (API 34+), CONNECTED_DEVICE type requires Bluetooth permissions
+        // to be granted at runtime, not just declared in the manifest
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            int serviceType;
+            if (hasBluetoothPermissions()) {
+                // Full service with BLE support
+                serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                Log.d(TAG, "Starting foreground service with CONNECTED_DEVICE|DATA_SYNC types");
+            } else {
+                // Fallback to dataSync only when Bluetooth permissions not granted
+                serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                Log.w(TAG, "Bluetooth permissions not granted, using DATA_SYNC type only");
+            }
+            startForeground(NOTIFICATION_ID, notification, serviceType);
         } else {
             startForeground(NOTIFICATION_ID, notification);
         }
@@ -143,6 +157,23 @@ public class BLEForegroundService extends Service {
 
         // Keep the service running
         return START_STICKY;
+    }
+
+    /**
+     * Check if any of the Bluetooth permissions required for FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+     * are granted. On Android 12+ (API 31+), we need BLUETOOTH_CONNECT, BLUETOOTH_SCAN, or BLUETOOTH_ADVERTISE.
+     * On older versions, the legacy BLUETOOTH permission is sufficient.
+     */
+    private boolean hasBluetoothPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12+ requires new Bluetooth permissions
+            return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED ||
+                   ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED ||
+                   ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED;
+        } else {
+            // Pre-Android 12 uses legacy BLUETOOTH permission (normal permission, auto-granted)
+            return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED;
+        }
     }
 
     @Override
