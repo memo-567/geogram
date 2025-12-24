@@ -24,7 +24,7 @@ fi
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Change to the geogram-desktop directory
+# Change to the geogram directory
 cd "$SCRIPT_DIR"
 
 echo "🚀 Launching Geogram Web..."

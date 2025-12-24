@@ -209,7 +209,7 @@ class UpdateService {
 
       final response = await http.get(
         Uri.parse(updateUrl),
-        headers: {'User-Agent': 'Geogram-Desktop-Updater'},
+        headers: {'User-Agent': 'Geogram-Updater'},
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
@@ -243,7 +243,7 @@ class UpdateService {
   Future<ReleaseInfo?> _checkGitHubForUpdates() async {
     try {
       final url = _settings?.updateUrl ??
-          'https://api.github.com/repos/geograms/geogram-desktop/releases/latest';
+          'https://api.github.com/repos/geograms/geogram/releases/latest';
 
       LogService().log('Checking GitHub for updates: $url');
 
@@ -251,7 +251,7 @@ class UpdateService {
         Uri.parse(url),
         headers: {
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Geogram-Desktop-Updater',
+          'User-Agent': 'Geogram-Updater',
         },
       ).timeout(const Duration(seconds: 30));
 
@@ -375,8 +375,8 @@ class UpdateService {
   /// Get platform-specific binary name
   String _getPlatformBinaryName() {
     if (!kIsWeb && Platform.isAndroid) return 'geogram.apk';
-    if (!kIsWeb && Platform.isWindows) return 'geogram-desktop.exe';
-    return 'geogram-desktop'; // Linux, macOS
+    if (!kIsWeb && Platform.isWindows) return 'geogram.exe';
+    return 'geogram'; // Linux, macOS
   }
 
   /// Find binary file inside a version directory
@@ -396,7 +396,7 @@ class UpdateService {
       if (entity is File) {
         final name = entity.path.split(Platform.pathSeparator).last;
         if (name.endsWith('.apk') || name.endsWith('.exe') ||
-            name == 'geogram-desktop' || name.startsWith('geogram')) {
+            name == 'geogram' || name.startsWith('geogram')) {
           return entity.path;
         }
       }
@@ -813,7 +813,7 @@ class UpdateService {
       // First, get the total file size with a HEAD request
       final headResponse = await http.head(
         Uri.parse(downloadUrl),
-        headers: {'User-Agent': 'Geogram-Desktop-Updater'},
+        headers: {'User-Agent': 'Geogram-Updater'},
       ).timeout(const Duration(seconds: 30));
 
       final contentLength = int.tryParse(

@@ -857,7 +857,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               builder: (context, layerType, child) {
                 return TileLayer(
                   urlTemplate: _mapTileService.getTileUrl(layerType),
-                  userAgentPackageName: 'dev.geogram.geogram_desktop',
+                  userAgentPackageName: 'dev.geogram',
                   subdomains: const [],
                   tileBuilder: (context, tileWidget, tile) {
                     return tileWidget;
@@ -885,7 +885,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   ]),
                   child: TileLayer(
                     urlTemplate: _mapTileService.getBordersUrl(),
-                    userAgentPackageName: 'dev.geogram.geogram_desktop',
+                    userAgentPackageName: 'dev.geogram',
                     subdomains: const [],
                     tileProvider: _mapTileService.getBordersProvider(),
                   ),
@@ -901,7 +901,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 }
                 return TileLayer(
                   urlTemplate: _mapTileService.getLabelsUrl(),
-                  userAgentPackageName: 'dev.geogram.geogram_desktop',
+                  userAgentPackageName: 'dev.geogram',
                   subdomains: const [],
                   tileProvider: _mapTileService.getLabelsProvider(),
                 );
@@ -927,7 +927,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                   ]),
                   child: TileLayer(
                     urlTemplate: _mapTileService.getTransportLabelsUrl(),
-                    userAgentPackageName: 'dev.geogram.geogram_desktop',
+                    userAgentPackageName: 'dev.geogram',
                     subdomains: const [],
                     tileProvider: _mapTileService.getTransportLabelsProvider(),
                   ),

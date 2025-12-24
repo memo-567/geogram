@@ -1,4 +1,4 @@
-# Geogram Desktop
+# Geogram
 
 A cross-platform desktop and mobile application for Geogram, built with Flutter.
 
@@ -28,7 +28,7 @@ A cross-platform desktop and mobile application for Geogram, built with Flutter.
 Run the automated setup script to install all dependencies and Flutter:
 
 ```bash
-cd geogram-desktop
+cd geogram
 ./setup.sh
 ```
 
@@ -90,21 +90,21 @@ To make this permanent, add it to your `~/.bashrc` or `~/.zshrc`.
 ### Linux Desktop
 
 ```bash
-cd geogram_desktop
+cd geogram
 flutter run -d linux
 ```
 
 ### macOS Desktop
 
 ```bash
-cd geogram_desktop
+cd geogram
 flutter run -d macos
 ```
 
 ### Web
 
 ```bash
-cd geogram_desktop
+cd geogram
 flutter run -d chrome
 ```
 
@@ -121,7 +121,7 @@ The built files will be in `build/web/`.
 Connect an Android device or start an emulator, then:
 
 ```bash
-cd geogram_desktop
+cd geogram
 flutter run -d android
 ```
 
@@ -130,14 +130,14 @@ flutter run -d android
 Connect an iOS device or start a simulator (macOS only), then:
 
 ```bash
-cd geogram_desktop
+cd geogram
 flutter run -d ios
 ```
 
 ## Project Structure
 
 ```
-geogram_desktop/
+geogram/
 ├── lib/
 │   └── main.dart          # Main application code
 ├── android/               # Android-specific files

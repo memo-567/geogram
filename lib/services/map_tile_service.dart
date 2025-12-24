@@ -472,7 +472,7 @@ class MapTileService {
         final osmUrl = 'https://tile.openstreetmap.org/$z/$x/$y.png';
         LogService().log('TEST [$z/$x/$y] Trying internet: $osmUrl');
         final osmResponse = await httpClient
-            .get(Uri.parse(osmUrl), headers: {'User-Agent': 'dev.geogram.geogram_desktop'})
+            .get(Uri.parse(osmUrl), headers: {'User-Agent': 'dev.geogram'})
             .timeout(const Duration(seconds: 10));
 
         if (osmResponse.statusCode == 200) {
@@ -720,7 +720,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
           final response = await httpClient
               .get(
                 Uri.parse(url),
-                headers: {'User-Agent': 'dev.geogram.geogram_desktop'},
+                headers: {'User-Agent': 'dev.geogram'},
               )
               .timeout(const Duration(seconds: 10));
 
@@ -823,7 +823,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
       }
 
       final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram.geogram_desktop'})
+          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
@@ -968,7 +968,7 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
       final response = await httpClient
           .get(
             Uri.parse(url),
-            headers: {'User-Agent': 'dev.geogram.geogram_desktop'},
+            headers: {'User-Agent': 'dev.geogram'},
           )
           .timeout(const Duration(seconds: 10));
 
@@ -1031,7 +1031,7 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
           .replaceAll('{x}', x.toString());
 
       final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram.geogram_desktop'})
+          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -1166,7 +1166,7 @@ class GeogramTransportLabelsImageProvider extends ImageProvider<GeogramTransport
           .replaceAll('{x}', x.toString());
 
       final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram.geogram_desktop'})
+          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
@@ -1326,7 +1326,7 @@ class GeogramBordersImageProvider extends ImageProvider<GeogramBordersImageProvi
           .replaceAll('{x}', x.toString());
 
       final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram.geogram_desktop'})
+          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {

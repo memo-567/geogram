@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Geogram Desktop - Complete Setup Script
-# This script sets up everything needed to run geogram-desktop on a new machine
+# Geogram - Complete Setup Script
+# This script sets up everything needed to run geogram on a new machine
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=============================="
-echo "🚀 Geogram Desktop Setup"
+echo "🚀 Geogram Setup"
 echo "=============================="
 echo ""
 echo "This script will:"

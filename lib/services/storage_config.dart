@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
-/// Centralized storage configuration for geogram-desktop
+/// Centralized storage configuration for geogram
 ///
 /// This service provides unified path management for both UI and CLI modes.
 /// By default, data is stored in the directory where the binary is running.
@@ -128,10 +128,10 @@ class StorageConfig {
           final appDir = await getApplicationDocumentsDirectory();
           _baseDir = path.join(appDir.path, 'geogram');
         } else {
-          // On desktop, use ~/.local/share/geogram-desktop for consistent location
+          // On desktop, use ~/.local/share/geogram for consistent location
           final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
           if (home != null) {
-            _baseDir = path.join(home, '.local', 'share', 'geogram-desktop');
+            _baseDir = path.join(home, '.local', 'share', 'geogram');
           } else {
             // Fallback to current working directory if HOME not set
             _baseDir = Directory.current.path;
@@ -153,12 +153,12 @@ class StorageConfig {
   String _getPreferencesFilePath() {
     final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '/tmp';
     if (Platform.isWindows) {
-      return path.join(home, 'AppData', 'Local', 'geogram-desktop', 'data_dir.txt');
+      return path.join(home, 'AppData', 'Local', 'geogram', 'data_dir.txt');
     } else if (Platform.isMacOS) {
-      return path.join(home, 'Library', 'Application Support', 'geogram-desktop', 'data_dir.txt');
+      return path.join(home, 'Library', 'Application Support', 'geogram', 'data_dir.txt');
     } else {
       // Linux and others
-      return path.join(home, '.config', 'geogram-desktop', 'data_dir.txt');
+      return path.join(home, '.config', 'geogram', 'data_dir.txt');
     }
   }
 

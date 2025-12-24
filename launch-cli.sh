@@ -33,7 +33,7 @@ fi
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Change to the geogram-desktop directory
+# Change to the geogram directory
 cd "$SCRIPT_DIR"
 
 # CLI binary path (standalone Dart, not Flutter)
@@ -52,7 +52,7 @@ for arg in "$@"; do
             SKIP_BUILD=true
             ;;
         --help|-h)
-            echo "Geogram Desktop CLI Launcher"
+            echo "Geogram CLI Launcher"
             echo ""
             echo "Usage: $0 [options]"
             echo ""
@@ -77,7 +77,7 @@ for arg in "$@"; do
 done
 
 echo "=============================================="
-echo "  Geogram Desktop CLI Mode"
+echo "  Geogram CLI Mode"
 echo "=============================================="
 echo ""
 

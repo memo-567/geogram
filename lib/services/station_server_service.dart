@@ -55,7 +55,7 @@ class RelayServerSettings {
     this.updateMirrorEnabled = true,
     this.updateCheckInterval = 120,
     this.lastMirroredVersion,
-    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
   });
 
   factory RelayServerSettings.fromJson(Map<String, dynamic> json) {
@@ -73,7 +73,7 @@ class RelayServerSettings {
       updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
       updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
-      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram/releases/latest',
     );
   }
 
@@ -694,7 +694,7 @@ class StationServerService {
       'type': 'hello_ack',
       'success': true,
       'message': 'Welcome to Geogram Station',
-      'server': 'geogram-desktop-station',
+      'server': 'geogram-station',
       'version': appVersion,
       'station_id': ProfileService().getProfile().callsign,
     };

@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-# Flutter 3.38.3 includes Dart 3.10 which is required by geogram-desktop (pubspec.yaml requires SDK ^3.10.0)
+# Flutter 3.38.3 includes Dart 3.10 which is required by geogram (pubspec.yaml requires SDK ^3.10.0)
 FLUTTER_VERSION="3.38.3"
 FLUTTER_HOME="$HOME/flutter"
 DOWNLOAD_DIR="$HOME"

@@ -411,7 +411,7 @@ class StationDiscoveryService {
           if (body.contains('Geogram Station') || body.contains('geogram-station') ||
               serviceField == 'Geogram Station Server') {
             type = 'station';
-          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop')) {
+          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop') || body.contains('Geogram') || body.contains('geogram')) {
             type = 'desktop';
           } else if (body.contains('Geogram') || body.contains('geogram')) {
             type = 'client';
@@ -483,7 +483,7 @@ class StationDiscoveryService {
               longitude: _getDouble(data, 'location.longitude'),
               connectedDevices: data['connected_devices'] as int?,
             );
-          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop')) {
+          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop') || body.contains('Geogram') || body.contains('geogram')) {
             try {
               final data = jsonDecode(body) as Map<String, dynamic>;
               return NetworkScanResult(

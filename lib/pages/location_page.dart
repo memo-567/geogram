@@ -389,7 +389,7 @@ class _LocationPageState extends State<LocationPage> {
                       builder: (context, layerType, child) {
                         return TileLayer(
                           urlTemplate: _mapTileService.getTileUrl(layerType),
-                          userAgentPackageName: 'dev.geogram.geogram_desktop',
+                          userAgentPackageName: 'dev.geogram',
                           subdomains: const [],
                           tileProvider: _mapTileService.getTileProvider(layerType),
                           errorTileCallback: (tile, error, stackTrace) {
@@ -411,7 +411,7 @@ class _LocationPageState extends State<LocationPage> {
                         }
                         return TileLayer(
                           urlTemplate: _mapTileService.getLabelsUrl(),
-                          userAgentPackageName: 'dev.geogram.geogram_desktop',
+                          userAgentPackageName: 'dev.geogram',
                           subdomains: const [],
                           tileProvider: _mapTileService.getLabelsProvider(),
                         );
@@ -428,7 +428,7 @@ class _LocationPageState extends State<LocationPage> {
                           opacity: 0.6,
                           child: TileLayer(
                             urlTemplate: _mapTileService.getTransportLabelsUrl(),
-                            userAgentPackageName: 'dev.geogram.geogram_desktop',
+                            userAgentPackageName: 'dev.geogram',
                             subdomains: const [],
                             tileProvider: _mapTileService.getTransportLabelsProvider(),
                           ),

@@ -254,7 +254,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                             builder: (context, layerType, child) {
                               return TileLayer(
                                 urlTemplate: _mapTileService.getTileUrl(layerType),
-                                userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                userAgentPackageName: 'dev.geogram',
                                 subdomains: const [], // No subdomains for station/OSM
                                 tileProvider: _mapTileService.getTileProvider(layerType),
                                 errorTileCallback: (tile, error, stackTrace) {
@@ -276,7 +276,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               }
                               return TileLayer(
                                 urlTemplate: _mapTileService.getLabelsUrl(),
-                                userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                userAgentPackageName: 'dev.geogram',
                                 subdomains: const [],
                                 tileProvider: _mapTileService.getLabelsProvider(),
                               );
@@ -293,7 +293,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                 opacity: 0.6, // Soften road colors
                                 child: TileLayer(
                                   urlTemplate: _mapTileService.getTransportLabelsUrl(),
-                                  userAgentPackageName: 'dev.geogram.geogram_desktop',
+                                  userAgentPackageName: 'dev.geogram',
                                   subdomains: const [],
                                   tileProvider: _mapTileService.getTransportLabelsProvider(),
                                 ),

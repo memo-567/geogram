@@ -14,7 +14,7 @@ import 'package:flutter/services.dart';
 ///
 /// Supported arguments:
 ///   --port=PORT, -p PORT       API server port (default: 3456)
-///   --data-dir=PATH, -d PATH   Data directory (default: ~/.local/share/geogram-desktop)
+///   --data-dir=PATH, -d PATH   Data directory (default: ~/.local/share/geogram)
 ///   --cli                      Run in CLI mode (no GUI)
 ///   --http-api                 Enable HTTP API on startup
 ///   --debug-api                Enable Debug API on startup
@@ -34,9 +34,9 @@ import 'package:flutter/services.dart';
 ///   GEOGRAM_DATA_DIR          Data directory
 ///
 /// Example usage:
-///   geogram_desktop --port=3457 --data-dir=/tmp/geogram-test
-///   geogram_desktop -p 3457 -d /tmp/geogram-test
-///   geogram_desktop --new-identity --identity-type=station --nickname="Test Station"
+///   geogram --port=3457 --data-dir=/tmp/geogram-test
+///   geogram -p 3457 -d /tmp/geogram-test
+///   geogram --new-identity --identity-type=station --nickname="Test Station"
 class AppArgs {
   static final AppArgs _instance = AppArgs._internal();
   factory AppArgs() => _instance;

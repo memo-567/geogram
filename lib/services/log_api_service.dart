@@ -433,7 +433,7 @@ class LogApiService {
       jsonEncode({
         'service': 'Geogram Desktop',
         'version': appVersion,
-        'type': 'geogram-desktop',
+        'type': 'geogram',
         'callsign': callsign,
         'hostname': io.Platform.localHostname,
         'endpoints': {

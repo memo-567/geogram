@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run geogram-desktop tests
+# Run geogram tests
 #
 # Usage:
 #   ./run_tests.sh          # Run station API tests (default)

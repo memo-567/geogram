@@ -1,5 +1,5 @@
 #!/usr/bin/env dart
-// Standalone CLI entry point for geogram-desktop
+// Standalone CLI entry point for geogram
 // This is pure Dart CLI mode with no Flutter dependencies
 //
 // Build: dart compile exe bin/cli.dart -o geogram-cli

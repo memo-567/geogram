@@ -530,7 +530,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       final response = await http.get(
         Uri.parse('https://nominatim.openstreetmap.org/search?q=$address&format=json&limit=1'),
         headers: {
-          'User-Agent': 'geogram-desktop/1.0',
+          'User-Agent': 'geogram/1.0',
         },
       ).timeout(const Duration(seconds: 10));
 

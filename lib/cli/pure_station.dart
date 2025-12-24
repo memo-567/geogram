@@ -101,7 +101,7 @@ class PureRelaySettings {
     this.updateMirrorEnabled = true,
     this.updateCheckIntervalSeconds = 120,
     this.lastMirroredVersion,
-    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+    this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -146,7 +146,7 @@ class PureRelaySettings {
       updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
       updateCheckIntervalSeconds: json['updateCheckIntervalSeconds'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
-      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+      updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram/releases/latest',
     );
   }
 

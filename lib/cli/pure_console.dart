@@ -30,7 +30,7 @@ class Candidate {
       : display = display ?? value;
 }
 
-/// Pure Dart CLI console for geogram-desktop
+/// Pure Dart CLI console for geogram
 class PureConsole {
   /// Virtual filesystem current path
   String _currentPath = '/';

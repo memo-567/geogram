@@ -14,7 +14,7 @@ import '../services/storage_config.dart';
 import '../services/app_args.dart';
 import '../version.dart';
 
-/// Main CLI console for geogram-desktop
+/// Main CLI console for geogram
 class Console {
   /// Virtual filesystem current path
   String _currentPath = '/';

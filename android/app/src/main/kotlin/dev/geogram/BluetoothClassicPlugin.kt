@@ -1,4 +1,4 @@
-package dev.geogram.geogram_desktop
+package dev.geogram
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter

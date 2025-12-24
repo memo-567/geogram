@@ -4,9 +4,9 @@
 
 set -e
 
-APP_NAME="geogram_desktop"
-INSTALL_DIR="/opt/geogram-desktop"
-DESKTOP_FILE="/usr/share/applications/dev.geogram.geogram_desktop.desktop"
+APP_NAME="geogram"
+INSTALL_DIR="/opt/geogram"
+DESKTOP_FILE="/usr/share/applications/dev.geogram.desktop"
 ICON_DIR="/usr/share/icons/hicolor/512x512/apps"
 
 echo "Installing Geogram Desktop..."
@@ -35,13 +35,13 @@ echo "Installing desktop entry..."
 cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Type=Application
-Name=Geogram Desktop
+Name=Geogram
 Comment=Resilient, Decentralized Communication
-Exec=$INSTALL_DIR/geogram_desktop
+Exec=$INSTALL_DIR/geogram
 Icon=geogram
 Categories=Network;Communication;
 Terminal=false
-StartupWMClass=geogram_desktop
+StartupWMClass=geogram
 EOF
 
 # Make executable

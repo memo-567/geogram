@@ -169,7 +169,7 @@ class UpdateSettings {
     this.autoCheckUpdates = true,
     this.notifyOnUpdate = true,
     this.useStationForUpdates = true,
-    this.updateUrl = 'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+    this.updateUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
     this.downloadUrlPattern = '',
     this.maxBackups = 5,
     this.lastCheckTime,
@@ -186,7 +186,7 @@ class UpdateSettings {
       notifyOnUpdate: json['notifyOnUpdate'] as bool? ?? true,
       useStationForUpdates: json['useStationForUpdates'] as bool? ?? true,
       updateUrl: json['updateUrl'] as String? ??
-          'https://api.github.com/repos/geograms/geogram-desktop/releases/latest',
+          'https://api.github.com/repos/geograms/geogram/releases/latest',
       downloadUrlPattern: json['downloadUrlPattern'] as String? ?? '',
       maxBackups: json['maxBackups'] as int? ?? 5,
       lastCheckTime: json['lastCheckTime'] != null

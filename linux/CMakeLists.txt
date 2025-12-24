@@ -4,10 +4,10 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "geogram_desktop")
+set(BINARY_NAME "geogram")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "dev.geogram.geogram_desktop")
+set(APPLICATION_ID "dev.geogram")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -103,7 +103,7 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/app_icon.png"
   COMPONENT Runtime)
 
 # Install desktop file
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/dev.geogram.geogram_desktop.desktop"
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/dev.geogram.desktop"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
