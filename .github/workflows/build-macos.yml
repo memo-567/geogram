@@ -51,7 +51,7 @@ jobs:
     - name: Create portable archive
       run: |
         cd build/macos/Build/Products/Release
-        zip -r ../../../../../geogram-macos-x64.zip geogram_desktop.app
+        zip -r ../../../../../geogram-macos-x64.zip Geogram.app
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
