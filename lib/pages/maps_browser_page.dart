@@ -24,6 +24,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
+import '../services/station_alert_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 
@@ -196,6 +197,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
 
     try {
+      final shouldFetchStationAlerts = isFirstLoad || forceRefresh;
+      if (shouldFetchStationAlerts) {
+        await StationAlertService().fetchAlerts(
+          lat: _centerPosition!.latitude,
+          lon: _centerPosition!.longitude,
+          radiusKm: null,
+        );
+      }
+
       // Always load all item types - filtering happens at display time
       final items = await _mapsService.loadAllMapItems(
         centerLat: _centerPosition!.latitude,
