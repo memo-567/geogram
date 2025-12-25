@@ -25,6 +25,7 @@ import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
 import '../services/station_alert_service.dart';
+import '../services/collection_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 
@@ -42,9 +43,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   final MapTileService _mapTileService = MapTileService();
   final I18nService _i18n = I18nService();
   final ConfigService _configService = ConfigService();
+  final CollectionService _collectionService = CollectionService();
   final MapController _mapController = MapController();
 
   late TabController _tabController;
+  late final VoidCallback _collectionsListener;
 
   // State
   List<MapItem> _allItems = [];
@@ -91,12 +94,19 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _collectionsListener = () {
+      if (!mounted) return;
+      _mapsService.clearCache();
+      _loadItems(forceRefresh: true);
+    };
+    _collectionService.collectionsNotifier.addListener(_collectionsListener);
     _initialize();
     _startAutoRefresh();
   }
 
   @override
   void dispose() {
+    _collectionService.collectionsNotifier.removeListener(_collectionsListener);
     _autoRefreshTimer?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -112,6 +122,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   Future<void> _initialize() async {
+    _mapsService.clearCache();
     // Initialize tile caching
     await _mapTileService.initialize();
     // Trigger rebuild to ensure GeogramTileProvider is used

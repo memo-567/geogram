@@ -62,6 +62,10 @@ class StationPlaceService {
     bool useSince = false,
   }) async {
     try {
+      if (!_stationService.isInitialized) {
+        await _stationService.initialize();
+      }
+
       final station = _stationService.getPreferredStation();
       if (station == null || station.url.isEmpty) {
         return StationPlaceFetchResult(

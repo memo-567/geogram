@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'package:path/path.dart' as path;
+
 import '../models/map_item.dart';
 import '../models/collection.dart';
 import 'collection_service.dart';
@@ -12,9 +14,11 @@ import 'news_service.dart';
 import 'report_service.dart';
 import 'station_service.dart';
 import 'station_alert_service.dart';
+import 'station_place_service.dart';
 import 'contact_service.dart';
 import 'profile_service.dart';
 import 'log_service.dart';
+import 'storage_config.dart';
 
 /// Service for aggregating and filtering map items from all sources
 class MapsService {
@@ -67,6 +71,7 @@ class MapsService {
     bool forceRefresh = false,
   }) async {
     final items = <MapItem>[];
+    final localRelativePaths = <String>{};
     final types = visibleTypes ?? MapItemType.values.toSet();
 
     LogService().log('MapsService: Loading map items within ${radiusKm ?? "unlimited"} km of ($centerLat, $centerLon)');
@@ -188,6 +193,8 @@ class MapsService {
 
           final places = await placeService.loadAllPlaces();
 
+          final basePath = path.join(collection.storagePath!, 'places');
+
           for (var place in places) {
             final distance = MapItem.calculateDistance(
               centerLat,
@@ -199,6 +206,14 @@ class MapsService {
             if (radiusKm != null && distance > radiusKm) continue;
 
             items.add(MapItem.fromPlace(place, distanceKm: distance, collectionPath: collection.storagePath));
+
+            final folderPath = place.folderPath;
+            if (folderPath != null && folderPath.isNotEmpty) {
+              final relativePath = path.relative(folderPath, from: basePath);
+              if (!relativePath.startsWith('..')) {
+                localRelativePaths.add(relativePath);
+              }
+            }
           }
 
           LogService().log('MapsService: Loaded ${places.length} places from ${collection.title}');
@@ -207,12 +222,84 @@ class MapsService {
         }
       }
 
-      LogService().log('MapsService: Found ${items.length} total places');
+      // Load station places (from other devices via the station)
+      try {
+        final stationPlaceService = StationPlaceService();
+        final stationResult = await stationPlaceService.fetchPlaces(
+          lat: centerLat,
+          lon: centerLon,
+          radiusKm: null,
+          useSince: false,
+        );
+
+        if (stationResult.success) {
+          final profile = ProfileService().getProfile();
+          final localCallsign = profile.callsign.toUpperCase();
+          final storageConfig = StorageConfig();
+          final devicesDir = storageConfig.isInitialized ? storageConfig.devicesDir : null;
+
+          for (final entry in stationResult.places) {
+            if (localCallsign.isNotEmpty &&
+                entry.callsign == localCallsign &&
+                entry.relativePath != null &&
+                localRelativePaths.contains(entry.relativePath)) {
+              continue;
+            }
+
+            final place = entry.place;
+
+            final distance = MapItem.calculateDistance(
+              centerLat,
+              centerLon,
+              place.latitude,
+              place.longitude,
+            );
+
+            if (radiusKm != null && distance > radiusKm) continue;
+
+            final collectionPath =
+                devicesDir != null ? path.join(devicesDir, entry.callsign) : _collectionPathFromFolder(place.folderPath);
+
+            if (collectionPath == null || collectionPath.isEmpty) {
+              continue;
+            }
+
+            items.add(MapItem(
+              type: MapItemType.place,
+              id: '${entry.callsign}:${place.placeFolderName}',
+              title: place.name,
+              subtitle: place.type ?? place.address,
+              latitude: place.latitude,
+              longitude: place.longitude,
+              distanceKm: distance,
+              sourceItem: place,
+              collectionPath: collectionPath,
+              isFromStation: true,
+            ));
+          }
+
+          LogService().log('MapsService: Added ${stationResult.places.length} station places to map');
+        } else if (stationResult.error != null) {
+          LogService().log('MapsService: Station places fetch error: ${stationResult.error}');
+        }
+      } catch (e) {
+        LogService().log('MapsService: Error loading station places: $e');
+      }
+
+      LogService().log('MapsService: Found ${items.length} total places (local + station)');
     } catch (e) {
       LogService().log('MapsService: Error loading places: $e');
     }
 
     return items;
+  }
+
+  String? _collectionPathFromFolder(String? folderPath) {
+    if (folderPath == null || folderPath.isEmpty) return null;
+    final parts = path.split(folderPath);
+    final placesIndex = parts.lastIndexOf('places');
+    if (placesIndex <= 0) return null;
+    return path.joinAll(parts.sublist(0, placesIndex));
   }
 
   /// Load news articles with location from all news collections
