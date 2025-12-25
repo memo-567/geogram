@@ -513,6 +513,27 @@ class DebugController {
           'provider_callsign': 'Provider callsign (required)',
         },
       },
+      {
+        'action': 'place_like',
+        'description': 'Toggle like for a place via station feedback API',
+        'params': {
+          'place_id': 'Place folder name (required)',
+          'callsign': '(optional) Place owner callsign for local cache update',
+          'place_path': '(optional) Absolute path to place folder for local cache update',
+        },
+      },
+      {
+        'action': 'place_comment',
+        'description': 'Add a comment to a place via station feedback API',
+        'params': {
+          'place_id': 'Place folder name (required)',
+          'content': 'Comment text (required)',
+          'author': '(optional) Comment author callsign',
+          'npub': '(optional) Comment author npub',
+          'callsign': '(optional) Place owner callsign for local cache update',
+          'place_path': '(optional) Absolute path to place folder for local cache update',
+        },
+      },
     ];
   }
 

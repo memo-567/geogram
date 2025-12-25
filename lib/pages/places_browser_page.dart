@@ -16,6 +16,7 @@ import '../services/place_sharing_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_place_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
+import '../widgets/place_feedback_section.dart';
 import 'add_edit_place_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -868,6 +869,11 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             ),
           ],
 
+          PlaceFeedbackSection(
+            key: ValueKey(place.folderPath ?? place.placeFolderName),
+            place: place,
+          ),
+
           const SizedBox(height: 24),
 
           if (!isReadOnly)
@@ -1391,6 +1397,11 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                   ),
                 ),
               ],
+
+              PlaceFeedbackSection(
+                key: ValueKey(widget.place.folderPath ?? widget.place.placeFolderName),
+                place: widget.place,
+              ),
 
               const SizedBox(height: 24),
 

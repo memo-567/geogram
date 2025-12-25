@@ -18,6 +18,7 @@ import '../platform/file_image_helper.dart' as file_helper;
 import 'add_edit_place_page.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
+import '../widgets/place_feedback_section.dart';
 
 /// Full-screen place detail page
 /// Can be used from the map, places browser, or anywhere else
@@ -480,6 +481,11 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
                         ),
                       ),
                     ],
+
+                    PlaceFeedbackSection(
+                      key: ValueKey(_place.folderPath ?? _place.placeFolderName),
+                      place: _place,
+                    ),
 
                     const SizedBox(height: 24),
 

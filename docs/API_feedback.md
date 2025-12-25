@@ -1,8 +1,8 @@
 # Centralized Feedback API
 
-**Version**: 1.2
+**Version**: 1.3
 **Status**: Active (implemented)
-**Last Updated**: 2025-12-24
+**Last Updated**: 2025-12-25
 
 ## Table of Contents
 
@@ -112,19 +112,19 @@ All content types use the same feedback folder structure:
 ├── {content-file}                 # Main content (report.txt, post.md, etc.)
 ├── files/                          # Attachments (optional)
 └── feedback/                       # NEW: Centralized feedback folder
-    ├── likes.txt                   # Signed NOSTR events (JSON), one per line
-    ├── points.txt                  # Signed NOSTR events (JSON), one per line
-    ├── dislikes.txt                # Signed NOSTR events (JSON), one per line
-    ├── subscribe.txt               # Signed NOSTR events (JSON), one per line
-    ├── verifications.txt           # Signed NOSTR events (JSON), one per line (add-only)
+    ├── likes.txt                   # NOSTR npub, one per line
+    ├── points.txt                  # NOSTR npub, one per line
+    ├── dislikes.txt                # NOSTR npub, one per line
+    ├── subscribe.txt               # NOSTR npub, one per line
+    ├── verifications.txt           # NOSTR npub, one per line (add-only)
     ├── views.txt                   # Signed NOSTR events (JSON), multiple entries
-    ├── heart.txt                   # Emoji reaction: signed events, one per line
-    ├── thumbs-up.txt               # Emoji reaction: signed events, one per line
-    ├── fire.txt                    # Emoji reaction: signed events, one per line
-    ├── celebrate.txt               # Emoji reaction: signed events, one per line
-    ├── laugh.txt                   # Emoji reaction: signed events, one per line
-    ├── sad.txt                     # Emoji reaction: signed events, one per line
-    ├── surprise.txt                # Emoji reaction: signed events, one per line
+    ├── heart.txt                   # Emoji reaction: npub per line
+    ├── thumbs-up.txt               # Emoji reaction: npub per line
+    ├── fire.txt                    # Emoji reaction: npub per line
+    ├── celebrate.txt               # Emoji reaction: npub per line
+    ├── laugh.txt                   # Emoji reaction: npub per line
+    ├── sad.txt                     # Emoji reaction: npub per line
+    ├── surprise.txt                # Emoji reaction: npub per line
     └── comments/
         └── YYYY-MM-DD_HH-MM-SS_CALLSIGN.txt
 ```
@@ -132,9 +132,9 @@ All content types use the same feedback folder structure:
 ### Key Principles
 
 1. **Flat Structure**: All feedback files stored directly in `feedback/` folder (no nested subfolders except comments)
-2. **Signed events per line**: All feedback files (except comments) store signed NOSTR event JSON lines
+2. **Npub per line**: Toggle feedback files store one npub per line; views remain signed JSON events
 3. **Auto-cleanup**: Empty feedback files are automatically deleted
-4. **Signature enforcement**: Only verified events are counted; unsigned lines are ignored
+4. **Signature enforcement**: Signatures are verified on write; stored npub lines represent validated feedback
 
 ### Example: Blog Post with Feedback
 
@@ -159,7 +159,8 @@ devices/X1ABCD/blog/2025/2025-12-04_hello-everyone/
 
 ## Feedback Types
 
-All feedback files (except comments) use the same format: **one signed NOSTR event JSON per line**.
+Toggle feedback files (likes, points, dislikes, subscribe, verifications, reactions) use **one npub per line**.
+Views remain signed JSON event lines to preserve timestamps and analytics.
 
 ### Standard Feedback Types
 
@@ -239,7 +240,7 @@ Average Views per Viewer: 3.93
 
 ### Emoji Reactions
 
-All emoji reactions follow the same pattern: one signed NOSTR event JSON per line in `{emoji-name}.txt`
+All emoji reactions follow the same pattern: one npub per line in `{emoji-name}.txt`
 
 | Emoji | File | Purpose | Icon |
 |-------|------|---------|------|
@@ -282,18 +283,19 @@ comments/2025-12-15_09-15-00_X1JKLM.txt
 
 **Encoding**: UTF-8
 **Line Ending**: Unix (`\n`)
-**Format**: One signed NOSTR event JSON per line
+**Format**: One npub per line (bech32)
 
 **Example** (`likes.txt`):
 ```
-{"id":"e8c4...","pubkey":"3bf0c63f...","created_at":1734937020,"kind":7,"tags":[["content_type","alert"],["content_id","2025-12-10_broken-sidewalk"],["action","like"],["owner","X1ABCD"],["type","likes"]],"content":"like","sig":"abc123..."}
-{"id":"a9d1...","pubkey":"7aa1e5d9...","created_at":1734937099,"kind":7,"tags":[["content_type","alert"],["content_id","2025-12-10_broken-sidewalk"],["action","like"],["owner","X1EFGH"],["type","likes"]],"content":"like","sig":"def456..."}
+npub1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890
+npub1def456ghi789jkl012mno345pqr678stu901vwx234yz567890abc12
 ```
 
 **Rules**:
 - No blank lines
-- Each line is a complete NOSTR event JSON object (id, pubkey, created_at, kind, tags, content, sig)
-- Invalid JSON or invalid signatures are ignored
+- Each line is a valid `npub1...` bech32 key
+- Signatures are verified on write; invalid events are rejected before storage
+- Legacy JSON event lines are accepted for migration; only verified events are counted
 - File is deleted automatically if it becomes empty
 
 ### Comment File Format
@@ -1175,7 +1177,7 @@ All errors return this structure:
 
 ## Migration Guide
 
-The centralized feedback API assumes data lives under `{contentPath}/feedback/` and uses signed NOSTR event files. Legacy feedback locations are out of scope for this specification; new apps should not implement dual-read logic.
+The centralized feedback API assumes data lives under `{contentPath}/feedback/` and uses npub-per-line toggle files plus JSON event files for views. Legacy feedback locations are out of scope for this specification; new apps should not implement dual-read logic.
 
 ---
 
@@ -1188,6 +1190,7 @@ The centralized feedback system is implemented in the shared libraries and API h
 - **Server endpoints**: `lib/services/station_feedback_api.dart` (wired in `lib/services/station_server_service.dart` and `lib/cli/pure_station.dart`)
 - **Storage utilities**: `lib/util/feedback_folder_utils.dart` and `lib/util/feedback_comment_utils.dart`
 - **Client usage**: `lib/services/alert_feedback_service.dart` and `lib/services/blog_comment_service.dart` post signed events to `/api/feedback/...`
+- **Client persistence rule**: For toggle feedback (like/point/dislike/subscribe/react), only persist the local feedback file after the station returns `success: true`. Use the response fields (`action`, `liked`, `like_count`, etc.) as the source of truth; do not apply optimistic local toggles.
 
 ### Concurrency & Race Condition Prevention
 
@@ -1661,6 +1664,10 @@ See "Comment File Format" above. Files are named `YYYY-MM-DD_HH-MM-SS_CALLSIGN.t
 ---
 
 ## Changelog
+
+### Version 1.3 (2025-12-25)
+- Toggle feedback files store one npub per line; views remain JSON events
+- Documented migration compatibility for legacy JSON lines
 
 ### Version 1.2 (2025-12-24)
 - Feedback files store signed NOSTR event JSON per line

@@ -35,6 +35,7 @@ import '../models/blog_post.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
+import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
 import 'station_blog_api.dart';
 import 'station_service.dart';
@@ -1152,6 +1153,11 @@ class LogApiService {
         return await _handleBlogAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle place actions separately (they are async)
+      if (action.toLowerCase().startsWith('place_')) {
+        return await _handlePlaceAction(action.toLowerCase(), params, headers);
+      }
+
       // Handle station actions separately (they are async)
       if (action.toLowerCase().startsWith('station_')) {
         return await _handleStationAction(action.toLowerCase(), params, headers);
@@ -2082,7 +2088,7 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      String? dataDir;
+      late final String dataDir;
       try {
         dataDir = StorageConfig().baseDir;
       } catch (e) {
@@ -2170,7 +2176,7 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      String? dataDir;
+      late final String dataDir;
       try {
         dataDir = StorageConfig().baseDir;
       } catch (e) {
@@ -4970,7 +4976,7 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      String? dataDir;
+      late final String dataDir;
       try {
         dataDir = StorageConfig().baseDir;
       } catch (e) {
@@ -6543,6 +6549,304 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Debug API - Place Actions (for testing Places feedback API)
+  // ============================================================
+
+  /// Handle place debug actions asynchronously
+  Future<shelf.Response> _handlePlaceAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      late final String dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Storage not initialized',
+          }),
+          headers: headers,
+        );
+      }
+
+      String? defaultCallsign;
+      String? defaultNpub;
+      String? defaultAuthor;
+      try {
+        final profile = ProfileService().getProfile();
+        defaultCallsign = profile.callsign;
+        defaultNpub = profile.npub;
+        defaultAuthor = profile.nickname != null && profile.nickname!.isNotEmpty
+            ? profile.nickname
+            : profile.callsign;
+      } catch (_) {}
+
+      final placePathParam = params['place_path'] as String? ?? params['placePath'] as String?;
+      var placeId = params['place_id'] as String? ?? params['placeId'] as String?;
+      if ((placeId == null || placeId.isEmpty) &&
+          placePathParam != null &&
+          placePathParam.isNotEmpty) {
+        final baseName = path.basename(placePathParam);
+        placeId = baseName == 'place.txt'
+            ? path.basename(path.dirname(placePathParam))
+            : baseName;
+      }
+
+      if (placeId == null || placeId.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing place_id parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      final callsign = params['callsign'] as String? ?? defaultCallsign;
+      String? placePath;
+      if (placePathParam != null && placePathParam.isNotEmpty) {
+        final placeFile = io.File(placePathParam);
+        if (await placeFile.exists()) {
+          placePath = placeFile.parent.path;
+        } else {
+          final placeDir = io.Directory(placePathParam);
+          if (await placeDir.exists()) {
+            placePath = placeDir.path;
+          } else {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'place_path not found',
+                'place_path': placePathParam,
+              }),
+              headers: headers,
+            );
+          }
+        }
+      } else {
+        placePath = await _resolvePlacePath(dataDir, placeId, callsign: callsign);
+      }
+
+      switch (action) {
+        case 'place_like':
+          final event = await PlaceFeedbackService().buildLikeEvent(placeId);
+          if (event == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unable to sign like feedback',
+              }),
+              headers: headers,
+            );
+          }
+
+          final result = await PlaceFeedbackService().toggleLikeOnStation(placeId, event);
+          if (!result.success) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': result.error ?? 'Station rejected feedback',
+              }),
+              headers: headers,
+            );
+          }
+
+          final liked = result.isActive;
+          if (liked == null) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Station did not return like state',
+              }),
+              headers: headers,
+            );
+          }
+
+          bool? localSaved;
+          int? localCount;
+          if (placePath != null && placePath.isNotEmpty) {
+            if (liked) {
+              await FeedbackFolderUtils.addFeedbackEvent(
+                placePath,
+                FeedbackFolderUtils.feedbackTypeLikes,
+                event,
+              );
+            } else {
+              await FeedbackFolderUtils.removeFeedbackEvent(
+                placePath,
+                FeedbackFolderUtils.feedbackTypeLikes,
+                event.npub,
+              );
+            }
+
+            final localNpubs = await FeedbackFolderUtils.readFeedbackFile(
+              placePath,
+              FeedbackFolderUtils.feedbackTypeLikes,
+            );
+            localSaved = liked ? localNpubs.contains(event.npub) : !localNpubs.contains(event.npub);
+            localCount = localNpubs.length;
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'place_id': placeId,
+              'liked': liked,
+              'like_count': result.count ?? localCount,
+              'place_path': placePath,
+              'local_saved': localSaved,
+            }),
+            headers: headers,
+          );
+
+        case 'place_comment':
+          final content = params['content'] as String?;
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing content parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final author = params['author'] as String? ??
+              defaultAuthor ??
+              defaultCallsign ??
+              'UNKNOWN';
+          final requestedNpub = params['npub'] as String?;
+          if (requestedNpub != null &&
+              defaultNpub != null &&
+              requestedNpub != defaultNpub) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'npub does not match active profile',
+              }),
+              headers: headers,
+            );
+          }
+          final npub = requestedNpub ?? defaultNpub;
+
+          final signature = await PlaceFeedbackService().signComment(placeId, content);
+          if (signature == null || signature.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unable to sign comment',
+              }),
+              headers: headers,
+            );
+          }
+
+          final commentOk = await PlaceFeedbackService().commentOnStation(
+            placeId,
+            author,
+            content,
+            npub: npub,
+            signature: signature,
+          );
+
+          if (!commentOk) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Station rejected comment',
+              }),
+              headers: headers,
+            );
+          }
+
+          String? commentId;
+          bool? localSaved;
+          if (placePath != null && placePath.isNotEmpty) {
+            commentId = await FeedbackCommentUtils.writeComment(
+              contentPath: placePath,
+              author: author,
+              content: content,
+              npub: npub,
+              signature: signature,
+            );
+            localSaved = commentId.isNotEmpty;
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'place_id': placeId,
+              'comment_id': commentId,
+              'place_path': placePath,
+              'local_saved': localSaved,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown place action: $action',
+              'available': ['place_like', 'place_comment'],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Place action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<String?> _resolvePlacePath(
+    String dataDir,
+    String folderName, {
+    String? callsign,
+  }) async {
+    final devicesDir = io.Directory('$dataDir/devices');
+    if (!await devicesDir.exists()) return null;
+
+    Future<String?> searchCallsign(String callsign) async {
+      final placesRoot = io.Directory('$dataDir/devices/$callsign/places');
+      if (!await placesRoot.exists()) return null;
+
+      await for (final entity in placesRoot.list(recursive: true)) {
+        if (entity is! io.File) continue;
+        if (!entity.path.endsWith('/place.txt')) continue;
+
+        final folder = entity.parent;
+        if (path.basename(folder.path) == folderName) {
+          return folder.path;
+        }
+      }
+      return null;
+    }
+
+    if (callsign != null && callsign.isNotEmpty) {
+      return searchCallsign(callsign);
+    }
+
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! io.Directory) continue;
+      final deviceCallsign = path.basename(deviceEntity.path);
+      final match = await searchCallsign(deviceCallsign);
+      if (match != null) return match;
+    }
+
+    return null;
   }
 
   // ============================================================

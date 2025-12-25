@@ -1841,9 +1841,13 @@ Triggers a debug action.
 | `alert_comment` | Add a comment to an alert | `alert_id` (required): Alert ID, `content` (required): Comment text, `author` (optional): Author callsign, `npub` (optional): Author npub |
 | `alert_add_photo` | Add a photo to an alert | `alert_id` (required): Alert ID, `url` (optional): URL to download image from, `name` (optional): Photo filename (default: auto-generated) |
 | `alert_upload_photos` | Upload photos directly to station via HTTP | `alert_id` (required): Alert ID, `station_url` (optional): Station URL (default: connected station). Uploads all photos from the alert folder to the station |
+| `place_like` | Toggle like for a place via station feedback | `place_id` (required): Place folder name, `callsign` (optional): Place owner callsign for local cache update, `place_path` (optional): Absolute path to place folder or `place.txt` |
+| `place_comment` | Add a comment to a place via station feedback | `place_id` (required): Place folder name, `content` (required): Comment text, `author` (optional): Author callsign, `npub` (optional): Author npub, `callsign` (optional): Place owner callsign for local cache update, `place_path` (optional): Absolute path to place folder or `place.txt` |
 | `station_server_start` | Start the station server | None. Starts StationServerService on port (API port + 1) |
 | `station_server_stop` | Stop the station server | None. Stops the running station server |
 | `station_server_status` | Get station server status | None. Returns running state, port, and connected client count |
+
+Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
 **Response - Success (200 OK):**
 ```json
@@ -1975,6 +1979,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "alert_comment", "alert_id": "38_7222_n9_1393_broken-sidewalk", "content": "Issue verified", "author": "X1ABCD", "npub": "npub1xyz..."}'
+
+# Like a place (toggle)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "place_like", "place_id": "40.209643_-8.419623_praa-de-repblica", "callsign": "X1UEFU"}'
+
+# Comment on a place
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "place_comment", "place_id": "40.209643_-8.419623_praa-de-repblica", "content": "Great spot", "author": "X1UEFU"}'
 
 # Add a placeholder photo to an alert
 curl -X POST http://localhost:3456/api/debug \

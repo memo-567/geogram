@@ -9,25 +9,30 @@ class _FileLock {
   final String lockFilePath;
   static const int maxWaitMs = 5000;
   static const int retryDelayMs = 50;
+  RandomAccessFile? _handle;
 
   _FileLock(String feedbackFilePath) : lockFilePath = '$feedbackFilePath.lock';
 
   /// Acquire the lock, waiting up to maxWaitMs if necessary.
   /// Returns true if lock acquired, false if timeout.
   Future<bool> acquire() async {
-    final lockFile = File(lockFilePath);
     final startTime = DateTime.now();
 
     while (true) {
       try {
-        // Try to create lock file exclusively (fails if exists)
-        await lockFile.create(exclusive: true);
-        return true; // Lock acquired
+        final lockFile = File(lockFilePath);
+        _handle = await lockFile.open(mode: FileMode.append);
+        await _handle!.lock(FileLock.exclusive);
+        return true;
       } catch (e) {
-        // Lock file exists, wait and retry
+        try {
+          await _handle?.close();
+        } catch (_) {}
+        _handle = null;
+
         final elapsed = DateTime.now().difference(startTime).inMilliseconds;
         if (elapsed > maxWaitMs) {
-          return false; // Timeout
+          return false;
         }
         await Future.delayed(Duration(milliseconds: retryDelayMs));
       }
@@ -36,13 +41,18 @@ class _FileLock {
 
   /// Release the lock.
   Future<void> release() async {
-    final lockFile = File(lockFilePath);
     try {
+      await _handle?.unlock();
+      await _handle?.close();
+
+      final lockFile = File(lockFilePath);
       if (await lockFile.exists()) {
         await lockFile.delete();
       }
     } catch (e) {
-      // Lock file already deleted, ignore
+      // Lock file already deleted or not accessible, ignore.
+    } finally {
+      _handle = null;
     }
   }
 }
@@ -53,19 +63,19 @@ class _FileLock {
 /// ```
 /// {contentPath}/
 /// └── feedback/
-///     ├── likes.txt                  # Signed NOSTR events (JSON), one per line (toggle)
-///     ├── points.txt                 # Signed NOSTR events (JSON), one per line (toggle)
-///     ├── dislikes.txt               # Signed NOSTR events (JSON), one per line (toggle)
-///     ├── subscribe.txt              # Signed NOSTR events (JSON), one per line (toggle)
-///     ├── verifications.txt          # Signed NOSTR events (JSON), one per line (add-only)
+///     ├── likes.txt                  # NOSTR npub, one per line (toggle)
+///     ├── points.txt                 # NOSTR npub, one per line (toggle)
+///     ├── dislikes.txt               # NOSTR npub, one per line (toggle)
+///     ├── subscribe.txt              # NOSTR npub, one per line (toggle)
+///     ├── verifications.txt          # NOSTR npub, one per line (add-only)
 ///     ├── views.txt                  # Signed NOSTR events (JSON), multiple entries (metric)
-///     ├── heart.txt                  # Emoji reaction: signed events, one per line (toggle)
-///     ├── thumbs-up.txt              # Emoji reaction: signed events, one per line (toggle)
-///     ├── fire.txt                   # Emoji reaction: signed events, one per line (toggle)
-///     ├── celebrate.txt              # Emoji reaction: signed events, one per line (toggle)
-///     ├── laugh.txt                  # Emoji reaction: signed events, one per line (toggle)
-///     ├── sad.txt                    # Emoji reaction: signed events, one per line (toggle)
-///     ├── surprise.txt               # Emoji reaction: signed events, one per line (toggle)
+///     ├── heart.txt                  # Emoji reaction: npub per line (toggle)
+///     ├── thumbs-up.txt              # Emoji reaction: npub per line (toggle)
+///     ├── fire.txt                   # Emoji reaction: npub per line (toggle)
+///     ├── celebrate.txt              # Emoji reaction: npub per line (toggle)
+///     ├── laugh.txt                  # Emoji reaction: npub per line (toggle)
+///     ├── sad.txt                    # Emoji reaction: npub per line (toggle)
+///     ├── surprise.txt               # Emoji reaction: npub per line (toggle)
 ///     └── comments/
 ///         └── YYYY-MM-DD_HH-MM-SS_XXXXXX.txt
 /// ```
@@ -138,12 +148,25 @@ class FeedbackFolderUtils {
     }
   }
 
-  /// Read signed feedback events from a feedback file.
-  /// Returns list of verified npub strings, empty list if file doesn't exist.
-  /// Only includes feedback with valid NOSTR signatures.
+  static bool _isValidNpubLine(String line) {
+    if (!line.startsWith('npub1')) {
+      return false;
+    }
+
+    try {
+      NostrCrypto.decodeNpub(line);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Read feedback npubs from a feedback file.
+  /// Returns list of npub strings, empty list if file doesn't exist.
+  /// JSON lines are verified; plain npub lines are accepted (signature verified on write).
   ///
-  /// File format: Each line is a JSON signed NOSTR event (verified).
-  /// Plain npub lines are not supported and are ignored.
+  /// File format: Each line is either a signed NOSTR event JSON or a plain npub.
+  /// Legacy JSON lines are still supported.
   ///
   /// Example:
   /// ```dart
@@ -163,7 +186,7 @@ class FeedbackFolderUtils {
         .where((line) => line.isNotEmpty)
         .toList();
 
-    final verifiedNpubs = <String>[];
+    final npubs = <String>{};
 
     for (final line in lines) {
       // Try to parse as JSON event
@@ -174,21 +197,23 @@ class FeedbackFolderUtils {
 
           // Verify signature
           if (event.verify()) {
-            verifiedNpubs.add(event.npub);
+            npubs.add(event.npub);
           }
         } catch (e) {
           // Invalid JSON or event, skip
           continue;
         }
+      } else if (_isValidNpubLine(line)) {
+        npubs.add(line);
       }
-      // Legacy format (plain npub) is ignored for security - no signature
     }
 
-    return verifiedNpubs;
+    return npubs.toList();
   }
 
   /// Read signed feedback events (full event objects with signatures).
   /// Returns list of verified NostrEvent objects.
+  /// Plain npub lines are ignored (toggle feedback stores npub-only lines).
   ///
   /// Example:
   /// ```dart
@@ -230,7 +255,7 @@ class FeedbackFolderUtils {
     return verifiedEvents;
   }
 
-  /// Write signed feedback events to a feedback file.
+  /// Write signed feedback events to a feedback file (legacy JSON format).
   /// Each event is written as a JSON object on a separate line.
   /// If the list is empty, the file is deleted.
   ///
@@ -258,7 +283,7 @@ class FeedbackFolderUtils {
     await feedbackFile.writeAsString(lines, flush: true);
   }
 
-  /// Write npubs to a feedback file (DEPRECATED - use writeFeedbackEvents for security).
+  /// Write npubs to a feedback file.
   /// Each npub is written on a separate line.
   /// If the list is empty, the file is deleted.
   ///
@@ -266,7 +291,6 @@ class FeedbackFolderUtils {
   /// ```dart
   /// await writeFeedbackFile(contentPath, FeedbackFolderUtils.feedbackTypeLikes, ['npub1...', 'npub2...']);
   /// ```
-  @Deprecated('Use writeFeedbackEvents with signed NOSTR events for security')
   static Future<void> writeFeedbackFile(
     String contentPath,
     String feedbackType,
@@ -316,16 +340,16 @@ class FeedbackFolderUtils {
 
     try {
       // CRITICAL SECTION - atomic read-check-write
-      final events = await readFeedbackEvents(contentPath, feedbackType);
+      final npubs = await readFeedbackFile(contentPath, feedbackType);
       final npub = event.npub;
 
       // Check if this npub already has feedback
-      if (events.any((e) => e.npub == npub)) {
+      if (npubs.contains(npub)) {
         return false;
       }
 
-      events.add(event);
-      await writeFeedbackEvents(contentPath, feedbackType, events);
+      npubs.add(npub);
+      await writeFeedbackFile(contentPath, feedbackType, npubs);
       return true;
     } finally {
       // Always release lock
@@ -379,16 +403,16 @@ class FeedbackFolderUtils {
 
     try {
       // CRITICAL SECTION - atomic read-modify-write
-      final events = await readFeedbackEvents(contentPath, feedbackType);
-      final initialLength = events.length;
+      final npubs = await readFeedbackFile(contentPath, feedbackType);
+      final initialLength = npubs.length;
 
-      events.removeWhere((e) => e.npub == npub);
+      npubs.removeWhere((entry) => entry == npub);
 
-      if (events.length == initialLength) {
+      if (npubs.length == initialLength) {
         return false; // Not found
       }
 
-      await writeFeedbackEvents(contentPath, feedbackType, events);
+      await writeFeedbackFile(contentPath, feedbackType, npubs);
       return true;
     } finally {
       // Always release lock
@@ -426,21 +450,18 @@ class FeedbackFolderUtils {
 
     try {
       // CRITICAL SECTION - atomic read-modify-write
-      final events = await readFeedbackEvents(contentPath, feedbackType);
+      final npubs = await readFeedbackFile(contentPath, feedbackType);
       final npub = event.npub;
 
-      // Check if this npub already has feedback
-      final existingIndex = events.indexWhere((e) => e.npub == npub);
-
-      if (existingIndex >= 0) {
+      if (npubs.contains(npub)) {
         // Remove existing feedback
-        events.removeAt(existingIndex);
-        await writeFeedbackEvents(contentPath, feedbackType, events);
+        npubs.removeWhere((entry) => entry == npub);
+        await writeFeedbackFile(contentPath, feedbackType, npubs);
         return false; // Removed
       } else {
         // Add new feedback
-        events.add(event);
-        await writeFeedbackEvents(contentPath, feedbackType, events);
+        npubs.add(npub);
+        await writeFeedbackFile(contentPath, feedbackType, npubs);
         return true; // Added
       }
     } finally {
