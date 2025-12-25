@@ -176,6 +176,7 @@ class MapsService {
     bool forceRefresh = false,
   }) async {
     final items = <MapItem>[];
+    final localRelativePaths = <String>{};
 
     try {
       // Get all collections and filter for places type
