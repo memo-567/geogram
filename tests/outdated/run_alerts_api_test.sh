@@ -12,8 +12,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-GEOGRAM="$PROJECT_DIR/build/linux/x64/release/bundle/geogram"
-LEGACY_GEOGRAM="$PROJECT_DIR/build/linux/x64/release/bundle/geogram_desktop"
+GEOGRAM="$PROJECT_DIR/build/linux/x64/release/bundle/geogram_desktop"
 
 # Configuration
 PORT=6200
@@ -58,13 +57,9 @@ cleanup() {
 
 check_dependencies() {
     if [ ! -f "$GEOGRAM" ]; then
-        if [ -f "$LEGACY_GEOGRAM" ]; then
-            GEOGRAM="$LEGACY_GEOGRAM"
-        else
-            log_error "Geogram binary not found at $GEOGRAM or $LEGACY_GEOGRAM"
-            log_error "Please build with: flutter build linux --release"
-            exit 1
-        fi
+        log_error "Geogram binary not found at $GEOGRAM"
+        log_error "Please build with: flutter build linux --release"
+        exit 1
     fi
 
     if ! command -v jq &> /dev/null; then

@@ -28,7 +28,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:geogram/util/nostr_event.dart';
 import 'package:http/http.dart' as http;
 
 // ============================================================
@@ -108,21 +107,9 @@ Future<Process?> launchStationCli({
   String? nickname,
 }) async {
   // Find the CLI executable
-  const executableCandidates = [
-    'build/geogram-cli',
-    'geogram-cli',
-  ];
-  File? executable;
-  for (final candidate in executableCandidates) {
-    final file = File(candidate);
-    if (await file.exists()) {
-      executable = file;
-      break;
-    }
-  }
-
-  if (executable == null) {
-    print('ERROR: CLI build not found at ${executableCandidates.join(' or ')}');
+  final executable = File('build/geogram-cli');
+  if (!await executable.exists()) {
+    print('ERROR: CLI build not found at ${executable.path}');
     print('Please run: ./launch-cli.sh --build-only');
     return null;
   }
@@ -141,7 +128,7 @@ Future<Process?> launchStationCli({
   info('Args: ${args.join(' ')}');
 
   final process = await Process.start(
-    executable.absolute.path,
+    executable.path,
     args,
     mode: ProcessStartMode.normal,
   );
@@ -177,22 +164,10 @@ Future<Process?> launchClientInstance({
   required String dataDir,
   String? scanLocalhostRange,
 }) async {
-  // Find the executable (new and legacy names)
-  const executableCandidates = [
-    'build/linux/x64/release/bundle/geogram',
-    'build/linux/x64/release/bundle/geogram_desktop',
-  ];
-  File? executable;
-  for (final candidate in executableCandidates) {
-    final file = File(candidate);
-    if (await file.exists()) {
-      executable = file;
-      break;
-    }
-  }
-
-  if (executable == null) {
-    print('ERROR: Build not found at ${executableCandidates.join(' or ')}');
+  // Find the executable
+  final executable = File('build/linux/x64/release/bundle/geogram_desktop');
+  if (!await executable.exists()) {
+    print('ERROR: Build not found at ${executable.path}');
     print('Please run: flutter build linux --release');
     return null;
   }
@@ -217,7 +192,7 @@ Future<Process?> launchClientInstance({
   info('Data directory: $dataDir');
 
   final process = await Process.start(
-    executable.absolute.path,
+    executable.path,
     args,
     mode: ProcessStartMode.detachedWithStdio,
   );
@@ -421,20 +396,9 @@ Future<void> testSetup() async {
   section('Setup');
 
   // Check if build exists
-  const executableCandidates = [
-    'build/linux/x64/release/bundle/geogram',
-    'build/linux/x64/release/bundle/geogram_desktop',
-  ];
-  File? executable;
-  for (final candidate in executableCandidates) {
-    final file = File(candidate);
-    if (await file.exists()) {
-      executable = file;
-      break;
-    }
-  }
-  if (executable == null) {
-    print('\x1B[31mERROR: Build not found at ${executableCandidates.join(' or ')}\x1B[0m');
+  final executable = File('build/linux/x64/release/bundle/geogram_desktop');
+  if (!await executable.exists()) {
+    print('\x1B[31mERROR: Build not found at ${executable.path}\x1B[0m');
     print('\nPlease build first:');
     print('  flutter build linux --release');
     exit(1);
@@ -1201,36 +1165,37 @@ Future<bool> testPointAlertFromClientB() async {
   info('Client B report path: $clientBReportPath');
   info('Station report path: $stationReportPath');
 
-  // Step 5: Read points from feedback/points.txt and LAST_MODIFIED from report.txt
+  // Step 5: Read points from points.txt files and LAST_MODIFIED from report.txt
   final clientBAlertPath = clientBReportPath.replaceAll('/report.txt', '');
   final stationAlertPath = stationReportPath.replaceAll('/report.txt', '');
 
-  final clientBPointsFile = File('$clientBAlertPath/feedback/points.txt');
-  final stationPointsFile = File('$stationAlertPath/feedback/points.txt');
+  // Verify points.txt files exist
+  final clientBPointsFile = File('$clientBAlertPath/points.txt');
+  final stationPointsFile = File('$stationAlertPath/points.txt');
 
   if (!await clientBPointsFile.exists()) {
-    fail('Verify points file', 'Client B points file not found at ${clientBPointsFile.path}');
+    fail('Verify points.txt', 'Client B points.txt file does not exist at: ${clientBPointsFile.path}');
     return false;
   }
-  pass('Client B points file exists');
+  pass('Client B points.txt file exists');
 
   if (!await stationPointsFile.exists()) {
-    fail('Verify points file', 'Station points file not found at ${stationPointsFile.path}');
+    fail('Verify points.txt', 'Station points.txt file does not exist at: ${stationPointsFile.path}');
     return false;
   }
-  pass('Station points file exists');
+  pass('Station points.txt file exists');
 
   final clientBPointedByList = await _readPointsFile(clientBAlertPath);
   final stationPointedByList = await _readPointsFile(stationAlertPath);
   final stationLastModified = _extractField(stationReport, 'LAST_MODIFIED');
 
-  info('Client B points: $clientBPointedByList');
-  info('Station points: $stationPointedByList');
+  info('Client B points.txt: $clientBPointedByList');
+  info('Station points.txt: $stationPointedByList');
   info('Station LAST_MODIFIED: $stationLastModified');
 
   // Verify we have exactly 1 point (the one we just added)
   if (clientBPointedByList.length != 1) {
-    fail('Verify point count', 'Expected 1 point in Client B points, got: ${clientBPointedByList.length}');
+    fail('Verify point count', 'Expected 1 point in Client B points.txt, got: ${clientBPointedByList.length}');
     return false;
   }
   pass('Client B has exactly 1 point');
@@ -1238,7 +1203,7 @@ Future<bool> testPointAlertFromClientB() async {
   // Verify the npub is valid format
   final npubInFile = clientBPointedByList.first;
   if (!npubInFile.startsWith('npub1')) {
-    fail('Verify npub format', 'Invalid npub format in points file: $npubInFile');
+    fail('Verify npub format', 'Invalid npub format in points.txt: $npubInFile');
     return false;
   }
   pass('Point npub has valid format: ${npubInFile.substring(0, 15)}...');
@@ -1260,7 +1225,7 @@ Future<bool> testPointAlertFromClientB() async {
 
   // Step 7: Verify the point counts match
   if (clientBPointedByList.length != stationPointedByList.length) {
-    fail('Compare points', 'Point count mismatch: Client B=${clientBPointedByList.length}, Station=${stationPointedByList.length}');
+    fail('Compare points.txt', 'Point count mismatch: Client B=${clientBPointedByList.length}, Station=${stationPointedByList.length}');
     return false;
   }
 
@@ -1269,12 +1234,12 @@ Future<bool> testPointAlertFromClientB() async {
   final stationSet = stationPointedByList.toSet();
 
   if (!clientBSet.containsAll(stationSet) || !stationSet.containsAll(clientBSet)) {
-    fail('Compare points', 'Points entries mismatch: Client B=$clientBPointedByList, Station=$stationPointedByList');
+    fail('Compare points.txt', 'Points entries mismatch: Client B=$clientBPointedByList, Station=$stationPointedByList');
     return false;
   }
 
   pass('Point count matches: ${clientBPointedByList.length}');
-  pass('Points match: $clientBPointedByList');
+  pass('Points.txt matches: $clientBPointedByList');
   pass('Points are synchronized');
 
   return true;
@@ -1303,53 +1268,20 @@ Future<String?> _findAlertPath(String dataDir, String callsign, String folderNam
   return null;
 }
 
-/// Read points from feedback/points.txt (signed events only).
+/// Parse POINTED_BY field value as a list of npubs (legacy format)
+List<String> _parsePointedBy(String value) {
+  if (value.isEmpty) return [];
+  // Format is typically: npub1..., npub2..., ...
+  return value.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+}
+
+/// Read points from points.txt file (one npub per line)
 Future<List<String>> _readPointsFile(String alertPath) async {
-  final pointsFile = File('$alertPath/feedback/points.txt');
+  final pointsFile = File('$alertPath/points.txt');
   if (!await pointsFile.exists()) return [];
 
   final content = await pointsFile.readAsString();
-  return _parsePointsContent(content);
-}
-
-List<String> _parsePointsContent(String content) {
-  final entries = content.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty);
-  final npubs = <String>[];
-
-  for (final entry in entries) {
-    if (!entry.startsWith('{')) {
-      continue;
-    }
-    try {
-      final json = jsonDecode(entry) as Map<String, dynamic>;
-      final event = NostrEvent.fromJson(json);
-      if (event.verify()) {
-        npubs.add(event.npub);
-      }
-    } catch (_) {
-      // Ignore malformed event entries
-    }
-  }
-
-  return npubs;
-}
-
-Future<Directory?> _findCommentsDir(String alertPath) async {
-  final feedbackDir = Directory('$alertPath/feedback/comments');
-  if (await feedbackDir.exists()) return feedbackDir;
-  return null;
-}
-
-Future<List<File>> _listCommentFilesByPath(String commentsDirPath) async {
-  final entries = await Directory(commentsDirPath).list().toList();
-  return entries.whereType<File>().where((file) => file.path.endsWith('.txt')).toList();
-}
-
-bool _containsAny(List<String> contents, List<String> candidates) {
-  for (final candidate in candidates) {
-    if (contents.contains(candidate)) return true;
-  }
-  return false;
+  return content.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 }
 
 /// Test Client A syncing alerts from station and receiving the updated report.txt
@@ -1414,15 +1346,15 @@ Future<bool> testSyncAlertsToClientA() async {
   // Wait for sync to complete
   await Future.delayed(const Duration(seconds: 2));
 
-  // Step 3: Verify points file was created/synced on Client A
-  final clientAPointsFile = File('$clientAAlertPathBefore/feedback/points.txt');
+  // Step 3: Verify points.txt file was created/synced on Client A
+  final clientAPointsFile = File('$clientAAlertPathBefore/points.txt');
   if (!await clientAPointsFile.exists()) {
-    fail('Verify sync', 'Client A points file does not exist after sync at ${clientAPointsFile.path}');
+    fail('Verify sync', 'Client A points.txt file does not exist after sync at: ${clientAPointsFile.path}');
     return false;
   }
-  pass('Client A points file exists after sync');
+  pass('Client A points.txt file exists after sync');
 
-  // Read Client A's points after sync
+  // Read Client A's points.txt after sync
   final clientAPointedByList = await _readPointsFile(clientAAlertPathBefore);
   final reportAfterSync = await File(clientAReportPathBefore).readAsString();
   final lastModifiedAfter = _extractField(reportAfterSync, 'LAST_MODIFIED');
@@ -1441,7 +1373,7 @@ Future<bool> testSyncAlertsToClientA() async {
   // Verify the npub is valid format
   final syncedNpub = clientAPointedByList.first;
   if (!syncedNpub.startsWith('npub1')) {
-    fail('Verify npub format', 'Invalid npub format in synced points file: $syncedNpub');
+    fail('Verify npub format', 'Invalid npub format in synced points.txt: $syncedNpub');
     return false;
   }
   pass('Synced npub has valid format: ${syncedNpub.substring(0, 15)}...');
@@ -1454,7 +1386,7 @@ Future<bool> testSyncAlertsToClientA() async {
 
   pass('Client A received LAST_MODIFIED: $lastModifiedAfter');
 
-  // Step 6: Compare Client A's points with Station's points
+  // Step 6: Compare Client A's points.txt with Station's points.txt
   final stationAlertsDir = Directory('$stationDataDir/devices');
   String? stationAlertPath;
 
@@ -1483,7 +1415,7 @@ Future<bool> testSyncAlertsToClientA() async {
     return false;
   }
 
-  // Verify points entries match (order-independent)
+  // Verify points.txt entries match (order-independent)
   final clientASet = clientAPointedByList.toSet();
   final stationSet = stationPointedByList.toSet();
 
@@ -1493,7 +1425,7 @@ Future<bool> testSyncAlertsToClientA() async {
   }
 
   pass('Client A point count matches Station: ${clientAPointedByList.length}');
-  pass('Client A points match Station: $clientAPointedByList');
+  pass('Client A points.txt matches Station: $clientAPointedByList');
 
   // Verify LAST_MODIFIED matches
   if (lastModifiedAfter != stationLastModified) {
@@ -1575,9 +1507,9 @@ Future<bool> testCommentAlertFromClientB() async {
   String? stationCommentsDir;
   await for (final entity in stationAlertsDir.list(recursive: true)) {
     if (entity is Directory && entity.path.endsWith(folderName)) {
-      final commentsDir = await _findCommentsDir(entity.path);
-      if (commentsDir != null) {
-        stationCommentsDir = commentsDir.path;
+      final commentsPath = '${entity.path}/comments';
+      if (await Directory(commentsPath).exists()) {
+        stationCommentsDir = commentsPath;
         break;
       }
     }
@@ -1589,7 +1521,8 @@ Future<bool> testCommentAlertFromClientB() async {
   }
 
   // Find the comment file on station
-  final txtFiles = await _listCommentFilesByPath(stationCommentsDir);
+  final stationComments = await Directory(stationCommentsDir).list().toList();
+  final txtFiles = stationComments.where((e) => e.path.endsWith('.txt')).toList();
 
   if (txtFiles.isEmpty) {
     fail('Verify comment on station', 'No comment files found on station');
@@ -1616,9 +1549,9 @@ Future<bool> testCommentAlertFromClientB() async {
 
   await for (final entity in clientBAlertsDir.list(recursive: true)) {
     if (entity is Directory && entity.path.endsWith(folderName)) {
-      final commentsDir = await _findCommentsDir(entity.path);
-      if (commentsDir != null) {
-        clientBCommentsDir = commentsDir.path;
+      final commentsPath = '${entity.path}/comments';
+      if (await Directory(commentsPath).exists()) {
+        clientBCommentsDir = commentsPath;
         break;
       }
     }
@@ -1629,7 +1562,8 @@ Future<bool> testCommentAlertFromClientB() async {
     return false;
   }
 
-  final clientBTxtFiles = await _listCommentFilesByPath(clientBCommentsDir);
+  final clientBComments = await Directory(clientBCommentsDir).list().toList();
+  final clientBTxtFiles = clientBComments.where((e) => e.path.endsWith('.txt')).toList();
 
   if (clientBTxtFiles.isEmpty) {
     fail('Verify comment on Client B', 'No comment files found on Client B');
@@ -1701,9 +1635,9 @@ Future<bool> testSyncCommentToClientA() async {
 
   await for (final entity in clientAAlertsDir.list(recursive: true)) {
     if (entity is Directory && entity.path.endsWith(folderName)) {
-      final commentsDir = await _findCommentsDir(entity.path);
-      if (commentsDir != null) {
-        clientACommentsDir = commentsDir.path;
+      final commentsPath = '${entity.path}/comments';
+      if (await Directory(commentsPath).exists()) {
+        clientACommentsDir = commentsPath;
         break;
       }
     }
@@ -1714,7 +1648,8 @@ Future<bool> testSyncCommentToClientA() async {
     return false;
   }
 
-  final clientATxtFiles = await _listCommentFilesByPath(clientACommentsDir);
+  final clientAComments = await Directory(clientACommentsDir).list().toList();
+  final clientATxtFiles = clientAComments.where((e) => e.path.endsWith('.txt')).toList();
 
   if (clientATxtFiles.isEmpty) {
     fail('Verify comment on Client A', 'No comment files found on Client A');
@@ -1741,9 +1676,10 @@ Future<bool> testSyncCommentToClientA() async {
 
   await for (final entity in stationAlertsDir.list(recursive: true)) {
     if (entity is Directory && entity.path.endsWith(folderName)) {
-      final commentsDir = await _findCommentsDir(entity.path);
-      if (commentsDir != null) {
-        final txtFiles = await _listCommentFilesByPath(commentsDir.path);
+      final commentsDir = Directory('${entity.path}/comments');
+      if (await commentsDir.exists()) {
+        final comments = await commentsDir.list().toList();
+        final txtFiles = comments.where((e) => e.path.endsWith('.txt')).toList();
         if (txtFiles.isNotEmpty) {
           stationCommentPath = txtFiles.first.path;
         }
@@ -1884,8 +1820,8 @@ Future<bool> testVerifyFolderStructureConsistency() async {
   info('Station contents: $stationContents');
   info('Client B contents: $clientBContents');
 
-  // All should have these essential items (points/comments may live under feedback/)
-  final requiredItems = ['report.txt', 'images/', 'images/photo1.png', 'images/photo2.png'];
+  // All should have these essential items (points.txt is created after pointing test)
+  final requiredItems = ['report.txt', 'points.txt', 'images/', 'images/photo1.png', 'images/photo2.png', 'comments/'];
 
   for (final item in requiredItems) {
     if (!clientAContents.contains(item)) {
@@ -1902,26 +1838,9 @@ Future<bool> testVerifyFolderStructureConsistency() async {
     }
   }
 
-  final pointsCandidates = ['feedback/points.txt'];
-  final commentsCandidates = ['feedback/comments/'];
+  pass('All instances have required items: ${requiredItems.join(', ')}');
 
-  if (!_containsAny(clientAContents, pointsCandidates) ||
-      !_containsAny(stationContents, pointsCandidates) ||
-      !_containsAny(clientBContents, pointsCandidates)) {
-    fail('Verify points file', 'Missing points file under feedback/');
-    return false;
-  }
-
-  if (!_containsAny(clientAContents, commentsCandidates) ||
-      !_containsAny(stationContents, commentsCandidates) ||
-      !_containsAny(clientBContents, commentsCandidates)) {
-    fail('Verify comments folder', 'Missing comments folder under feedback/');
-    return false;
-  }
-
-  pass('All instances have required items: report/photos + points/comments');
-
-  // Verify points content matches across all instances
+  // Verify points.txt content matches across all instances
   final clientAPoints = await _readPointsFile(clientAAlertPath);
   final stationPoints = await _readPointsFile(stationAlertPath);
   final clientBPoints = await _readPointsFile(clientBAlertPath);
@@ -1937,19 +1856,19 @@ Future<bool> testVerifyFolderStructureConsistency() async {
 
   if (clientAPointSet.length != stationPointSet.length ||
       stationPointSet.length != clientBPointSet.length) {
-    fail('Verify points consistency', 'Point count mismatch: ClientA=${clientAPoints.length}, Station=${stationPoints.length}, ClientB=${clientBPoints.length}');
+    fail('Verify points.txt consistency', 'Point count mismatch: ClientA=${clientAPoints.length}, Station=${stationPoints.length}, ClientB=${clientBPoints.length}');
     return false;
   }
 
   if (!clientAPointSet.containsAll(stationPointSet) || !stationPointSet.containsAll(clientBPointSet)) {
-    fail('Verify points consistency', 'Points content mismatch across instances');
+    fail('Verify points.txt consistency', 'Points content mismatch across instances');
     return false;
   }
 
-  pass('Points content consistent across all instances: ${clientAPoints.length} point(s)');
+  pass('Points.txt content consistent across all instances: ${clientAPoints.length} point(s)');
 
   // Verify comments directory has at least one comment with correct naming format
-  final commentPattern = RegExp(r'feedback/comments/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Z0-9]{6}\.txt');
+  final commentPattern = RegExp(r'comments/\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[A-Z0-9]{6}\.txt');
 
   bool clientAHasComment = clientAContents.any((item) => commentPattern.hasMatch(item));
   bool stationHasComment = stationContents.any((item) => commentPattern.hasMatch(item));
