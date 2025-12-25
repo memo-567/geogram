@@ -1,5 +1,14 @@
 # Geogram Desktop Changelog
 
+## 2025-12-25 - v1.6.56
+
+### Changes
+- Add place feedback handling and update feedback storage
+- maps: reload items after pan and radius change
+- maps: refresh on profile location updates
+- maps: fix station places dedupe set
+
+
 ## 2025-12-25 - v1.6.55
 
 ### Changes
