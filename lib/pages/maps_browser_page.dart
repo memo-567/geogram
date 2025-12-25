@@ -75,6 +75,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   Timer? _autoRefreshTimer;
   static const Duration _autoRefreshInterval = Duration(minutes: 5);
   late final VoidCallback _profileListener;
+  Timer? _moveReloadTimer;
 
   // Radius slider range (logarithmic scale for fine control at lower values)
   static const double _minRadius = 1.0;
@@ -116,6 +117,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void dispose() {
     _collectionService.collectionsNotifier.removeListener(_collectionsListener);
     _profileService.profileNotifier.removeListener(_profileListener);
+    _moveReloadTimer?.cancel();
     _autoRefreshTimer?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -336,7 +338,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void _onRadiusChangeEnd(double radius) {
     // Save state and reload items when user finishes dragging the slider
     _saveMapState();
-    _loadItems();
+    _loadItems(forceRefresh: true);
   }
 
   /// Calculate appropriate zoom level to show the given radius
@@ -673,6 +675,14 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     LogService().log('Location detected: $lat, $lon (${_i18n.t(successMessageKey)})');
   }
 
+  void _scheduleMapMoveReload() {
+    _moveReloadTimer?.cancel();
+    _moveReloadTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      _loadItems(forceRefresh: true);
+    });
+  }
+
   Color _getTypeColor(MapItemType type) {
     switch (type) {
       case MapItemType.event:
@@ -892,6 +902,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 });
                 // Save state (debounced by the config service)
                 _saveMapState();
+                _scheduleMapMoveReload();
               }
             },
           ),
