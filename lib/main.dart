@@ -502,7 +502,7 @@ class _HomePageState extends State<HomePage> {
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    final defaultTypes = ['chat', 'blog', 'alerts'];
+    final defaultTypes = ['chat', 'blog', 'alerts', 'places'];
 
     LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
 
