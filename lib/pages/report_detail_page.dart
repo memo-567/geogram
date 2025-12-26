@@ -76,7 +76,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
   /// Save station alert to disk (for persisting likes, verifications, comments)
   Future<void> _saveStationAlert() async {
-    if (_report == null || !_isFromStation || kIsWeb) return;
+    if (_report == null || !_isFromStation || kIsWeb) return null;
 
     try {
       // Station alerts are stored in the collection path passed to this widget
