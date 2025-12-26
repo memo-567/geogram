@@ -1,5 +1,12 @@
 # Geogram Desktop Changelog
 
+## 2025-12-26 - v1.6.57
+
+### Changes
+- Normalize station place upload paths
+- Add place profile pics and dedupe station places
+
+
 ## 2025-12-25 - v1.6.56
 
 ### Changes
