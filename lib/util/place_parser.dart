@@ -33,6 +33,7 @@ class PlaceParser {
     final moderators = <String>[];
     String? metadataNpub;
     String? signature;
+    String? profileImage;
 
     // Parse description/history
     String description = '';
@@ -82,6 +83,8 @@ class PlaceParser {
         founded = trimmed.substring(8).trim();
       } else if (trimmed.startsWith('HOURS:')) {
         hours = trimmed.substring(6).trim();
+      } else if (trimmed.startsWith('PROFILE_PIC:')) {
+        profileImage = trimmed.substring(12).trim();
       } else if (trimmed.startsWith('ADMINS:')) {
         final adminList = trimmed.substring(7).trim().split(',');
         admins.addAll(adminList.map((a) => a.trim()).where((a) => a.isNotEmpty));
@@ -224,6 +227,7 @@ class PlaceParser {
       moderators: moderators,
       metadataNpub: metadataNpub,
       signature: signature,
+      profileImage: profileImage,
       filePath: filePath,
       folderPath: folderPath,
       regionPath: regionName,

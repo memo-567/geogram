@@ -66,7 +66,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   int _tilesLoaded = 0;
   bool _mapReady = false;
   bool _isDetectingLocation = false;
-  bool _rotationEnabled = true;
+  bool _rotationEnabled = false;
   double _currentRotation = 0.0;
   bool _awaitingProfileLocation = false;
   bool _hasUserMoved = false;

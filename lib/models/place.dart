@@ -32,6 +32,7 @@ class Place {
   // Metadata
   final String? metadataNpub;
   final String? signature;
+  final String? profileImage; // Relative path to profile image within place folder
 
   // File/folder paths
   final String? filePath; // Path to place.txt
@@ -62,6 +63,7 @@ class Place {
     this.moderators = const [],
     this.metadataNpub,
     this.signature,
+    this.profileImage,
     this.filePath,
     this.folderPath,
     this.regionPath,
@@ -184,6 +186,7 @@ class Place {
         if (moderators.isNotEmpty) 'moderators': moderators,
         if (metadataNpub != null) 'metadataNpub': metadataNpub,
         if (signature != null) 'signature': signature,
+        if (profileImage != null) 'profileImage': profileImage,
         if (filePath != null) 'filePath': filePath,
         if (folderPath != null) 'folderPath': folderPath,
         if (regionPath != null) 'regionPath': regionPath,
@@ -223,6 +226,7 @@ class Place {
           : const [],
       metadataNpub: json['metadataNpub'] as String?,
       signature: json['signature'] as String?,
+      profileImage: json['profileImage'] as String?,
       filePath: json['filePath'] as String?,
       folderPath: json['folderPath'] as String?,
       regionPath: json['regionPath'] as String?,
@@ -252,6 +256,7 @@ class Place {
     List<String>? moderators,
     String? metadataNpub,
     String? signature,
+    String? profileImage,
     String? filePath,
     String? folderPath,
     String? regionPath,
@@ -278,6 +283,7 @@ class Place {
       moderators: moderators ?? this.moderators,
       metadataNpub: metadataNpub ?? this.metadataNpub,
       signature: signature ?? this.signature,
+      profileImage: profileImage ?? this.profileImage,
       filePath: filePath ?? this.filePath,
       folderPath: folderPath ?? this.folderPath,
       regionPath: regionPath ?? this.regionPath,

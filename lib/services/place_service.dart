@@ -148,6 +148,9 @@ class PlaceService {
     if (place.hours != null) {
       buffer.writeln('HOURS: ${place.hours}');
     }
+    if (place.profileImage != null && place.profileImage!.isNotEmpty) {
+      buffer.writeln('PROFILE_PIC: ${place.profileImage}');
+    }
     if (place.admins.isNotEmpty) {
       buffer.writeln('ADMINS: ${place.admins.join(', ')}');
     }

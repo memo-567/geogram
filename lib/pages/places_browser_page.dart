@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path/path.dart' as path;
 import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
@@ -133,7 +134,10 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       return;
     }
 
-    final entries = result.places;
+    final localKeys = _buildLocalPlaceKeys();
+    final entries = result.places
+        .where((entry) => !_isDuplicateStationPlace(entry, localKeys))
+        .toList();
     entries.sort((a, b) => a.place.name.compareTo(b.place.name));
 
     StationPlaceEntry? selectedEntry;
@@ -170,6 +174,81 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     if (selectedEntry != null) {
       await _loadPlacePhotos(selectedEntry.place);
     }
+  }
+
+  Set<String> _buildLocalPlaceKeys() {
+    final keys = <String>{};
+    for (final place in _allPlaces) {
+      final folderName = _getPlaceFolderName(place);
+      final author = place.author.trim().toUpperCase();
+      if (folderName.isEmpty || author.isEmpty) continue;
+      keys.add('$author|$folderName');
+    }
+    return keys;
+  }
+
+  bool _isDuplicateStationPlace(StationPlaceEntry entry, Set<String> localKeys) {
+    if (localKeys.isEmpty) return false;
+    final callsign = entry.callsign.trim().toUpperCase();
+    if (callsign.isEmpty) return false;
+    final folderName = _getStationFolderName(entry);
+    if (folderName.isEmpty) return false;
+    return localKeys.contains('$callsign|$folderName');
+  }
+
+  String _getStationFolderName(StationPlaceEntry entry) {
+    final relativePath = entry.relativePath;
+    if (relativePath != null && relativePath.isNotEmpty) {
+      return path.basename(relativePath);
+    }
+    final folderPath = entry.place.folderPath;
+    if (folderPath != null && folderPath.isNotEmpty) {
+      return path.basename(folderPath);
+    }
+    return entry.place.placeFolderName;
+  }
+
+  String _getPlaceFolderName(Place place) {
+    final folderPath = place.folderPath;
+    if (folderPath != null && folderPath.isNotEmpty) {
+      return path.basename(folderPath);
+    }
+    return place.placeFolderName;
+  }
+
+  String? _resolveProfileImagePath(Place place) {
+    final profileImage = place.profileImage;
+    final folderPath = place.folderPath;
+    if (profileImage == null || profileImage.isEmpty || folderPath == null) {
+      return null;
+    }
+    final resolved = path.isAbsolute(profileImage)
+        ? profileImage
+        : path.join(folderPath, profileImage);
+    return file_helper.fileExists(resolved) ? resolved : null;
+  }
+
+  Widget _buildPlaceAvatar(
+    Place place, {
+    double radius = 20,
+    Color? backgroundColor,
+  }) {
+    final imagePath = _resolveProfileImagePath(place);
+    final imageProvider = imagePath != null
+        ? file_helper.getFileImageProvider(imagePath)
+        : null;
+    if (imageProvider != null) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: backgroundColor,
+        backgroundImage: imageProvider,
+      );
+    }
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: backgroundColor,
+      child: Icon(_getTypeIcon(place.type)),
+    );
   }
 
   Future<void> _syncLocalPlacesToStation() async {
@@ -672,9 +751,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     ];
 
     return ListTile(
-      leading: CircleAvatar(
-        child: Icon(_getTypeIcon(place.type)),
-      ),
+      leading: _buildPlaceAvatar(place),
       title: Text(place.name),
       subtitle: Text(
         subtitleParts.join(' • '),
@@ -687,18 +764,25 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           () => isMobileView
               ? _selectPlaceMobile(place, isReadOnly: isReadOnly)
               : _selectPlace(place),
-      trailing: isReadOnly
-          ? const Icon(Icons.cloud)
-          : PopupMenuButton(
-              itemBuilder: (context) => [
-                PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
-                PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
-              ],
-              onSelected: (value) {
-                if (value == 'edit') _editPlace(place);
-                if (value == 'delete') _deletePlace(place);
-              },
-            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PlaceLikeCountBadge(place: place),
+          const SizedBox(width: 8),
+          isReadOnly
+              ? const Icon(Icons.cloud)
+              : PopupMenuButton(
+                  itemBuilder: (context) => [
+                    PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
+                    PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
+                  ],
+                  onSelected: (value) {
+                    if (value == 'edit') _editPlace(place);
+                    if (value == 'delete') _deletePlace(place);
+                  },
+                ),
+        ],
+      ),
     );
   }
 
@@ -766,18 +850,19 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           // Header
           Row(
             children: [
-              CircleAvatar(
-                radius: 30,
-                child: Icon(_getTypeIcon(place.type), size: 30),
-              ),
+              _buildPlaceAvatar(place, radius: 30),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      place.name,
-                      style: Theme.of(context).textTheme.headlineSmall,
+                      description.isNotEmpty ? description : place.name,
+                      style: description.isNotEmpty
+                          ? Theme.of(context).textTheme.bodyLarge
+                          : Theme.of(context).textTheme.headlineSmall,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     if (place.type != null)
                       Text(
@@ -788,6 +873,11 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                       ),
                   ],
                 ),
+              ),
+              const SizedBox(width: 12),
+              PlaceLikeButton(
+                place: place,
+                compact: true,
               ),
             ],
           ),
@@ -836,22 +926,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             _buildInfoRow(_i18n.t('author'), place.author),
             _buildInfoRow(_i18n.t('created'), place.displayCreated),
           ]),
-
-          // Description
-          if (description.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text(
-              _i18n.t('description'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(description),
-              ),
-            ),
-          ],
 
           // History
           if (history != null && history.isNotEmpty) ...[
@@ -1111,6 +1185,35 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
     }
   }
 
+  String? _resolveProfileImagePath(Place place) {
+    final profileImage = place.profileImage;
+    final folderPath = place.folderPath;
+    if (profileImage == null || profileImage.isEmpty || folderPath == null) {
+      return null;
+    }
+    final resolved = path.isAbsolute(profileImage)
+        ? profileImage
+        : path.join(folderPath, profileImage);
+    return file_helper.fileExists(resolved) ? resolved : null;
+  }
+
+  Widget _buildPlaceAvatar(Place place, {double radius = 30}) {
+    final imagePath = _resolveProfileImagePath(place);
+    final imageProvider = imagePath != null
+        ? file_helper.getFileImageProvider(imagePath)
+        : null;
+    if (imageProvider != null) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundImage: imageProvider,
+      );
+    }
+    return CircleAvatar(
+      radius: radius,
+      child: Icon(_getTypeIcon(place.type), size: radius),
+    );
+  }
+
   Future<void> _deletePlace() async {
     if (widget.isReadOnly) return;
 
@@ -1295,18 +1398,19 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
               // Header
               Row(
                 children: [
-                  CircleAvatar(
-                    radius: 30,
-                    child: Icon(_getTypeIcon(widget.place.type), size: 30),
-                  ),
+                  _buildPlaceAvatar(widget.place, radius: 30),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.place.name,
-                          style: Theme.of(context).textTheme.headlineSmall,
+                          description.isNotEmpty ? description : widget.place.name,
+                          style: description.isNotEmpty
+                              ? Theme.of(context).textTheme.bodyLarge
+                              : Theme.of(context).textTheme.headlineSmall,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         if (widget.place.type != null)
                           Text(
@@ -1317,6 +1421,11 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                           ),
                       ],
                     ),
+                  ),
+                  const SizedBox(width: 12),
+                  PlaceLikeButton(
+                    place: widget.place,
+                    compact: true,
                   ),
                 ],
               ),
@@ -1365,22 +1474,6 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                 _buildInfoRow(widget.i18n.t('author'), widget.place.author),
                 _buildInfoRow(widget.i18n.t('created'), widget.place.displayCreated),
               ]),
-
-              // Description
-              if (description.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(
-                  widget.i18n.t('description'),
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(description),
-                  ),
-                ),
-              ],
 
               // History
               if (history != null && history.isNotEmpty) ...[

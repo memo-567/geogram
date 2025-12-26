@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path/path.dart' as path;
 import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/profile_service.dart';
@@ -150,6 +151,37 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
       default:
         return Icons.place;
     }
+  }
+
+  String? _resolveProfileImagePath(Place place) {
+    final profileImage = place.profileImage;
+    final folderPath = place.folderPath;
+    if (profileImage == null || profileImage.isEmpty || folderPath == null) {
+      return null;
+    }
+    final resolved = path.isAbsolute(profileImage)
+        ? profileImage
+        : path.join(folderPath, profileImage);
+    return file_helper.fileExists(resolved) ? resolved : null;
+  }
+
+  Widget _buildPlaceAvatar(Place place, {double radius = 30}) {
+    final imagePath = _resolveProfileImagePath(place);
+    final imageProvider = imagePath != null
+        ? file_helper.getFileImageProvider(imagePath)
+        : null;
+    if (imageProvider != null) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: Colors.green.shade100,
+        backgroundImage: imageProvider,
+      );
+    }
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: Colors.green.shade100,
+      child: Icon(_getTypeIcon(place.type), size: radius, color: Colors.green.shade700),
+    );
   }
 
   Future<void> _editPlace() async {
@@ -320,19 +352,19 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
                     // Header
                     Row(
                       children: [
-                        CircleAvatar(
-                          radius: 30,
-                          backgroundColor: Colors.green.shade100,
-                          child: Icon(_getTypeIcon(_place.type), size: 30, color: Colors.green.shade700),
-                        ),
+                        _buildPlaceAvatar(_place, radius: 30),
                         const SizedBox(width: 16),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _place.name,
-                                style: Theme.of(context).textTheme.headlineSmall,
+                                description.isNotEmpty ? description : _place.name,
+                                style: description.isNotEmpty
+                                    ? Theme.of(context).textTheme.bodyLarge
+                                    : Theme.of(context).textTheme.headlineSmall,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               if (_place.type != null)
                                 Container(
@@ -352,6 +384,11 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
                                 ),
                             ],
                           ),
+                        ),
+                        const SizedBox(width: 12),
+                        PlaceLikeButton(
+                          place: _place,
+                          compact: true,
                         ),
                       ],
                     ),
@@ -407,43 +444,6 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
                       _buildInfoRow(_i18n.t('author'), _place.author),
                       _buildInfoRow(_i18n.t('created'), _place.displayCreated),
                     ]),
-
-                    // Description
-                    if (description.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Text(
-                            _i18n.t('description'),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          if (_place.descriptions.length > 1) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                '${_place.descriptions.length} ${_i18n.t('languages')}',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(description),
-                        ),
-                      ),
-                    ],
 
                     // History
                     if (history != null && history.isNotEmpty) ...[

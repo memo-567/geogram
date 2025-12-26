@@ -55,6 +55,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   // Photo state
   List<String> _imageFilePaths = [];  // New photos to add
   List<String> _existingImages = [];  // Already saved photos
+  String? _profileImageSelection;
+  bool _profileImageCleared = false;
 
   bool _isSaving = false;
 
@@ -210,15 +212,47 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     if (kIsWeb || widget.place?.folderPath == null) return;
 
     try {
-      final imagesDir = Directory('${widget.place!.folderPath}/images');
+      final folderPath = widget.place!.folderPath!;
+      final images = <String>[];
+
+      final imagesDir = Directory('$folderPath/images');
       if (await imagesDir.exists()) {
         final entities = await imagesDir.list().toList();
-        setState(() {
-          _existingImages = entities
+        images.addAll(
+          entities
               .where((e) => e is File && _isImageFile(e.path))
-              .map((e) => e.path)
-              .toList();
-        });
+              .map((e) => e.path),
+        );
+      }
+
+      final rootDir = Directory(folderPath);
+      if (await rootDir.exists()) {
+        final entities = await rootDir.list().toList();
+        images.addAll(
+          entities
+              .where((e) => e is File && _isImageFile(e.path))
+              .where((e) => path.basename(e.path).toLowerCase() != 'place.txt')
+              .map((e) => e.path),
+        );
+      }
+
+      images.sort();
+
+      setState(() {
+        _existingImages = images;
+      });
+
+      final profileImage = widget.place?.profileImage;
+      if (profileImage != null && profileImage.isNotEmpty) {
+        final resolved = path.isAbsolute(profileImage)
+            ? profileImage
+            : path.join(folderPath, profileImage);
+        if (_existingImages.contains(resolved)) {
+          setState(() {
+            _profileImageSelection = resolved;
+            _profileImageCleared = false;
+          });
+        }
       }
     } catch (e) {
       LogService().log('Error loading place images: $e');
@@ -230,6 +264,53 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     return ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
            ext.endsWith('.png') || ext.endsWith('.gif') ||
            ext.endsWith('.webp');
+  }
+
+  Map<String, String> _buildImageDestinations(String placeFolderPath) {
+    if (_imageFilePaths.isEmpty) {
+      return {};
+    }
+
+    final destinations = <String, String>{};
+    final imagesDir = Directory('$placeFolderPath/images');
+
+    var photoNumber = 1;
+    if (imagesDir.existsSync()) {
+      final entities = imagesDir.listSync();
+      final existingPhotos = entities.where((e) =>
+          e is File && e.path.contains('photo') && _isImageFile(e.path));
+      photoNumber = existingPhotos.length + 1;
+    }
+
+    for (final imagePath in _imageFilePaths) {
+      final ext = path.extension(imagePath).toLowerCase();
+      final destPath = '${imagesDir.path}/photo$photoNumber$ext';
+      destinations[imagePath] = destPath;
+      photoNumber++;
+    }
+
+    return destinations;
+  }
+
+  String? _resolveProfileImageRelativePath(
+    String placeFolderPath,
+    Map<String, String> imageDestinations,
+  ) {
+    final selection = _profileImageSelection;
+    if (selection == null || selection.isEmpty) {
+      return null;
+    }
+
+    final pendingDestination = imageDestinations[selection];
+    if (pendingDestination != null) {
+      return path.relative(pendingDestination, from: placeFolderPath);
+    }
+
+    if (path.isAbsolute(selection) && selection.startsWith(placeFolderPath)) {
+      return path.relative(selection, from: placeFolderPath);
+    }
+
+    return null;
   }
 
   /// Pick images from file system
@@ -262,8 +343,18 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   void _removeImage(int index, {bool isExisting = false}) {
     setState(() {
       if (isExisting) {
+        final removedPath = _existingImages[index];
+        if (_profileImageSelection == removedPath) {
+          _profileImageSelection = null;
+          _profileImageCleared = true;
+        }
         _existingImages.removeAt(index);
       } else {
+        final removedPath = _imageFilePaths[index];
+        if (_profileImageSelection == removedPath) {
+          _profileImageSelection = null;
+          _profileImageCleared = true;
+        }
         _imageFilePaths.removeAt(index);
       }
     });
@@ -283,6 +374,18 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         ),
       ),
     );
+  }
+
+  void _toggleProfileImage(String imagePath) {
+    setState(() {
+      if (_profileImageSelection == imagePath) {
+        _profileImageSelection = null;
+        _profileImageCleared = true;
+      } else {
+        _profileImageSelection = imagePath;
+        _profileImageCleared = false;
+      }
+    });
   }
 
   @override
@@ -371,7 +474,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       final author = profile.callsign.isNotEmpty ? profile.callsign : 'ANONYMOUS';
 
       // Create place object with translations
-      final place = Place(
+      final draftPlace = Place(
         name: name,
         created: widget.place?.created ?? timestamp,
         author: widget.place?.author ?? author,
@@ -388,6 +491,21 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         histories: Map<String, String>.from(_histories), // All translations
       );
 
+      final placeFolderPath = kIsWeb ? null : await _placeService.getPlaceFolderPath(draftPlace);
+      final imageDestinations = placeFolderPath != null
+          ? _buildImageDestinations(placeFolderPath)
+          : <String, String>{};
+      var profileImage = placeFolderPath != null
+          ? _resolveProfileImageRelativePath(placeFolderPath, imageDestinations)
+          : null;
+      if (profileImage == null &&
+          !_profileImageCleared &&
+          widget.place?.profileImage != null) {
+        profileImage = widget.place!.profileImage;
+      }
+
+      final place = draftPlace.copyWith(profileImage: profileImage);
+
       // Save place
       final error = await _placeService.savePlace(place);
 
@@ -399,7 +517,11 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         }
       } else {
         // Save images after place is saved
-        await _saveImages(place);
+        await _saveImages(
+          place,
+          imageDestinations: imageDestinations,
+          placeFolderPath: placeFolderPath,
+        );
 
         // Upload place to preferred station (place.txt + photos)
         if (!kIsWeb) {
@@ -425,42 +547,33 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   }
 
   /// Save photos to the place folder
-  Future<void> _saveImages(Place place) async {
-    if (kIsWeb || _imageFilePaths.isEmpty) return;
+  Future<void> _saveImages(
+    Place place, {
+    required Map<String, String> imageDestinations,
+    String? placeFolderPath,
+  }) async {
+    if (kIsWeb || imageDestinations.isEmpty) return;
 
     try {
-      // Build the place folder path
-      final placeFolderPath = await _placeService.getPlaceFolderPath(place);
-      if (placeFolderPath == null) return;
+      final resolvedFolderPath = placeFolderPath ?? await _placeService.getPlaceFolderPath(place);
+      if (resolvedFolderPath == null) return;
 
-      final imagesDir = Directory('$placeFolderPath/images');
+      final imagesDir = Directory('$resolvedFolderPath/images');
 
       // Create images directory if it doesn't exist
       if (!await imagesDir.exists()) {
         await imagesDir.create(recursive: true);
       }
 
-      // Get existing photo count for sequential naming
-      int photoNumber = 1;
-      if (await imagesDir.exists()) {
-        final entities = await imagesDir.list().toList();
-        final existingPhotos = entities.where((e) =>
-          e is File && e.path.contains('photo') && _isImageFile(e.path)
-        ).toList();
-        photoNumber = existingPhotos.length + 1;
-      }
-
-      // Copy new images with sequential naming (photo1.ext, photo2.ext, etc.)
-      for (final imagePath in _imageFilePaths) {
+      for (final entry in imageDestinations.entries) {
+        final imagePath = entry.key;
+        final destPath = entry.value;
         final imageFile = File(imagePath);
-        final ext = path.extension(imagePath).toLowerCase();
-        final destPath = '${imagesDir.path}/photo$photoNumber$ext';
         await imageFile.copy(destPath);
-        photoNumber++;
       }
 
       _imageFilePaths.clear();
-      LogService().log('Saved ${photoNumber - 1} photos for place ${place.name}');
+      LogService().log('Saved ${imageDestinations.length} photos for place ${place.name}');
     } catch (e) {
       LogService().log('Error saving place images: $e');
     }
@@ -823,6 +936,13 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 icon: const Icon(Icons.add_photo_alternate),
                 label: Text(_i18n.t('add_photos')),
               ),
+              const SizedBox(height: 8),
+              Text(
+                _i18n.t('select_profile_picture'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
               const SizedBox(height: 12),
               if (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty)
                 Wrap(
@@ -831,8 +951,10 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                   children: [
                     // Existing images
                     ..._existingImages.asMap().entries.map((entry) {
+                      final imagePath = entry.value;
+                      final isProfile = _profileImageSelection == imagePath;
                       final imageWidget = file_helper.buildFileImage(
-                        entry.value,
+                        imagePath,
                         width: 100,
                         height: 100,
                         fit: BoxFit.cover,
@@ -845,6 +967,28 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                             ClipRRect(
                               borderRadius: BorderRadius.circular(8),
                               child: imageWidget,
+                            ),
+                            Positioned(
+                              top: 4,
+                              left: 4,
+                              child: Tooltip(
+                                message: _i18n.t('select_profile_picture'),
+                                child: GestureDetector(
+                                  onTap: () => _toggleProfileImage(imagePath),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: BoxDecoration(
+                                      color: isProfile ? Colors.amber : Colors.black54,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      isProfile ? Icons.star : Icons.star_border,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                             Positioned(
                               top: 4,
@@ -867,8 +1011,10 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                     }),
                     // New images
                     ..._imageFilePaths.asMap().entries.map((entry) {
+                      final imagePath = entry.value;
+                      final isProfile = _profileImageSelection == imagePath;
                       final imageWidget = file_helper.buildFileImage(
-                        entry.value,
+                        imagePath,
                         width: 100,
                         height: 100,
                         fit: BoxFit.cover,
@@ -881,6 +1027,28 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                             ClipRRect(
                               borderRadius: BorderRadius.circular(8),
                               child: imageWidget,
+                            ),
+                            Positioned(
+                              top: 4,
+                              left: 4,
+                              child: Tooltip(
+                                message: _i18n.t('select_profile_picture'),
+                                child: GestureDetector(
+                                  onTap: () => _toggleProfileImage(imagePath),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: BoxDecoration(
+                                      color: isProfile ? Colors.amber : Colors.black54,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      isProfile ? Icons.star : Icons.star_border,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                             Positioned(
                               top: 4,

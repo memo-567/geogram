@@ -14,30 +14,28 @@ import '../services/profile_service.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 
-class PlaceFeedbackSection extends StatefulWidget {
+class PlaceLikeButton extends StatefulWidget {
   final Place place;
+  final bool compact;
 
-  const PlaceFeedbackSection({
+  const PlaceLikeButton({
     super.key,
     required this.place,
+    this.compact = false,
   });
 
   @override
-  State<PlaceFeedbackSection> createState() => _PlaceFeedbackSectionState();
+  State<PlaceLikeButton> createState() => _PlaceLikeButtonState();
 }
 
-class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
+class _PlaceLikeButtonState extends State<PlaceLikeButton> {
   final PlaceFeedbackService _feedbackService = PlaceFeedbackService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
-  final TextEditingController _commentController = TextEditingController();
 
-  bool _isLoading = false;
   bool _isSubmitting = false;
   int _likeCount = 0;
   bool _hasLiked = false;
-  List<FeedbackComment> _comments = [];
-
   String? _currentNpub;
 
   String? get _contentPath => widget.place.folderPath;
@@ -54,40 +52,30 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
   void initState() {
     super.initState();
     _currentNpub = _profileService.getProfile().npub;
-    _loadFeedback();
+    _loadLikes();
   }
 
   @override
-  void didUpdateWidget(covariant PlaceFeedbackSection oldWidget) {
+  void didUpdateWidget(covariant PlaceLikeButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.place.folderPath != widget.place.folderPath ||
         oldWidget.place.placeFolderName != widget.place.placeFolderName) {
       _currentNpub = _profileService.getProfile().npub;
-      _loadFeedback();
+      _loadLikes();
     }
   }
 
-  @override
-  void dispose() {
-    _commentController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadFeedback() async {
+  Future<void> _loadLikes() async {
     final contentPath = _contentPath;
     if (contentPath == null || contentPath.isEmpty) {
       return;
     }
 
-    setState(() => _isLoading = true);
     try {
       final npubs = await FeedbackFolderUtils.readFeedbackFile(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
       );
-      final comments = await FeedbackCommentUtils.loadComments(contentPath);
-
-      comments.sort((a, b) => _parseCommentDate(b.created).compareTo(_parseCommentDate(a.created)));
 
       final npub = _currentNpub;
       final hasLiked = npub != null && npub.isNotEmpty
@@ -98,20 +86,10 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
       setState(() {
         _likeCount = npubs.length;
         _hasLiked = hasLiked;
-        _comments = comments;
       });
     } catch (e) {
-      LogService().log('PlaceFeedbackSection: Error loading feedback: $e');
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      LogService().log('PlaceLikeButton: Error loading likes: $e');
     }
-  }
-
-  DateTime _parseCommentDate(String created) {
-    final normalized = created.replaceAll('_', ':');
-    return DateTime.tryParse(normalized) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   Future<void> _toggleLike() async {
@@ -194,6 +172,241 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
     }
   }
 
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : null,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final contentPath = _contentPath;
+    if (contentPath == null || contentPath.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final labelStyle = TextStyle(
+      fontWeight: _hasLiked ? FontWeight.bold : FontWeight.normal,
+      color: _hasLiked ? Colors.amber.shade800 : theme.colorScheme.onSurface,
+    );
+
+    final badge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: _hasLiked
+            ? Colors.amber.withValues(alpha: 0.2)
+            : theme.colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        _likeCount.toString(),
+        style: theme.textTheme.labelSmall?.copyWith(
+          fontWeight: FontWeight.bold,
+          color: _hasLiked ? Colors.amber.shade800 : theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+
+    return OutlinedButton.icon(
+      onPressed: _isSubmitting ? null : _toggleLike,
+      icon: Icon(
+        _hasLiked ? Icons.star : Icons.star_border,
+        color: _hasLiked ? Colors.amber : theme.colorScheme.onSurfaceVariant,
+        size: widget.compact ? 18 : 20,
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(_i18n.t('like'), style: labelStyle),
+          const SizedBox(width: 6),
+          badge,
+        ],
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: widget.compact
+            ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6)
+            : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        visualDensity: widget.compact ? VisualDensity.compact : VisualDensity.standard,
+        side: BorderSide(
+          color: _hasLiked ? Colors.amber : theme.colorScheme.outline,
+          width: _hasLiked ? 2 : 1,
+        ),
+        backgroundColor: _hasLiked ? Colors.amber.withValues(alpha: 0.1) : null,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+}
+
+class PlaceLikeCountBadge extends StatefulWidget {
+  final Place place;
+  final bool showZero;
+
+  const PlaceLikeCountBadge({
+    super.key,
+    required this.place,
+    this.showZero = true,
+  });
+
+  @override
+  State<PlaceLikeCountBadge> createState() => _PlaceLikeCountBadgeState();
+}
+
+class _PlaceLikeCountBadgeState extends State<PlaceLikeCountBadge> {
+  int? _count;
+
+  String? get _contentPath => widget.place.folderPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCount();
+  }
+
+  @override
+  void didUpdateWidget(covariant PlaceLikeCountBadge oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.place.folderPath != widget.place.folderPath ||
+        oldWidget.place.placeFolderName != widget.place.placeFolderName) {
+      _loadCount();
+    }
+  }
+
+  Future<void> _loadCount() async {
+    final contentPath = _contentPath;
+    if (contentPath == null || contentPath.isEmpty) {
+      setState(() => _count = 0);
+      return;
+    }
+
+    try {
+      final count = await FeedbackFolderUtils.getFeedbackCount(
+        contentPath,
+        FeedbackFolderUtils.feedbackTypeLikes,
+      );
+      if (!mounted) return;
+      setState(() => _count = count);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _count = 0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final count = _count ?? 0;
+    if (!widget.showZero && count == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.star,
+          size: 16,
+          color: Colors.amber.shade700,
+        ),
+        const SizedBox(width: 4),
+        Text(
+          count.toString(),
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class PlaceFeedbackSection extends StatefulWidget {
+  final Place place;
+
+  const PlaceFeedbackSection({
+    super.key,
+    required this.place,
+  });
+
+  @override
+  State<PlaceFeedbackSection> createState() => _PlaceFeedbackSectionState();
+}
+
+class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
+  final PlaceFeedbackService _feedbackService = PlaceFeedbackService();
+  final ProfileService _profileService = ProfileService();
+  final I18nService _i18n = I18nService();
+  final TextEditingController _commentController = TextEditingController();
+
+  bool _isLoading = false;
+  bool _isSubmitting = false;
+  List<FeedbackComment> _comments = [];
+
+  String? get _contentPath => widget.place.folderPath;
+  String get _placeId {
+    final folderPath = widget.place.folderPath;
+    if (folderPath != null && folderPath.isNotEmpty) {
+      return path.basename(folderPath);
+    }
+    return widget.place.placeFolderName;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadComments();
+  }
+
+  @override
+  void didUpdateWidget(covariant PlaceFeedbackSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.place.folderPath != widget.place.folderPath ||
+        oldWidget.place.placeFolderName != widget.place.placeFolderName) {
+      _loadComments();
+    }
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadComments() async {
+    final contentPath = _contentPath;
+    if (contentPath == null || contentPath.isEmpty) {
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final comments = await FeedbackCommentUtils.loadComments(contentPath);
+
+      comments.sort((a, b) => _parseCommentDate(b.created).compareTo(_parseCommentDate(a.created)));
+
+      if (!mounted) return;
+      setState(() {
+        _comments = comments;
+      });
+    } catch (e) {
+      LogService().log('PlaceFeedbackSection: Error loading feedback: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  DateTime _parseCommentDate(String created) {
+    final normalized = created.replaceAll('_', ':');
+    return DateTime.tryParse(normalized) ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
   Future<void> _addComment() async {
     if (_isSubmitting) return;
     final contentPath = _contentPath;
@@ -220,7 +433,7 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
       );
 
       _commentController.clear();
-      await _loadFeedback();
+      await _loadComments();
       _showMessage(_i18n.t('comment_added'));
 
       _feedbackService.commentOnStation(
@@ -260,72 +473,8 @@ class _PlaceFeedbackSectionState extends State<PlaceFeedbackSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 16),
-        Text(
-          _i18n.t('likes'),
-          style: theme.textTheme.titleMedium,
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OutlinedButton.icon(
-              onPressed: _isSubmitting ? null : _toggleLike,
-              icon: Icon(
-                _hasLiked ? Icons.star : Icons.star_border,
-                color: _hasLiked ? Colors.amber : theme.colorScheme.onSurfaceVariant,
-              ),
-              label: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _i18n.t('like'),
-                    style: TextStyle(
-                      fontWeight: _hasLiked ? FontWeight.bold : FontWeight.normal,
-                      color: _hasLiked ? Colors.amber.shade800 : theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  if (_likeCount > 0) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _hasLiked
-                            ? Colors.amber.withValues(alpha: 0.2)
-                            : theme.colorScheme.surfaceVariant,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        _likeCount.toString(),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: _hasLiked ? Colors.amber.shade800 : theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(
-                  color: _hasLiked ? Colors.amber : theme.colorScheme.outline,
-                  width: _hasLiked ? 2 : 1,
-                ),
-                backgroundColor: _hasLiked ? Colors.amber.withValues(alpha: 0.1) : null,
-              ),
-            ),
-            if (_likeCount == 0)
-              Text(
-                _i18n.t('no_likes_yet'),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-          ],
-        ),
         if (_isLoading) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           const LinearProgressIndicator(),
         ],
         const SizedBox(height: 16),
