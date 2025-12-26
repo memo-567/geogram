@@ -114,12 +114,12 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   }
 
   /// Save a comment for a station alert
-  Future<void> _saveStationAlertComment(String author, String content, {String? npub}) async {
+  Future<String?> _saveStationAlertComment(String author, String content, {String? npub}) async {
     if (_report == null || !_isFromStation || kIsWeb) return;
 
     try {
       final alertPath = await _resolveStationAlertPath();
-      if (alertPath == null) return;
+      if (alertPath == null) return null;
 
       final signature = await _alertFeedbackService.signComment(_report!.apiId, content);
       await FeedbackCommentUtils.writeComment(
@@ -131,8 +131,10 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       );
 
       LogService().log('ReportDetailPage: Saved comment for station alert ${_report!.folderName}');
+      return signature;
     } catch (e) {
       LogService().log('ReportDetailPage: Error saving station alert comment: $e');
+      return null;
     }
   }
 
@@ -369,7 +371,11 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
       if (_isFromStation) {
         // For station alerts: save comment to local disk, then sync to station
-        await _saveStationAlertComment(profile.callsign, commentContent, npub: _currentUserNpub);
+        final signature = await _saveStationAlertComment(
+          profile.callsign,
+          commentContent,
+          npub: _currentUserNpub,
+        );
         _commentController.clear();
         await _loadComments();
         _showSuccess(_i18n.t('comment_added'));
@@ -380,6 +386,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
           profile.callsign,
           commentContent,
           npub: _currentUserNpub,
+          signature: signature,
         ).then((_) async {
           await StationAlertService().refreshAlert(_report!.folderName, _report!.metadata['station_callsign'] ?? '');
           if (mounted) {

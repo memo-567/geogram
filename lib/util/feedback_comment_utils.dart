@@ -157,6 +157,7 @@ class FeedbackCommentUtils {
     final commentFiles = await listCommentFiles(contentPath);
     final comments = <FeedbackComment>[];
     final commentsDir = FeedbackFolderUtils.buildCommentsPath(contentPath);
+    final seenSignatures = <String>{};
 
     for (final filename in commentFiles) {
       final commentId = filename.replaceAll('.txt', '');
@@ -164,6 +165,12 @@ class FeedbackCommentUtils {
       try {
         final content = await File(filePath).readAsString();
         final comment = parseCommentFile(content, commentId);
+        final signature = comment.signature;
+        if (signature != null && signature.isNotEmpty) {
+          if (!seenSignatures.add(signature)) {
+            continue;
+          }
+        }
         comments.add(comment);
       } catch (_) {
         // Skip invalid comment files
