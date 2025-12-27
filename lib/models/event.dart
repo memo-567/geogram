@@ -23,7 +23,7 @@ class Event {
   final String content;
   final String? agenda; // Event schedule/agenda (optional)
   final String visibility; // "public", "private", or "group"
-  final List<String> likes; // List of callsigns
+  final List<String> likes; // List of npubs (feedback)
   final List<EventComment> comments;
   final Map<String, String> metadata;
 
@@ -167,6 +167,9 @@ class Event {
     return '$hour:$minute';
   }
 
+  /// Whether a meaningful time is available (00:00 treated as "not set")
+  bool get hasDisplayTime => displayTime != '00:00';
+
   /// Get display date (YYYY-MM-DD)
   String get displayDate {
     final dt = dateTime;
@@ -174,6 +177,14 @@ class Event {
     final month = dt.month.toString().padLeft(2, '0');
     final day = dt.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
+  }
+
+  /// Get display date + time (omit time if unset)
+  String get displayDateTime {
+    if (!hasDisplayTime) {
+      return displayDate;
+    }
+    return '$displayDate $displayTime';
   }
 
   /// Get year from timestamp
@@ -262,8 +273,9 @@ class Event {
   }
 
   /// Check if user has liked the event
-  bool hasUserLiked(String callsign) {
-    return likes.contains(callsign);
+  bool hasUserLiked(String? npub) {
+    if (npub == null || npub.isEmpty) return false;
+    return likes.contains(npub);
   }
 
   /// Get like count

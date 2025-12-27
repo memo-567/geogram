@@ -21,6 +21,7 @@ import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
+import '../services/group_sync_service.dart';
 import '../services/signing_service.dart';
 import '../models/device_source.dart';
 import '../util/nostr_crypto.dart';
@@ -101,6 +102,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   // File change subscription for CLI/external updates
   StreamSubscription<ChatFileChange>? _fileChangeSubscription;
+
+  // Local collection paths for group synchronization
+  String? _localChatCollectionPath;
+  String? _groupsCollectionPath;
 
   @override
   void initState() {
@@ -379,7 +384,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         creatorNpub: currentProfile.npub,
       );
 
-      // Load channels
+      _localChatCollectionPath = storagePath;
+      _groupsCollectionPath =
+          await GroupSyncService().findCollectionPathByType('groups');
+      if (_groupsCollectionPath != null) {
+        await GroupSyncService().syncGroupsCollection(
+          groupsCollectionPath: _groupsCollectionPath!,
+          chatCollectionPath: storagePath,
+        );
+      }
+
+      await _chatService.refreshChannels();
       _channels = _chatService.channels;
 
       // Start watching for file changes now that channels are loaded
@@ -1150,6 +1165,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         // Create channel
         final channel = await _chatService.createChannel(result);
 
+        if (channel.isGroup &&
+            !channel.isMain &&
+            _groupsCollectionPath != null &&
+            _localChatCollectionPath != null) {
+          await GroupSyncService().syncGroupsCollection(
+            groupsCollectionPath: _groupsCollectionPath!,
+            chatCollectionPath: _localChatCollectionPath!,
+          );
+        }
+
         // Refresh channels
         await _chatService.refreshChannels();
 
@@ -1158,7 +1183,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         });
 
         // Select the new channel
-        await _selectChannel(channel);
+        final updatedChannel = _chatService.getChannel(channel.id) ?? channel;
+        await _selectChannel(updatedChannel);
 
         _showSuccess('Channel created successfully');
       } catch (e) {

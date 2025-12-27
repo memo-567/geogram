@@ -115,7 +115,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
 
   /// Save a comment for a station alert
   Future<String?> _saveStationAlertComment(String author, String content, {String? npub}) async {
-    if (_report == null || !_isFromStation || kIsWeb) return;
+    if (_report == null || !_isFromStation || kIsWeb) return null;
 
     try {
       final alertPath = await _resolveStationAlertPath();

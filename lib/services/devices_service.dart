@@ -878,6 +878,29 @@ class DevicesService {
     return folder;
   }
 
+  /// Ensure a folder exists with a specific id (used for group synchronization)
+  DeviceFolder ensureFolder(String id, String name) {
+    final folders = getFolders();
+
+    final existing = folders.firstWhere(
+      (f) => f.id == id,
+      orElse: () => DeviceFolder(id: '', name: ''),
+    );
+
+    if (existing.id.isNotEmpty) {
+      return existing;
+    }
+
+    final maxOrder = folders.isEmpty
+        ? 0
+        : folders.map((f) => f.order).reduce((a, b) => a > b ? a : b);
+    final folder = DeviceFolder(id: id, name: name, order: maxOrder + 1);
+    folders.add(folder);
+    _saveFolders(folders);
+    LogService().log('DevicesService: Ensured folder "$name" with id $id');
+    return folder;
+  }
+
   /// Rename a folder
   void renameFolder(String folderId, String newName) {
     if (folderId == defaultFolderId) return; // Can't rename default folder

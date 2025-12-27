@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import '../models/chat_channel.dart';
+import '../util/group_utils.dart';
 
 /// Dialog for creating a new chat channel (DM or group)
 class NewChannelDialog extends StatefulWidget {
@@ -278,11 +279,6 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
 
   /// Generate a unique group ID from name
   String _generateGroupId(String name) {
-    return name
-        .toLowerCase()
-        .replaceAll(' ', '-')
-        .replaceAll(RegExp(r'[^a-z0-9-]'), '')
-        .replaceAll(RegExp(r'-+'), '-')
-        .replaceAll(RegExp(r'^-|-$'), '');
+    return GroupUtils.sanitizeGroupName(name);
   }
 }

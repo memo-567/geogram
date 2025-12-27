@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/group.dart';
 import '../models/group_member.dart';
 import '../services/groups_service.dart';
+import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import 'group_detail_page.dart';
@@ -57,6 +58,11 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
       widget.collectionPath,
       creatorNpub: currentProfile.npub,
     );
+    if (_groupsService.isCollectionAdmin(currentProfile.npub)) {
+      await GroupSyncService().syncGroupsCollection(
+        groupsCollectionPath: widget.collectionPath,
+      );
+    }
     await _loadGroups();
   }
 
@@ -555,6 +561,10 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
           collectionType: result['collectionType'],
           creatorNpub: currentProfile.npub,
           creatorCallsign: currentProfile.callsign,
+        );
+
+        await GroupSyncService().syncGroupsCollection(
+          groupsCollectionPath: widget.collectionPath,
         );
 
         await _loadGroups();

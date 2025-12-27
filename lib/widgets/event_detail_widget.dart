@@ -12,7 +12,10 @@ import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
+import '../services/event_service.dart';
 import '../services/i18n_service.dart';
+import 'event_feedback_section.dart';
+import '../pages/photo_viewer_page.dart';
 
 /// Widget for displaying event detail with all v1.2 features
 class EventDetailWidget extends StatelessWidget {
@@ -21,12 +24,11 @@ class EventDetailWidget extends StatelessWidget {
   final String? currentCallsign;
   final String? currentUserNpub;
   final bool canEdit;
-  final bool hasLiked;
-  final VoidCallback? onLike;
   final VoidCallback? onRefresh;
   final VoidCallback? onEdit;
   final VoidCallback? onUploadFiles;
   final VoidCallback? onCreateUpdate;
+  final Future<void> Function()? onFeedbackUpdated;
 
   const EventDetailWidget({
     Key? key,
@@ -35,12 +37,11 @@ class EventDetailWidget extends StatelessWidget {
     this.currentCallsign,
     this.currentUserNpub,
     this.canEdit = false,
-    this.hasLiked = false,
-    this.onLike,
     this.onRefresh,
     this.onEdit,
     this.onUploadFiles,
     this.onCreateUpdate,
+    this.onFeedbackUpdated,
   }) : super(key: key);
 
   @override
@@ -76,13 +77,12 @@ class EventDetailWidget extends StatelessWidget {
                 ),
               ),
               // Like button
-              IconButton(
-                icon: Icon(
-                  hasLiked ? Icons.favorite : Icons.favorite_border,
-                  color: hasLiked ? theme.colorScheme.error : null,
-                ),
-                onPressed: onLike,
-                tooltip: hasLiked ? i18n.t('unlike') : i18n.t('like'),
+              EventLikeButton(
+                event: event,
+                collectionPath: collectionPath,
+                compact: true,
+                showCount: false,
+                onFeedbackUpdated: onFeedbackUpdated,
               ),
               // Edit/Settings button (if allowed)
               if (canEdit)
@@ -132,6 +132,12 @@ class EventDetailWidget extends StatelessWidget {
           _buildContent(theme, i18n),
           const SizedBox(height: 24),
 
+          // Agenda
+          if (event.agenda != null && event.agenda!.isNotEmpty) ...[
+            _buildAgenda(theme, i18n),
+            const SizedBox(height: 24),
+          ],
+
           // Registration section
           if (event.hasRegistration) ...[
             _buildRegistration(context, theme, i18n),
@@ -140,7 +146,7 @@ class EventDetailWidget extends StatelessWidget {
 
           // Links section
           if (event.hasLinks) ...[
-            _buildLinks(theme, i18n),
+            _buildLinks(context, theme, i18n),
             const SizedBox(height: 24),
           ],
 
@@ -158,6 +164,13 @@ class EventDetailWidget extends StatelessWidget {
           ),
           const SizedBox(height: 24),
 
+          EventFeedbackSection(
+            event: event,
+            collectionPath: collectionPath,
+            onFeedbackUpdated: onFeedbackUpdated,
+          ),
+          const SizedBox(height: 24),
+
           // Engagement stats
           _buildEngagementStats(theme, i18n),
             ],
@@ -168,6 +181,8 @@ class EventDetailWidget extends StatelessWidget {
   }
 
   Widget _buildMetadata(ThemeData theme, I18nService i18n) {
+    final relativeLabel = _relativeDaysLabel(i18n);
+
     // Get visibility icon and label
     IconData visibilityIcon;
     String visibilityLabel;
@@ -220,13 +235,31 @@ class EventDetailWidget extends StatelessWidget {
             Text(
               event.isMultiDay
                   ? '${event.startDate} - ${event.endDate}'
-                  : '${event.displayDate} ${event.displayTime}',
+                  : event.displayDateTime,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ],
         ),
+        if (relativeLabel != null)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.timelapse,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                relativeLabel,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         // Location
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -267,9 +300,44 @@ class EventDetailWidget extends StatelessWidget {
     );
   }
 
+  String? _relativeDaysLabel(I18nService i18n) {
+    DateTime? startDate;
+    if (event.isMultiDay && event.startDate != null) {
+      try {
+        startDate = DateTime.parse(event.startDate!);
+      } catch (e) {
+        startDate = null;
+      }
+    } else {
+      final dt = event.dateTime;
+      startDate = DateTime(dt.year, dt.month, dt.day);
+    }
+
+    if (startDate == null) return null;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final diffDays = startDate.difference(today).inDays;
+
+    if (diffDays < -90) {
+      return null;
+    }
+    if (diffDays == 0) {
+      return i18n.t('today');
+    }
+    if (diffDays > 0) {
+      return i18n.t('in_days', params: [diffDays.toString()]);
+    }
+    return i18n.t('days_ago_long', params: [diffDays.abs().toString()]);
+  }
+
   Widget _buildFlyer(BuildContext context, ThemeData theme, I18nService i18n) {
     final year = event.id.substring(0, 4);
     final flyerPath = '$collectionPath/events/$year/${event.id}/${event.primaryFlyer}';
+    final flyerPaths = event.flyers
+        .map((flyer) => '$collectionPath/events/$year/${event.id}/$flyer')
+        .toList();
+    final canOpen = !kIsWeb && flyerPaths.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -281,33 +349,47 @@ class EventDetailWidget extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: kIsWeb
-            ? Container(
-                height: 200,
-                color: theme.colorScheme.surfaceVariant,
-                child: Center(
-                  child: Text(i18n.t('image_not_available_on_web')),
-                ),
-              )
-            : Image.file(
-                io.File(flyerPath),
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    height: 200,
-                    color: theme.colorScheme.surfaceVariant,
-                    child: Center(
-                      child: Icon(
-                        Icons.broken_image,
-                        size: 48,
-                        color: theme.colorScheme.onSurfaceVariant,
+        GestureDetector(
+          onTap: canOpen
+              ? () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => PhotoViewerPage(
+                        imagePaths: flyerPaths,
+                        initialIndex: 0,
                       ),
                     ),
                   );
-                },
-              ),
+                }
+              : null,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: kIsWeb
+                ? Container(
+                    height: 200,
+                    color: theme.colorScheme.surfaceVariant,
+                    child: Center(
+                      child: Text(i18n.t('image_not_available_on_web')),
+                    ),
+                  )
+                : Image.file(
+                    io.File(flyerPath),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 200,
+                        color: theme.colorScheme.surfaceVariant,
+                        child: Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            size: 48,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
         ),
       ],
     );
@@ -369,103 +451,36 @@ class EventDetailWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildRegistration(BuildContext context, ThemeData theme, I18nService i18n) {
-    final registration = event.registration!;
-
+  Widget _buildAgenda(ThemeData theme, I18nService i18n) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          i18n.t('registration'),
+          i18n.t('agenda'),
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            // Going
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.green.withOpacity(0.3),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.check_circle, color: Colors.green, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          i18n.t('going'),
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${registration.goingCount} ${i18n.t('people')}',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            // Interested
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: theme.colorScheme.primary.withOpacity(0.3),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.star_outline,
-                          color: theme.colorScheme.primary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          i18n.t('interested'),
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${registration.interestedCount} ${i18n.t('people')}',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+        const SizedBox(height: 8),
+        SelectableText(
+          event.agenda ?? '',
+          style: theme.textTheme.bodyLarge?.copyWith(height: 1.6),
         ),
       ],
     );
   }
 
-  Widget _buildLinks(ThemeData theme, I18nService i18n) {
+  Widget _buildRegistration(BuildContext context, ThemeData theme, I18nService i18n) {
+    return EventRegistrationSection(
+      event: event,
+      collectionPath: collectionPath,
+      currentCallsign: currentCallsign,
+      currentUserNpub: currentUserNpub,
+      onRegistrationUpdated: onFeedbackUpdated,
+    );
+  }
+
+  Widget _buildLinks(BuildContext context, ThemeData theme, I18nService i18n) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -476,12 +491,12 @@ class EventDetailWidget extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        ...event.links.map((link) => _buildLinkItem(link, theme, i18n)),
+        ...event.links.map((link) => _buildLinkItem(context, link, theme, i18n)),
       ],
     );
   }
 
-  Widget _buildLinkItem(EventLink link, ThemeData theme, I18nService i18n) {
+  Widget _buildLinkItem(BuildContext context, EventLink link, ThemeData theme, I18nService i18n) {
     IconData icon;
     switch (link.linkType) {
       case LinkType.zoom:
@@ -542,8 +557,21 @@ class EventDetailWidget extends StatelessWidget {
               ),
               IconButton(
                 icon: const Icon(Icons.open_in_new, size: 18),
-                onPressed: () {
-                  // TODO: Open link
+                onPressed: () async {
+                  final uri = Uri.tryParse(link.url);
+                  if (uri == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(i18n.t('invalid_url', params: [link.url]))),
+                    );
+                    return;
+                  }
+                  if (await canLaunchUrl(uri)) {
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(i18n.t('could_not_open_url', params: [link.url]))),
+                    );
+                  }
                 },
                 tooltip: i18n.t('open_link'),
               ),
@@ -709,6 +737,234 @@ class EventDetailWidget extends StatelessWidget {
     );
   }
 
+}
+
+class EventRegistrationSection extends StatefulWidget {
+  final Event event;
+  final String collectionPath;
+  final String? currentCallsign;
+  final String? currentUserNpub;
+  final Future<void> Function()? onRegistrationUpdated;
+
+  const EventRegistrationSection({
+    Key? key,
+    required this.event,
+    required this.collectionPath,
+    this.currentCallsign,
+    this.currentUserNpub,
+    this.onRegistrationUpdated,
+  }) : super(key: key);
+
+  @override
+  State<EventRegistrationSection> createState() => _EventRegistrationSectionState();
+}
+
+class _EventRegistrationSectionState extends State<EventRegistrationSection> {
+  final EventService _eventService = EventService();
+  final I18nService _i18n = I18nService();
+  bool _isSubmitting = false;
+  late EventRegistration _registration;
+
+  @override
+  void initState() {
+    super.initState();
+    _registration = widget.event.registration ?? EventRegistration();
+  }
+
+  @override
+  void didUpdateWidget(covariant EventRegistrationSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.id != widget.event.id ||
+        oldWidget.event.registration?.totalCount != widget.event.registration?.totalCount) {
+      _registration = widget.event.registration ?? EventRegistration();
+    }
+  }
+
+  Future<void> _toggleRegistration(RegistrationType type) async {
+    if (_isSubmitting) return;
+
+    if (widget.collectionPath.isEmpty) {
+      _showMessage(_i18n.t('connection_failed'), isError: true);
+      return;
+    }
+
+    final callsign = widget.currentCallsign ?? '';
+    final npub = widget.currentUserNpub ?? '';
+    if (callsign.isEmpty) {
+      _showMessage(_i18n.t('no_active_callsign'));
+      return;
+    }
+    if (npub.isEmpty) {
+      _showMessage(_i18n.t('nostr_keys_required'));
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+    try {
+      final currentType = _registration.getRegistrationType(callsign);
+      bool success;
+      if (currentType == type) {
+        success = await _eventService.unregister(
+          eventId: widget.event.id,
+          callsign: callsign,
+        );
+      } else {
+        success = await _eventService.register(
+          eventId: widget.event.id,
+          callsign: callsign,
+          npub: npub,
+          type: type,
+        );
+      }
+
+      if (!success) {
+        _showMessage(_i18n.t('error'), isError: true);
+        return;
+      }
+
+      final updated = await _eventService.loadEvent(widget.event.id);
+      if (updated != null) {
+        setState(() {
+          _registration = updated.registration ?? EventRegistration();
+        });
+      }
+
+      await widget.onRegistrationUpdated?.call();
+    } catch (e) {
+      _showMessage('Failed to update registration: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : null,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final callsign = widget.currentCallsign ?? '';
+    final isGoing = callsign.isNotEmpty && _registration.isGoing(callsign);
+    final isInterested = callsign.isNotEmpty && _registration.isInterested(callsign);
+    final isReadOnly = widget.collectionPath.isEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _i18n.t('registration'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildRegistrationCard(
+                theme: theme,
+                label: _i18n.t('going'),
+                count: _registration.goingCount,
+                icon: Icons.check_circle,
+                accent: Colors.green,
+                isActive: isGoing,
+                isReadOnly: isReadOnly,
+                onPressed: () => _toggleRegistration(RegistrationType.going),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildRegistrationCard(
+                theme: theme,
+                label: _i18n.t('interested'),
+                count: _registration.interestedCount,
+                icon: Icons.star_outline,
+                accent: theme.colorScheme.primary,
+                isActive: isInterested,
+                isReadOnly: isReadOnly,
+                onPressed: () => _toggleRegistration(RegistrationType.interested),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRegistrationCard({
+    required ThemeData theme,
+    required String label,
+    required int count,
+    required IconData icon,
+    required Color accent,
+    required bool isActive,
+    required bool isReadOnly,
+    required VoidCallback onPressed,
+  }) {
+    final borderColor = accent.withOpacity(0.3);
+    final backgroundColor = accent.withOpacity(isActive ? 0.2 : 0.08);
+
+    final button = isActive
+        ? FilledButton.icon(
+            onPressed: _isSubmitting ? null : onPressed,
+            icon: const Icon(Icons.check, size: 16),
+            label: Text(label),
+          )
+        : OutlinedButton.icon(
+            onPressed: _isSubmitting ? null : onPressed,
+            icon: Icon(icon, size: 16),
+            label: Text(label),
+          );
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: borderColor,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: accent, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$count ${_i18n.t('people')}',
+            style: theme.textTheme.bodyMedium,
+          ),
+          if (!isReadOnly) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: button,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 /// Stateful widget for displaying and managing event files

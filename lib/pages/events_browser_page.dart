@@ -8,15 +8,17 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as path;
 import '../models/event.dart';
 import '../models/event_link.dart';
+import '../models/event_registration.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
-import '../dialogs/new_event_dialog.dart';
+import 'new_event_page.dart';
 import '../dialogs/new_update_dialog.dart';
 import 'event_settings_page.dart';
 
@@ -164,11 +166,14 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     if (widget.remoteDeviceUrl == null) return;
 
     try {
-      final url = '${widget.remoteDeviceUrl}/api/events/${event.id}';
+      final baseUri = Uri.parse(widget.remoteDeviceUrl!);
+      final url = baseUri.replace(
+        pathSegments: [...baseUri.pathSegments, 'api', 'events', event.id],
+      );
       LogService().log('EventsBrowserPage: Fetching remote event details from $url');
 
       final response = await http.get(
-        Uri.parse(url),
+        url,
         headers: {'Accept': 'application/json'},
       ).timeout(const Duration(seconds: 30));
 
@@ -244,6 +249,23 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     });
   }
 
+  Future<void> _refreshSelectedEvent() async {
+    if (_selectedEvent == null) return;
+    final updatedEvent = await _eventService.loadEvent(_selectedEvent!.id);
+    if (updatedEvent == null || !mounted) return;
+    setState(() {
+      _selectedEvent = updatedEvent;
+      final allIndex = _allEvents.indexWhere((e) => e.id == updatedEvent.id);
+      if (allIndex != -1) {
+        _allEvents[allIndex] = updatedEvent;
+      }
+      final filteredIndex = _filteredEvents.indexWhere((e) => e.id == updatedEvent.id);
+      if (filteredIndex != -1) {
+        _filteredEvents[filteredIndex] = updatedEvent;
+      }
+    });
+  }
+
   void _toggleYear(int year) {
     setState(() {
       if (_expandedYears.contains(year)) {
@@ -255,9 +277,12 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   Future<void> _createNewEvent() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => const NewEventDialog(),
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const NewEventPage(),
+        fullscreenDialog: true,
+      ),
     );
 
     if (result != null && mounted) {
@@ -271,10 +296,16 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         location: result['location'] as String,
         locationName: result['locationName'] as String?,
         content: result['content'] as String,
+        agenda: result['agenda'] as String?,
+        visibility: result['visibility'] as String?,
+        admins: result['admins'] as List<String>?,
+        moderators: result['moderators'] as List<String>?,
         npub: profile.npub,
       );
 
       if (event != null && mounted) {
+        await _applyEventExtras(event.id, result, profile.callsign, profile.npub);
+        final refreshedEvent = await _eventService.loadEvent(event.id);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_i18n.t('event_created')),
@@ -282,43 +313,133 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           ),
         );
         await _loadEvents();
-        await _selectEvent(event);
+        await _selectEvent(refreshedEvent ?? event);
       }
     }
   }
 
-  Future<void> _likeEvent() async {
-    if (_selectedEvent == null || _currentCallsign == null) return;
+  Future<void> _applyEventExtras(
+    String eventId,
+    Map<String, dynamic> result,
+    String callsign,
+    String? npub,
+  ) async {
+    if (widget.collectionPath == null) return;
 
-    final success = await _eventService.addLike(
-      eventId: _selectedEvent!.id,
-      callsign: _currentCallsign!,
-    );
+    final links = (result['links'] as List<dynamic>?)
+            ?.map((link) => link as EventLink)
+            .toList() ??
+        [];
+    if (links.isNotEmpty) {
+      await _writeLinksFile(eventId, links);
+    }
 
-    if (success && mounted) {
-      // Reload event
-      final updatedEvent = await _eventService.loadEvent(_selectedEvent!.id);
-      setState(() {
-        _selectedEvent = updatedEvent;
-      });
+    final registrationEnabled = result['registrationEnabled'] as bool?;
+    if (registrationEnabled == true) {
+      await _ensureRegistrationFile(eventId);
+    }
+
+    final updates = (result['updates'] as List<dynamic>?)
+            ?.map((entry) => Map<String, String>.from(entry as Map))
+            .toList() ??
+        [];
+    for (final update in updates) {
+      final title = update['title'];
+      final content = update['content'];
+      if (title == null || content == null) continue;
+      await _eventService.createUpdate(
+        eventId: eventId,
+        title: title,
+        author: callsign,
+        content: content,
+        npub: npub,
+      );
+    }
+
+    final flyerFiles = (result['flyers'] as List<dynamic>?)
+            ?.map((entry) => Map<String, String>.from(entry as Map))
+            .toList() ??
+        [];
+    if (flyerFiles.isNotEmpty) {
+      await _copyPendingFiles(eventId, flyerFiles, ensureUnique: false);
+    }
+
+    final trailer = result['trailer'] as Map<String, String>?;
+    if (trailer != null && trailer.isNotEmpty) {
+      await _copyPendingFiles(eventId, [trailer], ensureUnique: false);
+    }
+
+    final mediaFiles = (result['mediaFiles'] as List<dynamic>?)
+            ?.map((entry) => Map<String, String>.from(entry as Map))
+            .toList() ??
+        [];
+    if (mediaFiles.isNotEmpty) {
+      await _copyPendingFiles(eventId, mediaFiles, ensureUnique: true);
     }
   }
 
-  Future<void> _unlikeEvent() async {
-    if (_selectedEvent == null || _currentCallsign == null) return;
-
-    final success = await _eventService.removeLike(
-      eventId: _selectedEvent!.id,
-      callsign: _currentCallsign!,
+  Future<void> _writeLinksFile(String eventId, List<EventLink> links) async {
+    if (widget.collectionPath == null || links.isEmpty) return;
+    final eventPath = _eventFolderPath(eventId);
+    final linksFile = File('$eventPath/links.txt');
+    await linksFile.writeAsString(
+      EventLinksParser.toText(links),
+      flush: true,
     );
+  }
 
-    if (success && mounted) {
-      // Reload event
-      final updatedEvent = await _eventService.loadEvent(_selectedEvent!.id);
-      setState(() {
-        _selectedEvent = updatedEvent;
-      });
+  Future<void> _ensureRegistrationFile(String eventId) async {
+    if (widget.collectionPath == null) return;
+    final eventPath = _eventFolderPath(eventId);
+    final registrationFile = File('$eventPath/registration.txt');
+    if (await registrationFile.exists()) return;
+    final empty = EventRegistration();
+    await registrationFile.writeAsString(
+      empty.exportAsText(),
+      flush: true,
+    );
+  }
+
+  Future<void> _copyPendingFiles(
+    String eventId,
+    List<Map<String, String>> files, {
+    required bool ensureUnique,
+  }) async {
+    if (widget.collectionPath == null) return;
+    final eventPath = _eventFolderPath(eventId);
+
+    for (final file in files) {
+      final sourcePath = file['sourcePath'];
+      final targetName = file['targetName'];
+      if (sourcePath == null || sourcePath.isEmpty) continue;
+      if (targetName == null || targetName.isEmpty) continue;
+
+      String finalName = targetName;
+      if (ensureUnique) {
+        finalName = await _ensureUniqueFileName(eventPath, targetName);
+      }
+
+      final sourceFile = File(sourcePath);
+      if (!await sourceFile.exists()) continue;
+      await sourceFile.copy('$eventPath/$finalName');
     }
+  }
+
+  String _eventFolderPath(String eventId) {
+    final year = eventId.substring(0, 4);
+    return '${widget.collectionPath}/events/$year/$eventId';
+  }
+
+  Future<String> _ensureUniqueFileName(String dirPath, String fileName) async {
+    final ext = path.extension(fileName);
+    final base = path.basenameWithoutExtension(fileName);
+    var candidate = fileName;
+    var suffix = 1;
+    while (await File('$dirPath/$candidate').exists()) {
+      candidate = '${base}_$suffix$ext';
+      suffix++;
+    }
+    return candidate;
   }
 
   Future<void> _editEvent() async {
@@ -740,7 +861,6 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     final canEdit = widget.isRemoteDevice
         ? false
         : _selectedEvent!.canEdit(_currentCallsign ?? '', _currentUserNpub);
-    final hasLiked = _selectedEvent!.hasUserLiked(_currentCallsign ?? '');
 
     return EventDetailWidget(
       event: _selectedEvent!,
@@ -748,22 +868,16 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       currentCallsign: _currentCallsign,
       currentUserNpub: _currentUserNpub,
       canEdit: canEdit,
-      hasLiked: hasLiked,
-      // Disable like/edit/upload for remote events
-      onLike: widget.isRemoteDevice ? null : (hasLiked ? _unlikeEvent : _likeEvent),
+      // Disable edit/upload for remote events
       onEdit: widget.isRemoteDevice ? null : _editEvent,
       onUploadFiles: widget.isRemoteDevice ? null : _uploadFiles,
       onCreateUpdate: widget.isRemoteDevice ? null : _createUpdate,
+      onFeedbackUpdated: widget.isRemoteDevice ? null : _refreshSelectedEvent,
       onRefresh: widget.isRemoteDevice
           ? () async {
               await _selectRemoteEvent(_selectedEvent!);
             }
-          : () async {
-              final updated = await _eventService.loadEvent(_selectedEvent!.id);
-              setState(() {
-                _selectedEvent = updated;
-              });
-            },
+          : _refreshSelectedEvent,
     );
   }
 }
@@ -803,45 +917,15 @@ class _EventDetailPageState extends State<_EventDetailPage> {
     _event = widget.event;
   }
 
-  Future<void> _likeEvent() async {
-    if (widget.currentCallsign == null) return;
-
-    final success = await widget.eventService.addLike(
-      eventId: _event.id,
-      callsign: widget.currentCallsign!,
-    );
-
-    if (success && mounted) {
-      _hasChanges = true;
-      // Reload event
-      final updatedEvent = await widget.eventService.loadEvent(_event.id);
-      if (updatedEvent != null) {
-        final event = updatedEvent; // Capture non-null value
-        setState(() {
-          _event = event;
-        });
-      }
+  Future<void> _refreshEvent({bool markChanged = false}) async {
+    final updatedEvent = await widget.eventService.loadEvent(_event.id);
+    if (updatedEvent != null && mounted) {
+      setState(() {
+        _event = updatedEvent;
+      });
     }
-  }
-
-  Future<void> _unlikeEvent() async {
-    if (widget.currentCallsign == null) return;
-
-    final success = await widget.eventService.removeLike(
-      eventId: _event.id,
-      callsign: widget.currentCallsign!,
-    );
-
-    if (success && mounted) {
+    if (markChanged) {
       _hasChanges = true;
-      // Reload event
-      final updatedEvent = await widget.eventService.loadEvent(_event.id);
-      if (updatedEvent != null) {
-        final event = updatedEvent; // Capture non-null value
-        setState(() {
-          _event = event;
-        });
-      }
     }
   }
 
@@ -985,7 +1069,6 @@ class _EventDetailPageState extends State<_EventDetailPage> {
   @override
   Widget build(BuildContext context) {
     final canEdit = _event.canEdit(widget.currentCallsign ?? '', widget.currentUserNpub);
-    final hasLiked = _event.hasUserLiked(widget.currentCallsign ?? '');
 
     return PopScope(
       canPop: true,
@@ -1004,20 +1087,11 @@ class _EventDetailPageState extends State<_EventDetailPage> {
           currentCallsign: widget.currentCallsign,
           currentUserNpub: widget.currentUserNpub,
           canEdit: canEdit,
-          hasLiked: hasLiked,
-          onLike: hasLiked ? _unlikeEvent : _likeEvent,
           onEdit: _editEvent,
           onUploadFiles: _uploadFiles,
           onCreateUpdate: _createUpdate,
-          onRefresh: () async {
-            final updated = await widget.eventService.loadEvent(_event.id);
-            if (updated != null) {
-              final event = updated; // Capture non-null value
-              setState(() {
-                _event = event;
-              });
-            }
-          },
+          onFeedbackUpdated: () => _refreshEvent(markChanged: true),
+          onRefresh: _refreshEvent,
         ),
       ),
     );

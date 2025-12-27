@@ -12,6 +12,8 @@ import '../models/event_item.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
 import '../models/event_link.dart';
+import '../util/feedback_comment_utils.dart';
+import '../util/feedback_folder_utils.dart';
 
 /// Service for managing events, files, and reactions
 class EventService {
@@ -124,8 +126,41 @@ class EventService {
       final content = await eventFile.readAsString();
       final event = Event.fromText(content, eventId);
 
-      // Load event-level reactions
+      // Load event-level reactions (legacy) or centralized feedback (preferred)
       final eventReaction = await _loadReaction(eventDir.path, 'event.txt');
+      final feedbackDir = Directory(FeedbackFolderUtils.buildFeedbackPath(eventDir.path));
+      List<String> eventLikes = [];
+      List<EventComment> eventComments = [];
+
+      if (await feedbackDir.exists()) {
+        final feedbackLikes = await FeedbackFolderUtils.readFeedbackFile(
+          eventDir.path,
+          FeedbackFolderUtils.feedbackTypeLikes,
+        );
+        final feedbackComments = await FeedbackCommentUtils.loadComments(eventDir.path);
+
+        eventLikes = feedbackLikes;
+        eventComments = feedbackComments.map((comment) {
+          final metadata = <String, String>{};
+          final npub = comment.npub;
+          if (npub != null && npub.isNotEmpty) {
+            metadata['npub'] = npub;
+          }
+          final signature = comment.signature;
+          if (signature != null && signature.isNotEmpty) {
+            metadata['signature'] = signature;
+          }
+          return EventComment(
+            author: comment.author,
+            timestamp: comment.created,
+            content: comment.content,
+            metadata: metadata,
+          );
+        }).toList();
+      } else {
+        eventLikes = eventReaction?.likes ?? event.likes;
+        eventComments = eventReaction?.comments ?? event.comments;
+      }
 
       // Load v1.2 features
       final flyers = await _loadFlyers(eventDir.path);
@@ -135,8 +170,8 @@ class EventService {
       final links = await _loadLinks(eventDir.path);
 
       return event.copyWith(
-        likes: eventReaction?.likes ?? event.likes,
-        comments: eventReaction?.comments ?? event.comments,
+        likes: eventLikes,
+        comments: eventComments,
         flyers: flyers,
         trailer: trailer,
         updates: updates,
@@ -175,24 +210,14 @@ class EventService {
   String sanitizeFolderName(String title, DateTime? date) {
     date ??= DateTime.now();
 
-    // Convert to lowercase, replace spaces with hyphens
-    String sanitized = title.toLowerCase().trim();
-
-    // Replace spaces and underscores with hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'[\s_]+'), '-');
-
-    // Remove non-alphanumeric characters except hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'[^a-z0-9-]'), '');
-
-    // Remove multiple consecutive hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'-+'), '-');
-
-    // Remove leading/trailing hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'^-+|-+$'), '');
-
-    // Truncate to 50 characters
-    if (sanitized.length > 50) {
-      sanitized = sanitized.substring(0, 50);
+    // Preserve title casing/letters; only remove characters invalid on common filesystems.
+    String sanitized = title;
+    sanitized = sanitized.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
+    sanitized = sanitized.replaceAll(RegExp(r'[<>:"/\\\\|?*]'), '-');
+    sanitized = sanitized.trim();
+    sanitized = sanitized.replaceAll(RegExp(r'[. ]+$'), '');
+    if (sanitized.isEmpty) {
+      sanitized = 'event';
     }
 
     // Format date as YYYY-MM-DD
@@ -226,6 +251,10 @@ class EventService {
     required String location,
     String? locationName,
     required String content,
+    String? agenda,
+    String? visibility,
+    List<String>? admins,
+    List<String>? moderators,
     String? npub,
     Map<String, String>? metadata,
   }) async {
@@ -254,6 +283,9 @@ class EventService {
       final reactionsDir = Directory('${eventDir.path}/.reactions');
       await reactionsDir.create(recursive: true);
 
+      // Create feedback directory for centralized reactions/comments
+      await FeedbackFolderUtils.ensureFeedbackFolder(eventDir.path);
+
       // Create day folders if multi-day event
       if (startDate != null && endDate != null && startDate != endDate) {
         final start = DateTime.parse(startDate);
@@ -276,11 +308,13 @@ class EventService {
         title: title,
         startDate: startDate,
         endDate: endDate,
-        admins: [],
-        moderators: [],
+        admins: admins ?? [],
+        moderators: moderators ?? [],
         location: location,
         locationName: locationName,
         content: content,
+        agenda: agenda,
+        visibility: visibility ?? 'private',
         metadata: {
           ...?metadata,
           if (npub != null) 'npub': npub,

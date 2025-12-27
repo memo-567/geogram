@@ -12,6 +12,7 @@ import '../models/group_application.dart';
 import '../models/reputation_entry.dart';
 import '../models/station_node.dart';
 import '../util/nostr_key_generator.dart';
+import '../util/group_utils.dart';
 import 'log_service.dart';
 
 /// Service for managing groups
@@ -543,6 +544,7 @@ class GroupsService {
 
   /// Create new group
   Future<void> createGroup({
+    String? groupName,
     required String title,
     required String description,
     required GroupType type,
@@ -552,15 +554,16 @@ class GroupsService {
   }) async {
     if (_collectionPath == null) return;
 
+    final timestamp = _formatTimestamp(DateTime.now());
+    final resolvedName = await _resolveGroupName(groupName ?? title);
+
     // Generate npub/nsec key pair for the group
     final keys = NostrKeyGenerator.generateKeyPair();
     final groupNpub = keys.npub;
     final groupNsec = keys.nsec;
 
-    final timestamp = _formatTimestamp(DateTime.now());
-
     final group = Group(
-      name: groupNpub,
+      name: resolvedName,
       title: title,
       description: description,
       type: type,
@@ -583,18 +586,19 @@ class GroupsService {
     await saveGroup(group);
 
     // Save the nsec to security.json
-    final groupPath = '$_collectionPath/$groupNpub';
+    final groupPath = '$_collectionPath/$resolvedName';
     final securityFile = File('$groupPath/security.json');
     await securityFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
         'nsec': groupNsec,
+        'npub': groupNpub,
         'created': timestamp,
       }),
       flush: true,
     );
 
     // Create candidate subdirectories
-    final candidatesPath = '$_collectionPath/$groupNpub/candidates';
+    final candidatesPath = '$_collectionPath/$resolvedName/candidates';
     for (var subdir in ['pending', 'approved', 'rejected']) {
       final dir = Directory('$candidatesPath/$subdir');
       if (!await dir.exists()) {
@@ -604,28 +608,28 @@ class GroupsService {
 
     // Create feature directories if enabled
     if (group.isFeatureEnabled('photos')) {
-      final photosDir = Directory('$_collectionPath/$groupNpub/photos/.reactions');
+      final photosDir = Directory('$_collectionPath/$resolvedName/photos/.reactions');
       await photosDir.create(recursive: true);
     }
 
     if (group.isFeatureEnabled('news')) {
       final year = DateTime.now().year;
-      final newsDir = Directory('$_collectionPath/$groupNpub/news/$year/files');
+      final newsDir = Directory('$_collectionPath/$resolvedName/news/$year/files');
       await newsDir.create(recursive: true);
     }
 
     if (group.isFeatureEnabled('alerts')) {
-      await Directory('$_collectionPath/$groupNpub/alerts/active').create(recursive: true);
-      await Directory('$_collectionPath/$groupNpub/alerts/archived').create(recursive: true);
+      await Directory('$_collectionPath/$resolvedName/alerts/active').create(recursive: true);
+      await Directory('$_collectionPath/$resolvedName/alerts/archived').create(recursive: true);
     }
 
     if (group.isFeatureEnabled('chat')) {
       final year = DateTime.now().year;
-      final chatDir = Directory('$_collectionPath/$groupNpub/chat/$year/files');
+      final chatDir = Directory('$_collectionPath/$resolvedName/chat/$year/files');
       await chatDir.create(recursive: true);
     }
 
-    LogService().log('GroupsService: Created group $groupNpub');
+    LogService().log('GroupsService: Created group $resolvedName');
   }
 
   /// Get default config for new groups
@@ -660,13 +664,24 @@ class GroupsService {
 
   /// Format timestamp in geogram format
   String _formatTimestamp(DateTime dt) {
-    final year = dt.year.toString().padLeft(4, '0');
-    final month = dt.month.toString().padLeft(2, '0');
-    final day = dt.day.toString().padLeft(2, '0');
-    final hour = dt.hour.toString().padLeft(2, '0');
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final second = dt.second.toString().padLeft(2, '0');
-    return '$year-$month-$day $hour:$minute\_$second';
+    return GroupUtils.formatTimestamp(dt);
+  }
+
+  Future<String> _resolveGroupName(String name) async {
+    if (_collectionPath == null) {
+      return GroupUtils.sanitizeGroupName(name);
+    }
+
+    final baseName = GroupUtils.sanitizeGroupName(name);
+    var candidate = baseName;
+    var suffix = 2;
+
+    while (await Directory('$_collectionPath/$candidate').exists()) {
+      candidate = '$baseName-$suffix';
+      suffix++;
+    }
+
+    return candidate;
   }
 
   /// Delete group (mark as inactive)

@@ -13,6 +13,7 @@ import '../models/group_member.dart';
 import '../models/group_area.dart';
 import '../models/group_application.dart';
 import '../services/groups_service.dart';
+import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import 'location_picker_page.dart';
@@ -98,6 +99,9 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
       );
 
       await _groupsService.addMember(widget.groupName, member);
+      await GroupSyncService().syncGroupsCollection(
+        groupsCollectionPath: widget.collectionPath,
+      );
       await _loadGroup();
 
       if (mounted) {
@@ -129,6 +133,9 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
 
     if (confirm == true) {
       await _groupsService.removeMember(widget.groupName, member.npub);
+      await GroupSyncService().syncGroupsCollection(
+        groupsCollectionPath: widget.collectionPath,
+      );
       await _loadGroup();
 
       if (mounted) {
@@ -147,6 +154,9 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
 
     if (result != null && result != member.role) {
       await _groupsService.updateMemberRole(widget.groupName, member.npub, result);
+      await GroupSyncService().syncGroupsCollection(
+        groupsCollectionPath: widget.collectionPath,
+      );
       await _loadGroup();
 
       if (mounted) {
@@ -268,6 +278,9 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
           joined: timestamp,
         );
         await _groupsService.addMember(widget.groupName, member);
+        await GroupSyncService().syncGroupsCollection(
+          groupsCollectionPath: widget.collectionPath,
+        );
       }
 
       await _loadGroup();
