@@ -8,8 +8,15 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
+import '../dialogs/place_picker_dialog.dart';
 import '../models/event.dart';
 import '../models/event_link.dart';
+import '../models/group.dart';
+import '../models/place.dart';
+import '../services/collection_service.dart';
+import '../services/groups_service.dart';
+import '../services/place_service.dart';
+import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import 'location_picker_page.dart';
 
@@ -40,6 +47,8 @@ class _EventSettingsPageState extends State<EventSettingsPage>
   late TextEditingController _locationController;
   late TextEditingController _locationNameController;
   late bool _isOnline;
+  Place? _selectedPlace;
+  String? _selectedPlacePath;
   late DateTime _eventDateTime;
   late TextEditingController _startDateController;
   late TextEditingController _endDateController;
@@ -50,8 +59,13 @@ class _EventSettingsPageState extends State<EventSettingsPage>
   late TextEditingController _adminsController;
   late TextEditingController _moderatorsController;
   late String _visibility;
+  final List<_GroupOption> _availableGroups = [];
+  final Set<String> _selectedGroups = {};
+  bool _isLoadingGroups = true;
 
   // Media
+  List<File> _mediaFiles = [];
+  bool _isLoadingMedia = true;
   String? _trailerFileName;
   List<String> _flyersList = [];
 
@@ -70,13 +84,18 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     _titleController = TextEditingController(text: widget.event.title);
     _contentController = TextEditingController(text: widget.event.content);
     _agendaController = TextEditingController(text: widget.event.agenda ?? '');
+    _selectedPlacePath = widget.event.placePath;
+    _isOnline = widget.event.isOnline && (_selectedPlacePath == null || _selectedPlacePath!.isEmpty);
     _locationController = TextEditingController(
-      text: widget.event.isOnline ? '' : widget.event.location,
+      text: _isOnline
+          ? ''
+          : widget.event.hasCoordinates
+              ? widget.event.location
+              : '',
     );
     _locationNameController = TextEditingController(
       text: widget.event.locationName ?? '',
     );
-    _isOnline = widget.event.isOnline;
 
     // Initialize dates
     if (widget.event.isMultiDay) {
@@ -99,16 +118,21 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       text: widget.event.moderators.join(', '),
     );
     _visibility = widget.event.visibility;
+    _selectedGroups.addAll(widget.event.groupAccess);
+    _loadGroups();
 
     // Initialize media
     _trailerFileName = widget.event.trailer;
     _flyersList = List.from(widget.event.flyers);
+    _loadMediaFiles();
 
     // Initialize links
     _links = List.from(widget.event.links);
 
     // Initialize registration
     _registrationEnabled = widget.event.hasRegistration;
+
+    _loadLinkedPlace();
   }
 
   @override
@@ -243,6 +267,128 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
   }
 
+  Future<void> _loadMediaFiles() async {
+    setState(() => _isLoadingMedia = true);
+
+    try {
+      final year = widget.event.id.substring(0, 4);
+      final eventDir = Directory(
+        '${widget.collectionPath}/events/$year/${widget.event.id}',
+      );
+
+      if (await eventDir.exists()) {
+        final entities = await eventDir.list().toList();
+        _mediaFiles = entities.whereType<File>().where((file) {
+          final name = path.basename(file.path);
+          return !_isMediaFileExcluded(name);
+        }).toList()
+          ..sort((a, b) => path.basename(a.path).compareTo(path.basename(b.path)));
+      } else {
+        _mediaFiles = [];
+      }
+    } catch (e) {
+      _mediaFiles = [];
+    }
+
+    if (!mounted) return;
+    setState(() => _isLoadingMedia = false);
+  }
+
+  bool _isMediaFileExcluded(String fileName) {
+    if (fileName.startsWith('.')) return true;
+    if (fileName == 'event.txt') return true;
+    if (fileName == 'links.txt') return true;
+    if (fileName == 'registration.txt') return true;
+    if (_trailerFileName != null && fileName == _trailerFileName) return true;
+    if (_flyersList.contains(fileName)) return true;
+    return false;
+  }
+
+  IconData _mediaFileIcon(String fileName) {
+    final ext = path.extension(fileName).toLowerCase();
+    if (['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].contains(ext)) {
+      return Icons.image;
+    }
+    if (['.pdf'].contains(ext)) return Icons.picture_as_pdf;
+    if (['.doc', '.docx', '.txt', '.md'].contains(ext)) return Icons.description;
+    if (['.mp4', '.avi', '.mov', '.mkv'].contains(ext)) return Icons.video_file;
+    if (['.mp3', '.wav', '.ogg', '.m4a'].contains(ext)) return Icons.audio_file;
+    if (['.zip', '.rar', '.7z', '.tar', '.gz'].contains(ext)) return Icons.folder_zip;
+    return Icons.insert_drive_file;
+  }
+
+  Future<String> _ensureUniqueFileName(String eventPath, String fileName) async {
+    final ext = path.extension(fileName);
+    final base = path.basenameWithoutExtension(fileName);
+    var candidate = fileName;
+    var counter = 2;
+
+    while (await File('$eventPath/$candidate').exists()) {
+      candidate = ext.isEmpty ? '$base-$counter' : '$base-$counter$ext';
+      counter++;
+    }
+
+    return candidate;
+  }
+
+  Future<void> _selectMediaFiles() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.any,
+      dialogTitle: _i18n.t('select_files_to_add'),
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    final year = widget.event.id.substring(0, 4);
+    final eventPath = '${widget.collectionPath}/events/$year/${widget.event.id}';
+
+    int copied = 0;
+    for (final file in result.files) {
+      if (file.path == null) continue;
+      final sourceFile = File(file.path!);
+      final targetName = await _ensureUniqueFileName(eventPath, file.name);
+      try {
+        await sourceFile.copy('$eventPath/$targetName');
+        copied++;
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_i18n.t('error')}: $e')),
+          );
+        }
+      }
+    }
+
+    if (copied > 0 && mounted) {
+      await _loadMediaFiles();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('files_uploaded', params: [copied.toString()])),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _removeMediaFile(File file) async {
+    try {
+      await file.delete();
+      await _loadMediaFiles();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('file_deleted'))),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_i18n.t('error')}: $e')),
+        );
+      }
+    }
+  }
+
   void _removeTrailer() {
     setState(() {
       _trailerFileName = null;
@@ -363,6 +509,54 @@ class _EventSettingsPageState extends State<EventSettingsPage>
         .toList();
   }
 
+  Future<void> _loadGroups() async {
+    try {
+      final collections = await CollectionService().loadCollections();
+      final groupCollections = collections
+          .where((c) => c.type == 'groups' && c.storagePath != null)
+          .toList();
+
+      _availableGroups.clear();
+      final groupsService = GroupsService();
+      final profile = ProfileService().getProfile();
+
+      for (final collection in groupCollections) {
+        await groupsService.initializeCollection(
+          collection.storagePath!,
+          creatorNpub: profile.npub,
+        );
+        final groups = await groupsService.loadGroups();
+        for (final group in groups) {
+          if (!group.isActive) continue;
+          _availableGroups.add(_GroupOption(
+            group: group,
+            collectionTitle: collection.title,
+          ));
+        }
+      }
+
+      _availableGroups.sort((a, b) {
+        final titleA = _groupLabel(a).toLowerCase();
+        final titleB = _groupLabel(b).toLowerCase();
+        return titleA.compareTo(titleB);
+      });
+    } catch (e) {
+      _availableGroups.clear();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isLoadingGroups = false;
+    });
+  }
+
+  String _groupLabel(_GroupOption option) {
+    if (option.group.title.isNotEmpty) {
+      return option.group.title;
+    }
+    return option.group.name;
+  }
+
   Future<void> _openMapPicker() async {
     // Parse current location if exists
     LatLng? initialPosition;
@@ -393,9 +587,97 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
   }
 
-  void _save() {
-    final location = _isOnline ? 'online' : _locationController.text.trim();
+  Future<void> _openPlacePicker() async {
+    final selection = await showDialog<PlaceSelection>(
+      context: context,
+      builder: (context) => PlacePickerDialog(i18n: _i18n),
+    );
 
+    if (selection != null) {
+      final place = selection.place;
+      final langCode = _i18n.currentLanguage.split('_').first.toUpperCase();
+      final placeName = place.getName(langCode);
+      setState(() {
+        _selectedPlace = place;
+        _selectedPlacePath = place.folderPath;
+        _isOnline = false;
+        _locationController.clear();
+        _locationNameController.text = placeName;
+      });
+    }
+  }
+
+  void _clearSelectedPlace() {
+    setState(() {
+      _selectedPlace = null;
+      _selectedPlacePath = null;
+    });
+  }
+
+  Future<void> _loadLinkedPlace() async {
+    final placePath = _selectedPlacePath;
+    if (placePath == null || placePath.isEmpty) return;
+    final resolvedPath = _resolvePlacePath(placePath);
+    if (resolvedPath == null) return;
+
+    try {
+      final placeFile = File(path.join(resolvedPath, 'place.txt'));
+      if (!await placeFile.exists()) return;
+      final content = await placeFile.readAsString();
+      final place = PlaceService().parsePlaceContent(
+        content: content,
+        filePath: placeFile.path,
+        folderPath: resolvedPath,
+      );
+      if (place == null || !mounted) return;
+      setState(() {
+        _selectedPlace = place;
+        if (_locationNameController.text.trim().isEmpty) {
+          final langCode = _i18n.currentLanguage.split('_').first.toUpperCase();
+          _locationNameController.text = place.getName(langCode);
+        }
+      });
+    } catch (e) {
+      // Ignore load errors
+    }
+  }
+
+  String? _resolvePlacePath(String placePath) {
+    if (placePath.isEmpty) return null;
+    if (path.isAbsolute(placePath)) return placePath;
+    if (widget.collectionPath.isEmpty) return null;
+    final basePath = path.dirname(widget.collectionPath);
+    return path.normalize(path.join(basePath, placePath));
+  }
+
+  void _save() {
+    final location = _isOnline
+        ? 'online'
+        : (_selectedPlacePath != null || _selectedPlace != null)
+            ? 'place'
+            : _locationController.text.trim();
+
+    if (!_isOnline && location.isEmpty && (_selectedPlacePath == null || _selectedPlacePath!.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('location_required')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (_visibility == 'group' && _selectedGroups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('select_groups_for_event')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final placePath = _buildPlacePathReference();
     final result = <String, dynamic>{
       'title': _titleController.text.trim(),
       'location': location,
@@ -409,10 +691,12 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       'admins': _parseNpubs(_adminsController.text),
       'moderators': _parseNpubs(_moderatorsController.text),
       'visibility': _visibility,
+      'groupAccess': _selectedGroups.toList(),
       'trailer': _trailerFileName,
       'flyers': _flyersList,
       'links': _links,
       'registrationEnabled': _registrationEnabled,
+      'placePath': placePath,
     };
 
     // Add date information
@@ -424,6 +708,21 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
 
     Navigator.pop(context, result);
+  }
+
+  String _buildPlacePathReference() {
+    final rawPath = _selectedPlacePath ?? _selectedPlace?.folderPath;
+    if (rawPath == null || rawPath.isEmpty) return '';
+    if (path.isAbsolute(rawPath)) {
+      if (widget.collectionPath.isNotEmpty) {
+        final basePath = path.dirname(widget.collectionPath);
+        final relative = path.relative(rawPath, from: basePath);
+        if (!relative.startsWith('..')) {
+          return relative;
+        }
+      }
+    }
+    return rawPath;
   }
 
   @override
@@ -556,11 +855,38 @@ class _EventSettingsPageState extends State<EventSettingsPage>
               _isOnline = value;
               if (value) {
                 _locationController.clear();
+                _selectedPlace = null;
+                _selectedPlacePath = null;
               }
             });
           },
           contentPadding: EdgeInsets.zero,
         ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _openPlacePicker,
+          icon: const Icon(Icons.place_outlined, size: 18),
+          label: Text(_i18n.t('choose_place')),
+        ),
+        if (_selectedPlace != null) ...[
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.place),
+              title: Text(
+                _selectedPlace!.getName(
+                  _i18n.currentLanguage.split('_').first.toUpperCase(),
+                ),
+              ),
+              subtitle: Text(_selectedPlace!.coordinatesString),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelectedPlace,
+                tooltip: _i18n.t('remove'),
+              ),
+            ),
+          ),
+        ],
         if (!_isOnline) ...[
           const SizedBox(height: 12),
           Row(
@@ -574,6 +900,14 @@ class _EventSettingsPageState extends State<EventSettingsPage>
                     border: const OutlineInputBorder(),
                     helperText: _i18n.t('enter_latitude_longitude'),
                   ),
+                  onChanged: (_) {
+                    if (_selectedPlace != null) {
+                      setState(() {
+                        _selectedPlace = null;
+                        _selectedPlacePath = null;
+                      });
+                    }
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -641,6 +975,52 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        Text(
+          _i18n.t('event_files'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _i18n.t('event_files_info'),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_isLoadingMedia)
+          const LinearProgressIndicator()
+        else if (_mediaFiles.isEmpty)
+          Text(
+            _i18n.t('no_files_yet'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        else ...[
+          ..._mediaFiles.map((file) {
+            final name = path.basename(file.path);
+            return Card(
+              child: ListTile(
+                leading: Icon(_mediaFileIcon(name)),
+                title: Text(name),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete),
+                  tooltip: _i18n.t('remove'),
+                  onPressed: () => _removeMediaFile(file),
+                ),
+              ),
+            );
+          }),
+        ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _selectMediaFiles,
+          icon: const Icon(Icons.add),
+          label: Text(_i18n.t('add_files')),
+        ),
+        const SizedBox(height: 32),
         Text(
           _i18n.t('trailer'),
           style: theme.textTheme.titleMedium?.copyWith(
@@ -787,6 +1167,52 @@ class _EventSettingsPageState extends State<EventSettingsPage>
             }
           },
         ),
+        if (_visibility == 'group') ...[
+          const SizedBox(height: 16),
+          Text(
+            _i18n.t('event_groups_access'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (_isLoadingGroups)
+            const LinearProgressIndicator()
+          else if (_availableGroups.isEmpty)
+            Text(
+              _i18n.t('no_groups_available'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            ..._availableGroups.map((option) {
+              final label = _groupLabel(option);
+              final subtitleParts = <String>[];
+              if (option.group.title.isNotEmpty && option.group.name != option.group.title) {
+                subtitleParts.add(option.group.name);
+              }
+              if (option.collectionTitle != null && option.collectionTitle!.isNotEmpty) {
+                subtitleParts.add(option.collectionTitle!);
+              }
+              return CheckboxListTile(
+                value: _selectedGroups.contains(option.group.name),
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _selectedGroups.add(option.group.name);
+                    } else {
+                      _selectedGroups.remove(option.group.name);
+                    }
+                  });
+                },
+                title: Text(label),
+                subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join(' - ')),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              );
+            }),
+        ],
         const SizedBox(height: 32),
 
         Text(
@@ -958,6 +1384,16 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       ],
     );
   }
+}
+
+class _GroupOption {
+  final Group group;
+  final String? collectionTitle;
+
+  const _GroupOption({
+    required this.group,
+    this.collectionTitle,
+  });
 }
 
 /// Dialog for adding/editing a link

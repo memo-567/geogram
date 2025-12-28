@@ -151,9 +151,16 @@ class LanTransport extends Transport with TransportMixin {
     final method = message.method?.toUpperCase() ?? 'GET';
     final headers = message.headers ?? {'Content-Type': 'application/json'};
     // payload may already be a JSON string (from DM API) - don't double-encode
-    final body = message.payload != null
-        ? (message.payload is String ? message.payload : jsonEncode(message.payload))
-        : null;
+    Object? body;
+    if (message.payload != null) {
+      if (message.payload is List<int>) {
+        body = message.payload as List<int>;
+      } else if (message.payload is String) {
+        body = message.payload as String;
+      } else {
+        body = jsonEncode(message.payload);
+      }
+    }
 
     LogService().log('LanTransport: $method ${message.path} to ${message.targetCallsign}');
 
@@ -174,9 +181,13 @@ class LanTransport extends Transport with TransportMixin {
 
     stopwatch.stop();
 
+    final responseData = _isBinaryContentType(response.headers['content-type'])
+        ? response.bodyBytes
+        : response.body;
+
     final result = TransportResult.success(
       statusCode: response.statusCode,
-      responseData: response.body,
+      responseData: responseData,
       transportUsed: id,
       latency: stopwatch.elapsed,
     );
@@ -256,6 +267,16 @@ class LanTransport extends Transport with TransportMixin {
 
     recordMetrics(result);
     return result;
+  }
+
+  bool _isBinaryContentType(String? contentType) {
+    if (contentType == null || contentType.isEmpty) return false;
+    final normalized = contentType.toLowerCase();
+    return normalized.startsWith('image/') ||
+        normalized.startsWith('audio/') ||
+        normalized.startsWith('video/') ||
+        normalized.startsWith('application/octet-stream') ||
+        normalized.startsWith('application/pdf');
   }
 
   @override

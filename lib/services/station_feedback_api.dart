@@ -474,6 +474,9 @@ class StationFeedbackApi {
         return _resolveAlertPath(contentId, callsign: callsign);
       case 'blog':
         return _resolveBlogPath(contentId, callsign: callsign);
+      case 'event':
+      case 'events':
+        return _resolveEventPath(contentId, callsign: callsign);
       case 'place':
         return _resolvePlacePath(contentId, callsign: callsign);
       default:
@@ -595,6 +598,65 @@ class StationFeedbackApi {
     }
 
     return null;
+  }
+
+  Future<FeedbackContentLocation?> _resolveEventPath(String eventId, {String? callsign}) async {
+    final devicesDir = Directory('$dataDir/devices');
+    if (!await devicesDir.exists()) return null;
+
+    Future<FeedbackContentLocation?> searchCallsign(String callsign) async {
+      final eventsRoot = Directory('$dataDir/devices/$callsign/events');
+      if (!await eventsRoot.exists()) return null;
+
+      final year = _extractEventYear(eventId);
+      if (year != null) {
+        final eventDir = Directory('${eventsRoot.path}/$year/$eventId');
+        final eventFile = File('${eventDir.path}/event.txt');
+        if (await eventFile.exists()) {
+          return FeedbackContentLocation(contentPath: eventDir.path, callsign: callsign);
+        }
+      }
+
+      await for (final yearEntity in eventsRoot.list()) {
+        if (yearEntity is! Directory) continue;
+        final eventDir = Directory('${yearEntity.path}/$eventId');
+        final eventFile = File('${eventDir.path}/event.txt');
+        if (await eventFile.exists()) {
+          return FeedbackContentLocation(contentPath: eventDir.path, callsign: callsign);
+        }
+      }
+
+      await for (final entity in eventsRoot.list(recursive: true)) {
+        if (entity is! File) continue;
+        if (!entity.path.endsWith('/event.txt')) continue;
+        if (path.basename(entity.parent.path) == eventId) {
+          return FeedbackContentLocation(contentPath: entity.parent.path, callsign: callsign);
+        }
+      }
+
+      return null;
+    }
+
+    if (callsign != null && callsign.isNotEmpty) {
+      return searchCallsign(callsign);
+    }
+
+    await for (final deviceEntity in devicesDir.list()) {
+      if (deviceEntity is! Directory) continue;
+      final deviceCallsign = path.basename(deviceEntity.path);
+      final match = await searchCallsign(deviceCallsign);
+      if (match != null) return match;
+    }
+
+    return null;
+  }
+
+  String? _extractEventYear(String eventId) {
+    if (eventId.length < 4) return null;
+    final yearStr = eventId.substring(0, 4);
+    final year = int.tryParse(yearStr);
+    if (year == null || year < 1970 || year > 3000) return null;
+    return yearStr;
   }
 
   Future<void> _touchAlertLastModified(String contentPath, {String? verifiedNpub}) async {

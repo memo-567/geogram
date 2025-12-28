@@ -113,7 +113,17 @@ class EventFeedbackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/api/feedback/event/$eventId/$action');
+      final baseUri = Uri.parse(baseUrl);
+      final uri = baseUri.replace(
+        pathSegments: [
+          ...baseUri.pathSegments,
+          'api',
+          'feedback',
+          'event',
+          eventId,
+          action,
+        ],
+      );
       final response = await http.post(
         uri,
         headers: {
@@ -174,7 +184,17 @@ class EventFeedbackService {
     if (baseUrl == null) return false;
 
     try {
-      final uri = Uri.parse('$baseUrl/api/feedback/event/$eventId/comment');
+      final baseUri = Uri.parse(baseUrl);
+      final uri = baseUri.replace(
+        pathSegments: [
+          ...baseUri.pathSegments,
+          'api',
+          'feedback',
+          'event',
+          eventId,
+          'comment',
+        ],
+      );
       final body = <String, dynamic>{
         'author': author,
         'content': content,

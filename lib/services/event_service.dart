@@ -255,6 +255,7 @@ class EventService {
     String? visibility,
     List<String>? admins,
     List<String>? moderators,
+    List<String>? groupAccess,
     String? npub,
     Map<String, String>? metadata,
   }) async {
@@ -310,6 +311,7 @@ class EventService {
         endDate: endDate,
         admins: admins ?? [],
         moderators: moderators ?? [],
+        groupAccess: groupAccess ?? [],
         location: location,
         locationName: locationName,
         content: content,
@@ -958,12 +960,14 @@ class EventService {
     String? visibility,
     List<String>? admins,
     List<String>? moderators,
+    List<String>? groupAccess,
     DateTime? eventDateTime,
     String? startDate,
     String? endDate,
     String? trailerFileName,
     List<EventLink>? links,
     bool? registrationEnabled,
+    Map<String, String>? metadata,
   }) async {
     if (_collectionPath == null) return null;
 
@@ -996,6 +1000,17 @@ class EventService {
       }
 
       // Create updated event
+      final mergedMetadata = Map<String, String>.from(existingEvent.metadata);
+      if (metadata != null) {
+        for (final entry in metadata.entries) {
+          if (entry.value.isEmpty) {
+            mergedMetadata.remove(entry.key);
+          } else {
+            mergedMetadata[entry.key] = entry.value;
+          }
+        }
+      }
+
       final updatedEvent = existingEvent.copyWith(
         title: title,
         location: location,
@@ -1005,9 +1020,11 @@ class EventService {
         visibility: visibility,
         admins: admins,
         moderators: moderators,
+        groupAccess: groupAccess,
         timestamp: newTimestamp,
         startDate: startDate,
         endDate: endDate,
+        metadata: mergedMetadata,
       );
 
       // Determine the working directory (might be renamed)

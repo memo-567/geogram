@@ -9,11 +9,14 @@ import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
 import '../dialogs/new_update_dialog.dart';
+import '../dialogs/place_picker_dialog.dart';
 import '../models/event_link.dart';
+import '../models/group.dart';
 import '../models/place.dart';
 import '../services/collection_service.dart';
+import '../services/groups_service.dart';
+import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
-import '../services/place_service.dart';
 import 'location_picker_page.dart';
 
 /// Full-screen page for creating a new event
@@ -56,11 +59,11 @@ class _PendingUpdate {
       };
 }
 
-class _PlaceOption {
-  final Place place;
+class _GroupOption {
+  final Group group;
   final String? collectionTitle;
 
-  const _PlaceOption(this.place, this.collectionTitle);
+  const _GroupOption(this.group, this.collectionTitle);
 }
 
 class _NewEventPageState extends State<NewEventPage>
@@ -93,11 +96,15 @@ class _NewEventPageState extends State<NewEventPage>
   final List<_PendingFile> _flyers = [];
   _PendingFile? _trailer;
   final List<_PendingFile> _mediaFiles = [];
+  final List<_GroupOption> _availableGroups = [];
+  final Set<String> _selectedGroups = {};
+  bool _isLoadingGroups = true;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
+    _loadGroups();
   }
 
   @override
@@ -250,9 +257,9 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _openPlacePicker() async {
-    final selection = await showDialog<_PlaceOption>(
+    final selection = await showDialog<PlaceSelection>(
       context: context,
-      builder: (context) => _PlacePickerDialog(i18n: _i18n),
+      builder: (context) => PlacePickerDialog(i18n: _i18n),
     );
 
     if (selection != null) {
@@ -262,8 +269,7 @@ class _NewEventPageState extends State<NewEventPage>
       setState(() {
         _selectedPlace = place;
         _isOnline = false;
-        _locationController.text =
-            '${place.latitude.toStringAsFixed(6)},${place.longitude.toStringAsFixed(6)}';
+        _locationController.clear();
         _locationNameController.text = placeName;
       });
     }
@@ -438,6 +444,51 @@ class _NewEventPageState extends State<NewEventPage>
     });
   }
 
+  Future<void> _loadGroups() async {
+    try {
+      final collections = await CollectionService().loadCollections();
+      final groupCollections = collections
+          .where((c) => c.type == 'groups' && c.storagePath != null)
+          .toList();
+
+      _availableGroups.clear();
+      final groupsService = GroupsService();
+      final profile = ProfileService().getProfile();
+
+      for (final collection in groupCollections) {
+        await groupsService.initializeCollection(
+          collection.storagePath!,
+          creatorNpub: profile.npub,
+        );
+        final groups = await groupsService.loadGroups();
+        for (final group in groups) {
+          if (!group.isActive) continue;
+          _availableGroups.add(_GroupOption(group, collection.title));
+        }
+      }
+
+      _availableGroups.sort((a, b) {
+        final titleA = _groupLabel(a).toLowerCase();
+        final titleB = _groupLabel(b).toLowerCase();
+        return titleA.compareTo(titleB);
+      });
+    } catch (e) {
+      _availableGroups.clear();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isLoadingGroups = false;
+    });
+  }
+
+  String _groupLabel(_GroupOption option) {
+    if (option.group.title.isNotEmpty) {
+      return option.group.title;
+    }
+    return option.group.name;
+  }
+
   String? _buildAgendaText() {
     if (_isMultiDay) {
       final dates = _getAgendaDates();
@@ -475,7 +526,21 @@ class _NewEventPageState extends State<NewEventPage>
       return;
     }
 
-    final location = _isOnline ? 'online' : _locationController.text.trim();
+    if (_visibility == 'group' && _selectedGroups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('select_groups_for_event')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final location = _isOnline
+        ? 'online'
+        : _selectedPlace != null
+            ? 'place'
+            : _locationController.text.trim();
 
     final agenda = _buildAgendaText();
     final eventDateTime = _isMultiDay
@@ -488,7 +553,7 @@ class _NewEventPageState extends State<NewEventPage>
             _includeTime && _eventTime != null ? _eventTime!.minute : 0,
           );
 
-    Navigator.pop(context, {
+    final result = <String, dynamic>{
       'title': _titleController.text.trim(),
       'eventDate': eventDateTime,
       'startDate': _isMultiDay ? _formatDate(_startDate!) : null,
@@ -500,13 +565,19 @@ class _NewEventPageState extends State<NewEventPage>
       'content': _contentController.text.trim(),
       'agenda': agenda,
       'visibility': _visibility,
+      'groupAccess': _selectedGroups.toList(),
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'flyers': _flyers.map((file) => file.toMap()).toList(),
       'trailer': _trailer?.toMap(),
       'mediaFiles': _mediaFiles.map((file) => file.toMap()).toList(),
       'registrationEnabled': _registrationEnabled,
-    });
+    };
+    final placePath = _selectedPlace?.folderPath;
+    if (placePath != null && placePath.isNotEmpty) {
+      result['placePath'] = placePath;
+    }
+    Navigator.pop(context, result);
   }
 
   @override
@@ -685,6 +756,31 @@ class _NewEventPageState extends State<NewEventPage>
           },
           contentPadding: EdgeInsets.zero,
         ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _openPlacePicker,
+          icon: const Icon(Icons.place_outlined, size: 18),
+          label: Text(_i18n.t('choose_place')),
+        ),
+        if (_selectedPlace != null) ...[
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.place),
+              title: Text(
+                _selectedPlace!.getName(
+                  _i18n.currentLanguage.split('_').first.toUpperCase(),
+                ),
+              ),
+              subtitle: Text(_selectedPlace!.coordinatesString),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelectedPlace,
+                tooltip: _i18n.t('remove'),
+              ),
+            ),
+          ),
+        ],
         if (!_isOnline) ...[
           const SizedBox(height: 12),
           Row(
@@ -706,7 +802,9 @@ class _NewEventPageState extends State<NewEventPage>
                     }
                   },
                   validator: (value) {
-                    if (!_isOnline && (value == null || value.trim().isEmpty)) {
+                    if (!_isOnline &&
+                        _selectedPlace == null &&
+                        (value == null || value.trim().isEmpty)) {
                       return _i18n.t('location_required');
                     }
                     return null;
@@ -723,31 +821,6 @@ class _NewEventPageState extends State<NewEventPage>
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _openPlacePicker,
-            icon: const Icon(Icons.place_outlined, size: 18),
-            label: Text(_i18n.t('choose_place')),
-          ),
-          if (_selectedPlace != null) ...[
-            const SizedBox(height: 8),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.place),
-                title: Text(
-                  _selectedPlace!.getName(
-                    _i18n.currentLanguage.split('_').first.toUpperCase(),
-                  ),
-                ),
-                subtitle: Text(_selectedPlace!.coordinatesString),
-                trailing: IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: _clearSelectedPlace,
-                  tooltip: _i18n.t('remove'),
-                ),
-              ),
-            ),
-          ],
         ],
         const SizedBox(height: 16),
         TextFormField(
@@ -1169,6 +1242,52 @@ class _NewEventPageState extends State<NewEventPage>
             }
           },
         ),
+        if (_visibility == 'group') ...[
+          const SizedBox(height: 16),
+          Text(
+            _i18n.t('event_groups_access'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (_isLoadingGroups)
+            const LinearProgressIndicator()
+          else if (_availableGroups.isEmpty)
+            Text(
+              _i18n.t('no_groups_available'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            ..._availableGroups.map((option) {
+              final label = _groupLabel(option);
+              final subtitleParts = <String>[];
+              if (option.group.title.isNotEmpty && option.group.name != option.group.title) {
+                subtitleParts.add(option.group.name);
+              }
+              if (option.collectionTitle != null && option.collectionTitle!.isNotEmpty) {
+                subtitleParts.add(option.collectionTitle!);
+              }
+              return CheckboxListTile(
+                value: _selectedGroups.contains(option.group.name),
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _selectedGroups.add(option.group.name);
+                    } else {
+                      _selectedGroups.remove(option.group.name);
+                    }
+                  });
+                },
+                title: Text(label),
+                subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join(' - ')),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              );
+            }),
+        ],
         const SizedBox(height: 24),
         SwitchListTile(
           title: Text(_i18n.t('enable_registration')),
@@ -1182,169 +1301,6 @@ class _NewEventPageState extends State<NewEventPage>
           contentPadding: EdgeInsets.zero,
         ),
       ],
-    );
-  }
-}
-
-class _PlacePickerDialog extends StatefulWidget {
-  final I18nService i18n;
-
-  const _PlacePickerDialog({required this.i18n});
-
-  @override
-  State<_PlacePickerDialog> createState() => _PlacePickerDialogState();
-}
-
-class _PlacePickerDialogState extends State<_PlacePickerDialog> {
-  final TextEditingController _searchController = TextEditingController();
-  final List<_PlaceOption> _places = [];
-  List<_PlaceOption> _filtered = [];
-  bool _isLoading = true;
-  late String _langCode;
-
-  @override
-  void initState() {
-    super.initState();
-    _langCode = widget.i18n.currentLanguage.split('_').first.toUpperCase();
-    _searchController.addListener(_applyFilter);
-    _loadPlaces();
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadPlaces() async {
-    try {
-      final collections = await CollectionService().loadCollections();
-      final placeCollections = collections
-          .where((c) => c.type == 'places' && c.storagePath != null)
-          .toList();
-
-      final placeService = PlaceService();
-      for (final collection in placeCollections) {
-        await placeService.initializeCollection(collection.storagePath!);
-        final places = await placeService.loadAllPlaces();
-        for (final place in places) {
-          _places.add(_PlaceOption(place, collection.title));
-        }
-      }
-
-      _places.sort((a, b) {
-        final nameA = a.place.getName(_langCode).toLowerCase();
-        final nameB = b.place.getName(_langCode).toLowerCase();
-        return nameA.compareTo(nameB);
-      });
-    } catch (e) {
-      // ignore errors, just show empty state
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _filtered = List.from(_places);
-      _isLoading = false;
-    });
-  }
-
-  void _applyFilter() {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      setState(() {
-        _filtered = List.from(_places);
-      });
-      return;
-    }
-
-    setState(() {
-      _filtered = _places.where((option) {
-        final place = option.place;
-        final name = place.getName(_langCode).toLowerCase();
-        final address = place.address?.toLowerCase() ?? '';
-        return name.contains(query) || address.contains(query);
-      }).toList();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Dialog(
-      child: Container(
-        width: 640,
-        constraints: const BoxConstraints(maxHeight: 700),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Text(
-                  widget.i18n.t('places'),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: widget.i18n.t('search_places'),
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _filtered.isEmpty
-                      ? Center(
-                          child: Text(
-                            widget.i18n.t('no_places_found'),
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _filtered.length,
-                          itemBuilder: (context, index) {
-                            final option = _filtered[index];
-                            final place = option.place;
-                            final name = place.getName(_langCode);
-                            final subtitle = place.address?.isNotEmpty == true
-                                ? place.address!
-                                : place.coordinatesString;
-
-                            return ListTile(
-                              leading: const Icon(Icons.place_outlined),
-                              title: Text(name),
-                              subtitle: Text(subtitle),
-                              trailing: option.collectionTitle != null
-                                  ? Text(
-                                      option.collectionTitle!,
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                    )
-                                  : null,
-                              onTap: () => Navigator.pop(context, option),
-                            );
-                          },
-                        ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

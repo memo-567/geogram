@@ -3,8 +3,15 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 
+import '../models/event.dart';
+import '../models/place.dart';
 import '../models/map_item.dart';
 import '../models/collection.dart';
 import 'collection_service.dart';
@@ -30,6 +37,13 @@ class MapsService {
   List<Collection>? _cachedCollections;
   DateTime? _cacheTimestamp;
   static const Duration _cacheDuration = Duration(minutes: 5);
+
+  // Cache for station events
+  List<Event>? _cachedStationEvents;
+  DateTime? _stationEventsTimestamp;
+  static const Duration _stationEventsCacheDuration = Duration(minutes: 5);
+
+  final Map<String, (double, double)> _placeCoordinatesCache = {};
 
   /// Get collections with caching
   Future<List<Collection>> _getCollections({bool forceRefresh = false}) async {
@@ -57,6 +71,9 @@ class MapsService {
   void clearCache() {
     _cachedCollections = null;
     _cacheTimestamp = null;
+    _cachedStationEvents = null;
+    _stationEventsTimestamp = null;
+    _placeCoordinatesCache.clear();
     LogService().log('MapsService: Cache cleared');
   }
 
@@ -122,6 +139,8 @@ class MapsService {
     bool forceRefresh = false,
   }) async {
     final items = <MapItem>[];
+    final localEventKeys = <String>{};
+    final now = DateTime.now();
 
     try {
       // Get all collections and filter for events type
@@ -140,18 +159,31 @@ class MapsService {
           final events = await eventService.loadEvents();
 
           for (var event in events) {
-            if (!event.hasCoordinates) continue;
+            if (!_isEventCurrentOrUpcoming(event, now)) continue;
+            final coords = await _resolveEventCoordinates(
+              event,
+              collectionPath: collection.storagePath,
+            );
+            if (coords == null) continue;
+            final (lat, lon) = coords;
 
             final distance = MapItem.calculateDistance(
               centerLat,
               centerLon,
-              event.latitude!,
-              event.longitude!,
+              lat,
+              lon,
             );
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            items.add(MapItem.fromEvent(event, distanceKm: distance, collectionPath: collection.storagePath));
+            items.add(MapItem.fromEvent(
+              event,
+              distanceKm: distance,
+              collectionPath: collection.storagePath,
+              latitude: lat,
+              longitude: lon,
+            ));
+            localEventKeys.add(_buildEventKey(event));
           }
 
           LogService().log('MapsService: Loaded ${events.length} events from ${collection.title}');
@@ -160,12 +192,226 @@ class MapsService {
         }
       }
 
+      // Load station events (public events from station)
+      try {
+        final stationEvents = await _getStationEvents(forceRefresh: forceRefresh);
+
+        for (final event in stationEvents) {
+          if (!_isEventCurrentOrUpcoming(event, now)) continue;
+          final coords = await _resolveEventCoordinates(event);
+          if (coords == null) continue;
+          final (lat, lon) = coords;
+
+          final eventKey = _buildEventKey(event);
+          if (localEventKeys.contains(eventKey)) {
+            continue;
+          }
+
+          final distance = MapItem.calculateDistance(
+            centerLat,
+            centerLon,
+            lat,
+            lon,
+          );
+
+          if (radiusKm != null && distance > radiusKm) continue;
+
+          items.add(MapItem.fromEvent(
+            event,
+            distanceKm: distance,
+            collectionPath: null,
+            isFromStation: true,
+            idOverride: eventKey.isNotEmpty ? eventKey : null,
+            latitude: lat,
+            longitude: lon,
+          ));
+        }
+
+        LogService().log('MapsService: Added ${stationEvents.length} station events to map');
+      } catch (e) {
+        LogService().log('MapsService: Error loading station events: $e');
+      }
+
       LogService().log('MapsService: Found ${items.length} total events with coordinates');
     } catch (e) {
       LogService().log('MapsService: Error loading events: $e');
     }
 
     return items;
+  }
+
+  bool _isEventCurrentOrUpcoming(Event event, DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    final start = _parseEventDate(event.startDate);
+    final end = _parseEventDate(event.endDate);
+
+    if (start != null && end != null && !start.isAtSameMomentAs(end)) {
+      return !end.isBefore(today);
+    }
+
+    final singleDate = start ?? end;
+    final eventDate = singleDate ?? DateTime(event.dateTime.year, event.dateTime.month, event.dateTime.day);
+    return !eventDate.isBefore(today);
+  }
+
+  DateTime? _parseEventDate(String? value) {
+    if (value == null || value.isEmpty) return null;
+    try {
+      final dt = DateTime.parse(value);
+      return DateTime(dt.year, dt.month, dt.day);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  String _buildEventKey(Event event) {
+    final author = event.author.trim();
+    if (author.isEmpty) return event.id;
+    return '${author.toUpperCase()}:${event.id}';
+  }
+
+  Future<(double, double)?> _resolveEventCoordinates(
+    Event event, {
+    String? collectionPath,
+  }) async {
+    final placePath = event.placePath;
+    if (placePath != null && placePath.isNotEmpty) {
+      final resolvedPlacePath = _resolvePlacePath(
+        placePath,
+        collectionPath,
+        author: event.author,
+      );
+      if (resolvedPlacePath == null || resolvedPlacePath.isEmpty) return null;
+
+      final cached = _placeCoordinatesCache[resolvedPlacePath];
+      if (cached != null) return cached;
+
+      final place = await _loadPlaceFromPath(resolvedPlacePath);
+      if (place == null) return null;
+      final coords = (place.latitude, place.longitude);
+      _placeCoordinatesCache[resolvedPlacePath] = coords;
+      return coords;
+    }
+
+    if (event.hasCoordinates) {
+      final lat = event.latitude;
+      final lon = event.longitude;
+      if (lat != null && lon != null) {
+        return (lat, lon);
+      }
+    }
+
+    return null;
+  }
+
+  String? _resolvePlacePath(
+    String placePath,
+    String? collectionPath, {
+    String? author,
+  }) {
+    if (placePath.isEmpty) return null;
+    if (path.isAbsolute(placePath)) return placePath;
+    if (collectionPath != null && collectionPath.isNotEmpty) {
+      final basePath = path.dirname(collectionPath);
+      return path.normalize(path.join(basePath, placePath));
+    }
+    if (StorageConfig().isInitialized) {
+      final callsign = (author != null && author.isNotEmpty)
+          ? author
+          : ProfileService().getProfile().callsign;
+      if (callsign.isNotEmpty) {
+        final basePath = StorageConfig().getCallsignDir(callsign);
+        return path.normalize(path.join(basePath, placePath));
+      }
+    }
+    return null;
+  }
+
+  Future<Place?> _loadPlaceFromPath(String folderPath) async {
+    if (kIsWeb) return null;
+    try {
+      final placeFile = File(path.join(folderPath, 'place.txt'));
+      if (!await placeFile.exists()) return null;
+      final content = await placeFile.readAsString();
+      return PlaceService().parsePlaceContent(
+        content: content,
+        filePath: placeFile.path,
+        folderPath: folderPath,
+      );
+    } catch (e) {
+      LogService().log('MapsService: Error loading place from $folderPath: $e');
+      return null;
+    }
+  }
+
+  Future<List<Event>> _getStationEvents({bool forceRefresh = false}) async {
+    final now = DateTime.now();
+    if (!forceRefresh &&
+        _cachedStationEvents != null &&
+        _stationEventsTimestamp != null &&
+        now.difference(_stationEventsTimestamp!) < _stationEventsCacheDuration) {
+      return _cachedStationEvents!;
+    }
+
+    try {
+      final stationService = StationService();
+      if (!stationService.isInitialized) {
+        await stationService.initialize();
+      }
+
+      final preferred = stationService.getPreferredStation();
+      final station = (preferred != null && preferred.url.isNotEmpty)
+          ? preferred
+          : stationService.getConnectedRelay();
+      if (station == null || station.url.isEmpty) {
+        LogService().log('MapsService: No station configured for events');
+        return _cachedStationEvents ?? [];
+      }
+
+      var baseUrl = station.url;
+      if (baseUrl.startsWith('wss://')) {
+        baseUrl = baseUrl.replaceFirst('wss://', 'https://');
+      } else if (baseUrl.startsWith('ws://')) {
+        baseUrl = baseUrl.replaceFirst('ws://', 'http://');
+      }
+
+      final baseUri = Uri.parse(baseUrl);
+      final uri = baseUri.replace(
+        pathSegments: [...baseUri.pathSegments, 'api', 'events'],
+      );
+
+      LogService().log('MapsService: Fetching station events from $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        LogService().log('MapsService: Station events fetch failed: HTTP ${response.statusCode}');
+        return _cachedStationEvents ?? [];
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final eventsJson = json['events'] as List<dynamic>? ?? [];
+      final events = <Event>[];
+
+      for (final eventData in eventsJson) {
+        if (eventData is! Map<String, dynamic>) continue;
+        try {
+          events.add(Event.fromApiJson(eventData));
+        } catch (e) {
+          LogService().log('MapsService: Error parsing station event: $e');
+        }
+      }
+
+      _cachedStationEvents = events;
+      _stationEventsTimestamp = now;
+      return events;
+    } catch (e) {
+      LogService().log('MapsService: Error fetching station events: $e');
+      return _cachedStationEvents ?? [];
+    }
   }
 
   /// Load places from all places collections

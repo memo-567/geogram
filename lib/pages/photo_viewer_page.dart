@@ -200,6 +200,29 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
 
   Widget _buildPhotoView(int index) {
     final imagePath = widget.imagePaths[index];
+    if (_isNetworkImage(imagePath)) {
+      return InteractiveViewer(
+        transformationController: _getTransformationController(index),
+        minScale: 0.5,
+        maxScale: 4.0,
+        child: Center(
+          child: Image.network(
+            imagePath,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              return const Center(
+                child: Icon(
+                  Icons.broken_image,
+                  color: Colors.white54,
+                  size: 64,
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
+
     final imageProvider = file_helper.getFileImageProvider(imagePath);
 
     if (imageProvider == null) {
@@ -232,6 +255,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         ),
       ),
     );
+  }
+
+  bool _isNetworkImage(String path) {
+    return path.startsWith('http://') || path.startsWith('https://');
   }
 
   Widget _buildNavigationButton({

@@ -15,6 +15,7 @@ import '../models/event_registration.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
 import 'event_feedback_section.dart';
+import 'event_community_media_section.dart';
 import '../pages/photo_viewer_page.dart';
 
 /// Widget for displaying event detail with all v1.2 features
@@ -24,7 +25,6 @@ class EventDetailWidget extends StatelessWidget {
   final String? currentCallsign;
   final String? currentUserNpub;
   final bool canEdit;
-  final VoidCallback? onRefresh;
   final VoidCallback? onEdit;
   final VoidCallback? onUploadFiles;
   final VoidCallback? onCreateUpdate;
@@ -37,7 +37,6 @@ class EventDetailWidget extends StatelessWidget {
     this.currentCallsign,
     this.currentUserNpub,
     this.canEdit = false,
-    this.onRefresh,
     this.onEdit,
     this.onUploadFiles,
     this.onCreateUpdate,
@@ -91,17 +90,12 @@ class EventDetailWidget extends StatelessWidget {
                   onPressed: onEdit,
                   tooltip: i18n.t('event_settings'),
                 ),
-              // Refresh button
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: onRefresh,
-                tooltip: i18n.t('refresh'),
-              ),
             ],
           ),
         ),
         Expanded(
           child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
             children: [
           // Event metadata (author, date, location, visibility)
@@ -161,6 +155,14 @@ class EventDetailWidget extends StatelessWidget {
             event: event,
             collectionPath: collectionPath,
             onUploadFiles: onUploadFiles,
+          ),
+          const SizedBox(height: 24),
+
+          EventCommunityMediaSection(
+            event: event,
+            collectionPath: collectionPath,
+            currentCallsign: currentCallsign,
+            currentUserNpub: currentUserNpub,
           ),
           const SizedBox(height: 24),
 
@@ -985,7 +987,7 @@ class EventFilesSection extends StatefulWidget {
 }
 
 class _EventFilesSectionState extends State<EventFilesSection> {
-  List<io.FileSystemEntity> _files = [];
+  List<io.File> _files = [];
   bool _isLoading = true;
 
   @override
@@ -1022,9 +1024,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
         final entities = await eventDir.list().toList();
 
         // Filter out directories and system files
-        _files = entities.where((entity) {
-          if (entity is! io.File) return false;
-
+        _files = entities.whereType<io.File>().where((entity) {
           final fileName = path.basename(entity.path);
           // Exclude system files
           if (fileName == 'event.txt') return false;
@@ -1061,12 +1061,40 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     return Icons.insert_drive_file;
   }
 
-  Future<void> _openFile(io.FileSystemEntity file) async {
+  Future<void> _openFile(io.File file) async {
     if (kIsWeb) return;
     final uri = Uri.file(file.path);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
     }
+  }
+
+  void _openImageViewer(BuildContext context, io.File file) {
+    final imageFiles = _files
+        .where((entry) => _isImageFile(path.basename(entry.path)))
+        .toList();
+    if (imageFiles.isEmpty) return;
+
+    final imagePaths = imageFiles.map((entry) => entry.path).toList();
+    final initialIndex = imagePaths.indexOf(file.path);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex >= 0 ? initialIndex : 0,
+        ),
+      ),
+    );
+  }
+
+  void _handleFileTap(BuildContext context, io.File file) {
+    if (_isImageFile(path.basename(file.path))) {
+      _openImageViewer(context, file);
+      return;
+    }
+
+    _openFile(file);
   }
 
   @override
@@ -1154,7 +1182,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
               final isImage = _isImageFile(fileName);
 
               return InkWell(
-                onTap: () => _openFile(file),
+                onTap: () => _handleFileTap(context, file),
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
                   decoration: BoxDecoration(

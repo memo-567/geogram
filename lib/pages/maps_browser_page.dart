@@ -14,6 +14,7 @@ import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import '../models/event.dart';
 import '../models/map_item.dart';
 import '../models/report.dart';
 import '../models/place.dart';
@@ -24,10 +25,13 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/storage_config.dart';
+import '../services/event_service.dart';
+import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
 import '../services/collection_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
+import 'event_detail_page.dart';
 
 /// Maps browser page showing geo-located items
 class MapsBrowserPage extends StatefulWidget {
@@ -398,7 +402,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
   }
 
-  void _openItemDetail(MapItem item) {
+  Future<void> _openItemDetail(MapItem item) async {
     // Open detail page based on item type
     switch (item.type) {
       case MapItemType.alert:
@@ -432,8 +436,44 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         }
         break;
       case MapItemType.event:
-        // TODO: Open event detail page when available
-        _showItemSnackbar(item);
+        if (item.sourceItem is Event) {
+          final event = item.sourceItem as Event;
+          var collectionPath = item.collectionPath ?? '';
+          var readOnly = false;
+
+          if (item.isFromStation) {
+            readOnly = true;
+            final stationPath = await _resolveStationEventsCollectionPath();
+            if (stationPath != null && stationPath.isNotEmpty) {
+              collectionPath = stationPath;
+            }
+          }
+
+          final eventService = EventService();
+          if (collectionPath.isNotEmpty) {
+            await eventService.initializeCollection(collectionPath);
+          }
+          if (!mounted) return;
+
+          final profile = _profileService.getProfile();
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EventDetailPage(
+                event: event,
+                collectionPath: collectionPath,
+                eventService: eventService,
+                profileService: _profileService,
+                i18n: _i18n,
+                currentUserNpub: profile.npub,
+                currentCallsign: profile.callsign,
+                readOnly: readOnly,
+              ),
+            ),
+          );
+        } else {
+          _showItemSnackbar(item);
+        }
         break;
       case MapItemType.place:
         if (item.sourceItem is Place) {
@@ -464,6 +504,24 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _showItemSnackbar(item);
         break;
     }
+  }
+
+  Future<String?> _resolveStationEventsCollectionPath() async {
+    final stationService = StationService();
+    if (!stationService.isInitialized) {
+      await stationService.initialize();
+    }
+
+    final station = stationService.getPreferredStation() ??
+        stationService.getConnectedRelay();
+    if (station == null) return null;
+
+    final identifier = (station.callsign != null && station.callsign!.isNotEmpty)
+        ? station.callsign!
+        : (station.name.isNotEmpty ? station.name : station.url);
+    if (identifier.isEmpty) return null;
+
+    return '${StorageConfig().getCallsignDir(identifier)}/events';
   }
 
   void _showItemSnackbar(MapItem item) {

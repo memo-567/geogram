@@ -15,11 +15,13 @@ import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
 import '../services/direct_message_service.dart';
 import '../services/app_args.dart';
+import '../services/event_service.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
 import '../models/blog_post.dart';
 import '../models/chat_message.dart';
+import '../models/event.dart';
 import '../models/update_settings.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
@@ -569,6 +571,8 @@ class StationServerService {
       } else if (path == '/api/places' || path == '/api/places/list') {
         // GET /api/places - list places (using shared handler)
         await _handlePlacesApi(request);
+      } else if (path == '/api/events' || path == '/api/events/list' || path.startsWith('/api/events/')) {
+        await _handleEventsRequest(request);
       } else if (path.startsWith('/api/feedback/')) {
         // /api/feedback/{contentType}/{contentId}/...
         await _handleFeedbackApi(request);
@@ -1241,10 +1245,23 @@ class StationServerService {
       }
 
       // Read the file content from request body
-      final bytes = await request.fold<List<int>>(
+      var bytes = await request.fold<List<int>>(
         <int>[],
         (previous, element) => previous..addAll(element),
       );
+
+      final transferEncoding = request.headers.value('Content-Transfer-Encoding') ??
+          request.headers.value('content-transfer-encoding');
+      if (transferEncoding != null && transferEncoding.toLowerCase().contains('base64')) {
+        try {
+          bytes = base64Decode(utf8.decode(bytes));
+        } catch (e) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid base64 payload'}));
+          return;
+        }
+      }
 
       if (bytes.isEmpty) {
         request.response.statusCode = 400;
@@ -1620,6 +1637,857 @@ class StationServerService {
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(result));
+  }
+
+  /// Handle /api/events/* requests (list, details, files, and media)
+  Future<void> _handleEventsRequest(HttpRequest request) async {
+    try {
+      final segments = request.uri.pathSegments;
+      if (segments.length < 2 || segments[0] != 'api' || segments[1] != 'events') {
+        request.response.statusCode = 404;
+        request.response.write('Not Found');
+        return;
+      }
+
+      final method = request.method;
+      if (segments.length == 2 || (segments.length == 3 && segments[2] == 'list')) {
+        if (method != 'GET') {
+          request.response.statusCode = 405;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Method not allowed'}));
+          return;
+        }
+        await _handleEventsApi(request);
+        return;
+      }
+
+      if (segments.length < 3) {
+        request.response.statusCode = 404;
+        request.response.write('Not Found');
+        return;
+      }
+
+      final eventId = segments[2];
+      if (_isInvalidEventId(eventId)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid event ID'}));
+        return;
+      }
+
+      if (segments.length == 3) {
+        if (method != 'GET') {
+          request.response.statusCode = 405;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Method not allowed'}));
+          return;
+        }
+        await _handleEventDetails(request, eventId);
+        return;
+      }
+
+      final section = segments[3];
+      if (section == 'items') {
+        if (method != 'GET') {
+          request.response.statusCode = 405;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Method not allowed'}));
+          return;
+        }
+        final itemPath = request.uri.queryParameters['path'] ?? '';
+        await _handleEventItems(request, eventId, itemPath);
+        return;
+      }
+
+      if (section == 'files') {
+        if (method != 'GET') {
+          request.response.statusCode = 405;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Method not allowed'}));
+          return;
+        }
+        if (segments.length < 5) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing file path'}));
+          return;
+        }
+        final filePath = segments.sublist(4).join('/');
+        await _handleEventFileServe(request, eventId, filePath);
+        return;
+      }
+
+      if (section == 'media') {
+        await _handleEventMediaRequest(request, eventId, segments);
+        return;
+      }
+
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Events endpoint not found'}));
+    } catch (e) {
+      LogService().log('Error handling events request: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /api/events - list events
+  Future<void> _handleEventsApi(HttpRequest request) async {
+    try {
+      final dataDir = _getStationDataDir();
+      if (dataDir == null) {
+        request.response.statusCode = 500;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Storage not initialized'}));
+        return;
+      }
+
+      final yearParam = request.uri.queryParameters['year'];
+      final year = yearParam != null ? int.tryParse(yearParam) : null;
+
+      final eventService = EventService();
+      final events = await eventService.getAllEventsGlobal(dataDir, year: year);
+      final publicEvents = events
+          .where((event) => event.visibility.toLowerCase() == 'public')
+          .toList();
+      final years = await eventService.getAvailableYearsGlobal(dataDir);
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'events': publicEvents.map((e) => e.toApiJson(summary: true)).toList(),
+        'years': years,
+        'total': publicEvents.length,
+        'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }));
+    } catch (e) {
+      LogService().log('Error in events API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+        'message': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle GET /api/events/{eventId} - event details
+  Future<void> _handleEventDetails(HttpRequest request, String eventId) async {
+    try {
+      final eventDir = await _resolveEventDir(eventId);
+      if (eventDir == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      final eventService = EventService();
+      final collectionPath = path.dirname(path.dirname(path.dirname(eventDir)));
+      await eventService.initializeCollection(collectionPath);
+      final event = await eventService.loadEvent(eventId);
+
+      if (event == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not public'}));
+        return;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(event.toApiJson(summary: false)));
+    } catch (e) {
+      LogService().log('Error handling event details: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /api/events/{eventId}/items - list event files and folders
+  Future<void> _handleEventItems(HttpRequest request, String eventId, String itemPath) async {
+    try {
+      final eventDirPath = await _resolveEventDir(eventId);
+      if (eventDirPath == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (itemPath.contains('..')) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      String targetPath = eventDirPath;
+      if (itemPath.isNotEmpty) {
+        targetPath = '$eventDirPath/$itemPath';
+      }
+
+      final targetDir = Directory(targetPath);
+      if (!await targetDir.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Path not found', 'path': itemPath}));
+        return;
+      }
+
+      final items = <Map<String, dynamic>>[];
+      await for (final entity in targetDir.list()) {
+        final name = path.basename(entity.path);
+        if (name.startsWith('.') || name == 'event.txt') continue;
+
+        if (entity is Directory) {
+          final isDayFolder = RegExp(r'^day\\d+$', caseSensitive: false).hasMatch(name);
+          final subItems = await entity.list().length;
+          items.add({
+            'name': name,
+            'type': isDayFolder ? 'dayFolder' : 'folder',
+            'item_count': subItems,
+          });
+        } else if (entity is File) {
+          final stat = await entity.stat();
+          final ext = path.extension(name).toLowerCase();
+          String fileType = 'file';
+          if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+            fileType = 'image';
+          } else if (['.mp4', '.mov', '.avi', '.webm'].contains(ext)) {
+            fileType = 'video';
+          } else if (['.mp3', '.m4a', '.wav', '.ogg'].contains(ext)) {
+            fileType = 'audio';
+          } else if (['.pdf'].contains(ext)) {
+            fileType = 'document';
+          }
+          items.add({
+            'name': name,
+            'type': fileType,
+            'size': stat.size,
+          });
+        }
+      }
+
+      items.sort((a, b) {
+        final aIsFolder = a['type'] == 'folder' || a['type'] == 'dayFolder';
+        final bIsFolder = b['type'] == 'folder' || b['type'] == 'dayFolder';
+        if (aIsFolder && !bIsFolder) return -1;
+        if (!aIsFolder && bIsFolder) return 1;
+        return (a['name'] as String).compareTo(b['name'] as String);
+      });
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'event_id': eventId,
+        'path': itemPath,
+        'items': items,
+      }));
+    } catch (e) {
+      LogService().log('Error handling event items: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  /// Handle GET /api/events/{eventId}/files/{path} - serve event file content
+  Future<void> _handleEventFileServe(HttpRequest request, String eventId, String filePath) async {
+    try {
+      final eventDirPath = await _resolveEventDir(eventId);
+      if (eventDirPath == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (_isInvalidEventFilePath(filePath)) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final fullPath = path.join(eventDirPath, filePath);
+      final file = File(fullPath);
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File not found', 'path': filePath}));
+        return;
+      }
+
+      final ext = path.extension(filePath).toLowerCase();
+      String contentType = 'application/octet-stream';
+      final mimeTypes = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.mp4': 'video/mp4',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.webm': 'video/webm',
+        '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.json': 'application/json',
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+      };
+      if (mimeTypes.containsKey(ext)) {
+        contentType = mimeTypes[ext]!;
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.headers.set('Cache-Control', 'public, max-age=86400');
+      request.response.add(bytes);
+    } catch (e) {
+      LogService().log('Error serving event file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  Future<void> _handleEventMediaRequest(
+    HttpRequest request,
+    String eventId,
+    List<String> segments,
+  ) async {
+    final method = request.method;
+    if (segments.length == 4) {
+      if (method != 'GET') {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+      await _handleEventMediaList(request, eventId);
+      return;
+    }
+
+    if (segments.length < 6) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Event media endpoint not found'}));
+      return;
+    }
+
+    final callsign = segments[4];
+    if (segments.length >= 7 && segments[5] == 'files') {
+      final filename = segments.sublist(6).join('/');
+      if (method == 'POST') {
+        await _handleEventMediaFileUpload(request, eventId, callsign, filename);
+      } else if (method == 'GET') {
+        await _handleEventMediaFileServe(request, eventId, callsign, filename);
+      } else {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+      }
+      return;
+    }
+
+    if (segments.length == 6) {
+      final action = segments[5];
+      if (method != 'POST') {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+      await _handleEventMediaAction(request, eventId, callsign, action);
+      return;
+    }
+
+    request.response.statusCode = 404;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'error': 'Event media endpoint not found'}));
+  }
+
+  Future<void> _handleEventMediaList(HttpRequest request, String eventId) async {
+    try {
+      final eventDir = await _resolveEventDir(eventId);
+      if (eventDir == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      final event = await _loadEventFromDir(eventId, eventDir);
+      if (event == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not public'}));
+        return;
+      }
+
+      final includePending = request.uri.queryParameters['include_pending'] == 'true';
+      final includeBanned = request.uri.queryParameters['include_banned'] == 'true';
+
+      final mediaRoot = Directory(path.join(eventDir, 'media'));
+      final approvedFile = path.join(mediaRoot.path, 'approved.txt');
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+      final approved = await _readCallsignList(approvedFile);
+      final banned = await _readCallsignList(bannedFile);
+
+      final contributors = <Map<String, dynamic>>[];
+      if (await mediaRoot.exists()) {
+        await for (final entity in mediaRoot.list()) {
+          if (entity is! Directory) continue;
+          final callsign = path.basename(entity.path);
+          if (callsign.isEmpty) continue;
+
+          final files = <Map<String, dynamic>>[];
+          await for (final entry in entity.list()) {
+            if (entry is! File) continue;
+            final name = path.basename(entry.path);
+            if (name.startsWith('.')) continue;
+            final stat = await entry.stat();
+            final ext = path.extension(name).toLowerCase();
+            String fileType = 'file';
+            if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].contains(ext)) {
+              fileType = 'image';
+            } else if (['.mp4', '.mov', '.avi', '.webm'].contains(ext)) {
+              fileType = 'video';
+            } else if (['.mp3', '.m4a', '.wav', '.ogg'].contains(ext)) {
+              fileType = 'audio';
+            } else if (['.pdf'].contains(ext)) {
+              fileType = 'document';
+            }
+            files.add({
+              'name': name,
+              'type': fileType,
+              'size': stat.size,
+              'path': '/api/events/$eventId/media/$callsign/files/$name',
+            });
+          }
+
+          if (files.isEmpty) continue;
+          files.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+
+          final isApproved = approved.contains(callsign);
+          final isBanned = banned.contains(callsign);
+
+          if (!includePending) {
+            if (!isApproved || isBanned) continue;
+          } else if (!includeBanned && isBanned) {
+            continue;
+          }
+
+          contributors.add({
+            'callsign': callsign,
+            'is_approved': isApproved,
+            'is_banned': isBanned,
+            'files': files,
+          });
+        }
+      }
+
+      contributors.sort((a, b) => (a['callsign'] as String).compareTo(b['callsign'] as String));
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'event_id': eventId,
+        'contributors': contributors,
+        'approved': approved.toList()..sort(),
+        'banned': banned.toList()..sort(),
+      }));
+    } catch (e) {
+      LogService().log('Error listing event media: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  Future<void> _handleEventMediaFileUpload(
+    HttpRequest request,
+    String eventId,
+    String callsign,
+    String filename,
+  ) async {
+    try {
+      final eventDir = await _resolveEventDir(eventId);
+      if (eventDir == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      final event = await _loadEventFromDir(eventId, eventDir);
+      if (event == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not public'}));
+        return;
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid callsign'}));
+        return;
+      }
+
+      if (_isInvalidMediaFilename(filename)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid filename'}));
+        return;
+      }
+
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      const maxSizeBytes = 25 * 1024 * 1024;
+      if (bytes.length > maxSizeBytes) {
+        request.response.statusCode = 413;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File too large', 'max_size_mb': 25}));
+        return;
+      }
+
+      final mediaRoot = Directory(path.join(eventDir, 'media'));
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+      final banned = await _readCallsignList(bannedFile);
+      if (banned.contains(sanitizedCallsign)) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Contributor banned'}));
+        return;
+      }
+
+      final contributorDir = Directory(path.join(mediaRoot.path, sanitizedCallsign));
+      await contributorDir.create(recursive: true);
+
+      final nextIndex = await _nextMediaIndex(contributorDir);
+      final ext = _normalizeMediaExtension(filename);
+      final targetName = 'media$nextIndex.$ext';
+      final filePath = path.join(contributorDir.path, targetName);
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'callsign': sanitizedCallsign,
+        'filename': targetName,
+        'size': bytes.length,
+        'path': '/api/events/$eventId/media/$sanitizedCallsign/files/$targetName',
+      }));
+    } catch (e) {
+      LogService().log('Error uploading event media: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  Future<void> _handleEventMediaFileServe(
+    HttpRequest request,
+    String eventId,
+    String callsign,
+    String filename,
+  ) async {
+    try {
+      final eventDir = await _resolveEventDir(eventId);
+      if (eventDir == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty || _isInvalidMediaFilename(filename)) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid path'}));
+        return;
+      }
+
+      final filePath = path.join(eventDir, 'media', sanitizedCallsign, filename);
+      final file = File(filePath);
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'File not found', 'filename': filename}));
+        return;
+      }
+
+      final ext = path.extension(filename).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.bmp') {
+        contentType = 'image/bmp';
+      } else if (ext == '.mp4') {
+        contentType = 'video/mp4';
+      } else if (ext == '.mov') {
+        contentType = 'video/quicktime';
+      } else if (ext == '.avi') {
+        contentType = 'video/x-msvideo';
+      } else if (ext == '.webm') {
+        contentType = 'video/webm';
+      } else if (ext == '.mp3') {
+        contentType = 'audio/mpeg';
+      } else if (ext == '.m4a') {
+        contentType = 'audio/mp4';
+      } else if (ext == '.wav') {
+        contentType = 'audio/wav';
+      } else if (ext == '.ogg') {
+        contentType = 'audio/ogg';
+      }
+
+      final bytes = await file.readAsBytes();
+      request.response.headers.set('Content-Type', contentType);
+      request.response.headers.set('Content-Length', bytes.length.toString());
+      request.response.headers.set('Cache-Control', 'public, max-age=86400');
+      request.response.add(bytes);
+    } catch (e) {
+      LogService().log('Error serving event media: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  Future<void> _handleEventMediaAction(
+    HttpRequest request,
+    String eventId,
+    String callsign,
+    String action,
+  ) async {
+    try {
+      final eventDir = await _resolveEventDir(eventId);
+      if (eventDir == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      final event = await _loadEventFromDir(eventId, eventDir);
+      if (event == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not found', 'eventId': eventId}));
+        return;
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Event not public'}));
+        return;
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Invalid callsign'}));
+        return;
+      }
+
+      final mediaRoot = Directory(path.join(eventDir, 'media'));
+      final approvedFile = path.join(mediaRoot.path, 'approved.txt');
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+
+      final approved = await _readCallsignList(approvedFile);
+      final banned = await _readCallsignList(bannedFile);
+
+      switch (action) {
+        case 'approve':
+          approved.add(sanitizedCallsign);
+          banned.remove(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          await _writeCallsignList(bannedFile, banned);
+          break;
+        case 'suspend':
+          approved.remove(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          break;
+        case 'ban':
+          approved.remove(sanitizedCallsign);
+          banned.add(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          await _writeCallsignList(bannedFile, banned);
+          final contributorDir = Directory(path.join(mediaRoot.path, sanitizedCallsign));
+          if (await contributorDir.exists()) {
+            await contributorDir.delete(recursive: true);
+          }
+          break;
+        default:
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid action'}));
+          return;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'action': action,
+        'callsign': sanitizedCallsign,
+      }));
+    } catch (e) {
+      LogService().log('Error updating event media status: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+    }
+  }
+
+  String? _getStationDataDir() {
+    try {
+      return StorageConfig().baseDir;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _resolveEventDir(String eventId) async {
+    final dataDir = _getStationDataDir();
+    if (dataDir == null) return null;
+    final eventService = EventService();
+    return eventService.getEventPath(eventId, dataDir);
+  }
+
+  Future<Event?> _loadEventFromDir(String eventId, String eventDir) async {
+    try {
+      final eventFile = File(path.join(eventDir, 'event.txt'));
+      if (!await eventFile.exists()) return null;
+      final content = await eventFile.readAsString();
+      return Event.fromText(content, eventId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _isInvalidEventId(String eventId) {
+    return eventId.contains('..') || eventId.contains('/') || eventId.contains('\\');
+  }
+
+  bool _isInvalidEventFilePath(String filePath) {
+    if (filePath.isEmpty) return true;
+    if (filePath.contains('..')) return true;
+    if (filePath.contains('\\')) return true;
+    return filePath.startsWith('/');
+  }
+
+  bool _isInvalidMediaFilename(String filename) {
+    if (filename.isEmpty) return true;
+    if (filename.contains('..')) return true;
+    if (filename.contains('/') || filename.contains('\\')) return true;
+    return false;
+  }
+
+  String _sanitizeMediaCallsign(String callsign) {
+    return callsign
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z0-9_-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+  }
+
+  String _normalizeMediaExtension(String filename) {
+    var ext = path.extension(filename).toLowerCase();
+    if (ext.startsWith('.')) ext = ext.substring(1);
+    if (ext.isEmpty) ext = 'bin';
+    if (ext.length > 8) {
+      ext = ext.substring(0, 8);
+    }
+    return ext;
+  }
+
+  Future<int> _nextMediaIndex(Directory contributorDir) async {
+    int maxIndex = 0;
+    if (await contributorDir.exists()) {
+      await for (final entry in contributorDir.list()) {
+        if (entry is! File) continue;
+        final name = path.basename(entry.path);
+        final match = RegExp(r'^media(\\d+)\\.', caseSensitive: false).firstMatch(name);
+        if (match == null) continue;
+        final parsed = int.tryParse(match.group(1) ?? '');
+        if (parsed != null && parsed > maxIndex) {
+          maxIndex = parsed;
+        }
+      }
+    }
+    return maxIndex + 1;
+  }
+
+  Future<Set<String>> _readCallsignList(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return <String>{};
+    final content = await file.readAsString();
+    return content
+        .split('\\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toSet();
+  }
+
+  Future<void> _writeCallsignList(String filePath, Set<String> values) async {
+    final file = File(filePath);
+    await file.parent.create(recursive: true);
+    final sorted = values.toList()..sort();
+    await file.writeAsString(sorted.join('\\n'), flush: true);
   }
 
   /// Handle GET /api/places/{callsign}/{folderName} - place details

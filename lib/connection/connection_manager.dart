@@ -173,7 +173,11 @@ class ConnectionManager {
   ///
   /// Automatically selects the best transport based on routing strategy.
   /// If [queueIfOffline] is true on the message, queues for later delivery.
-  Future<TransportResult> send(TransportMessage message) async {
+  Future<TransportResult> send(
+    TransportMessage message, {
+    RoutingStrategy? routingStrategy,
+    Set<String>? excludeTransports,
+  }) async {
     if (!_initialized) {
       return TransportResult.failure(error: 'ConnectionManager not initialized');
     }
@@ -181,11 +185,17 @@ class ConnectionManager {
     LogService().log('ConnectionManager: Sending ${message.type} to ${message.targetCallsign}');
 
     // Get ordered list of transports to try
-    final transportsToTry = await _routingStrategy.selectTransports(
+    var transportsToTry = await (routingStrategy ?? _routingStrategy).selectTransports(
       callsign: message.targetCallsign,
       messageType: message.type,
       availableTransports: availableTransports,
     );
+
+    if (excludeTransports != null && excludeTransports.isNotEmpty) {
+      transportsToTry = transportsToTry
+          .where((transport) => !excludeTransports.contains(transport.id))
+          .toList();
+    }
 
     if (transportsToTry.isEmpty) {
       if (message.queueIfOffline) {
@@ -237,6 +247,8 @@ class ConnectionManager {
     dynamic body,
     bool queueIfOffline = false,
     Duration timeout = const Duration(seconds: 30),
+    RoutingStrategy? routingStrategy,
+    Set<String>? excludeTransports,
   }) {
     final message = TransportMessage.apiRequest(
       targetCallsign: callsign,
@@ -247,7 +259,11 @@ class ConnectionManager {
       queueIfOffline: queueIfOffline,
     );
 
-    return send(message);
+    return send(
+      message,
+      routingStrategy: routingStrategy,
+      excludeTransports: excludeTransports,
+    );
   }
 
   /// Send a direct message
@@ -411,17 +427,26 @@ class ConnectionManager {
       final uri = Uri.parse('http://localhost:$localPort$path');
 
       // Prepare headers
-      Map<String, String> headers = {'Content-Type': 'application/json'};
+      final headers = <String, String>{};
       if (message.headers != null) {
         headers.addAll(message.headers!);
       }
+      if (!headers.containsKey('Content-Type')) {
+        headers['Content-Type'] = message.payload is List<int>
+            ? 'application/octet-stream'
+            : 'application/json';
+      }
 
       // Prepare body
-      String? body;
+      Object? body;
       if (message.payload != null) {
-        body = message.payload is String
-            ? message.payload as String
-            : jsonEncode(message.payload);
+        if (message.payload is List<int>) {
+          body = message.payload as List<int>;
+        } else if (message.payload is String) {
+          body = message.payload as String;
+        } else {
+          body = jsonEncode(message.payload);
+        }
       }
 
       // Make request to local server

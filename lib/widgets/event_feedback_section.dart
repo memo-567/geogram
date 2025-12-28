@@ -99,6 +99,7 @@ class _EventLikeButtonState extends State<EventLikeButton> {
 
     final contentPath = _contentPath;
     if (contentPath == null || contentPath.isEmpty) return;
+    final isPublic = widget.event.visibility.toLowerCase() == 'public';
 
     final profile = _profileService.getProfile();
     if (profile.callsign.isEmpty) {
@@ -118,16 +119,19 @@ class _EventLikeButtonState extends State<EventLikeButton> {
         return;
       }
 
-      final stationResult = await _feedbackService.toggleLikeOnStation(widget.event.id, event);
-      if (!stationResult.success) {
-        _showMessage(
-          stationResult.error ?? _i18n.t('connection_failed'),
-          isError: true,
-        );
-        return;
+      FeedbackToggleResult? stationResult;
+      if (isPublic) {
+        stationResult = await _feedbackService.toggleLikeOnStation(widget.event.id, event);
+        if (!stationResult.success) {
+          _showMessage(
+            stationResult.error ?? _i18n.t('connection_failed'),
+            isError: true,
+          );
+          return;
+        }
       }
 
-      bool? isActive = stationResult.isActive;
+      bool? isActive = stationResult?.isActive;
       if (isActive == true) {
         await FeedbackFolderUtils.addFeedbackEvent(
           contentPath,
@@ -153,10 +157,11 @@ class _EventLikeButtonState extends State<EventLikeButton> {
         return;
       }
 
-      final count = stationResult.count ?? await FeedbackFolderUtils.getFeedbackCount(
+      final localCount = await FeedbackFolderUtils.getFeedbackCount(
         contentPath,
         FeedbackFolderUtils.feedbackTypeLikes,
       );
+      final count = isPublic ? (stationResult?.count ?? localCount) : localCount;
 
       if (!mounted) return;
       setState(() {
@@ -324,6 +329,7 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
     if (_isSubmitting) return;
     final contentPath = _contentPath;
     if (contentPath == null || contentPath.isEmpty) return;
+    final isPublic = widget.event.visibility.toLowerCase() == 'public';
 
     final content = _commentController.text.trim();
     if (content.isEmpty) return;
@@ -349,13 +355,15 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
       await _loadComments();
       _showMessage(_i18n.t('comment_added'));
 
-      _feedbackService.commentOnStation(
-        widget.event.id,
-        profile.callsign,
-        content,
-        npub: profile.npub.isNotEmpty ? profile.npub : null,
-        signature: signature,
-      ).ignore();
+      if (isPublic) {
+        _feedbackService.commentOnStation(
+          widget.event.id,
+          profile.callsign,
+          content,
+          npub: profile.npub.isNotEmpty ? profile.npub : null,
+          signature: signature,
+        ).ignore();
+      }
 
       await widget.onFeedbackUpdated?.call();
     } catch (e) {

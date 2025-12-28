@@ -18,6 +18,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
+import 'event_detail_page.dart';
 import 'new_event_page.dart';
 import '../dialogs/new_update_dialog.dart';
 import 'event_settings_page.dart';
@@ -101,10 +102,12 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   /// Load events from remote device via API
-  Future<void> _loadRemoteEvents() async {
+  Future<void> _loadRemoteEvents({bool showLoading = true}) async {
     if (widget.remoteDeviceUrl == null) return;
 
-    setState(() => _isLoading = true);
+    if (showLoading) {
+      setState(() => _isLoading = true);
+    }
 
     try {
       final url = '${widget.remoteDeviceUrl}/api/events';
@@ -197,8 +200,10 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     }
   }
 
-  Future<void> _loadEvents() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadEvents({bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() => _isLoading = true);
+    }
 
     final events = await _eventService.loadEvents(
       currentCallsign: _currentCallsign,
@@ -287,6 +292,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
     if (result != null && mounted) {
       final profile = _profileService.getProfile();
+      final metadata = _buildEventMetadata(result);
       final event = await _eventService.createEvent(
         author: profile.callsign,
         title: result['title'] as String,
@@ -300,7 +306,9 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         visibility: result['visibility'] as String?,
         admins: result['admins'] as List<String>?,
         moderators: result['moderators'] as List<String>?,
+        groupAccess: result['groupAccess'] as List<String>?,
         npub: profile.npub,
+        metadata: metadata,
       );
 
       if (event != null && mounted) {
@@ -376,6 +384,28 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     if (mediaFiles.isNotEmpty) {
       await _copyPendingFiles(eventId, mediaFiles, ensureUnique: true);
     }
+  }
+
+  Map<String, String>? _buildEventMetadata(Map<String, dynamic> result) {
+    if (!result.containsKey('placePath')) return null;
+    final placePath = (result['placePath'] as String?)?.trim() ?? '';
+    final normalized = _normalizePlacePath(placePath);
+    return {'place_path': normalized ?? placePath};
+  }
+
+  String? _normalizePlacePath(String placePath) {
+    if (placePath.isEmpty) return '';
+    if (widget.collectionPath == null || widget.collectionPath!.isEmpty) {
+      return placePath;
+    }
+    if (path.isAbsolute(placePath)) {
+      final basePath = path.dirname(widget.collectionPath!);
+      final relative = path.relative(placePath, from: basePath);
+      if (!relative.startsWith('..')) {
+        return relative;
+      }
+    }
+    return placePath;
   }
 
   Future<void> _writeLinksFile(String eventId, List<EventLink> links) async {
@@ -457,6 +487,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
     if (result != null && mounted) {
       print('EventsBrowserPage: Received result from settings page: $result');
+      final metadata = _buildEventMetadata(result);
       final newEventId = await _eventService.updateEvent(
         eventId: _selectedEvent!.id,
         title: result['title'] as String,
@@ -467,6 +498,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         visibility: result['visibility'] as String?,
         admins: result['admins'] as List<String>?,
         moderators: result['moderators'] as List<String>?,
+        groupAccess: result['groupAccess'] as List<String>?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,
@@ -476,6 +508,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
             : null,  // key not present means don't update trailer
         links: result['links'] as List<EventLink>?,
         registrationEnabled: result['registrationEnabled'] as bool?,
+        metadata: metadata,
       );
 
       if (newEventId != null && mounted) {
@@ -622,40 +655,44 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   Widget _buildEventList(ThemeData theme, {bool isMobileView = false}) {
+    final refreshHandler = widget.isRemoteDevice
+        ? () => _loadRemoteEvents(showLoading: false)
+        : () => _loadEvents(showLoading: false);
+    final listContent = _filteredEvents.isEmpty
+        ? (isMobileView ? _buildEmptyStateScrollable(theme) : _buildEmptyState(theme))
+        : _buildYearGroupedList(theme, isMobileView: isMobileView);
+    final listBody = isMobileView
+        ? RefreshIndicator(onRefresh: refreshHandler, child: listContent)
+        : listContent;
+
     return Container(
       width: isMobileView ? null : 350,
       color: theme.colorScheme.surface,
       child: Column(
         children: [
           // Toolbar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
+          if (!widget.isRemoteDevice)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: theme.colorScheme.outlineVariant,
+                    width: 1,
+                  ),
                 ),
               ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: widget.isRemoteDevice ? _loadRemoteEvents : _loadEvents,
-                  tooltip: _i18n.t('refresh'),
-                ),
-                // Only show add button for local events
-                if (!widget.isRemoteDevice)
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
                   IconButton(
                     icon: const Icon(Icons.add),
                     onPressed: _createNewEvent,
                     tooltip: _i18n.t('new_event'),
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
           // Search bar
           Padding(
             padding: const EdgeInsets.all(16),
@@ -684,9 +721,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           const Divider(height: 1),
           // Event list
           Expanded(
-            child: _filteredEvents.isEmpty
-                ? _buildEmptyState(theme)
-                : _buildYearGroupedList(theme, isMobileView: isMobileView),
+            child: listBody,
           ),
         ],
       ),
@@ -697,36 +732,61 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: _buildEmptyStateContent(theme),
+      ),
+    );
+  }
+
+  Widget _buildEmptyStateScrollable(ThemeData theme) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(
-              Icons.event_outlined,
-              size: 64,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _searchController.text.isNotEmpty
-                  ? _i18n.t('no_matching_events')
-                  : _i18n.t('no_events_yet'),
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: _buildEmptyStateContent(theme),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _searchController.text.isNotEmpty
-                  ? _i18n.t('try_different_search')
-                  : _i18n.t('create_first_event'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
-              ),
-              textAlign: TextAlign.center,
             ),
           ],
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyStateContent(ThemeData theme) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.event_outlined,
+          size: 64,
+          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
         ),
-      ),
+        const SizedBox(height: 16),
+        Text(
+          _searchController.text.isNotEmpty
+              ? _i18n.t('no_matching_events')
+              : _i18n.t('no_events_yet'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _searchController.text.isNotEmpty
+              ? _i18n.t('try_different_search')
+              : _i18n.t('create_first_event'),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 
@@ -740,6 +800,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     final years = eventsByYear.keys.toList()..sort((a, b) => b.compareTo(a));
 
     return ListView.builder(
+      physics: isMobileView ? const AlwaysScrollableScrollPhysics() : null,
       itemCount: years.length,
       itemBuilder: (context, index) {
         final year = years[index];
@@ -816,7 +877,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     // Navigate to full-screen detail view
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => _EventDetailPage(
+        builder: (context) => EventDetailPage(
           event: fullEvent,
           collectionPath: widget.collectionPath ?? '',
           eventService: _eventService,
@@ -873,227 +934,6 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       onUploadFiles: widget.isRemoteDevice ? null : _uploadFiles,
       onCreateUpdate: widget.isRemoteDevice ? null : _createUpdate,
       onFeedbackUpdated: widget.isRemoteDevice ? null : _refreshSelectedEvent,
-      onRefresh: widget.isRemoteDevice
-          ? () async {
-              await _selectRemoteEvent(_selectedEvent!);
-            }
-          : _refreshSelectedEvent,
-    );
-  }
-}
-
-/// Full-screen event detail page for mobile view
-class _EventDetailPage extends StatefulWidget {
-  final Event event;
-  final String collectionPath;
-  final EventService eventService;
-  final ProfileService profileService;
-  final I18nService i18n;
-  final String? currentUserNpub;
-  final String? currentCallsign;
-
-  const _EventDetailPage({
-    Key? key,
-    required this.event,
-    required this.collectionPath,
-    required this.eventService,
-    required this.profileService,
-    required this.i18n,
-    required this.currentUserNpub,
-    required this.currentCallsign,
-  }) : super(key: key);
-
-  @override
-  State<_EventDetailPage> createState() => _EventDetailPageState();
-}
-
-class _EventDetailPageState extends State<_EventDetailPage> {
-  late Event _event;
-  bool _hasChanges = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _event = widget.event;
-  }
-
-  Future<void> _refreshEvent({bool markChanged = false}) async {
-    final updatedEvent = await widget.eventService.loadEvent(_event.id);
-    if (updatedEvent != null && mounted) {
-      setState(() {
-        _event = updatedEvent;
-      });
-    }
-    if (markChanged) {
-      _hasChanges = true;
-    }
-  }
-
-  Future<void> _editEvent() async {
-    final result = await Navigator.push<Map<String, dynamic>>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => EventSettingsPage(
-          event: _event,
-          collectionPath: widget.collectionPath,
-        ),
-      ),
-    );
-
-    if (result != null && mounted) {
-      final newEventId = await widget.eventService.updateEvent(
-        eventId: _event.id,
-        title: result['title'] as String,
-        location: result['location'] as String,
-        locationName: result['locationName'] as String?,
-        content: result['content'] as String,
-        agenda: result['agenda'] as String?,
-        visibility: result['visibility'] as String?,
-        admins: result['admins'] as List<String>?,
-        moderators: result['moderators'] as List<String>?,
-        eventDateTime: result['eventDateTime'] as DateTime?,
-        startDate: result['startDate'] as String?,
-        endDate: result['endDate'] as String?,
-        trailerFileName: result.containsKey('trailer')
-            ? (result['trailer'] as String? ?? '')
-            : null,
-        links: result['links'] as List<EventLink>?,
-        registrationEnabled: result['registrationEnabled'] as bool?,
-      );
-
-      if (newEventId != null && mounted) {
-        _hasChanges = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(widget.i18n.t('event_updated')),
-            backgroundColor: Colors.green,
-          ),
-        );
-        // Reload event using the new ID
-        final updatedEvent = await widget.eventService.loadEvent(newEventId);
-        if (updatedEvent != null) {
-          final event = updatedEvent; // Capture non-null value
-          setState(() {
-            _event = event;
-          });
-        }
-      }
-    }
-  }
-
-  Future<void> _uploadFiles() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.any,
-        dialogTitle: widget.i18n.t('select_files_to_add'),
-      );
-
-      if (result != null && result.files.isNotEmpty && mounted) {
-        final year = _event.id.substring(0, 4);
-        final eventPath = '${widget.collectionPath}/events/$year/${_event.id}';
-
-        int copiedCount = 0;
-        for (var file in result.files) {
-          if (file.path != null) {
-            final sourceFile = File(file.path!);
-            final targetPath = '$eventPath/${file.name}';
-
-            try {
-              await sourceFile.copy(targetPath);
-              copiedCount++;
-            } catch (e) {
-              print('Error copying file ${file.name}: $e');
-            }
-          }
-        }
-
-        if (copiedCount > 0 && mounted) {
-          _hasChanges = true;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(widget.i18n.t('files_uploaded', params: [copiedCount.toString()])),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${widget.i18n.t('error')}: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _createUpdate() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => const NewUpdateDialog(),
-    );
-
-    if (result != null && mounted) {
-      final profile = widget.profileService.getProfile();
-      final update = await widget.eventService.createUpdate(
-        eventId: _event.id,
-        title: result['title'] as String,
-        author: profile.callsign,
-        content: result['content'] as String,
-        npub: profile.npub,
-      );
-
-      if (update != null && mounted) {
-        _hasChanges = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(widget.i18n.t('update_created')),
-            backgroundColor: Colors.green,
-          ),
-        );
-        // Reload event to show the new update
-        final updatedEvent = await widget.eventService.loadEvent(_event.id);
-        if (updatedEvent != null) {
-          final event = updatedEvent; // Capture non-null value
-          setState(() {
-            _event = event;
-          });
-        }
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final canEdit = _event.canEdit(widget.currentCallsign ?? '', widget.currentUserNpub);
-
-    return PopScope(
-      canPop: true,
-      onPopInvoked: (didPop) {
-        if (didPop && _hasChanges) {
-          Navigator.of(context).pop(true);
-        }
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_event.title),
-        ),
-        body: EventDetailWidget(
-          event: _event,
-          collectionPath: widget.collectionPath,
-          currentCallsign: widget.currentCallsign,
-          currentUserNpub: widget.currentUserNpub,
-          canEdit: canEdit,
-          onEdit: _editEvent,
-          onUploadFiles: _uploadFiles,
-          onCreateUpdate: _createUpdate,
-          onFeedbackUpdated: () => _refreshEvent(markChanged: true),
-          onRefresh: _refreshEvent,
-        ),
-      ),
     );
   }
 }

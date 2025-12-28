@@ -47,7 +47,6 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('backup', Icons.backup),
     _CollectionTypeInfo('files', Icons.folder),
     _CollectionTypeInfo('postcards', Icons.mail),
-    _CollectionTypeInfo('contacts', Icons.contacts),
     _CollectionTypeInfo('market', Icons.storefront),
     _CollectionTypeInfo('groups', Icons.groups),
   ];
@@ -58,7 +57,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'contacts', 'places', 'market', 'alerts', 'groups', 'backup'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup'
   };
 
   @override

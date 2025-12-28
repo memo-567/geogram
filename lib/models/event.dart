@@ -18,6 +18,7 @@ class Event {
   final String? endDate; // YYYY-MM-DD (for multi-day events)
   final List<String> admins; // List of npub strings
   final List<String> moderators; // List of npub strings
+  final List<String> groupAccess; // Group names with access (when visibility == group)
   final String location; // "online" or "lat,lon"
   final String? locationName;
   final String content;
@@ -43,6 +44,7 @@ class Event {
     this.endDate,
     this.admins = const [],
     this.moderators = const [],
+    this.groupAccess = const [],
     required this.location,
     this.locationName,
     required this.content,
@@ -61,6 +63,20 @@ class Event {
 
   /// Create Event from API JSON (from toApiJson output)
   factory Event.fromApiJson(Map<String, dynamic> json) {
+    final metadata = <String, String>{};
+    final npub = json['npub'] as String?;
+    if (npub != null && npub.isNotEmpty) {
+      metadata['npub'] = npub;
+    }
+    final signature = json['signature'] as String?;
+    if (signature != null && signature.isNotEmpty) {
+      metadata['signature'] = signature;
+    }
+    final placePath = json['place_path'] as String? ?? json['placePath'] as String?;
+    if (placePath != null && placePath.isNotEmpty) {
+      metadata['place_path'] = placePath;
+    }
+
     // Parse comments if present
     final commentsJson = json['comments'] as List<dynamic>? ?? [];
     final comments = commentsJson.map((c) {
@@ -134,6 +150,9 @@ class Event {
       endDate: json['end_date'] as String?,
       admins: (json['admins'] as List<dynamic>?)?.cast<String>() ?? [],
       moderators: (json['moderators'] as List<dynamic>?)?.cast<String>() ?? [],
+      groupAccess: (json['groups'] as List<dynamic>?)?.cast<String>() ??
+          (json['group_access'] as List<dynamic>?)?.cast<String>() ??
+          [],
       location: json['location'] as String? ?? 'online',
       locationName: json['location_name'] as String?,
       content: json['content'] as String? ?? '',
@@ -146,6 +165,7 @@ class Event {
       updates: updates,
       registration: registration,
       links: links,
+      metadata: metadata,
     );
   }
 
@@ -242,6 +262,16 @@ class Event {
   /// Get signature
   String? get signature => metadata['signature'];
 
+  /// Linked place path (relative or absolute)
+  String? get placePath {
+    final path = metadata['place_path'] ?? metadata['placePath'];
+    if (path == null || path.trim().isEmpty) return null;
+    return path.trim();
+  }
+
+  /// Whether this event links to a place
+  bool get hasPlaceReference => placePath != null;
+
   /// Check if user is author
   bool isAuthor(String callsign) => author == callsign;
 
@@ -310,6 +340,9 @@ class Event {
     // Moderators (optional)
     if (moderators.isNotEmpty) {
       buffer.writeln('MODERATORS: ${moderators.join(', ')}');
+    }
+    if (groupAccess.isNotEmpty) {
+      buffer.writeln('GROUPS: ${groupAccess.join(', ')}');
     }
 
     // Location
@@ -393,6 +426,7 @@ class Event {
     String? endDate;
     List<String> admins = [];
     List<String> moderators = [];
+    List<String> groupAccess = [];
     String? location;
     String? locationName;
     String? agenda;
@@ -414,6 +448,9 @@ class Event {
       } else if (line.startsWith('MODERATORS: ')) {
         final modsStr = line.substring(12).trim();
         moderators = modsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      } else if (line.startsWith('GROUPS: ')) {
+        final groupsStr = line.substring(8).trim();
+        groupAccess = groupsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
       } else if (line.startsWith('LOCATION: ')) {
         location = line.substring(10).trim();
       } else if (line.startsWith('LOCATION_NAME: ')) {
@@ -475,6 +512,7 @@ class Event {
       endDate: endDate,
       admins: admins,
       moderators: moderators,
+      groupAccess: groupAccess,
       location: location,
       locationName: locationName,
       content: content,
@@ -522,6 +560,7 @@ class Event {
     String? endDate,
     List<String>? admins,
     List<String>? moderators,
+    List<String>? groupAccess,
     String? location,
     String? locationName,
     String? content,
@@ -545,6 +584,7 @@ class Event {
       endDate: endDate ?? this.endDate,
       admins: admins ?? this.admins,
       moderators: moderators ?? this.moderators,
+      groupAccess: groupAccess ?? this.groupAccess,
       location: location ?? this.location,
       locationName: locationName ?? this.locationName,
       content: content ?? this.content,
@@ -577,6 +617,7 @@ class Event {
         'start_date': startDate,
         'end_date': endDate,
         'visibility': visibility,
+        'groups': groupAccess,
         'like_count': likes.length,
         'comment_count': comments.length,
         'has_flyer': flyers.isNotEmpty,
@@ -584,6 +625,7 @@ class Event {
         'update_count': updates.length,
         'going_count': registration?.goingCount ?? 0,
         'interested_count': registration?.interestedCount ?? 0,
+        if (placePath != null) 'place_path': placePath,
       };
     }
 
@@ -600,11 +642,12 @@ class Event {
       'end_date': endDate,
       'agenda': agenda,
       'visibility': visibility,
-      'admins': admins,
-      'moderators': moderators,
-      'likes': likes,
-      'comments': comments.map((c) => {
-        'author': c.author,
+        'admins': admins,
+        'moderators': moderators,
+        'groups': groupAccess,
+        'likes': likes,
+        'comments': comments.map((c) => {
+          'author': c.author,
         'timestamp': c.timestamp,
         'content': c.content,
         'npub': c.npub,
@@ -637,6 +680,7 @@ class Event {
       }).toList(),
       'npub': npub,
       'signature': signature,
+      if (placePath != null) 'place_path': placePath,
     };
   }
 

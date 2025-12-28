@@ -84,17 +84,31 @@ class MapItem {
   });
 
   /// Create MapItem from an Event
-  factory MapItem.fromEvent(Event event, {double? distanceKm, String? collectionPath}) {
+  factory MapItem.fromEvent(
+    Event event, {
+    double? distanceKm,
+    String? collectionPath,
+    bool isFromStation = false,
+    String? idOverride,
+    double? latitude,
+    double? longitude,
+  }) {
+    final resolvedLat = latitude ?? event.latitude;
+    final resolvedLon = longitude ?? event.longitude;
+    if (resolvedLat == null || resolvedLon == null) {
+      throw ArgumentError('Event is missing coordinates');
+    }
     return MapItem(
       type: MapItemType.event,
-      id: event.id,
+      id: idOverride ?? event.id,
       title: event.title,
       subtitle: event.locationName ?? event.displayDate,
-      latitude: event.latitude!,
-      longitude: event.longitude!,
+      latitude: resolvedLat,
+      longitude: resolvedLon,
       distanceKm: distanceKm,
       sourceItem: event,
       collectionPath: collectionPath,
+      isFromStation: isFromStation,
     );
   }
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../connection/connection_manager.dart';
 import '../models/station.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
@@ -11,7 +12,18 @@ import '../services/chat_notification_service.dart';
 import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
-import '../util/chat_api.dart';
+
+class _StationApiResponse {
+  final int statusCode;
+  final String body;
+  final String? transportUsed;
+
+  const _StationApiResponse({
+    required this.statusCode,
+    required this.body,
+    this.transportUsed,
+  });
+}
 
 /// Service for managing internet stations
 class StationService {
@@ -417,10 +429,14 @@ class StationService {
         double? stationLatitude;
         double? stationLongitude;
         try {
-          final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-          final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
-          final response = await http.get(Uri.parse(statusUrl));
-          if (response.statusCode == 200) {
+          final station = _resolveStation(url);
+          final response = await _stationApiRequest(
+            stationUrl: url,
+            method: 'GET',
+            path: '/api/status',
+            stationCallsign: station.callsign,
+          );
+          if (response != null && response.statusCode == 200) {
             final data = jsonDecode(response.body);
             connectedDevices = data['connected_devices'] as int?;
             stationCallsign = data['callsign'] as String?;
@@ -568,31 +584,135 @@ class StationService {
         .replaceFirst('wss://', 'https://');
   }
 
+  Station _resolveStation(String stationUrl, {String? stationCallsign}) {
+    final existing = _stations.firstWhere(
+      (station) => station.url == stationUrl,
+      orElse: () => Station(url: stationUrl, name: stationUrl),
+    );
+    if (stationCallsign != null &&
+        stationCallsign.isNotEmpty &&
+        (existing.callsign == null || existing.callsign!.isEmpty)) {
+      return existing.copyWith(callsign: stationCallsign);
+    }
+    return existing;
+  }
+
+  String _buildStationHttpUrl(String baseUrl, String path) {
+    final normalizedBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return '$normalizedBase$normalizedPath';
+  }
+
+  String _responseBodyFromResult(dynamic responseData) {
+    if (responseData == null) return '';
+    if (responseData is String) return responseData;
+    if (responseData is List<int>) return utf8.decode(responseData);
+    try {
+      return jsonEncode(responseData);
+    } catch (_) {
+      return responseData.toString();
+    }
+  }
+
+  Future<_StationApiResponse?> _stationApiRequest({
+    required String stationUrl,
+    required String method,
+    required String path,
+    String? stationCallsign,
+    Map<String, String>? headers,
+    dynamic body,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final station = _resolveStation(stationUrl, stationCallsign: stationCallsign);
+
+    if (station.callsign != null &&
+        station.callsign!.isNotEmpty &&
+        ConnectionManager().isInitialized) {
+      try {
+        final result = await ConnectionManager().apiRequest(
+          callsign: station.callsign!,
+          method: method,
+          path: path,
+          headers: headers,
+          body: body,
+          timeout: timeout,
+          excludeTransports: {'station'},
+        );
+        if (result.statusCode != null) {
+          return _StationApiResponse(
+            statusCode: result.statusCode!,
+            body: _responseBodyFromResult(result.responseData),
+            transportUsed: result.transportUsed,
+          );
+        }
+        if (result.success) {
+          return _StationApiResponse(
+            statusCode: 200,
+            body: _responseBodyFromResult(result.responseData),
+            transportUsed: result.transportUsed,
+          );
+        }
+      } catch (e) {
+        LogService().log('StationService: ConnectionManager request failed: $e');
+      }
+    }
+
+    try {
+      final encodedBody = body == null ? null : (body is String ? body : jsonEncode(body));
+      final httpUrl = _getHttpBaseUrl(stationUrl);
+      final uri = Uri.parse(_buildStationHttpUrl(httpUrl, path));
+      http.Response response;
+      switch (method.toUpperCase()) {
+        case 'POST':
+          response = await http
+              .post(uri, headers: headers, body: encodedBody)
+              .timeout(timeout);
+          break;
+        case 'PUT':
+          response = await http
+              .put(uri, headers: headers, body: encodedBody)
+              .timeout(timeout);
+          break;
+        case 'DELETE':
+          response = await http
+              .delete(uri, headers: headers, body: encodedBody)
+              .timeout(timeout);
+          break;
+        default:
+          response = await http.get(uri, headers: headers).timeout(timeout);
+      }
+      return _StationApiResponse(
+        statusCode: response.statusCode,
+        body: response.body,
+        transportUsed: 'http',
+      );
+    } catch (e) {
+      LogService().log('StationService: HTTP request failed: $e');
+      return null;
+    }
+  }
+
   /// Fetch public chat rooms from station
   /// [stationCallsign] is the station's X3 callsign used in the API path
   Future<List<StationChatRoom>> fetchChatRooms(String stationUrl, {String? stationCallsign}) async {
     try {
-      final httpUrl = _getHttpBaseUrl(stationUrl);
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: '/api/chat/rooms',
+        stationCallsign: stationCallsign,
+      );
 
-      // If no callsign provided, try to get it from status endpoint
-      String? callsign = stationCallsign;
-      if (callsign == null || callsign.isEmpty) {
-        callsign = await _getStationCallsign(httpUrl);
-      }
-
-      if (callsign == null || callsign.isEmpty) {
-        LogService().log('Cannot fetch chat rooms: station callsign not available');
+      if (response == null) {
+        LogService().log('Failed to fetch chat rooms: no response');
         return [];
       }
 
-      final apiUrl = ChatApi.roomsUrl(httpUrl, callsign);
-
-      LogService().log('Fetching chat rooms from: $apiUrl');
-      final response = await http.get(Uri.parse(apiUrl));
-
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final stationName = data['callsign'] as String? ?? callsign;
+        final stationName = data['callsign'] as String? ?? stationCallsign ?? stationUrl;
         final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
         final rooms = roomsData.map((room) {
@@ -615,23 +735,6 @@ class StationService {
     }
   }
 
-  /// Get station callsign from status endpoint
-  Future<String?> _getStationCallsign(String httpUrl) async {
-    try {
-      final statusUrl = httpUrl.endsWith('/')
-          ? '${httpUrl}api/status'
-          : '$httpUrl/api/status';
-      final response = await http.get(Uri.parse(statusUrl));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['callsign'] as String?;
-      }
-    } catch (e) {
-      LogService().log('Error fetching station callsign: $e');
-    }
-    return null;
-  }
-
   /// Fetch messages from a station chat room
   /// [stationCallsign] is the station's X3 callsign used in the API path
   Future<List<StationChatMessage>> fetchRoomMessages(
@@ -641,23 +744,17 @@ class StationService {
     String? stationCallsign,
   }) async {
     try {
-      final httpUrl = _getHttpBaseUrl(stationUrl);
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: '/api/chat/rooms/$roomId/messages?limit=$limit',
+        stationCallsign: stationCallsign,
+      );
 
-      // If no callsign provided, try to get it from status endpoint
-      String? callsign = stationCallsign;
-      if (callsign == null || callsign.isEmpty) {
-        callsign = await _getStationCallsign(httpUrl);
-      }
-
-      if (callsign == null || callsign.isEmpty) {
-        LogService().log('Cannot fetch messages: station callsign not available');
+      if (response == null) {
+        LogService().log('Failed to fetch messages: no response');
         return [];
       }
-
-      final apiUrl = ChatApi.messagesUrl(httpUrl, callsign, roomId, limit: limit);
-
-      LogService().log('Fetching messages from room: $roomId');
-      final response = await http.get(Uri.parse(apiUrl));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -689,11 +786,17 @@ class StationService {
     String roomId,
   ) async {
     try {
-      final httpUrl = _getHttpBaseUrl(stationUrl);
-      final apiUrl = '$httpUrl/api/chat/rooms/$roomId/files';
-
       LogService().log('Fetching chat file list for room: $roomId');
-      final response = await http.get(Uri.parse(apiUrl));
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: '/api/chat/rooms/$roomId/files',
+      );
+
+      if (response == null) {
+        LogService().log('Failed to fetch chat files: no response');
+        return [];
+      }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -721,11 +824,17 @@ class StationService {
     String filename,
   ) async {
     try {
-      final httpUrl = _getHttpBaseUrl(stationUrl);
-      final apiUrl = '$httpUrl/api/chat/rooms/$roomId/file/$year/$filename';
-
       LogService().log('Fetching chat file: $roomId/$year/$filename');
-      final response = await http.get(Uri.parse(apiUrl));
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'GET',
+        path: '/api/chat/rooms/$roomId/file/$year/$filename',
+      );
+
+      if (response == null) {
+        LogService().log('Failed to fetch chat file: no response');
+        return null;
+      }
 
       if (response.statusCode == 200) {
         return response.body;
@@ -810,18 +919,6 @@ class StationService {
 
       // HTTP fallback (when WebSocket is unavailable or send failed)
       {
-        // Fallback to HTTP API with NOSTR signature
-        final httpUrl = _getHttpBaseUrl(stationUrl);
-
-        // Get station callsign for API path
-        final stationCallsign = await _getStationCallsign(httpUrl);
-        if (stationCallsign == null || stationCallsign.isEmpty) {
-          LogService().log('Cannot post message: station callsign not available');
-          return false;
-        }
-
-        final apiUrl = ChatApi.messagesUrl(httpUrl, stationCallsign, roomId);
-
         LogService().log('Posting message via HTTP to room: $roomId');
 
         // Create NOSTR event for signature
@@ -876,17 +973,21 @@ class StationService {
           'created_at': signedEvent.createdAt,
         };
 
-        final response = await http.post(
-          Uri.parse(apiUrl),
+        final response = await _stationApiRequest(
+          stationUrl: stationUrl,
+          method: 'POST',
+          path: '/api/chat/rooms/$roomId/messages',
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode(body),
         );
 
-        if (response.statusCode == 201) {
+        if (response != null && response.statusCode == 201) {
           LogService().log('Message posted successfully (HTTP)');
           return true;
         } else {
-          LogService().log('Failed to post message: ${response.statusCode} - ${response.body}');
+          final status = response?.statusCode;
+          final bodyText = response?.body ?? '';
+          LogService().log('Failed to post message: $status - $bodyText');
           return false;
         }
       }

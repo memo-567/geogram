@@ -463,6 +463,9 @@ class LogApiService {
           '/api/events/{eventId}': 'Get event details',
           '/api/events/{eventId}/items': 'List event files and folders',
           '/api/events/{eventId}/files/{path}': 'Get event file content',
+          '/api/events/{eventId}/media': 'List event community media contributors',
+          '/api/events/{eventId}/media/{callsign}/files/{name}': 'GET media file or POST upload',
+          '/api/events/{eventId}/media/{callsign}/{action}': 'POST approve/suspend/ban contributor',
           '/api/alerts': 'List all alerts (supports ?status=X&lat=X&lon=X&radius=X)',
           '/api/alerts/{alertId}': 'Get alert details',
           '/api/alerts/{alertId}/files/{path}': 'Get alert file (photo)',
@@ -4656,14 +4659,6 @@ class LogApiService {
     String urlPath,
     Map<String, String> headers,
   ) async {
-    if (request.method != 'GET') {
-      return shelf.Response(
-        405,
-        body: jsonEncode({'error': 'Method not allowed. Events API is read-only.'}),
-        headers: headers,
-      );
-    }
-
     try {
       String? dataDir;
       try {
@@ -4690,11 +4685,35 @@ class LogApiService {
 
       // GET /api/events - List all events
       if (subPath.isEmpty) {
+        if (request.method != 'GET') {
+          return shelf.Response(
+            405,
+            body: jsonEncode({'error': 'Method not allowed. Events API is read-only.'}),
+            headers: headers,
+          );
+        }
         return await _handleEventsListEvents(request, dataDir, headers);
       }
 
       // Parse the sub-path to determine the operation
       final pathParts = subPath.split('/');
+
+      if (pathParts.length >= 2 && pathParts[1] == 'media') {
+        return await _handleEventMediaRequest(
+          request,
+          pathParts,
+          dataDir,
+          headers,
+        );
+      }
+
+      if (request.method != 'GET') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed. Events API is read-only.'}),
+          headers: headers,
+        );
+      }
 
       if (pathParts.length == 1) {
         // GET /api/events/{eventId} - Get single event
@@ -4963,6 +4982,587 @@ class LogApiService {
         'Cache-Control': 'public, max-age=86400', // Cache for 1 day
       },
     );
+  }
+
+  // ============================================================
+  // Event Community Media Endpoints
+  // ============================================================
+
+  Future<shelf.Response> _handleEventMediaRequest(
+    shelf.Request request,
+    List<String> pathParts,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    if (pathParts.length < 2) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Event media endpoint not found'}),
+        headers: headers,
+      );
+    }
+
+    final eventId = pathParts[0];
+
+    if (pathParts.length == 2) {
+      if (request.method != 'GET') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+      return await _handleEventMediaList(request, eventId, dataDir, headers);
+    }
+
+    if (pathParts.length < 4) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Event media endpoint not found'}),
+        headers: headers,
+      );
+    }
+
+    final callsign = pathParts[2];
+
+    if (pathParts.length >= 5 && pathParts[3] == 'files') {
+      final filename = pathParts.sublist(4).join('/');
+      if (request.method == 'POST') {
+        return await _handleEventMediaFileUpload(
+          request,
+          eventId,
+          callsign,
+          filename,
+          dataDir,
+          headers,
+        );
+      }
+      if (request.method == 'GET') {
+        return await _handleEventMediaFileServe(
+          eventId,
+          callsign,
+          filename,
+          dataDir,
+          headers,
+        );
+      }
+      return shelf.Response(
+        405,
+        body: jsonEncode({'error': 'Method not allowed'}),
+        headers: headers,
+      );
+    }
+
+    if (pathParts.length == 4) {
+      if (request.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+      final action = pathParts[3];
+      return await _handleEventMediaAction(
+        eventId,
+        callsign,
+        action,
+        dataDir,
+        headers,
+      );
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Event media endpoint not found'}),
+      headers: headers,
+    );
+  }
+
+  Future<shelf.Response> _handleEventMediaList(
+    shelf.Request request,
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final eventService = EventService();
+      final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+      if (eventDirPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      final event = await eventService.findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Event not public'}),
+          headers: headers,
+        );
+      }
+
+      final includePending = request.url.queryParameters['include_pending'] == 'true';
+      final includeBanned = request.url.queryParameters['include_banned'] == 'true';
+
+      final mediaRoot = io.Directory(path.join(eventDirPath, 'media'));
+      final approvedFile = path.join(mediaRoot.path, 'approved.txt');
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+      final approved = await _readCallsignList(approvedFile);
+      final banned = await _readCallsignList(bannedFile);
+
+      final contributors = <Map<String, dynamic>>[];
+      if (await mediaRoot.exists()) {
+        await for (final entity in mediaRoot.list()) {
+          if (entity is! io.Directory) continue;
+          final callsign = path.basename(entity.path);
+          if (callsign.isEmpty) continue;
+
+          final files = <Map<String, dynamic>>[];
+          await for (final entry in entity.list()) {
+            if (entry is! io.File) continue;
+            final name = path.basename(entry.path);
+            if (name.startsWith('.')) continue;
+            final stat = await entry.stat();
+            final ext = path.extension(name).toLowerCase();
+            String fileType = 'file';
+            if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].contains(ext)) {
+              fileType = 'image';
+            } else if (['.mp4', '.mov', '.avi', '.webm'].contains(ext)) {
+              fileType = 'video';
+            } else if (['.mp3', '.m4a', '.wav', '.ogg'].contains(ext)) {
+              fileType = 'audio';
+            } else if (['.pdf'].contains(ext)) {
+              fileType = 'document';
+            }
+            files.add({
+              'name': name,
+              'type': fileType,
+              'size': stat.size,
+              'path': '/api/events/$eventId/media/$callsign/files/$name',
+            });
+          }
+
+          if (files.isEmpty) continue;
+          files.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+
+          final isApproved = approved.contains(callsign);
+          final isBanned = banned.contains(callsign);
+
+          if (!includePending) {
+            if (!isApproved || isBanned) continue;
+          } else if (!includeBanned && isBanned) {
+            continue;
+          }
+
+          contributors.add({
+            'callsign': callsign,
+            'is_approved': isApproved,
+            'is_banned': isBanned,
+            'files': files,
+          });
+        }
+      }
+
+      contributors.sort((a, b) => (a['callsign'] as String).compareTo(b['callsign'] as String));
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'event_id': eventId,
+          'contributors': contributors,
+          'approved': approved.toList()..sort(),
+          'banned': banned.toList()..sort(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error listing event media: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal server error', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleEventMediaFileUpload(
+    shelf.Request request,
+    String eventId,
+    String callsign,
+    String filename,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final eventService = EventService();
+      final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+      if (eventDirPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      final event = await eventService.findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Event not public'}),
+          headers: headers,
+        );
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Invalid callsign'}),
+          headers: headers,
+        );
+      }
+
+      if (_isInvalidMediaFilename(filename)) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Invalid filename'}),
+          headers: headers,
+        );
+      }
+
+      var bytes = await request.read().expand((chunk) => chunk).toList();
+      final transferEncoding = request.headers['Content-Transfer-Encoding'] ??
+          request.headers['content-transfer-encoding'];
+      if (transferEncoding != null && transferEncoding.toLowerCase().contains('base64')) {
+        try {
+          bytes = base64Decode(utf8.decode(bytes));
+        } catch (e) {
+          return shelf.Response(
+            400,
+            body: jsonEncode({'error': 'Invalid base64 payload'}),
+            headers: headers,
+          );
+        }
+      }
+
+      if (bytes.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Empty file'}),
+          headers: headers,
+        );
+      }
+
+      const maxSizeBytes = 25 * 1024 * 1024;
+      if (bytes.length > maxSizeBytes) {
+        return shelf.Response(
+          413,
+          body: jsonEncode({'error': 'File too large', 'max_size_mb': 25}),
+          headers: headers,
+        );
+      }
+
+      final mediaRoot = io.Directory(path.join(eventDirPath, 'media'));
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+      final banned = await _readCallsignList(bannedFile);
+      if (banned.contains(sanitizedCallsign)) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({'error': 'Contributor banned'}),
+          headers: headers,
+        );
+      }
+
+      final contributorDir = io.Directory(path.join(mediaRoot.path, sanitizedCallsign));
+      await contributorDir.create(recursive: true);
+
+      final nextIndex = await _nextMediaIndex(contributorDir);
+      final ext = _normalizeMediaExtension(filename);
+      final targetName = 'media$nextIndex.$ext';
+      final filePath = path.join(contributorDir.path, targetName);
+      final file = io.File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      return shelf.Response(
+        201,
+        body: jsonEncode({
+          'success': true,
+          'callsign': sanitizedCallsign,
+          'filename': targetName,
+          'size': bytes.length,
+          'path': '/api/events/$eventId/media/$sanitizedCallsign/files/$targetName',
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error uploading event media: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal server error', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleEventMediaFileServe(
+    String eventId,
+    String callsign,
+    String filename,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final eventService = EventService();
+      final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+      if (eventDirPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      final event = await eventService.findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Event not public'}),
+          headers: headers,
+        );
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty || _isInvalidMediaFilename(filename)) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Invalid path'}),
+          headers: headers,
+        );
+      }
+
+      final filePath = path.join(eventDirPath, 'media', sanitizedCallsign, filename);
+      final file = io.File(filePath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'File not found', 'filename': filename}),
+          headers: headers,
+        );
+      }
+
+      final ext = path.extension(filename).toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (ext == '.jpg' || ext == '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext == '.png') {
+        contentType = 'image/png';
+      } else if (ext == '.gif') {
+        contentType = 'image/gif';
+      } else if (ext == '.webp') {
+        contentType = 'image/webp';
+      } else if (ext == '.bmp') {
+        contentType = 'image/bmp';
+      } else if (ext == '.mp4') {
+        contentType = 'video/mp4';
+      } else if (ext == '.mov') {
+        contentType = 'video/quicktime';
+      } else if (ext == '.avi') {
+        contentType = 'video/x-msvideo';
+      } else if (ext == '.webm') {
+        contentType = 'video/webm';
+      } else if (ext == '.mp3') {
+        contentType = 'audio/mpeg';
+      } else if (ext == '.m4a') {
+        contentType = 'audio/mp4';
+      } else if (ext == '.wav') {
+        contentType = 'audio/wav';
+      } else if (ext == '.ogg') {
+        contentType = 'audio/ogg';
+      }
+
+      final bytes = await file.readAsBytes();
+      return shelf.Response.ok(
+        bytes,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Content-Type': contentType,
+          'Content-Length': bytes.length.toString(),
+          'Cache-Control': 'public, max-age=86400',
+        },
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error serving event media: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal server error', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleEventMediaAction(
+    String eventId,
+    String callsign,
+    String action,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final eventService = EventService();
+      final eventDirPath = await eventService.getEventPath(eventId, dataDir);
+      if (eventDirPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      final event = await eventService.findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found', 'eventId': eventId}),
+          headers: headers,
+        );
+      }
+
+      if (event.visibility.toLowerCase() != 'public') {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Event not public'}),
+          headers: headers,
+        );
+      }
+
+      final sanitizedCallsign = _sanitizeMediaCallsign(callsign);
+      if (sanitizedCallsign.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Invalid callsign'}),
+          headers: headers,
+        );
+      }
+
+      final mediaRoot = io.Directory(path.join(eventDirPath, 'media'));
+      final approvedFile = path.join(mediaRoot.path, 'approved.txt');
+      final bannedFile = path.join(mediaRoot.path, 'banned.txt');
+
+      final approved = await _readCallsignList(approvedFile);
+      final banned = await _readCallsignList(bannedFile);
+
+      switch (action) {
+        case 'approve':
+          approved.add(sanitizedCallsign);
+          banned.remove(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          await _writeCallsignList(bannedFile, banned);
+          break;
+        case 'suspend':
+          approved.remove(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          break;
+        case 'ban':
+          approved.remove(sanitizedCallsign);
+          banned.add(sanitizedCallsign);
+          await _writeCallsignList(approvedFile, approved);
+          await _writeCallsignList(bannedFile, banned);
+          final contributorDir = io.Directory(path.join(mediaRoot.path, sanitizedCallsign));
+          if (await contributorDir.exists()) {
+            await contributorDir.delete(recursive: true);
+          }
+          break;
+        default:
+          return shelf.Response(
+            400,
+            body: jsonEncode({'error': 'Invalid action'}),
+            headers: headers,
+          );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'action': action,
+          'callsign': sanitizedCallsign,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error updating event media status: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal server error', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<Set<String>> _readCallsignList(String filePath) async {
+    final file = io.File(filePath);
+    if (!await file.exists()) return <String>{};
+    final content = await file.readAsString();
+    return content
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toSet();
+  }
+
+  Future<void> _writeCallsignList(String filePath, Set<String> values) async {
+    final file = io.File(filePath);
+    await file.parent.create(recursive: true);
+    final sorted = values.toList()..sort();
+    await file.writeAsString(sorted.join('\n'), flush: true);
+  }
+
+  String _sanitizeMediaCallsign(String callsign) {
+    return callsign
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+  }
+
+  bool _isInvalidMediaFilename(String filename) {
+    if (filename.isEmpty) return true;
+    if (filename.contains('..')) return true;
+    if (filename.contains('/') || filename.contains('\\')) return true;
+    return false;
+  }
+
+  String _normalizeMediaExtension(String filename) {
+    var ext = path.extension(filename).toLowerCase();
+    if (ext.startsWith('.')) ext = ext.substring(1);
+    if (ext.isEmpty) ext = 'bin';
+    if (ext.length > 8) {
+      ext = ext.substring(0, 8);
+    }
+    return ext;
+  }
+
+  Future<int> _nextMediaIndex(io.Directory contributorDir) async {
+    int maxIndex = 0;
+    if (await contributorDir.exists()) {
+      await for (final entry in contributorDir.list()) {
+        if (entry is! io.File) continue;
+        final name = path.basename(entry.path);
+        final match = RegExp(r'^media(\\d+)\\.', caseSensitive: false).firstMatch(name);
+        if (match == null) continue;
+        final parsed = int.tryParse(match.group(1) ?? '');
+        if (parsed != null && parsed > maxIndex) {
+          maxIndex = parsed;
+        }
+      }
+    }
+    return maxIndex + 1;
   }
 
   // ============================================================

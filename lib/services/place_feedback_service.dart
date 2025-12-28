@@ -113,7 +113,17 @@ class PlaceFeedbackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/api/feedback/place/$placeId/$action');
+      final baseUri = Uri.parse(baseUrl);
+      final uri = baseUri.replace(
+        pathSegments: [
+          ...baseUri.pathSegments,
+          'api',
+          'feedback',
+          'place',
+          placeId,
+          action,
+        ],
+      );
       final response = await http.post(
         uri,
         headers: {
@@ -174,7 +184,17 @@ class PlaceFeedbackService {
     if (baseUrl == null) return false;
 
     try {
-      final uri = Uri.parse('$baseUrl/api/feedback/place/$placeId/comment');
+      final baseUri = Uri.parse(baseUrl);
+      final uri = baseUri.replace(
+        pathSegments: [
+          ...baseUri.pathSegments,
+          'api',
+          'feedback',
+          'place',
+          placeId,
+          'comment',
+        ],
+      );
       final body = <String, dynamic>{
         'author': author,
         'content': content,

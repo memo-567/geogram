@@ -12,6 +12,7 @@
 - [Feedback Types](#feedback-types)
 - [File Format Specifications](#file-format-specifications)
 - [API Endpoints](#api-endpoints)
+- [Subscription Notifications](#subscription-notifications)
 - [NOSTR Message Format](#nostr-message-format)
 - [Authentication & Authorization](#authentication--authorization)
 - [Request/Response Examples](#requestresponse-examples)
@@ -80,6 +81,17 @@ Each piece of content is uniquely identified by three components:
 1. **Content Type**: The app/category (e.g., `blog`, `alert`)
 2. **Content ID**: Unique identifier within that type (e.g., `2025-12-04_hello-everyone`)
 3. **Owner Callsign**: The device/user who created it (e.g., `X1ABCD`)
+
+### Visibility and Sync Behavior
+
+Feedback sync is visibility-aware across apps:
+
+- **Public content**: Feedback is sent to the station via `/api/feedback/...` and stored under `{contentPath}/feedback/`.
+- **Group content**: Feedback is stored locally and replicated peer-to-peer within the group. Do not send to the station API.
+- **Private content**: Feedback is stored locally only. Do not send to the station API.
+
+If an app does not expose visibility controls, treat the content as public (station-synced).
+If content is not present on the station, the feedback API will return `404 Content not found`.
 
 ### Path Resolution Examples
 
@@ -647,6 +659,75 @@ final response = await http.post(
 }
 ```
 
+---
+
+### Subscription Notifications
+
+Subscriptions are stored in `feedback/subscribe.txt` and toggled via:
+
+```
+POST /api/feedback/{contentType}/{contentId}/subscribe
+```
+
+When content changes, the item owner can notify all current subscribers.
+
+#### Endpoint: Notify Subscribers (Owner/Admin)
+
+**Endpoint**: `POST /api/feedback/{contentType}/{contentId}/notify`
+
+**Purpose**: Fan-out a notification to all subscribers of a content item.
+
+**Request Body** (NOSTR-signed event):
+```json
+{
+  "id": "9f1a...",
+  "pubkey": "3bf0c63f...",
+  "created_at": 1734865200,
+  "kind": 1,
+  "tags": [
+    ["content_type", "event"],
+    ["content_id", "2025-01-15_community-meetup"],
+    ["action", "notify"],
+    ["owner", "X1ABCD"]
+  ],
+  "content": "update: Agenda updated and photos added",
+  "sig": "abc123..."
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "notification_id": "2025-12-22_10-30-00_X1ABCD",
+  "subscriber_count": 24,
+  "delivered_online": 7,
+  "timestamp": "2025-12-22T10:30:00Z"
+}
+```
+
+**Realtime Delivery**:
+For each connected subscriber, the station sends a lightweight WebSocket update:
+
+```
+UPDATE:{ownerCallsign}/{collectionType}/{contentId}
+```
+
+Example:
+```
+UPDATE:X1ABCD/events/2025-01-15_community-meetup
+```
+
+`collectionType` is the collection folder name (alerts/events/places/blog/forum/etc).
+
+Clients should increment a per-app unread counter (similar to chat) and clear it
+when the user opens the item.
+
+**Visibility Rules**:
+- **Public**: notify via station API.
+- **Group**: do not use station API; notify within the group channel or P2P sync.
+- **Private**: local-only, no station notification.
+
 ### Endpoint: Get All Feedback
 
 **Endpoint**: `GET /api/feedback/{contentType}/{contentId}`
@@ -717,7 +798,7 @@ Feedback actions are signed NOSTR events for cryptographic verification and rela
 | Action | NOSTR Kind | Description |
 |--------|------------|-------------|
 | Like, Point, Dislike, React | 7 | Reaction event (NIP-25) |
-| Comment, View | 1 | Text note (NIP-01) |
+| Comment, View, Notify | 1 | Text note (NIP-01) |
 | Subscribe, Verify | 30078 | Application-specific data (NIP-78) |
 
 ### Event Structure for Reactions
@@ -804,7 +885,7 @@ Optional tags:
 |------------------|--------|
 | **Public** (any authenticated user) | Add likes, points, dislikes, emoji reactions, comments, subscriptions |
 | **Author** (comment author) | Delete own comments |
-| **Content Owner** (content creator) | Delete any comment on their content |
+| **Content Owner** (content creator) | Delete any comment on their content, notify subscribers |
 | **Admin** (system admin) | All permissions, bulk operations |
 
 ### NOSTR Signature Verification
@@ -840,7 +921,8 @@ Comments SHOULD include signatures as well, but the server stores unsigned comme
 2. **Only the author** can delete their own comments
 3. **Only the content owner** can delete comments on their content
 4. **Verifications are immutable** - cannot be removed once added
-5. **Rate limits apply** to prevent spam
+5. **Only content owners** can send subscriber notifications
+6. **Rate limits apply** to prevent spam
 
 ---
 
