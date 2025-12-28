@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-28 - v1.6.61
+
+### Changes
+- Export TitleManager type for attention service
+
+
 ## 2025-12-28 - v1.6.60
 
 ### Changes
