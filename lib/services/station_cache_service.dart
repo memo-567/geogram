@@ -360,6 +360,37 @@ class RelayCacheService {
     }
   }
 
+  /// Load the most recent cached chat message for a room
+  Future<ChatMessage?> loadLatestMessage(
+    String deviceCallsign,
+    String roomId,
+  ) async {
+    if (kIsWeb || _basePath == null) return null;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return null;
+
+      final files = await getCachedChatFiles(deviceCallsign, roomId);
+      if (files.isEmpty) return null;
+
+      final latest = files.last;
+      final year = latest['year'] as String;
+      final filename = latest['filename'] as String;
+      final file = File('${cacheDir.path}/chat/$roomId/$year/$filename');
+      if (!await file.exists()) return null;
+
+      final content = await file.readAsString();
+      final chatMessages = ChatService.parseMessageText(content);
+      if (chatMessages.isEmpty) return null;
+
+      return chatMessages.last;
+    } catch (e) {
+      LogService().log('Error loading latest cached message: $e');
+      return null;
+    }
+  }
+
   /// Check if path is a year folder (4 digits)
   bool _isYearFolder(String folderPath) {
     final name = folderPath.split('/').last;

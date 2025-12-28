@@ -17,11 +17,17 @@ class DMNotificationService {
   factory DMNotificationService() => _instance;
   DMNotificationService._internal();
 
+  static const String _messageGroupKey = 'geogram_messages';
+  static const int _summaryNotificationId = 900100;
+  static const int _maxSummaryLines = 10;
+
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   EventSubscription<DirectMessageReceivedEvent>? _dmEventSubscription;
   EventSubscription<ChatMessageEvent>? _chatEventSubscription;
   bool _initialized = false;
   bool _permissionRequested = false;
+  final List<String> _recentMessageLines = [];
+  int _totalMessageCount = 0;
 
   /// Initialize the notification service
   /// Set [skipPermissionRequest] to true to defer permission request (e.g., for first launch onboarding)
@@ -168,13 +174,6 @@ class DMNotificationService {
       return;
     }
 
-    // Don't notify for sync messages (user preference may vary)
-    // For now, only notify for fresh incoming messages
-    if (event.fromSync) {
-      LogService().log('DMNotificationService: Skipping notification for synced message');
-      return;
-    }
-
     // Show notification
     await _showNotification(
       fromCallsign: event.fromCallsign,
@@ -187,7 +186,22 @@ class DMNotificationService {
 
   /// Handle incoming chat message (group/room)
   Future<void> _handleIncomingChatMessage(ChatMessageEvent event) async {
-    if (!_initialized) return;
+    await showChatRoomMessage(
+      roomId: event.roomId,
+      fromCallsign: event.callsign,
+      content: event.content,
+      verified: event.verified,
+    );
+  }
+
+  /// Show a notification for a chat room message (public API for station updates)
+  Future<void> showChatRoomMessage({
+    required String roomId,
+    required String fromCallsign,
+    required String content,
+    required bool verified,
+  }) async {
+    if (!_initialized || !_isMobilePlatform()) return;
 
     final settings = NotificationService().getSettings();
     if (!settings.enableNotifications || !settings.notifyNewMessages) {
@@ -196,15 +210,15 @@ class DMNotificationService {
     }
 
     final myCallsign = ProfileService().getProfile().callsign;
-    if (myCallsign.isEmpty || event.callsign == myCallsign) {
+    if (myCallsign.isEmpty || fromCallsign == myCallsign) {
       return;
     }
 
     await _showChatNotification(
-      roomId: event.roomId,
-      fromCallsign: event.callsign,
-      content: event.content,
-      verified: event.verified,
+      roomId: roomId,
+      fromCallsign: fromCallsign,
+      content: content,
+      verified: verified,
     );
   }
 
@@ -235,9 +249,7 @@ class DMNotificationService {
       priority: Priority.high,
       enableVibration: settings.vibrationEnabled,
       playSound: settings.soundEnabled,
-      sound: settings.soundEnabled
-          ? const RawResourceAndroidNotificationSound('notification_sound')
-          : null,
+      groupKey: _messageGroupKey,
     );
 
     // iOS notification details
@@ -245,7 +257,6 @@ class DMNotificationService {
       presentAlert: true,
       presentBadge: true,
       presentSound: settings.soundEnabled,
-      sound: settings.soundEnabled ? 'notification_sound.aiff' : null,
     );
 
     final notificationDetails = NotificationDetails(
@@ -263,6 +274,9 @@ class DMNotificationService {
       notificationDetails,
       payload: 'dm:$fromCallsign', // Store callsign for tap handling
     );
+
+    _recordRecentMessage('$title: $displayContent');
+    await _showSummaryNotification();
   }
 
   /// Show a notification for a chat room message
@@ -289,16 +303,13 @@ class DMNotificationService {
       priority: Priority.high,
       enableVibration: settings.vibrationEnabled,
       playSound: settings.soundEnabled,
-      sound: settings.soundEnabled
-          ? const RawResourceAndroidNotificationSound('notification_sound')
-          : null,
+      groupKey: _messageGroupKey,
     );
 
     final iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: settings.soundEnabled,
-      sound: settings.soundEnabled ? 'notification_sound.aiff' : null,
     );
 
     final notificationDetails = NotificationDetails(
@@ -315,6 +326,9 @@ class DMNotificationService {
       notificationDetails,
       payload: 'chat:$roomId',
     );
+
+    _recordRecentMessage('$title: $displayContent');
+    await _showSummaryNotification();
   }
 
   /// Handle notification tap
@@ -339,5 +353,56 @@ class DMNotificationService {
   void dispose() {
     _dmEventSubscription?.cancel();
     _chatEventSubscription?.cancel();
+  }
+
+  void _recordRecentMessage(String line) {
+    _totalMessageCount += 1;
+    _recentMessageLines.insert(0, line);
+    if (_recentMessageLines.length > _maxSummaryLines) {
+      _recentMessageLines.removeRange(_maxSummaryLines, _recentMessageLines.length);
+    }
+  }
+
+  Future<void> _showSummaryNotification() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (_recentMessageLines.isEmpty) return;
+
+    final settings = NotificationService().getSettings();
+    if (!settings.enableNotifications || !settings.notifyNewMessages) {
+      return;
+    }
+
+    final lines = _recentMessageLines.reversed.toList();
+    final inboxStyle = InboxStyleInformation(
+      lines,
+      contentTitle: 'Messages ($_totalMessageCount)',
+      summaryText: '$_totalMessageCount total',
+    );
+
+    final androidDetails = AndroidNotificationDetails(
+      'messages_summary',
+      'Messages',
+      channelDescription: 'Summary of recent messages',
+      importance: Importance.low,
+      priority: Priority.low,
+      enableVibration: false,
+      playSound: false,
+      styleInformation: inboxStyle,
+      groupKey: _messageGroupKey,
+      setAsGroupSummary: true,
+      groupAlertBehavior: GroupAlertBehavior.summary,
+    );
+
+    final notificationDetails = NotificationDetails(
+      android: androidDetails,
+    );
+
+    await _notificationsPlugin.show(
+      _summaryNotificationId,
+      'Geogram',
+      '$_totalMessageCount new messages',
+      notificationDetails,
+      payload: 'messages',
+    );
   }
 }

@@ -5,6 +5,8 @@
 
 import 'dart:async';
 import '../models/update_notification.dart';
+import '../services/dm_notification_service.dart';
+import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'log_service.dart';
 
@@ -15,6 +17,7 @@ class ChatNotificationService {
   ChatNotificationService._internal();
 
   final StationService _stationService = StationService();
+  final RelayCacheService _cacheService = RelayCacheService();
 
   // Unread counts per room (roomId -> count)
   final Map<String, int> _unreadCounts = {};
@@ -76,8 +79,82 @@ class ChatNotificationService {
     _unreadCounts[roomId] = (_unreadCounts[roomId] ?? 0) + 1;
     LogService().log('ChatNotificationService: New message in $roomId (unread: ${_unreadCounts[roomId]})');
 
+    unawaited(_notifyChatUpdate(update));
+
     // Notify listeners
     _notificationController.add(Map.from(_unreadCounts));
+  }
+
+  Future<void> _notifyChatUpdate(UpdateNotification update) async {
+    final roomId = update.path;
+    if (roomId.isEmpty) return;
+
+    final resolved = await _resolveChatMessage(update);
+    if (resolved == null) {
+      LogService().log('ChatNotificationService: Unable to resolve message for $roomId');
+      return;
+    }
+
+    await DMNotificationService().showChatRoomMessage(
+      roomId: roomId,
+      fromCallsign: resolved.callsign,
+      content: resolved.content,
+      verified: resolved.verified,
+    );
+  }
+
+  Future<({String callsign, String content, bool verified})?> _resolveChatMessage(
+    UpdateNotification update,
+  ) async {
+    final roomId = update.path;
+    if (roomId.isEmpty) return null;
+
+    final station = _stationService.getPreferredStation();
+    if (station != null && station.url.isNotEmpty) {
+      try {
+        final messages = await _stationService.fetchRoomMessages(
+          station.url,
+          roomId,
+          limit: 1,
+          stationCallsign: station.callsign,
+        );
+        if (messages.isNotEmpty) {
+          messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+          final latest = messages.last;
+          return (
+            callsign: latest.callsign,
+            content: latest.content,
+            verified: latest.verified,
+          );
+        }
+      } catch (e) {
+        LogService().log('ChatNotificationService: Failed to fetch latest message: $e');
+      }
+    }
+
+    try {
+      await _cacheService.initialize();
+      final candidateKeys = <String?>[
+        update.callsign,
+        station?.callsign,
+        station?.name,
+      ];
+      for (final cacheKey in candidateKeys) {
+        if (cacheKey == null || cacheKey.isEmpty) continue;
+        final cached = await _cacheService.loadLatestMessage(cacheKey, roomId);
+        if (cached != null) {
+          return (
+            callsign: cached.author,
+            content: cached.content,
+            verified: cached.isVerified,
+          );
+        }
+      }
+    } catch (e) {
+      LogService().log('ChatNotificationService: Failed to load cached message: $e');
+    }
+
+    return null;
   }
 
   /// Set the currently viewed room (clears its unread count)

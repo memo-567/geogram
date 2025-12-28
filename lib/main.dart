@@ -354,6 +354,16 @@ class GeogramApp extends StatelessWidget {
         useMaterial3: true,
       ),
       themeMode: ThemeMode.system,
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        return SafeArea(
+          top: false,
+          bottom: true,
+          left: true,
+          right: true,
+          child: child,
+        );
+      },
       home: const HomePage(),
     );
   }

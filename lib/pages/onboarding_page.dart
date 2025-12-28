@@ -86,8 +86,9 @@ class _OnboardingPageState extends State<OnboardingPage> {
       canPop: false,
       child: Scaffold(
         body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
+          bottom: false,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
             return SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: ConstrainedBox(

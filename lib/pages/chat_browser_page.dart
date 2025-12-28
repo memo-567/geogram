@@ -118,6 +118,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _startMessagePolling();
   }
 
+  void _setStateIfMounted(VoidCallback callback) {
+    if (!mounted) return;
+    setState(callback);
+  }
+
   /// Subscribe to file changes for real-time updates from CLI
   void _subscribeToFileChanges() {
     _fileChangeSubscription = _chatService.onFileChange.listen((change) {
@@ -152,7 +157,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   void _subscribeToUnreadCounts() {
     _unreadCounts = _chatNotificationService.unreadCounts;
     _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
-      setState(() {
+      _setStateIfMounted(() {
         _unreadCounts = counts;
       });
     });
@@ -354,7 +359,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Initialize chat service and load data
   Future<void> _initializeChat() async {
     LogService().log('DEBUG _initializeChat: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _error = null;
     });
@@ -363,7 +368,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // For remote device, skip local channel initialization
       if (widget.isRemoteDevice) {
         LogService().log('DEBUG _initializeChat: Remote device mode - loading from ${widget.remoteDeviceUrl}');
-        setState(() {
+        _setStateIfMounted(() {
           _isInitialized = true;
         });
         // Load station chat rooms from the remote device
@@ -400,7 +405,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
 
-      setState(() {
+      _setStateIfMounted(() {
         _isInitialized = true;
       });
 
@@ -418,11 +423,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
       }
     } catch (e) {
-      setState(() {
+      _setStateIfMounted(() {
         _error = 'Failed to initialize chat: $e';
       });
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
@@ -432,7 +437,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Future<void> _loadRelayRooms() async {
     LogService().log('DEBUG _loadRelayRooms: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
 
-    setState(() {
+    _setStateIfMounted(() {
       _loadingRelayRooms = true;
     });
 
@@ -458,7 +463,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: widget.remoteDeviceUrl);
         }
 
-        setState(() {
+        _setStateIfMounted(() {
           _stationRooms = rooms;
           _stationReachable = true; // Successfully fetched - device is reachable
           _loadingRelayRooms = false;
@@ -470,19 +475,19 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         return;
       } catch (e) {
         LogService().log('DEBUG _loadRelayRooms: Remote device fetch failed: $e');
-        setState(() {
+        _setStateIfMounted(() {
           _stationReachable = false;
         });
         // Try loading from cache using the same consistent key
         final cachedRooms = await _cacheService.loadChatRooms(cacheKey, _lastStationUrl ?? '');
         if (cachedRooms.isNotEmpty) {
-          setState(() {
+          _setStateIfMounted(() {
             _stationRooms = cachedRooms;
             _loadingRelayRooms = false;
           });
           return;
         }
-        setState(() {
+        _setStateIfMounted(() {
           _loadingRelayRooms = false;
         });
         return;
@@ -508,7 +513,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           // Always save using the consistent cache key
           await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: station.url);
 
-          setState(() {
+          _setStateIfMounted(() {
             _stationRooms = rooms;
             _stationReachable = true; // Successfully fetched - station is reachable
             _loadingRelayRooms = false;
@@ -532,7 +537,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Station is not connected or fetch failed - try loading from cache
     LogService().log('DEBUG _loadRelayRooms: falling through to cache loading');
-    setState(() {
+    _setStateIfMounted(() {
       _stationReachable = false;
     });
 
@@ -540,7 +545,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await _loadAllCachedDevices();
 
     LogService().log('DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
-    setState(() {
+    _setStateIfMounted(() {
       _loadingRelayRooms = false;
     });
   }
@@ -591,14 +596,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _stationRooms = mostRecent.rooms;
     }
 
-    setState(() {
+    _setStateIfMounted(() {
       _cachedDeviceSources = allCachedSources;
     });
   }
 
   /// Select a channel and load its messages
   Future<void> _selectChannel(ChatChannel channel) async {
-    setState(() {
+    _setStateIfMounted(() {
       _selectedChannel = channel;
       _selectedStationRoom = null; // Deselect station room
       _isLoading = true;
@@ -611,13 +616,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         limit: 100,
       );
 
-      setState(() {
+      _setStateIfMounted(() {
         _messages = messages;
       });
     } catch (e) {
       _showError('Failed to load messages: $e');
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
@@ -648,7 +653,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Mark this room as current (clears unread count)
     _chatNotificationService.setCurrentRoom(room.id);
 
-    setState(() {
+    _setStateIfMounted(() {
       _selectedStationRoom = room;
       _selectedChannel = null; // Deselect local channel
       _isLoading = true;
@@ -679,7 +684,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Only update reachability if not in forced offline mode
       if (!_forcedOfflineMode) {
-        setState(() {
+        _setStateIfMounted(() {
           _stationReachable = true; // Successfully fetched - station is reachable
         });
       }
@@ -687,7 +692,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Station not reachable - try loading from cache
       LogService().log('Fetch failed ($e), loading from cache');
       if (!_forcedOfflineMode) {
-        setState(() {
+        _setStateIfMounted(() {
           _stationReachable = false;
         });
       }
@@ -703,7 +708,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         roomId,
       );
       LogService().log('DEBUG _loadMessagesFromCache: Loaded ${cachedMessages.length} messages for room $roomId');
-      setState(() {
+      _setStateIfMounted(() {
         _stationMessages = cachedMessages;
         _isLoading = false;
       });
@@ -712,7 +717,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
     } else {
       LogService().log('No cache key available');
-      setState(() {
+      _setStateIfMounted(() {
         _stationMessages = [];
         _isLoading = false;
       });
@@ -880,7 +885,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       await _chatService.saveMessage(_selectedChannel!.id, message);
 
       // Add to local list (optimistic update)
-      setState(() {
+      _setStateIfMounted(() {
         _messages.add(message);
       });
     } catch (e) {
@@ -928,7 +933,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           hasSignature: true,  // Message was signed
         );
 
-        setState(() {
+        _setStateIfMounted(() {
           _stationMessages.add(newMessage);
         });
 
@@ -942,14 +947,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
       } else {
         // Send failed - station may be unreachable
-        setState(() {
+        _setStateIfMounted(() {
           _stationReachable = false;
         });
         _showError('Failed to send message - station offline');
       }
     } catch (e) {
       // Station became unreachable - update status
-      setState(() {
+      _setStateIfMounted(() {
         _stationReachable = false;
       });
       _showError('Station offline - message not sent');
@@ -1077,7 +1082,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
 
       // Remove from local list
-      setState(() {
+      _setStateIfMounted(() {
         _messages.removeWhere((msg) =>
             msg.timestamp == message.timestamp && msg.author == message.author);
       });
@@ -1158,7 +1163,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     if (result != null) {
       try {
-        setState(() {
+        _setStateIfMounted(() {
           _isLoading = true;
         });
 
@@ -1178,7 +1183,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         // Refresh channels
         await _chatService.refreshChannels();
 
-        setState(() {
+        _setStateIfMounted(() {
           _channels = _chatService.channels;
         });
 
@@ -1190,7 +1195,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       } catch (e) {
         _showError('Failed to create channel: $e');
       } finally {
-        setState(() {
+        _setStateIfMounted(() {
           _isLoading = false;
         });
       }
@@ -1236,7 +1241,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (_selectedChannel != null) {
         _selectedChannel = _chatService.getChannel(_selectedChannel!.id);
       }
-      setState(() {});
+      _setStateIfMounted(() {});
     });
   }
 
@@ -1262,7 +1267,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     ).then((_) {
       // Reload channel data when returning
       _chatService.refreshChannels();
-      setState(() {
+      _setStateIfMounted(() {
         _channels = _chatService.channels;
         // Update selected channel with refreshed data
         final updated = _chatService.channels.firstWhere(
