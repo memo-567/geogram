@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2025-12-29 - v1.6.64
+
+### Changes
+- Improve chat UX, station sync, and update flow
+
+
 ## 2025-12-29 - v1.6.63
 
 ### Changes
