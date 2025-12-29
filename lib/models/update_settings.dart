@@ -153,6 +153,7 @@ enum UpdatePlatform {
 /// Update settings configuration
 class UpdateSettings {
   bool autoCheckUpdates;
+  bool autoDownloadUpdates;
   bool notifyOnUpdate;
   bool useStationForUpdates; // Default: true (offgrid-first)
   String updateUrl;
@@ -164,9 +165,11 @@ class UpdateSettings {
   String? lastCheckedHtmlUrl; // GitHub release URL
   String? lastCheckedStationUrl; // Station URL if from station (null = GitHub)
   String? lastCheckedPublishedAt; // Release date ISO string
+  bool? lastCheckedAssetAvailable; // Whether an asset existed for this platform
 
   UpdateSettings({
     this.autoCheckUpdates = true,
+    this.autoDownloadUpdates = true,
     this.notifyOnUpdate = true,
     this.useStationForUpdates = true,
     this.updateUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
@@ -178,11 +181,13 @@ class UpdateSettings {
     this.lastCheckedHtmlUrl,
     this.lastCheckedStationUrl,
     this.lastCheckedPublishedAt,
+    this.lastCheckedAssetAvailable,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
     return UpdateSettings(
       autoCheckUpdates: json['autoCheckUpdates'] as bool? ?? true,
+      autoDownloadUpdates: json['autoDownloadUpdates'] as bool? ?? true,
       notifyOnUpdate: json['notifyOnUpdate'] as bool? ?? true,
       useStationForUpdates: json['useStationForUpdates'] as bool? ?? true,
       updateUrl: json['updateUrl'] as String? ??
@@ -197,12 +202,14 @@ class UpdateSettings {
       lastCheckedHtmlUrl: json['lastCheckedHtmlUrl'] as String?,
       lastCheckedStationUrl: json['lastCheckedStationUrl'] as String?,
       lastCheckedPublishedAt: json['lastCheckedPublishedAt'] as String?,
+      lastCheckedAssetAvailable: json['lastCheckedAssetAvailable'] as bool?,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'autoCheckUpdates': autoCheckUpdates,
+      'autoDownloadUpdates': autoDownloadUpdates,
       'notifyOnUpdate': notifyOnUpdate,
       'useStationForUpdates': useStationForUpdates,
       'updateUrl': updateUrl,
@@ -214,11 +221,13 @@ class UpdateSettings {
       'lastCheckedHtmlUrl': lastCheckedHtmlUrl,
       'lastCheckedStationUrl': lastCheckedStationUrl,
       'lastCheckedPublishedAt': lastCheckedPublishedAt,
+      'lastCheckedAssetAvailable': lastCheckedAssetAvailable,
     };
   }
 
   UpdateSettings copyWith({
     bool? autoCheckUpdates,
+    bool? autoDownloadUpdates,
     bool? notifyOnUpdate,
     bool? useStationForUpdates,
     String? updateUrl,
@@ -230,9 +239,11 @@ class UpdateSettings {
     String? lastCheckedHtmlUrl,
     String? lastCheckedStationUrl,
     String? lastCheckedPublishedAt,
+    bool? lastCheckedAssetAvailable,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
+      autoDownloadUpdates: autoDownloadUpdates ?? this.autoDownloadUpdates,
       notifyOnUpdate: notifyOnUpdate ?? this.notifyOnUpdate,
       useStationForUpdates: useStationForUpdates ?? this.useStationForUpdates,
       updateUrl: updateUrl ?? this.updateUrl,
@@ -244,6 +255,7 @@ class UpdateSettings {
       lastCheckedHtmlUrl: lastCheckedHtmlUrl ?? this.lastCheckedHtmlUrl,
       lastCheckedStationUrl: lastCheckedStationUrl ?? this.lastCheckedStationUrl,
       lastCheckedPublishedAt: lastCheckedPublishedAt ?? this.lastCheckedPublishedAt,
+      lastCheckedAssetAvailable: lastCheckedAssetAvailable ?? this.lastCheckedAssetAvailable,
     );
   }
 }

@@ -42,6 +42,7 @@ class _DMChatPageState extends State<DMChatPage> {
   bool _isSending = false;
   bool _isRecording = false;
   String? _error;
+  ChatMessage? _quotedMessage;
 
   // Event subscriptions
   EventSubscription<DirectMessageReceivedEvent>? _messageSubscription;
@@ -133,7 +134,23 @@ class _DMChatPageState extends State<DMChatPage> {
     });
 
     try {
-      await _dmService.sendMessage(widget.otherCallsign, content.trim());
+      final metadata = <String, String>{};
+      if (_quotedMessage != null) {
+        metadata['quote'] = _quotedMessage!.timestamp;
+        metadata['quote_author'] = _quotedMessage!.author;
+        if (_quotedMessage!.content.isNotEmpty) {
+          final excerpt = _quotedMessage!.content.length > 120
+              ? _quotedMessage!.content.substring(0, 120)
+              : _quotedMessage!.content;
+          metadata['quote_excerpt'] = excerpt;
+        }
+      }
+
+      await _dmService.sendMessage(
+        widget.otherCallsign,
+        content.trim(),
+        metadata: metadata.isNotEmpty ? metadata : null,
+      );
       await _loadMessages();
     } on DMMustBeReachableException {
       // Device is not reachable - show specific error
@@ -156,6 +173,7 @@ class _DMChatPageState extends State<DMChatPage> {
     if (mounted) {
       setState(() {
         _isSending = false;
+        _quotedMessage = null;
       });
     }
   }
@@ -189,8 +207,21 @@ class _DMChatPageState extends State<DMChatPage> {
     if (mounted) {
       setState(() {
         _isSending = false;
+        _quotedMessage = null;
       });
     }
+  }
+
+  void _setQuotedMessage(ChatMessage message) {
+    setState(() {
+      _quotedMessage = message;
+    });
+  }
+
+  void _clearQuotedMessage() {
+    setState(() {
+      _quotedMessage = null;
+    });
   }
 
   void _startRecording() async {
@@ -354,6 +385,7 @@ class _DMChatPageState extends State<DMChatPage> {
                   messages: _messages,
                   isGroupChat: false, // 1:1 DM conversation
                   getVoiceFilePath: _getVoiceFilePath,
+                  onMessageQuote: _setQuotedMessage,
                 ),
         ),
         // Message input / Voice recorder
@@ -376,6 +408,8 @@ class _DMChatPageState extends State<DMChatPage> {
             allowFiles: false, // DMs don't support file attachments yet
             // Only show mic button on supported platforms (Linux, Android)
             onMicPressed: isVoiceSupported ? _startRecording : null,
+            quotedMessage: _quotedMessage,
+            onClearQuote: _clearQuotedMessage,
           )
         else
           // Disabled input when offline

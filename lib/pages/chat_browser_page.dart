@@ -32,6 +32,8 @@ import '../widgets/message_input_widget.dart';
 import '../widgets/new_channel_dialog.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
+import 'photo_viewer_page.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 
 /// Page for browsing and interacting with a chat collection
 class ChatBrowserPage extends StatefulWidget {
@@ -68,6 +70,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   List<ChatChannel> _channels = [];
   ChatChannel? _selectedChannel;
   List<ChatMessage> _messages = [];
+  static const int _pageSize = 100;
+  static const int _stationIncrementalLimit = 200;
+  int _localMessageLimit = _pageSize;
+  int _stationMessageLimit = _pageSize;
+  ChatMessage? _quotedMessage;
   bool _isLoading = false;
   bool _isInitialized = false;
   String? _error;
@@ -76,6 +83,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   List<StationChatRoom> _stationRooms = [];
   StationChatRoom? _selectedStationRoom;
   List<StationChatMessage> _stationMessages = [];
+  final Map<String, List<StationChatMessage>> _stationMessageCache = {};
   bool _loadingRelayRooms = false;
   bool _stationReachable = false; // Track if station is currently reachable (default false until confirmed)
   bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
@@ -141,7 +149,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     try {
       final messages = await _chatService.loadMessages(
         _selectedChannel!.id,
-        limit: 100,
+        limit: _localMessageLimit,
       );
 
       if (mounted) {
@@ -198,48 +206,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Refresh station messages without showing loading indicator
   Future<void> _refreshRelayMessages() async {
-    if (_selectedStationRoom == null) return;
-
-    try {
-      // Download any new raw chat files
-      final cacheKey = _lastRelayCacheKey ?? '';
-      if (cacheKey.isNotEmpty) {
-        await _downloadAndCacheChatFiles(
-          _selectedStationRoom!.stationUrl,
-          _selectedStationRoom!.id,
-          cacheKey,
-        );
-      }
-
-      // Load messages from cache (now contains any new files)
-      final cachedMessages = await _cacheService.loadMessages(
-        cacheKey,
-        _selectedStationRoom!.id,
-      );
-
-      if (mounted) {
-        // Check for new messages
-        if (cachedMessages.length > _stationMessages.length) {
-          final latestMsg = cachedMessages.last;
-          print('');
-          print('╔══════════════════════════════════════════════════════════════╗');
-          print('║  NEW MESSAGE RECEIVED                                        ║');
-          print('╠══════════════════════════════════════════════════════════════╣');
-          print('║  Room: ${_selectedStationRoom!.id}');
-          print('║  From: ${latestMsg.callsign}');
-          print('║  Content: ${latestMsg.content}');
-          print('║  Time: ${latestMsg.timestamp}');
-          print('╚══════════════════════════════════════════════════════════════╝');
-          print('');
-        }
-
-        setState(() {
-          _stationMessages = cachedMessages;
-        });
-      }
-    } catch (e) {
-      // Silently fail - user is already viewing messages
-    }
+    await _syncStationMessages();
   }
 
   /// Ensure WebSocket is connected for real-time updates
@@ -284,32 +251,67 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedStationRoom == null || !_stationReachable) return;
 
     try {
-      // Download any new raw chat files
-      final cacheKey = _lastRelayCacheKey ?? '';
-      if (cacheKey.isNotEmpty) {
-        await _downloadAndCacheChatFiles(
-          _selectedStationRoom!.stationUrl,
-          _selectedStationRoom!.id,
-          cacheKey,
-        );
-      }
+      await _syncStationMessages();
+    } catch (e) {
+      // Silently fail - don't disrupt user experience
+    }
+  }
 
-      // Load messages from cache
+  Future<void> _syncStationMessages() async {
+    if (_selectedStationRoom == null) return;
+    final cacheKey = _lastRelayCacheKey ?? '';
+    if (cacheKey.isEmpty) return;
+
+    try {
+      final roomId = _selectedStationRoom!.id;
+      final cached = _stationMessageCache[roomId];
+      final latestCached = cached != null && cached.isNotEmpty
+          ? cached.last
+          : (_stationMessages.isNotEmpty ? _stationMessages.last : null);
+      DateTime? after;
+      final latestDateTime = latestCached?.dateTime;
+      if (latestDateTime != null) {
+        after = DateTime(latestDateTime.year, latestDateTime.month, latestDateTime.day);
+      }
+      final limit = after == null ? _stationMessageLimit : _stationIncrementalLimit;
+
+      final newMessages = await _stationService.fetchRoomMessages(
+        _selectedStationRoom!.stationUrl,
+        roomId,
+        limit: limit,
+        after: after,
+      );
+
+      if (newMessages.isEmpty) return;
+
+      final previousLatest = _stationMessages.isNotEmpty ? _stationMessages.last.timestamp : null;
+
+      await _cacheService.mergeMessages(cacheKey, roomId, newMessages);
       final cachedMessages = await _cacheService.loadMessages(
         cacheKey,
-        _selectedStationRoom!.id,
+        roomId,
+        limit: _stationMessageLimit,
       );
 
       if (!mounted) return;
 
-      // Check if there are new messages by comparing count
-      if (cachedMessages.length > _stationMessages.length) {
-        setState(() {
-          _stationMessages = cachedMessages;
-        });
+      _stationMessageCache[roomId] = cachedMessages;
+      final latestMsg = cachedMessages.isNotEmpty ? cachedMessages.last : null;
+      if (latestMsg != null && latestMsg.timestamp != previousLatest) {
+        print('');
+        print('╔══════════════════════════════════════════════════════════════╗');
+        print('║  NEW MESSAGE RECEIVED                                        ║');
+        print('╠══════════════════════════════════════════════════════════════╣');
+        print('║  Room: $roomId');
+        print('║  From: ${latestMsg.callsign}');
+        print('║  Content: ${latestMsg.content}');
+        print('║  Time: ${latestMsg.timestamp}');
+        print('╚══════════════════════════════════════════════════════════════╝');
+        print('');
       }
+      _applyStationMessageLimit(cachedMessages);
     } catch (e) {
-      // Silently fail - don't disrupt user experience
+      // Silently fail - user is already viewing messages
     }
   }
 
@@ -454,44 +456,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _lastStationUrl = widget.remoteDeviceUrl;
       _lastRelayCacheKey = cacheKey;
 
-      try {
-        // Fetch rooms from remote device
-        final rooms = await _stationService.fetchChatRooms(widget.remoteDeviceUrl!);
-
-        if (rooms.isNotEmpty) {
-          // Always save using the consistent cache key (widget callsign)
-          await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: widget.remoteDeviceUrl);
-        }
-
+      final cachedRooms = await _cacheService.loadChatRooms(cacheKey, _lastStationUrl ?? '');
+      if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
-          _stationRooms = rooms;
-          _stationReachable = true; // Successfully fetched - device is reachable
-          _loadingRelayRooms = false;
-        });
-
-        // Ensure WebSocket connection for real-time updates
-        await _ensureWebSocketConnection(widget.remoteDeviceUrl!);
-
-        return;
-      } catch (e) {
-        LogService().log('DEBUG _loadRelayRooms: Remote device fetch failed: $e');
-        _setStateIfMounted(() {
+          _stationRooms = cachedRooms;
           _stationReachable = false;
         });
-        // Try loading from cache using the same consistent key
-        final cachedRooms = await _cacheService.loadChatRooms(cacheKey, _lastStationUrl ?? '');
-        if (cachedRooms.isNotEmpty) {
-          _setStateIfMounted(() {
-            _stationRooms = cachedRooms;
-            _loadingRelayRooms = false;
-          });
-          return;
-        }
-        _setStateIfMounted(() {
-          _loadingRelayRooms = false;
-        });
-        return;
       }
+
+      unawaited(_fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!));
+      return;
     }
 
     // Use preferred station for HTTP API calls - doesn't require WebSocket connection
@@ -499,55 +473,85 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     LogService().log('DEBUG _loadRelayRooms: station=${station?.name}, url=${station?.url}');
 
     // If station has a valid URL, try to fetch from it via HTTP API
+    String? cacheKey;
     if (station != null && station.url.isNotEmpty) {
-      // Use station's callsign as the consistent cache key
-      final cacheKey = station.callsign ?? station.name;
+      cacheKey = station.callsign ?? station.name;
       _lastStationUrl = station.url;
       _lastRelayCacheKey = cacheKey;
 
-      try {
-        // Fetch rooms from station
-        final rooms = await _stationService.fetchChatRooms(station.url);
-
-        if (rooms.isNotEmpty) {
-          // Always save using the consistent cache key
-          await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: station.url);
-
-          _setStateIfMounted(() {
-            _stationRooms = rooms;
-            _stationReachable = true; // Successfully fetched - station is reachable
-            _loadingRelayRooms = false;
-          });
-
-          // Ensure WebSocket connection for real-time updates
-          await _ensureWebSocketConnection(station.url);
-
-          // Also load other cached devices to show them as offline
-          await _loadAllCachedDevices();
-
-          return;
-        }
-        // If rooms are empty, fall through to cache loading
-        LogService().log('DEBUG _loadRelayRooms: station returned empty rooms, trying cache');
-      } catch (e) {
-        // Fetch failed - will try cache below
-        LogService().log('DEBUG _loadRelayRooms: fetch failed with error: $e');
+      final cachedRooms = await _cacheService.loadChatRooms(cacheKey, station.url);
+      if (cachedRooms.isNotEmpty) {
+        _setStateIfMounted(() {
+          _stationRooms = cachedRooms;
+          _stationReachable = false;
+        });
       }
     }
-
-    // Station is not connected or fetch failed - try loading from cache
-    LogService().log('DEBUG _loadRelayRooms: falling through to cache loading');
-    _setStateIfMounted(() {
-      _stationReachable = false;
-    });
 
     // Load ALL cached devices with their rooms
     await _loadAllCachedDevices();
 
     LogService().log('DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
+
+    if (station != null && station.url.isNotEmpty && cacheKey != null) {
+      unawaited(_fetchRelayRoomsFromStation(cacheKey, station.url));
+      return;
+    }
+
     _setStateIfMounted(() {
+      _stationReachable = false;
       _loadingRelayRooms = false;
     });
+  }
+
+  Future<void> _fetchRelayRoomsFromRemote(String cacheKey, String url) async {
+    try {
+      final rooms = await _stationService.fetchChatRooms(url);
+
+      if (rooms.isNotEmpty) {
+        await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: url);
+      }
+
+      _setStateIfMounted(() {
+        _stationRooms = rooms;
+        _stationReachable = true; // Successfully fetched - device is reachable
+        _loadingRelayRooms = false;
+      });
+
+      await _ensureWebSocketConnection(url);
+    } catch (e) {
+      LogService().log('DEBUG _fetchRelayRoomsFromRemote: fetch failed: $e');
+      _setStateIfMounted(() {
+        _stationReachable = false;
+        _loadingRelayRooms = false;
+      });
+    }
+  }
+
+  Future<void> _fetchRelayRoomsFromStation(String cacheKey, String url) async {
+    try {
+      final rooms = await _stationService.fetchChatRooms(url);
+
+      if (rooms.isNotEmpty) {
+        await _cacheService.saveChatRooms(cacheKey, rooms, stationUrl: url);
+      }
+
+      _setStateIfMounted(() {
+        _stationRooms = rooms;
+        _stationReachable = rooms.isNotEmpty;
+        _loadingRelayRooms = false;
+      });
+
+      if (rooms.isNotEmpty) {
+        await _ensureWebSocketConnection(url);
+      }
+    } catch (e) {
+      LogService().log('DEBUG _fetchRelayRoomsFromStation: fetch failed: $e');
+      _setStateIfMounted(() {
+        _stationReachable = false;
+        _loadingRelayRooms = false;
+      });
+    }
   }
 
   /// Load all cached devices and their chat rooms for offline viewing
@@ -607,13 +611,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _selectedChannel = channel;
       _selectedStationRoom = null; // Deselect station room
       _isLoading = true;
+      _localMessageLimit = _pageSize;
+      _quotedMessage = null;
     });
 
     try {
       // Load messages for selected channel
       final messages = await _chatService.loadMessages(
         channel.id,
-        limit: 100,
+        limit: _localMessageLimit,
       );
 
       _setStateIfMounted(() {
@@ -626,6 +632,49 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadMoreLocalMessages() async {
+    if (_selectedChannel == null) return;
+
+    _setStateIfMounted(() {
+      _isLoading = true;
+      _localMessageLimit += _pageSize;
+    });
+
+    try {
+      final messages = await _chatService.loadMessages(
+        _selectedChannel!.id,
+        limit: _localMessageLimit,
+      );
+
+      _setStateIfMounted(() {
+        _messages = messages;
+      });
+    } catch (e) {
+      _showError('Failed to load more messages: $e');
+    } finally {
+      _setStateIfMounted(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMoreStationMessages() async {
+    if (_selectedStationRoom == null) return;
+
+    _setStateIfMounted(() {
+      _isLoading = true;
+      _stationMessageLimit += _pageSize;
+    });
+
+    final cached = _stationMessageCache[_selectedStationRoom!.id];
+    if (cached != null) {
+      _applyStationMessageLimit(cached, limit: _stationMessageLimit);
+      return;
+    }
+
+    await _loadMessagesFromCache(_selectedStationRoom!.id, limit: _stationMessageLimit);
   }
 
   /// Select a channel for mobile view (just sets it, layout handles display)
@@ -657,72 +706,62 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _selectedStationRoom = room;
       _selectedChannel = null; // Deselect local channel
       _isLoading = true;
+      _stationMessageLimit = _pageSize;
+      _quotedMessage = null;
     });
 
-    // If we already know the device is offline, skip network request and load from cache directly
+    if (_stationMessageCache.containsKey(room.id)) {
+      _applyStationMessageLimit(_stationMessageCache[room.id] ?? []);
+      _setStateIfMounted(() {
+        _isLoading = false;
+      });
+    } else {
+      // Load cached messages first to avoid blocking on network
+      await _loadMessagesFromCache(room.id, limit: _stationMessageLimit);
+    }
+
+    // If we already know the device is offline, skip network request
     if (!_stationReachable) {
-      LogService().log('Device offline, loading from cache');
-      await _loadMessagesFromCache(room.id);
+      LogService().log('Device offline, using cached messages');
       return;
     }
 
-    // Try to fetch and cache raw chat files from station
-    try {
-      final cacheKey = _lastRelayCacheKey ?? '';
-      if (cacheKey.isNotEmpty) {
-        // Download and cache raw chat files (preserves all metadata including signatures)
-        await _downloadAndCacheChatFiles(room.stationUrl, room.id, cacheKey);
-      }
-
-      // Load messages from cache (now contains the raw files)
-      await _loadMessagesFromCache(room.id);
-
-      // Also save the rooms to cache for offline room listing
-      if (cacheKey.isNotEmpty && _stationRooms.isNotEmpty) {
-        await _cacheService.saveChatRooms(cacheKey, _stationRooms, stationUrl: room.stationUrl);
-      }
-
-      // Only update reachability if not in forced offline mode
-      if (!_forcedOfflineMode) {
-        _setStateIfMounted(() {
-          _stationReachable = true; // Successfully fetched - station is reachable
-        });
-      }
-    } catch (e) {
-      // Station not reachable - try loading from cache
-      LogService().log('Fetch failed ($e), loading from cache');
-      if (!_forcedOfflineMode) {
-        _setStateIfMounted(() {
-          _stationReachable = false;
-        });
-      }
-      await _loadMessagesFromCache(room.id);
-    }
+    // Refresh in the background to fetch any new files
+    unawaited(_refreshRelayMessages());
   }
 
   /// Load messages from cache for a room
-  Future<void> _loadMessagesFromCache(String roomId) async {
+  Future<void> _loadMessagesFromCache(String roomId, {int? limit}) async {
     if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
       final cachedMessages = await _cacheService.loadMessages(
         _lastRelayCacheKey!,
         roomId,
+        limit: limit ?? _stationMessageLimit,
       );
       LogService().log('DEBUG _loadMessagesFromCache: Loaded ${cachedMessages.length} messages for room $roomId');
-      _setStateIfMounted(() {
-        _stationMessages = cachedMessages;
-        _isLoading = false;
-      });
-      if (cachedMessages.isEmpty) {
-        _showError('No cached messages available');
-      }
+      _stationMessageCache[roomId] = cachedMessages;
+      _applyStationMessageLimit(cachedMessages, limit: limit);
     } else {
       LogService().log('No cache key available');
       _setStateIfMounted(() {
         _stationMessages = [];
         _isLoading = false;
       });
-      _showError('No cached data available');
+      if (!_stationReachable) {
+        _showError('No cached data available');
+      }
     }
+  }
+
+  void _applyStationMessageLimit(List<StationChatMessage> messages, {int? limit}) {
+    final effectiveLimit = limit ?? _stationMessageLimit;
+    final trimmed = messages.length > effectiveLimit
+        ? messages.sublist(messages.length - effectiveLimit)
+        : messages;
+    _setStateIfMounted(() {
+      _stationMessages = trimmed;
+      _isLoading = false;
+    });
   }
 
   /// Download and cache raw chat files from the station
@@ -794,6 +833,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Build metadata map with verification info
       final metadata = <String, String>{};
 
+      if (rm.metadata.isNotEmpty) {
+        metadata.addAll(rm.metadata);
+      }
+
       // Track if message has signature (from server response)
       if (rm.hasSignature) {
         metadata['has_signature'] = 'true';
@@ -830,7 +873,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Handle station room message
     if (_selectedStationRoom != null) {
-      await _sendRelayMessage(content);
+      final metadata = <String, String>{};
+      if (_quotedMessage != null) {
+        metadata['quote'] = _quotedMessage!.timestamp;
+        metadata['quote_author'] = _quotedMessage!.author;
+        if (_quotedMessage!.content.isNotEmpty) {
+          final excerpt = _quotedMessage!.content.length > 120
+              ? _quotedMessage!.content.substring(0, 120)
+              : _quotedMessage!.content;
+          metadata['quote_excerpt'] = excerpt;
+        }
+      }
+
+      await _sendRelayMessage(
+        content,
+        metadata: metadata.isNotEmpty ? metadata : null,
+      );
       return;
     }
 
@@ -849,6 +907,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         attachedFileName = await _copyFileToChannel(filePath);
         if (attachedFileName != null) {
           metadata['file'] = attachedFileName;
+        }
+      }
+
+      if (_quotedMessage != null) {
+        metadata['quote'] = _quotedMessage!.timestamp;
+        metadata['quote_author'] = _quotedMessage!.author;
+        if (_quotedMessage!.content.isNotEmpty) {
+          final excerpt = _quotedMessage!.content.length > 120
+              ? _quotedMessage!.content.substring(0, 120)
+              : _quotedMessage!.content;
+          metadata['quote_excerpt'] = excerpt;
         }
       }
 
@@ -887,6 +956,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Add to local list (optimistic update)
       _setStateIfMounted(() {
         _messages.add(message);
+        _quotedMessage = null;
       });
     } catch (e) {
       _showError('Failed to send message: $e');
@@ -894,7 +964,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   /// Send a message to a station chat room as a signed NOSTR event
-  Future<void> _sendRelayMessage(String content) async {
+  Future<void> _sendRelayMessage(String content, {Map<String, String>? metadata}) async {
     if (_selectedStationRoom == null) return;
 
     // Check if station is reachable before trying to send
@@ -914,6 +984,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _selectedStationRoom!.id,
         currentProfile.callsign,
         content,
+        metadata: metadata,
       );
 
       if (success) {
@@ -928,6 +999,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           callsign: currentProfile.callsign,
           content: content,
           roomId: _selectedStationRoom!.id,
+          metadata: metadata,
           npub: currentProfile.npub,
           verified: true,      // We signed it, so it's verified
           hasSignature: true,  // Message was signed
@@ -935,14 +1007,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
         _setStateIfMounted(() {
           _stationMessages.add(newMessage);
+          final cached = List<StationChatMessage>.from(
+            _stationMessageCache[_selectedStationRoom!.id] ?? [],
+          );
+          cached.add(newMessage);
+          _stationMessageCache[_selectedStationRoom!.id] = cached;
+          _quotedMessage = null;
         });
 
-        // Cache the updated message list using the consistent cache key
+        // Cache the new message using the consistent cache key
         if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
-          await _cacheService.saveMessages(
+          await _cacheService.mergeMessages(
             _lastRelayCacheKey!,
             _selectedStationRoom!.id,
-            _stationMessages,
+            [newMessage],
           );
         }
       } else {
@@ -1063,8 +1141,67 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final currentProfile = _profileService.getProfile();
     final userNpub = currentProfile.npub;
 
+    final isOwnMessage = message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
+        (message.npub != null &&
+         message.npub!.isNotEmpty &&
+         userNpub.isNotEmpty &&
+         message.npub == userNpub);
+
+    if (isOwnMessage) return true;
+
     // Check if user is admin or moderator
     return _chatService.security.canModerate(userNpub, _selectedChannel!.id);
+  }
+
+  bool _canDeleteStationMessage(ChatMessage message) {
+    final currentProfile = _profileService.getProfile();
+    final isOwnMessage = message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
+        (message.npub != null &&
+         message.npub!.isNotEmpty &&
+         currentProfile.npub.isNotEmpty &&
+         message.npub == currentProfile.npub);
+    return isOwnMessage;
+  }
+
+  Future<void> _deleteStationMessage(ChatMessage message) async {
+    if (_selectedStationRoom == null) return;
+    if (!_canDeleteStationMessage(message)) return;
+
+    try {
+      final success = await _stationService.deleteRoomMessage(
+        _selectedStationRoom!.stationUrl,
+        _selectedStationRoom!.id,
+        message.timestamp,
+      );
+
+      if (!success) {
+        _showError('Failed to delete message');
+        return;
+      }
+
+      final roomId = _selectedStationRoom!.id;
+      final updated = List<StationChatMessage>.from(
+        _stationMessageCache[roomId] ?? _stationMessages,
+      );
+      updated.removeWhere((msg) =>
+          msg.timestamp == message.timestamp &&
+          msg.callsign.toUpperCase() == message.author.toUpperCase());
+
+      _stationMessageCache[roomId] = updated;
+      _applyStationMessageLimit(updated);
+
+      final cacheKey = _lastRelayCacheKey ?? '';
+      if (cacheKey.isNotEmpty) {
+        await _cacheService.removeMessage(
+          cacheKey,
+          roomId,
+          message.timestamp,
+          message.author,
+        );
+      }
+    } catch (e) {
+      _showError('Failed to delete message: $e');
+    }
   }
 
   /// Delete a message
@@ -1075,10 +1212,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final currentProfile = _profileService.getProfile();
       final userNpub = currentProfile.npub;
 
-      await _chatService.deleteMessage(
-        _selectedChannel!.id,
-        message,
-        userNpub,
+      await _chatService.deleteMessageByTimestamp(
+        channelId: _selectedChannel!.id,
+        timestamp: message.timestamp,
+        authorCallsign: message.author,
+        actorNpub: userNpub,
       );
 
       // Remove from local list
@@ -1090,6 +1228,45 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _showSuccess('Message deleted');
     } catch (e) {
       _showError('Failed to delete message: $e');
+    }
+  }
+
+  void _setQuotedMessage(ChatMessage message) {
+    _setStateIfMounted(() {
+      _quotedMessage = message;
+    });
+  }
+
+  void _clearQuotedMessage() {
+    _setStateIfMounted(() {
+      _quotedMessage = null;
+    });
+  }
+
+  bool _isMessageHidden(ChatMessage message) {
+    if (_selectedChannel == null) return false;
+    return _chatService.isMessageHidden(_selectedChannel!.id, message);
+  }
+
+  Future<void> _hideMessage(ChatMessage message) async {
+    if (_selectedChannel == null) return;
+
+    try {
+      await _chatService.hideMessage(_selectedChannel!.id, message);
+      _setStateIfMounted(() {});
+    } catch (e) {
+      _showError('Failed to hide message: $e');
+    }
+  }
+
+  Future<void> _unhideMessage(ChatMessage message) async {
+    if (_selectedChannel == null) return;
+
+    try {
+      await _chatService.unhideMessage(_selectedChannel!.id, message);
+      _setStateIfMounted(() {});
+    } catch (e) {
+      _showError('Failed to unhide message: $e');
     }
   }
 
@@ -1132,6 +1309,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
 
+      if (_isImageFile(filePath)) {
+        await _openAttachedImage(message);
+        return;
+      }
+
       final file = File(filePath);
       if (!await file.exists()) {
         _showError('File not found: ${message.attachedFile}');
@@ -1149,6 +1331,88 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     } catch (e) {
       _showError('Failed to open file: $e');
     }
+  }
+
+  String? _resolveAttachedFilePath(ChatMessage message) {
+    if (!message.hasFile) return null;
+    if (widget.isRemoteDevice || widget.collection == null) return null;
+
+    final storagePath = widget.collection!.storagePath;
+    if (storagePath == null) return null;
+    if (_selectedChannel == null) return null;
+
+    if (_selectedChannel!.id == 'main') {
+      final year = message.dateTime.year.toString();
+      return path.join(
+        storagePath,
+        _selectedChannel!.folder,
+        year,
+        'files',
+        message.attachedFile!,
+      );
+    }
+
+    return path.join(
+      storagePath,
+      _selectedChannel!.folder,
+      'files',
+      message.attachedFile!,
+    );
+  }
+
+  bool _isImageFile(String pathOrName) {
+    final lower = pathOrName.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
+  }
+
+  Future<void> _openAttachedImage(ChatMessage message) async {
+    final filePath = _resolveAttachedFilePath(message);
+    if (filePath == null) {
+      _showError('Image not available');
+      return;
+    }
+
+    if (!file_helper.fileExists(filePath)) {
+      _showError('File not found: ${message.attachedFile}');
+      return;
+    }
+
+    final imagePaths = <String>[];
+    for (final msg in _messages) {
+      if (!msg.hasFile) continue;
+      final path = _resolveAttachedFilePath(msg);
+      if (path == null) continue;
+      if (!_isImageFile(path)) continue;
+      if (!file_helper.fileExists(path)) continue;
+      imagePaths.add(path);
+    }
+
+    if (imagePaths.isEmpty) {
+      _showError('No images available');
+      return;
+    }
+
+    var initialIndex = imagePaths.indexOf(filePath);
+    if (initialIndex < 0) {
+      imagePaths.add(filePath);
+      initialIndex = imagePaths.length - 1;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
   }
 
   /// Show new channel dialog
@@ -1199,17 +1463,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _isLoading = false;
         });
       }
-    }
-  }
-
-  /// Refresh current channel or station room
-  Future<void> _refreshChannel() async {
-    if (_selectedStationRoom != null) {
-      // Refresh station room messages
-      await _refreshRelayMessages();
-    } else if (_selectedChannel != null) {
-      // Refresh local channel
-      await _selectChannel(_selectedChannel!);
     }
   }
 
@@ -1369,11 +1622,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           },
         ),
         actions: [
-          // Show room info/management for RESTRICTED group channels only
+          // Show room info/management for group channels
           if (!widget.isRemoteDevice &&
               _selectedChannel != null &&
               _selectedChannel!.isGroup &&
-              _selectedChannel!.config?.visibility == 'RESTRICTED')
+              _selectedChannel!.config != null)
             IconButton(
               icon: const Icon(Icons.group),
               onPressed: _openRoomManagement,
@@ -1386,11 +1639,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               onPressed: _showNewChannelDialog,
               tooltip: _i18n.t('new_channel'),
             ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshChannel,
-            tooltip: _i18n.t('refresh'),
-          ),
           // Only show settings for local chat (not remote devices)
           if (!widget.isRemoteDevice)
             IconButton(
@@ -1468,9 +1716,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                   messages: _messages,
                                   isGroupChat: _selectedChannel!.isGroup,
                                   isLoading: _isLoading,
+                                  onLoadMore: _loadMoreLocalMessages,
                                   onFileOpen: _openAttachedFile,
                                   onMessageDelete: _deleteMessage,
                                   canDeleteMessage: _canDeleteMessage,
+                                  onMessageQuote: _setQuotedMessage,
+                                  onMessageHide: _hideMessage,
+                                  isMessageHidden: _isMessageHidden,
+                                  onMessageUnhide: _unhideMessage,
+                                  getAttachmentPath: _resolveAttachedFilePath,
+                                  onImageOpen: _openAttachedImage,
                                 ),
                               ),
                               // Message input
@@ -1479,6 +1734,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                 maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
                                 allowFiles:
                                     _selectedChannel!.config?.fileUpload ?? true,
+                                quotedMessage: _quotedMessage,
+                                onClearQuote: _clearQuotedMessage,
                               ),
                             ],
                           ),
@@ -1503,9 +1760,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     messages: _messages,
                     isGroupChat: _selectedChannel!.isGroup,
                     isLoading: _isLoading,
+                    onLoadMore: _loadMoreLocalMessages,
                     onFileOpen: _openAttachedFile,
                     onMessageDelete: _deleteMessage,
                     canDeleteMessage: _canDeleteMessage,
+                    onMessageQuote: _setQuotedMessage,
+                    onMessageHide: _hideMessage,
+                    isMessageHidden: _isMessageHidden,
+                    onMessageUnhide: _unhideMessage,
+                    getAttachmentPath: _resolveAttachedFilePath,
+                    onImageOpen: _openAttachedImage,
                   ),
                 ),
                 // Message input
@@ -1513,6 +1777,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                   onSend: _sendMessage,
                   maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
                   allowFiles: _selectedChannel!.config?.fileUpload ?? true,
+                  quotedMessage: _quotedMessage,
+                  onClearQuote: _clearQuotedMessage,
                 ),
               ],
             );
@@ -1624,9 +1890,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             messages: _convertStationMessages(_stationMessages),
             isGroupChat: true,
             isLoading: _isLoading,
+            onLoadMore: _loadMoreStationMessages,
             onFileOpen: (_) {}, // Station messages don't support file attachments
-            onMessageDelete: (_) {}, // Can't delete station messages
-            canDeleteMessage: (_) => false,
+            onMessageDelete: _deleteStationMessage,
+            canDeleteMessage: _canDeleteStationMessage,
+            onMessageQuote: _setQuotedMessage,
           ),
         ),
         // Message input (no file upload for station) - disabled when offline
@@ -1635,6 +1903,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onSend: _sendMessage,
             maxLength: 1000,
             allowFiles: false,
+            quotedMessage: _quotedMessage,
+            onClearQuote: _clearQuotedMessage,
           )
         else
           Container(
@@ -1780,11 +2050,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                       ],
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.refresh),
-                    onPressed: _loadRelayRooms,
-                    tooltip: _i18n.t('refresh_rooms'),
-                  ),
+                  const SizedBox(width: 8),
                 ],
               ),
             ),
@@ -2100,11 +2366,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _loadRelayRooms,
-                  tooltip: _i18n.t('refresh_rooms'),
-                ),
               ],
             ),
           ),
@@ -2197,10 +2458,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            FilledButton.icon(
+            FilledButton(
               onPressed: _loadRelayRooms,
-              icon: const Icon(Icons.refresh),
-              label: Text(_i18n.t('refresh')),
+              child: Text(_i18n.t('refresh')),
             ),
           ],
         ),

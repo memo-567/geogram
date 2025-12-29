@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../services/i18n_service.dart';
+import '../models/chat_message.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 
 /// Widget for composing and sending chat messages
 class MessageInputWidget extends StatefulWidget {
@@ -16,6 +18,8 @@ class MessageInputWidget extends StatefulWidget {
   final bool allowFiles;
   /// Optional callback for mic button (voice recording)
   final VoidCallback? onMicPressed;
+  final ChatMessage? quotedMessage;
+  final VoidCallback? onClearQuote;
 
   const MessageInputWidget({
     Key? key,
@@ -23,6 +27,8 @@ class MessageInputWidget extends StatefulWidget {
     this.maxLength = 500,
     this.allowFiles = true,
     this.onMicPressed,
+    this.quotedMessage,
+    this.onClearQuote,
   }) : super(key: key);
 
   @override
@@ -64,6 +70,8 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Quote preview (if replying)
+          if (widget.quotedMessage != null) _buildQuotePreview(theme),
           // File preview (if file selected)
           if (_selectedFilePath != null) _buildFilePreview(theme),
           // Input row
@@ -72,6 +80,13 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                // Attach image button
+                if (widget.allowFiles)
+                  IconButton(
+                    icon: const Icon(Icons.image_outlined),
+                    onPressed: _isSending ? null : _pickImage,
+                    tooltip: _i18n.t('attach_image'),
+                  ),
                 // Attach file button
                 if (widget.allowFiles)
                   IconButton(
@@ -150,6 +165,16 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
 
   /// Build file preview widget
   Widget _buildFilePreview(ThemeData theme) {
+    final isImage = _isImageFile(_selectedFilePath!);
+    final imageWidget = isImage
+        ? file_helper.buildFileImage(
+            _selectedFilePath!,
+            width: 48,
+            height: 48,
+            fit: BoxFit.cover,
+          )
+        : null;
+
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       padding: const EdgeInsets.all(12),
@@ -159,10 +184,16 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.insert_drive_file,
-            color: theme.colorScheme.primary,
-          ),
+          if (imageWidget != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: imageWidget,
+            )
+          else
+            Icon(
+              Icons.insert_drive_file,
+              color: theme.colorScheme.primary,
+            ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -197,6 +228,62 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
     );
   }
 
+  /// Build quote preview widget
+  Widget _buildQuotePreview(ThemeData theme) {
+    final quoted = widget.quotedMessage!;
+    final excerpt = quoted.content.isNotEmpty
+        ? quoted.content
+        : _i18n.t('message');
+    final preview = excerpt.length > 120 ? '${excerpt.substring(0, 120)}...' : excerpt;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(color: theme.colorScheme.primary, width: 3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  quoted.author,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  preview,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (widget.onClearQuote != null)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: widget.onClearQuote,
+              tooltip: _i18n.t('remove_quote'),
+              iconSize: 18,
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Pick a file to attach
   Future<void> _pickFile() async {
     try {
@@ -218,6 +305,41 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
         );
       }
     }
+  }
+
+  /// Pick an image to attach
+  Future<void> _pickImage() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          _selectedFilePath = result.files.single.path;
+          _selectedFileName = result.files.single.name;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('error_picking_file', params: ['$e'])),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  bool _isImageFile(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
   }
 
   /// Clear selected file

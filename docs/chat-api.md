@@ -451,9 +451,76 @@ Hello everyone!
 --> signature: abc123...
 ```
 
+**Common metadata fields:**
+
+- `file`: Attached filename stored under the room `files/` folder
+- `quote`: Timestamp of the quoted message (`YYYY-MM-DD HH:MM_ss`)
+- `quote_author`: Callsign of the quoted message author
+- `quote_excerpt`: Short excerpt for display
+- `edited_at`: Timestamp of last edit
+
+**Example with attachment + quote:**
+```
+> 2025-12-09 10:30_15 -- CR7BBQ
+Photo from the event
+--> file: abc123def456_photo.jpg
+--> quote: 2025-12-08 18:10_02
+--> quote_author: X1ABCD
+--> quote_excerpt: See you there?
+--> npub: npub1abc...
+--> signature: abc123...
+```
+
+**Images:** Image files are attached as normal files. Clients can render them inline when the extension is an image type (`.jpg`, `.png`, `.gif`, `.webp`, etc.).
+
+**Hidden messages (client-only):** Hidden messages are stored locally per collection in `extra/hidden_messages.json` using `{timestamp}|{author}` keys. This is not synchronized via the API.
+
 See [Chat Format Specification](../../central/docs/collections/types/chat-format-specification.md) for details.
 
 ---
+
+## Moderation & Roles
+
+### GET /api/chat/{roomId}/roles
+
+Returns the role map for a room (requires NOSTR auth).
+
+**Response:**
+```json
+{
+  "roomId": "main",
+  "role": "moderator",
+  "owner": "npub1...",
+  "admins": ["npub1..."],
+  "moderators": ["npub1..."],
+  "members": ["npub1..."]
+}
+```
+
+### POST /api/chat/{roomId}/promote
+
+Promote a member to moderator/admin. Requires a NOSTR event with:
+- `["action","promote"]`
+- `["target","npub1..."]`
+- `["role","moderator|admin"]`
+
+### POST /api/chat/{roomId}/demote
+
+Demote a member. Requires:
+- `["action","demote"]`
+- `["target","npub1..."]`
+
+### POST /api/chat/{roomId}/ban/{npub}
+
+Ban a member. Requires:
+- `["action","ban"]`
+- `["target","npub1..."]` (optional if provided in URL)
+
+### DELETE /api/chat/{roomId}/ban/{npub}
+
+Unban a member. Requires:
+- `["action","unban"]`
+- `["target","npub1..."]` (optional if provided in URL)
 
 ## Security Considerations
 

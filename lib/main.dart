@@ -691,7 +691,7 @@ class _HomePageState extends State<HomePage> {
                 if (mounted) {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const UpdatePage(autoInstall: true)),
+                    MaterialPageRoute(builder: (_) => const UpdatePage()),
                   );
                 }
               });

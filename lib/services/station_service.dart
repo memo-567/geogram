@@ -741,13 +741,21 @@ class StationService {
     String stationUrl,
     String roomId, {
     int limit = 50,
+    DateTime? after,
     String? stationCallsign,
   }) async {
     try {
+      final query = <String, String>{
+        'limit': limit.toString(),
+      };
+      if (after != null) {
+        query['after'] = after.toIso8601String();
+      }
+      final queryString = Uri(queryParameters: query).query;
       final response = await _stationApiRequest(
         stationUrl: stationUrl,
         method: 'GET',
-        path: '/api/chat/rooms/$roomId/messages?limit=$limit',
+        path: '/api/chat/rooms/$roomId/messages?$queryString',
         stationCallsign: stationCallsign,
       );
 
@@ -856,11 +864,14 @@ class StationService {
     String callsign,
     String content, {
     bool useNostrProtocol = true,
+    Map<String, String>? metadata,
   }) async {
     try {
       final profile = ProfileService().getProfile();
+      final hasMetadata = metadata != null && metadata.isNotEmpty;
+      final useNostr = useNostrProtocol && !hasMetadata;
 
-      if (useNostrProtocol) {
+      if (useNostr) {
         // Verify WebSocket connection is alive before attempting to send
         final isConnected = await _wsService.ensureConnected();
         if (!isConnected) {
@@ -917,7 +928,7 @@ class StationService {
         }
       }
 
-      // HTTP fallback (when WebSocket is unavailable or send failed)
+      // HTTP fallback (when WebSocket is unavailable, send failed, or metadata needs to be included)
       {
         LogService().log('Posting message via HTTP to room: $roomId');
 
@@ -972,6 +983,9 @@ class StationService {
           'signature': signedEvent.sig,
           'created_at': signedEvent.createdAt,
         };
+        if (hasMetadata) {
+          body['metadata'] = metadata;
+        }
 
         final response = await _stationApiRequest(
           stationUrl: stationUrl,
@@ -993,6 +1007,56 @@ class StationService {
       }
     } catch (e) {
       LogService().log('Error posting message: $e');
+      return false;
+    }
+  }
+
+  /// Delete a message from a station chat room (author only)
+  Future<bool> deleteRoomMessage(
+    String stationUrl,
+    String roomId,
+    String timestamp,
+  ) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        LogService().log('Cannot delete message: NOSTR keys not configured');
+        return false;
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: 'delete',
+        tags: [
+          ['action', 'delete'],
+          ['room', roomId],
+          ['timestamp', timestamp],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign delete event');
+        return false;
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final response = await _stationApiRequest(
+        stationUrl: stationUrl,
+        method: 'DELETE',
+        path: '/api/chat/rooms/$roomId/messages/${Uri.encodeComponent(timestamp)}',
+        headers: {'Authorization': 'Nostr $authEvent'},
+      );
+
+      return response != null && response.statusCode == 200;
+    } catch (e) {
+      LogService().log('Error deleting message: $e');
       return false;
     }
   }

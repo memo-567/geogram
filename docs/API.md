@@ -1066,6 +1066,34 @@ Posts a message to a chat room.
 
 **Note:** Posting to RESTRICTED rooms requires NOSTR authentication with the sender's npub in the authorized participants list.
 
+**Message metadata (stored in chat files):**
+- `file`: Attached filename under the room `files/` folder
+- `quote`: Timestamp of the quoted message
+- `quote_author`: Callsign of the quoted author
+- `quote_excerpt`: Short excerpt for display
+
+Images are attached as files; clients may render them inline based on file extension.
+
+#### GET /api/chat/{roomId}/roles
+
+Returns room roles for moderation (requires NOSTR auth).
+
+#### POST /api/chat/{roomId}/promote
+
+Promotes a member to `moderator` or `admin` (requires NOSTR event with `promote` action).
+
+#### POST /api/chat/{roomId}/demote
+
+Demotes a member (requires NOSTR event with `demote` action).
+
+#### POST /api/chat/{roomId}/ban/{npub}
+
+Bans a member (requires NOSTR event with `ban` action).
+
+#### DELETE /api/chat/{roomId}/ban/{npub}
+
+Unbans a member (requires NOSTR event with `unban` action).
+
 ---
 
 ### Direct Messages

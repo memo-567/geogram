@@ -16,6 +16,12 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onFileOpen;
   final Function(ChatMessage)? onMessageDelete;
   final bool Function(ChatMessage)? canDeleteMessage;
+  final Function(ChatMessage)? onMessageQuote;
+  final Function(ChatMessage)? onMessageHide;
+  final bool Function(ChatMessage)? isMessageHidden;
+  final Function(ChatMessage)? onMessageUnhide;
+  final String? Function(ChatMessage)? getAttachmentPath;
+  final Function(ChatMessage)? onImageOpen;
   /// Callback to get voice file path for a message
   final Future<String?> Function(ChatMessage)? getVoiceFilePath;
 
@@ -28,6 +34,12 @@ class MessageListWidget extends StatefulWidget {
     this.onFileOpen,
     this.onMessageDelete,
     this.canDeleteMessage,
+    this.onMessageQuote,
+    this.onMessageHide,
+    this.isMessageHidden,
+    this.onMessageUnhide,
+    this.getAttachmentPath,
+    this.onImageOpen,
     this.getVoiceFilePath,
   }) : super(key: key);
 
@@ -107,6 +119,7 @@ class _MessageListWidgetState extends State<MessageListWidget> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final items = _buildItems();
 
     return Stack(
       children: [
@@ -116,7 +129,7 @@ class _MessageListWidgetState extends State<MessageListWidget> {
             : ListView.builder(
                 controller: _scrollController,
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                itemCount: widget.messages.length + (widget.isLoading ? 1 : 0),
+                itemCount: items.length + (widget.isLoading ? 1 : 0),
                 itemBuilder: (context, index) {
                   // Loading indicator at top
                   if (widget.isLoading && index == 0) {
@@ -136,9 +149,14 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                   }
 
                   // Message bubble
-                  final messageIndex =
-                      widget.isLoading ? index - 1 : index;
-                  final message = widget.messages[messageIndex];
+                  final messageIndex = widget.isLoading ? index - 1 : index;
+                  final item = items[messageIndex];
+
+                  if (item.isSeparator) {
+                    return _buildDateSeparator(theme, item.label ?? '');
+                  }
+
+                  final message = item.message!;
 
                   return MessageBubbleWidget(
                     key: ValueKey(message.timestamp + message.author),
@@ -153,6 +171,24 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     canDelete: widget.canDeleteMessage != null
                         ? widget.canDeleteMessage!(message)
                         : false,
+                    onQuote: widget.onMessageQuote != null
+                        ? () => widget.onMessageQuote!(message)
+                        : null,
+                    onHide: widget.onMessageHide != null
+                        ? () => widget.onMessageHide!(message)
+                        : null,
+                    isHidden: widget.isMessageHidden != null
+                        ? widget.isMessageHidden!(message)
+                        : false,
+                    onUnhide: widget.onMessageUnhide != null
+                        ? () => widget.onMessageUnhide!(message)
+                        : null,
+                    attachmentPath: widget.getAttachmentPath != null
+                        ? widget.getAttachmentPath!(message)
+                        : null,
+                    onImageOpen: widget.onImageOpen != null
+                        ? () => widget.onImageOpen!(message)
+                        : null,
                     // Voice message support
                     onVoiceDownloadRequested: widget.getVoiceFilePath != null && message.hasVoice
                         ? () => widget.getVoiceFilePath!(message)
@@ -207,4 +243,73 @@ class _MessageListWidgetState extends State<MessageListWidget> {
       ),
     );
   }
+
+  List<_MessageListItem> _buildItems() {
+    final items = <_MessageListItem>[];
+    String? lastDate;
+
+    for (final message in widget.messages) {
+      final date = message.datePortion;
+      if (date != lastDate) {
+        lastDate = date;
+        items.add(_MessageListItem.separator(_formatDateLabel(message.dateTime)));
+      }
+      items.add(_MessageListItem.message(message));
+    }
+
+    return items;
+  }
+
+  String _formatDateLabel(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final msgDate = DateTime(date.year, date.month, date.day);
+    final difference = msgDate.difference(today).inDays;
+
+    if (difference == 0) return 'Today';
+    if (difference == -1) return 'Yesterday';
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildDateSeparator(ThemeData theme, String label) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Divider(
+              color: theme.colorScheme.outlineVariant,
+              thickness: 1,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Divider(
+              color: theme.colorScheme.outlineVariant,
+              thickness: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MessageListItem {
+  final ChatMessage? message;
+  final String? label;
+
+  bool get isSeparator => label != null;
+
+  _MessageListItem.message(this.message) : label = null;
+  _MessageListItem.separator(this.label) : message = null;
 }

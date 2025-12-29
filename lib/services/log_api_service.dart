@@ -2465,6 +2465,15 @@ class LogApiService {
       String? npub;
       String? signature;
       String? eventId;
+      final extraMetadata = <String, String>{};
+
+      final rawMetadata = body['metadata'] ?? body['meta'];
+      if (rawMetadata is Map) {
+        rawMetadata.forEach((key, value) {
+          if (value == null) return;
+          extraMetadata[key.toString()] = value.toString();
+        });
+      }
 
       if (body.containsKey('event')) {
         // NOSTR-signed message from external user
@@ -2572,6 +2581,20 @@ class LogApiService {
       if (npub != null) metadata['npub'] = npub;
       if (eventId != null) metadata['event_id'] = eventId;
       if (signature != null) metadata['signature'] = signature;
+      if (extraMetadata.isNotEmpty) {
+        const reserved = {
+          'created_at',
+          'npub',
+          'event_id',
+          'signature',
+          'verified',
+          'status',
+        };
+        extraMetadata.forEach((key, value) {
+          if (reserved.contains(key)) return;
+          metadata[key] = value;
+        });
+      }
 
       final message = ChatMessage.now(
         author: author,

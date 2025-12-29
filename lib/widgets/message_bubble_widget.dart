@@ -5,10 +5,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/devices_service.dart';
 import 'voice_player_widget.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 
 /// Widget for displaying a single chat message bubble
 class MessageBubbleWidget extends StatelessWidget {
@@ -17,7 +19,13 @@ class MessageBubbleWidget extends StatelessWidget {
   final VoidCallback? onFileOpen;
   final VoidCallback? onLocationView;
   final VoidCallback? onDelete;
+  final VoidCallback? onQuote;
+  final VoidCallback? onHide;
   final bool canDelete;
+  final bool isHidden;
+  final VoidCallback? onUnhide;
+  final String? attachmentPath;
+  final VoidCallback? onImageOpen;
   /// Path to the voice file (for voice messages)
   final String? voiceFilePath;
   /// Callback to request download of voice file from remote
@@ -30,9 +38,15 @@ class MessageBubbleWidget extends StatelessWidget {
     this.onFileOpen,
     this.onLocationView,
     this.onDelete,
+    this.onQuote,
+    this.onHide,
     this.canDelete = false,
     this.voiceFilePath,
     this.onVoiceDownloadRequested,
+    this.isHidden = false,
+    this.onUnhide,
+    this.attachmentPath,
+    this.onImageOpen,
   }) : super(key: key);
 
   @override
@@ -60,6 +74,18 @@ class MessageBubbleWidget extends StatelessWidget {
       bubbleColor = _getBubbleColor(device?.preferredColor, theme);
       textColor = _getTextColor(device?.preferredColor, theme);
     }
+
+    final hasActions = (onQuote != null) || (onHide != null) || (canDelete && onDelete != null);
+    final isImageAttachment = _isImageAttachment();
+    final imageWidget = isImageAttachment && attachmentPath != null
+        ? file_helper.buildFileImage(
+            attachmentPath!,
+            width: 220,
+            height: 140,
+            fit: BoxFit.cover,
+          )
+        : null;
+    final showImagePreview = imageWidget != null;
 
     return Align(
       alignment: isOwnMessage ? Alignment.centerRight : Alignment.centerLeft,
@@ -99,32 +125,50 @@ class MessageBubbleWidget extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Voice message player (takes priority over text content)
-                    if (message.hasVoice)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: VoicePlayerWidget(
-                          key: ValueKey('voice_${message.voiceFile}'),
-                          filePath: voiceFilePath ?? '',
-                          durationSeconds: message.voiceDuration,
-                          isLocal: voiceFilePath != null,
-                          onDownloadRequested: onVoiceDownloadRequested,
+                    if (isHidden)
+                      _buildHiddenMessage(theme, textColor)
+                    else ...[
+                      if (message.isQuote) _buildQuotePreview(theme),
+                      if (showImagePreview)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: InkWell(
+                            onTap: onImageOpen ?? onFileOpen,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: imageWidget,
+                            ),
+                          ),
                         ),
-                      )
-                    // Text message content
-                    else if (message.content.isNotEmpty)
-                      SelectableText(
-                        message.content,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: textColor,
+                      // Voice message player (takes priority over text content)
+                      if (message.hasVoice)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: VoicePlayerWidget(
+                            key: ValueKey('voice_${message.voiceFile}'),
+                            filePath: voiceFilePath ?? '',
+                            durationSeconds: message.voiceDuration,
+                            isLocal: voiceFilePath != null,
+                            onDownloadRequested: onVoiceDownloadRequested,
+                          ),
+                        )
+                      // Text message content
+                      else if (message.content.isNotEmpty)
+                        SelectableText(
+                          message.content,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: textColor,
+                          ),
                         ),
-                      ),
-                    // Metadata chips (file, location, poll - but NOT signature)
-                    if (message.hasFile || message.hasLocation || message.isPoll)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: _buildMetadataChips(context, theme, isOwnMessage),
-                      ),
+                      // Metadata chips (file, location, poll - but NOT signature)
+                      if (((!isImageAttachment || !showImagePreview) && message.hasFile) ||
+                          message.hasLocation ||
+                          message.isPoll)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: _buildMetadataChips(context, theme, isOwnMessage),
+                        ),
+                    ],
                     // Timestamp, signature icon, and options
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
@@ -204,17 +248,19 @@ class MessageBubbleWidget extends StatelessWidget {
                               ),
                             ),
                           ],
-                          // Options menu button (moderator only, not for own messages)
-                          if (canDelete && onDelete != null && !isOwnMessage) ...[
+                          // Options menu button (desktop)
+                          if (hasActions && _isDesktopPlatform()) ...[
                             const SizedBox(width: 6),
-                            InkWell(
-                              onTap: () => _showMessageOptions(context),
-                              child: Icon(
-                                Icons.more_horiz,
-                                size: 16,
-                                color: theme.colorScheme.onSurfaceVariant
-                                        .withOpacity(0.6),
+                            IconButton(
+                              icon: const Icon(Icons.more_horiz, size: 16),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 24,
+                                minHeight: 24,
                               ),
+                              tooltip: 'Message options',
+                              onPressed: () => _showMessageOptions(context),
+                              color: textColor.withOpacity(0.7),
                             ),
                           ],
                         ],
@@ -226,6 +272,92 @@ class MessageBubbleWidget extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  bool _isImageAttachment() {
+    if (!message.hasFile) return false;
+    final name = (attachmentPath ?? message.attachedFile ?? '').toLowerCase();
+    return name.endsWith('.jpg') ||
+        name.endsWith('.jpeg') ||
+        name.endsWith('.png') ||
+        name.endsWith('.gif') ||
+        name.endsWith('.webp') ||
+        name.endsWith('.bmp');
+  }
+
+  bool _isDesktopPlatform() {
+    if (kIsWeb) return true;
+    return defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux;
+  }
+
+  Widget _buildHiddenMessage(ThemeData theme, Color textColor) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.visibility_off,
+          size: 16,
+          color: textColor.withOpacity(0.7),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          'Message hidden',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: textColor.withOpacity(0.7),
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+        if (onUnhide != null) ...[
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onUnhide,
+            child: const Text('Show'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildQuotePreview(ThemeData theme) {
+    final author = message.quotedAuthor ?? 'Unknown';
+    final excerpt = message.quotedExcerpt ?? '';
+    final display = excerpt.isNotEmpty ? excerpt : 'Quoted message';
+    final truncated = display.length > 120 ? '${display.substring(0, 120)}...' : display;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(color: theme.colorScheme.primary, width: 3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            author,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            truncated,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -314,6 +446,15 @@ class MessageBubbleWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (onQuote != null)
+              ListTile(
+                leading: const Icon(Icons.reply),
+                title: const Text('Reply'),
+                onTap: () {
+                  Navigator.pop(context);
+                  onQuote!();
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.copy),
               title: const Text('Copy message'),
@@ -328,6 +469,15 @@ class MessageBubbleWidget extends StatelessWidget {
                 );
               },
             ),
+            if (onHide != null)
+              ListTile(
+                leading: const Icon(Icons.visibility_off),
+                title: const Text('Hide message'),
+                onTap: () {
+                  Navigator.pop(context);
+                  onHide!();
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.info_outline),
               title: const Text('Message info'),

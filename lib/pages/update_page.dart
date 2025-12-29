@@ -26,12 +26,19 @@ class _UpdatePageState extends State<UpdatePage> {
   String? _error;
   String? _statusMessage;
   String? _completedDownloadPath; // Track completed download ready to install
+  VoidCallback? _completedDownloadListener;
 
   @override
   void initState() {
     super.initState();
     // Mark that UpdatePage is visible to suppress the update banner
     _updateService.isUpdatePageVisible = true;
+    _completedDownloadListener = () {
+      _setStateIfMounted(() {
+        _completedDownloadPath = _updateService.completedDownloadPathNotifier.value;
+      });
+    };
+    _updateService.completedDownloadPathNotifier.addListener(_completedDownloadListener!);
     _loadData();
   }
 
@@ -39,11 +46,19 @@ class _UpdatePageState extends State<UpdatePage> {
   void dispose() {
     // Mark that UpdatePage is no longer visible
     _updateService.isUpdatePageVisible = false;
+    if (_completedDownloadListener != null) {
+      _updateService.completedDownloadPathNotifier.removeListener(_completedDownloadListener!);
+    }
     super.dispose();
   }
 
+  void _setStateIfMounted(VoidCallback callback) {
+    if (!mounted) return;
+    setState(callback);
+  }
+
   Future<void> _loadData() async {
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _error = null;
     });
@@ -59,31 +74,30 @@ class _UpdatePageState extends State<UpdatePage> {
         _completedDownloadPath = _updateService.completedDownloadPath;
       } else if (_latestRelease != null) {
         // Check filesystem for completed download (in case app was restarted)
-        _completedDownloadPath = await _updateService.findCompletedDownload(_latestRelease!);
+        final foundPath = await _updateService.findCompletedDownload(_latestRelease!);
+        if (foundPath != null) {
+          _updateService.restoreCompletedDownload(foundPath, _latestRelease!.version);
+          _completedDownloadPath = foundPath;
+        }
       }
     } catch (e) {
       _error = e.toString();
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
 
-    // Auto-install if requested and update is available
-    if (widget.autoInstall && _latestRelease != null) {
-      final isNewer = _updateService.isNewerVersion(
-        _updateService.getCurrentVersion(),
-        _latestRelease!.version,
-      );
-      if (isNewer) {
-        // If already downloaded, just install
-        if (_completedDownloadPath != null) {
-          _installCompletedDownload();
-        } else {
-          _downloadAndInstall();
-        }
-        return; // Don't check for updates if auto-installing
+    if (!mounted) return;
+
+    // Auto-install flow (only installs if already downloaded; otherwise pre-download)
+    if (widget.autoInstall && _latestRelease != null && _updateService.isLatestUpdateReady) {
+      if (_completedDownloadPath != null) {
+        _installCompletedDownload();
+      } else {
+        _downloadUpdate();
       }
+      return; // Don't check for updates if auto-installing
     }
 
     // Automatically check for updates in background when visiting this page
@@ -96,7 +110,7 @@ class _UpdatePageState extends State<UpdatePage> {
     // Don't check if already checking or downloading
     if (_updateService.isChecking || _updateService.isDownloading) return;
 
-    setState(() {
+    _setStateIfMounted(() {
       _statusMessage = _i18n.t('checking_for_updates');
     });
 
@@ -105,39 +119,28 @@ class _UpdatePageState extends State<UpdatePage> {
       if (!mounted) return;
 
       if (release != null) {
-        setState(() {
-          _latestRelease = release;
+        _latestRelease = release;
+        final updateReady = _updateService.isLatestUpdateReady;
+        _setStateIfMounted(() {
+          _statusMessage = updateReady
+              ? _i18n.t('update_available_msg', params: [release.version])
+              : _i18n.t('running_latest_version');
         });
-
-        final isNewer = _updateService.isNewerVersion(
-          _updateService.getCurrentVersion(),
-          release.version,
-        );
-        if (isNewer) {
-          setState(() {
-            _statusMessage = _i18n.t('update_available_msg', params: [release.version]);
-          });
-        } else {
-          setState(() {
-            _statusMessage = _i18n.t('running_latest_version');
-          });
-        }
       } else {
-        setState(() {
+        _setStateIfMounted(() {
           _statusMessage = _i18n.t('could_not_check_updates');
         });
       }
     } catch (e) {
-      if (!mounted) return;
       // Don't show error for background check - just clear status
-      setState(() {
+      _setStateIfMounted(() {
         _statusMessage = null;
       });
     }
   }
 
   Future<void> _checkForUpdates() async {
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _error = null;
       _statusMessage = _i18n.t('checking_for_updates');
@@ -146,15 +149,10 @@ class _UpdatePageState extends State<UpdatePage> {
     try {
       _latestRelease = await _updateService.checkForUpdates();
       if (_latestRelease != null) {
-        final isNewer = _updateService.isNewerVersion(
-          _updateService.getCurrentVersion(),
-          _latestRelease!.version,
-        );
-        if (isNewer) {
-          _statusMessage = _i18n.t('update_available_msg', params: [_latestRelease!.version]);
-        } else {
-          _statusMessage = _i18n.t('running_latest_version');
-        }
+        final updateReady = _updateService.isLatestUpdateReady;
+        _statusMessage = updateReady
+            ? _i18n.t('update_available_msg', params: [_latestRelease!.version])
+            : _i18n.t('running_latest_version');
       } else {
         _statusMessage = _i18n.t('could_not_check_updates');
       }
@@ -162,49 +160,19 @@ class _UpdatePageState extends State<UpdatePage> {
       _error = e.toString();
       _statusMessage = null;
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
   }
 
-  Future<void> _downloadAndInstall() async {
+  Future<void> _downloadUpdate() async {
     if (_latestRelease == null) return;
+    if (_completedDownloadPath != null) return;
 
-    // On Android, check install permission first
-    if (!kIsWeb && Platform.isAndroid) {
-      final canInstall = await _updateService.canInstallPackages();
-      if (!canInstall) {
-        // Show dialog explaining the permission is needed
-        if (mounted) {
-          final shouldOpenSettings = await showDialog<bool>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text(_i18n.t('permission_required')),
-              content: Text(_i18n.t('permission_required_msg')),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: Text(_i18n.t('cancel')),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: Text(_i18n.t('open_settings')),
-                ),
-              ],
-            ),
-          );
-
-          if (shouldOpenSettings == true) {
-            await _updateService.openInstallPermissionSettings();
-          }
-        }
-        return;
-      }
-    }
-
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
+      _error = null;
       _statusMessage = _i18n.t('downloading_update');
     });
 
@@ -216,38 +184,26 @@ class _UpdatePageState extends State<UpdatePage> {
         },
       );
 
-      if (downloadPath != null) {
-        setState(() {
-          _statusMessage = _i18n.t('applying_update');
-        });
+      if (!mounted) return;
 
-        final success = await _updateService.applyUpdate(downloadPath);
-        if (success) {
-          final platform = _updateService.detectPlatform();
-          if (platform == UpdatePlatform.android) {
-            _statusMessage = _i18n.t('apk_installer_launched');
-          } else {
-            _statusMessage = _i18n.t('update_installed_restart');
-            _backups = await _updateService.listBackups();
-          }
-        } else {
-          // On Android, this might mean the permission was revoked during download
-          if (!kIsWeb && Platform.isAndroid) {
-            _error = _i18n.t('install_update_failed');
-          } else {
-            _error = _i18n.t('apply_update_failed');
-          }
-          _statusMessage = null;
-        }
+      if (downloadPath != null) {
+        _setStateIfMounted(() {
+          _completedDownloadPath = downloadPath;
+          _statusMessage = _i18n.t('ready_to_install');
+        });
       } else {
-        _error = _i18n.t('download_failed');
-        _statusMessage = null;
+        _setStateIfMounted(() {
+          _error = _i18n.t('download_failed');
+          _statusMessage = null;
+        });
       }
     } catch (e) {
-      _error = e.toString();
-      _statusMessage = null;
+      _setStateIfMounted(() {
+        _error = e.toString();
+        _statusMessage = null;
+      });
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
@@ -255,7 +211,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
   /// Install a completed download (skip download, go straight to install)
   Future<void> _installCompletedDownload() async {
-    if (_completedDownloadPath == null) return;
+    if (_completedDownloadPath == null || !mounted) return;
 
     // On Android, check install permission first
     if (!kIsWeb && Platform.isAndroid) {
@@ -289,7 +245,7 @@ class _UpdatePageState extends State<UpdatePage> {
       }
     }
 
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _statusMessage = _i18n.t('applying_update');
     });
@@ -303,25 +259,37 @@ class _UpdatePageState extends State<UpdatePage> {
 
         final platform = _updateService.detectPlatform();
         if (platform == UpdatePlatform.android) {
-          _statusMessage = _i18n.t('apk_installer_launched');
+          _setStateIfMounted(() {
+            _statusMessage = _i18n.t('apk_installer_launched');
+          });
         } else {
-          _statusMessage = _i18n.t('update_installed_restart');
-          _backups = await _updateService.listBackups();
+          final backups = await _updateService.listBackups();
+          _setStateIfMounted(() {
+            _statusMessage = _i18n.t('update_installed_restart');
+            _backups = backups;
+          });
         }
       } else {
         // On Android, this might mean the permission was revoked
         if (!kIsWeb && Platform.isAndroid) {
-          _error = _i18n.t('install_update_failed');
+          _setStateIfMounted(() {
+            _error = _i18n.t('install_update_failed');
+            _statusMessage = null;
+          });
         } else {
-          _error = _i18n.t('apply_update_failed');
+          _setStateIfMounted(() {
+            _error = _i18n.t('apply_update_failed');
+            _statusMessage = null;
+          });
         }
-        _statusMessage = null;
       }
     } catch (e) {
-      _error = e.toString();
-      _statusMessage = null;
+      _setStateIfMounted(() {
+        _error = e.toString();
+        _statusMessage = null;
+      });
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
@@ -348,7 +316,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
     if (confirmed != true) return;
 
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _statusMessage = _i18n.t('rolling_back');
     });
@@ -356,16 +324,22 @@ class _UpdatePageState extends State<UpdatePage> {
     try {
       final success = await _updateService.rollback(backup);
       if (success) {
-        _statusMessage = _i18n.t('rollback_complete');
+        _setStateIfMounted(() {
+          _statusMessage = _i18n.t('rollback_complete');
+        });
       } else {
-        _error = _i18n.t('rollback_failed');
-        _statusMessage = null;
+        _setStateIfMounted(() {
+          _error = _i18n.t('rollback_failed');
+          _statusMessage = null;
+        });
       }
     } catch (e) {
-      _error = e.toString();
-      _statusMessage = null;
+      _setStateIfMounted(() {
+        _error = e.toString();
+        _statusMessage = null;
+      });
     } finally {
-      setState(() {
+      _setStateIfMounted(() {
         _isLoading = false;
       });
     }
@@ -397,7 +371,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
     final success = await _updateService.deleteBackup(backup);
     if (success) {
-      setState(() {
+      _setStateIfMounted(() {
         _backups.remove(backup);
       });
       if (mounted) {
@@ -412,8 +386,10 @@ class _UpdatePageState extends State<UpdatePage> {
     final success = await _updateService.togglePinBackup(backup);
     if (success) {
       // Reload backups to reflect the new pin status
-      _backups = await _updateService.listBackups();
-      setState(() {});
+      final backups = await _updateService.listBackups();
+      _setStateIfMounted(() {
+        _backups = backups;
+      });
       if (mounted) {
         final message = backup.isPinned
             ? _i18n.t('backup_unpinned')
@@ -436,18 +412,14 @@ class _UpdatePageState extends State<UpdatePage> {
   void _handleUpdateCardTap() {
     if (_isLoading) return;
 
-    final hasUpdate = _latestRelease != null &&
-        _updateService.isNewerVersion(
-          _updateService.getCurrentVersion(),
-          _latestRelease!.version,
-        );
+    final hasUpdate = _updateService.isLatestUpdateReady;
 
     if (hasUpdate && !kIsWeb) {
       // If download already completed, just install
       if (_completedDownloadPath != null) {
         _installCompletedDownload();
       } else {
-        _downloadAndInstall();
+        _downloadUpdate();
       }
     } else {
       _checkForUpdates();
@@ -456,7 +428,7 @@ class _UpdatePageState extends State<UpdatePage> {
 
   /// Clear download cache and retry the download
   Future<void> _clearAndRetry() async {
-    setState(() {
+    _setStateIfMounted(() {
       _isLoading = true;
       _error = null;
       _statusMessage = _i18n.t('clearing_download_cache');
@@ -473,17 +445,17 @@ class _UpdatePageState extends State<UpdatePage> {
 
       // Now retry the download
       if (_latestRelease != null) {
-        await _downloadAndInstall();
+        await _downloadUpdate();
       }
     } catch (e) {
-      _error = e.toString();
-      _statusMessage = null;
+      _setStateIfMounted(() {
+        _error = e.toString();
+        _statusMessage = null;
+      });
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      _setStateIfMounted(() {
+        _isLoading = false;
+      });
     }
   }
 
@@ -492,8 +464,7 @@ class _UpdatePageState extends State<UpdatePage> {
     final platform = _updateService.detectPlatform();
     final settings = _updateService.getSettings();
     final currentVersion = _updateService.getCurrentVersion();
-    final hasUpdate = _latestRelease != null &&
-        _updateService.isNewerVersion(currentVersion, _latestRelease!.version);
+    final hasUpdate = _updateService.isLatestUpdateReady;
 
     return Scaffold(
       appBar: AppBar(
@@ -904,7 +875,19 @@ class _UpdatePageState extends State<UpdatePage> {
                         await _updateService.updateSettings(
                           settings.copyWith(autoCheckUpdates: value),
                         );
-                        setState(() {});
+                        _setStateIfMounted(() {});
+                      },
+                    ),
+                    const Divider(height: 1),
+                    SwitchListTile(
+                      title: Text(_i18n.t('auto_download_updates')),
+                      subtitle: Text(_i18n.t('auto_download_updates_desc')),
+                      value: settings.autoDownloadUpdates,
+                      onChanged: (value) async {
+                        await _updateService.updateSettings(
+                          settings.copyWith(autoDownloadUpdates: value),
+                        );
+                        _setStateIfMounted(() {});
                       },
                     ),
                     const Divider(height: 1),
@@ -918,7 +901,7 @@ class _UpdatePageState extends State<UpdatePage> {
                         await _updateService.updateSettings(
                           settings.copyWith(useStationForUpdates: value),
                         );
-                        setState(() {});
+                        _setStateIfMounted(() {});
                       },
                     ),
                     const Divider(height: 1),
@@ -930,7 +913,7 @@ class _UpdatePageState extends State<UpdatePage> {
                         await _updateService.updateSettings(
                           settings.copyWith(notifyOnUpdate: value),
                         );
-                        setState(() {});
+                        _setStateIfMounted(() {});
                       },
                     ),
                     const Divider(height: 1),
@@ -947,7 +930,7 @@ class _UpdatePageState extends State<UpdatePage> {
                             await _updateService.updateSettings(
                               settings.copyWith(maxBackups: value),
                             );
-                            setState(() {});
+                            _setStateIfMounted(() {});
                           }
                         },
                       ),

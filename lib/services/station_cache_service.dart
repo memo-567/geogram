@@ -317,8 +317,9 @@ class RelayCacheService {
   /// Load cached messages for a chat room from year folders and daily files
   Future<List<StationChatMessage>> loadMessages(
     String deviceCallsign,
-    String roomId,
-  ) async {
+    String roomId, {
+    int? limit,
+  }) async {
     if (kIsWeb || _basePath == null) return [];
 
     try {
@@ -328,30 +329,43 @@ class RelayCacheService {
       final roomDir = Directory('${cacheDir.path}/chat/$roomId');
       if (!await roomDir.exists()) return [];
 
-      List<StationChatMessage> allMessages = [];
+      final List<StationChatMessage> allMessages = [];
+      final List<File> chatFiles = [];
 
-      // Find all year folders
+      // Find all year folders and collect daily files
       final entities = await roomDir.list().toList();
       for (final entity in entities) {
         if (entity is Directory && _isYearFolder(entity.path)) {
-          // Find all daily chat files in year folder
           final yearEntities = await entity.list().toList();
           for (final yearEntity in yearEntities) {
             if (yearEntity is File && yearEntity.path.endsWith('_chat.txt')) {
-              // Parse messages from daily file
-              final content = await yearEntity.readAsString();
-              final chatMessages = ChatService.parseMessageText(content);
-              allMessages.addAll(
-                chatMessages.map((msg) => _chatMessageToRelayChat(msg, roomId)),
-              );
+              chatFiles.add(yearEntity);
             }
           }
         }
       }
 
+      // Sort files by filename (YYYY-MM-DD_chat.txt) descending for lazy loading
+      chatFiles.sort((a, b) => b.path.compareTo(a.path));
+
+      for (final file in chatFiles) {
+        final content = await file.readAsString();
+        final chatMessages = ChatService.parseMessageText(content);
+        allMessages.addAll(
+          chatMessages.map((msg) => _chatMessageToRelayChat(msg, roomId)),
+        );
+
+        if (limit != null && allMessages.length >= limit) {
+          break;
+        }
+      }
 
       // Sort by timestamp
       allMessages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      if (limit != null && allMessages.length > limit) {
+        return allMessages.sublist(allMessages.length - limit);
+      }
 
       return allMessages;
     } catch (e) {
@@ -400,10 +414,29 @@ class RelayCacheService {
   /// Convert StationChatMessage to ChatMessage for export
   ChatMessage _stationChatToChatMessage(StationChatMessage msg) {
     // StationChatMessage timestamp is already in chat format: YYYY-MM-DD HH:MM_ss
+    final metadata = <String, String>{};
+    if (msg.metadata.isNotEmpty) {
+      metadata.addAll(msg.metadata);
+    }
+    if (msg.createdAt != null) {
+      metadata['created_at'] = msg.createdAt.toString();
+    }
+    if (msg.npub != null && msg.npub!.isNotEmpty) {
+      metadata['npub'] = msg.npub!;
+    }
+    if (msg.signature != null && msg.signature!.isNotEmpty) {
+      metadata['signature'] = msg.signature!;
+      metadata['has_signature'] = 'true';
+    }
+    if (msg.verified) {
+      metadata['verified'] = 'true';
+    }
+
     return ChatMessage(
       author: msg.callsign,
       timestamp: msg.timestamp,
       content: msg.content,
+      metadata: metadata.isNotEmpty ? metadata : null,
     );
   }
 
@@ -421,19 +454,130 @@ class RelayCacheService {
     // Determine if message has signature and is verified
     final hasSignature = signature != null && signature.isNotEmpty;
     // Messages with valid signature+npub are considered verified when loaded from trusted cache
-    final verified = hasSignature && npub != null && npub.isNotEmpty;
+    final verified = metadata['verified'] == 'true' || (hasSignature && npub != null && npub.isNotEmpty);
 
     return StationChatMessage(
       roomId: roomId,
       callsign: msg.author,
       content: msg.content,
       timestamp: msg.timestamp,
+      metadata: metadata,
       npub: npub,
       signature: signature,
       createdAt: createdAt,
       hasSignature: hasSignature,
       verified: verified,
     );
+  }
+
+  /// Merge new messages into cached daily files without losing existing content
+  Future<void> mergeMessages(
+    String deviceCallsign,
+    String roomId,
+    List<StationChatMessage> newMessages,
+  ) async {
+    if (kIsWeb || _basePath == null) return;
+    if (newMessages.isEmpty) return;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return;
+
+      final roomDir = Directory('${cacheDir.path}/chat/$roomId');
+      if (!await roomDir.exists()) {
+        await roomDir.create(recursive: true);
+      }
+
+      final messagesByDate = <String, List<StationChatMessage>>{};
+      for (final msg in newMessages) {
+        if (msg.timestamp.length < 10) continue;
+        final dateKey = msg.timestamp.substring(0, 10);
+        messagesByDate.putIfAbsent(dateKey, () => []).add(msg);
+      }
+
+      for (final entry in messagesByDate.entries) {
+        final dateStr = entry.key;
+        final dayMessages = entry.value;
+        final year = dateStr.substring(0, 4);
+
+        final yearDir = Directory('${roomDir.path}/$year');
+        if (!await yearDir.exists()) {
+          await yearDir.create(recursive: true);
+          await Directory('${yearDir.path}/files').create();
+        }
+
+        final dailyFile = File('${yearDir.path}/${dateStr}_chat.txt');
+        final existing = <ChatMessage>[];
+        if (await dailyFile.exists()) {
+          final content = await dailyFile.readAsString();
+          existing.addAll(ChatService.parseMessageText(content));
+        }
+
+        final merged = <String, ChatMessage>{};
+        for (final msg in existing) {
+          merged['${msg.timestamp}|${msg.author.toUpperCase()}'] = msg;
+        }
+        for (final msg in dayMessages) {
+          final chatMsg = _stationChatToChatMessage(msg);
+          merged['${chatMsg.timestamp}|${chatMsg.author.toUpperCase()}'] = chatMsg;
+        }
+
+        final mergedMessages = merged.values.toList()
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+        final buffer = StringBuffer();
+        buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
+        for (final msg in mergedMessages) {
+          buffer.writeln();
+          buffer.write(msg.exportAsText());
+        }
+        buffer.writeln();
+
+        await dailyFile.writeAsString(buffer.toString());
+      }
+    } catch (e) {
+      LogService().log('Error merging cached messages: $e');
+    }
+  }
+
+  /// Remove a message from cached daily files by timestamp and author
+  Future<void> removeMessage(
+    String deviceCallsign,
+    String roomId,
+    String timestamp,
+    String author,
+  ) async {
+    if (kIsWeb || _basePath == null) return;
+    if (timestamp.length < 10) return;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return;
+
+      final dateStr = timestamp.substring(0, 10);
+      final year = dateStr.substring(0, 4);
+      final dailyFile = File('${cacheDir.path}/chat/$roomId/$year/${dateStr}_chat.txt');
+      if (!await dailyFile.exists()) return;
+
+      final content = await dailyFile.readAsString();
+      final messages = ChatService.parseMessageText(content);
+      final filtered = messages.where((msg) {
+        if (msg.timestamp != timestamp) return true;
+        return msg.author.toUpperCase() != author.toUpperCase();
+      }).toList();
+
+      final buffer = StringBuffer();
+      buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
+      for (final msg in filtered) {
+        buffer.writeln();
+        buffer.write(msg.exportAsText());
+      }
+      buffer.writeln();
+
+      await dailyFile.writeAsString(buffer.toString());
+    } catch (e) {
+      LogService().log('Error removing cached message: $e');
+    }
   }
 
   /// Get list of cached device callsigns

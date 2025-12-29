@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/devices_service.dart';
@@ -13,6 +14,8 @@ import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/signing_service.dart';
 import '../services/storage_config.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import 'remote_chat_browser_page.dart';
 
 /// Page for viewing messages in a chat room from a remote device
@@ -41,6 +44,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   bool _isLoading = true;
   bool _isSending = false;
   String? _error;
+  ChatMessage? _quotedMessage;
 
   @override
   void initState() {
@@ -186,6 +190,133 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     );
   }
 
+  void _setQuotedMessage(ChatMessage message) {
+    setState(() {
+      _quotedMessage = message;
+    });
+  }
+
+  void _clearQuotedMessage() {
+    setState(() {
+      _quotedMessage = null;
+    });
+  }
+
+  bool _canDeleteMessage(ChatMessage message) {
+    final profile = _profileService.getProfile();
+    return message.author.toUpperCase() == profile.callsign.toUpperCase() ||
+        (message.npub != null &&
+         message.npub!.isNotEmpty &&
+         profile.npub.isNotEmpty &&
+         message.npub == profile.npub);
+  }
+
+  Future<void> _deleteMessage(ChatMessage message) async {
+    if (!_canDeleteMessage(message)) return;
+
+    try {
+      final profile = _profileService.getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        throw Exception('NOSTR keys not configured');
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: 'delete',
+        tags: [
+          ['action', 'delete'],
+          ['room', widget.room.id],
+          ['timestamp', message.timestamp],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        throw Exception('Failed to sign delete request');
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'DELETE',
+        path: '/api/chat/${widget.room.id}/messages/${Uri.encodeComponent(message.timestamp)}',
+        headers: {
+          'Authorization': 'Nostr $authEvent',
+        },
+      );
+
+      if (response != null && response.statusCode == 200) {
+        await _fetchFromApi();
+      } else {
+        throw Exception('HTTP ${response?.statusCode ?? "null"}');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete message: $e')),
+        );
+      }
+    }
+  }
+
+  bool _isDesktopPlatform() {
+    if (kIsWeb) return true;
+    return defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux;
+  }
+
+  void _showMessageOptions(ChatMessage message) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Quote'),
+              onTap: () {
+                Navigator.pop(context);
+                _setQuotedMessage(message);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('Copy message'),
+              onTap: () {
+                Navigator.pop(context);
+                _copyMessage(message);
+              },
+            ),
+            if (_canDeleteMessage(message))
+              ListTile(
+                leading: Icon(
+                  Icons.delete,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                title: Text(
+                  'Delete message',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _deleteMessage(message);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _sendMessage() async {
     final content = _messageController.text.trim();
     if (content.isEmpty || _isSending) return;
@@ -224,8 +355,23 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
       LogService().log('RemoteChatRoomPage: Created signed event id=${signedEvent.id}');
 
+      final metadata = <String, String>{};
+      if (_quotedMessage != null) {
+        metadata['quote'] = _quotedMessage!.timestamp;
+        metadata['quote_author'] = _quotedMessage!.author;
+        if (_quotedMessage!.content.isNotEmpty) {
+          final excerpt = _quotedMessage!.content.length > 120
+              ? _quotedMessage!.content.substring(0, 120)
+              : _quotedMessage!.content;
+          metadata['quote_excerpt'] = excerpt;
+        }
+      }
+
       // Send as NOSTR-signed event per API specification
-      final payload = {'event': signedEvent.toJson()};
+      final payload = {
+        'event': signedEvent.toJson(),
+        if (metadata.isNotEmpty) 'metadata': metadata,
+      };
 
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
@@ -240,6 +386,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
         // Clear input field
         _messageController.clear();
+        _clearQuotedMessage();
 
         // Reload messages to show the new one
         await _fetchFromApi();
@@ -383,44 +530,50 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                 ),
               ),
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: 'Type a message...',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                if (_quotedMessage != null) _buildReplyPreview(theme),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        decoration: InputDecoration(
+                          hintText: 'Type a message...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                        maxLines: null,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _sendMessage(),
+                        enabled: !_isSending,
                       ),
                     ),
-                    maxLines: null,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
-                    enabled: !_isSending,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: _isSending ? null : _sendMessage,
-                  icon: _isSending
-                      ? SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: theme.colorScheme.primary,
-                          ),
-                        )
-                      : Icon(
-                          Icons.send,
-                          color: theme.colorScheme.primary,
-                        ),
-                  tooltip: 'Send message',
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _isSending ? null : _sendMessage,
+                      icon: _isSending
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: theme.colorScheme.primary,
+                              ),
+                            )
+                          : Icon(
+                              Icons.send,
+                              color: theme.colorScheme.primary,
+                            ),
+                      tooltip: 'Send message',
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -464,6 +617,20 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                     color: Colors.green,
                   ),
                 ],
+                if (_isDesktopPlatform()) ...[
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.more_horiz, size: 16),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 24,
+                      minHeight: 24,
+                    ),
+                    tooltip: 'Message options',
+                    onPressed: () => _showMessageOptions(message),
+                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 4),
@@ -475,9 +642,16 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                 color: theme.colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Text(
-                message.content,
-                style: theme.textTheme.bodyMedium,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (message.isQuote) _buildQuotePreview(theme, message),
+                  if (message.content.isNotEmpty)
+                    Text(
+                      message.content,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                ],
               ),
             ),
 
@@ -507,6 +681,98 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       ),
     );
   }
+
+  Widget _buildQuotePreview(ThemeData theme, ChatMessage message) {
+    final author = message.quotedAuthor ?? 'Unknown';
+    final excerpt = message.quotedExcerpt ?? '';
+    final display = excerpt.isNotEmpty ? excerpt : 'Quoted message';
+    final truncated = display.length > 120 ? '${display.substring(0, 120)}...' : display;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(
+            color: theme.colorScheme.primary,
+            width: 3,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            author,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            truncated,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReplyPreview(ThemeData theme) {
+    final quoted = _quotedMessage!;
+    final excerpt = quoted.content.isNotEmpty ? quoted.content : 'Quoted message';
+    final truncated = excerpt.length > 120 ? '${excerpt.substring(0, 120)}...' : excerpt;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(
+            color: theme.colorScheme.primary,
+            width: 3,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  quoted.author,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  truncated,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: _clearQuotedMessage,
+            tooltip: 'Remove quote',
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Chat message data model
@@ -519,6 +785,7 @@ class ChatMessage {
   final String? npub;
   final String? signature;
   final bool verified;
+  final Map<String, String> metadata;
 
   ChatMessage({
     required this.author,
@@ -529,18 +796,33 @@ class ChatMessage {
     this.npub,
     this.signature,
     required this.verified,
-  });
+    Map<String, String>? metadata,
+  }) : metadata = metadata ?? {};
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final rawMetadata = json['metadata'] as Map?;
+    final metadata = rawMetadata != null
+        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
+        : <String, String>{};
     return ChatMessage(
       author: json['author'] as String? ?? 'Unknown',
       timestamp: json['timestamp'] as String? ?? '',
       content: json['content'] as String? ?? '',
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
-      npub: json['npub'] as String?,
-      signature: json['signature'] as String?,
+      npub: (json['npub'] as String?) ?? metadata['npub'],
+      signature: (json['signature'] as String?) ?? metadata['signature'],
       verified: json['verified'] as bool? ?? false,
+      metadata: metadata,
     );
   }
+
+  bool get isQuote =>
+      metadata.containsKey('quote') ||
+      metadata.containsKey('quote_author') ||
+      metadata.containsKey('quote_excerpt');
+
+  String? get quotedAuthor => metadata['quote_author'];
+
+  String? get quotedExcerpt => metadata['quote_excerpt'];
 }

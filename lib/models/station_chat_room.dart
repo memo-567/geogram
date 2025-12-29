@@ -55,6 +55,7 @@ class StationChatMessage {
   final String callsign;
   final String content;
   final String roomId;
+  final Map<String, String> metadata;
   final String? npub;      // Author's NOSTR public key (bech32)
   final String? pubkey;    // Author's public key (hex)
   final String? signature; // Message signature (BIP-340 Schnorr)
@@ -68,6 +69,7 @@ class StationChatMessage {
     required this.callsign,
     required this.content,
     required this.roomId,
+    Map<String, String>? metadata,
     this.npub,
     this.pubkey,
     this.signature,
@@ -75,21 +77,50 @@ class StationChatMessage {
     this.createdAt,
     this.verified = false,
     this.hasSignature = false,
-  });
+  }) : metadata = metadata ?? {};
 
   factory StationChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
+    final rawMetadata = json['metadata'] as Map?;
+    final metadata = rawMetadata != null
+        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
+        : <String, String>{};
+    final npub = (json['npub'] as String?) ?? metadata['npub'];
+    final signature = (json['signature'] as String?) ?? metadata['signature'];
+    final eventId = (json['event_id'] as String?) ?? metadata['event_id'];
+    final createdAt = (json['created_at'] as int?) ??
+        (metadata['created_at'] != null ? int.tryParse(metadata['created_at']!) : null);
+    final verified = (json['verified'] as bool?) ?? (metadata['verified'] == 'true');
+    final hasSignature = (json['has_signature'] as bool?) ?? (signature != null && signature.isNotEmpty);
+
+    if (npub != null && npub.isNotEmpty) {
+      metadata['npub'] = npub;
+    }
+    if (signature != null && signature.isNotEmpty) {
+      metadata['signature'] = signature;
+    }
+    if (eventId != null && eventId.isNotEmpty) {
+      metadata['event_id'] = eventId;
+    }
+    if (createdAt != null) {
+      metadata['created_at'] = createdAt.toString();
+    }
+    if (verified) {
+      metadata['verified'] = 'true';
+    }
+
     return StationChatMessage(
       timestamp: json['timestamp'] as String? ?? '',
       callsign: json['callsign'] as String? ?? '',
       content: json['content'] as String? ?? '',
       roomId: roomId,
-      npub: json['npub'] as String?,
+      metadata: metadata,
+      npub: npub,
       pubkey: json['pubkey'] as String?,
-      signature: json['signature'] as String?,
-      eventId: json['event_id'] as String?,
-      createdAt: json['created_at'] as int?,
-      verified: json['verified'] as bool? ?? false,
-      hasSignature: json['has_signature'] as bool? ?? false,
+      signature: signature,
+      eventId: eventId,
+      createdAt: createdAt,
+      verified: verified,
+      hasSignature: hasSignature,
     );
   }
 
@@ -126,6 +157,7 @@ class StationChatMessage {
       callsign: callsign,
       content: content,
       roomId: roomId,
+      metadata: const <String, String>{},
       pubkey: pubkey,
       signature: eventJson['sig'] as String?,
       eventId: eventJson['id'] as String?,

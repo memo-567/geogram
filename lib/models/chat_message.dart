@@ -228,10 +228,16 @@ class ChatMessage implements Comparable<ChatMessage> {
   }
 
   /// Check if message quotes another message
-  bool get isQuote => hasMeta('quote');
+  bool get isQuote => hasMeta('quote') || hasMeta('quote_author') || hasMeta('quote_excerpt');
 
   /// Get quoted message timestamp
   String? get quotedMessage => getMeta('quote');
+
+  /// Get quoted message author (optional)
+  String? get quotedAuthor => getMeta('quote_author');
+
+  /// Get quoted message excerpt (optional)
+  String? get quotedExcerpt => getMeta('quote_excerpt');
 
   /// Check if message is a poll
   bool get isPoll => hasMeta('Poll');

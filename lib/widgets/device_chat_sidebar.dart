@@ -254,15 +254,6 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     fontSize: 10,
                   ),
                 ),
-              // Refresh button for remote devices
-              if (!device.isLocal && widget.onRefreshDevice != null)
-                IconButton(
-                  icon: const Icon(Icons.refresh, size: 16),
-                  onPressed: () => widget.onRefreshDevice?.call(device),
-                  tooltip: _i18n.t('refresh'),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                ),
             ],
           ),
         ),

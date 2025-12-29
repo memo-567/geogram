@@ -41,6 +41,9 @@ class ChatService {
   /// Security settings (moderators)
   ChatSecurity _security = ChatSecurity();
 
+  /// Hidden message IDs by channel (local-only)
+  final Map<String, Set<String>> _hiddenMessageIds = {};
+
   /// File system watcher subscriptions
   final List<StreamSubscription<FileSystemEvent>> _watchSubscriptions = [];
 
@@ -57,12 +60,98 @@ class ChatService {
     await _loadChannels();
     await _loadParticipants();
     await _loadSecurity();
+    await _loadHiddenMessages();
 
     // If this is a new collection (no admin set) and creator npub provided, set as admin
     if (_security.adminNpub == null && creatorNpub != null && creatorNpub.isNotEmpty) {
       final newSecurity = ChatSecurity(adminNpub: creatorNpub);
       await saveSecurity(newSecurity);
     }
+  }
+
+  String _hiddenMessageKey(ChatMessage message) {
+    return '${message.timestamp}|${message.author}';
+  }
+
+  Future<void> _loadHiddenMessages() async {
+    if (_collectionPath == null) return;
+
+    final hiddenPath = '$_collectionPath/extra/hidden_messages.json';
+
+    try {
+      String? content;
+
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (!await fs.exists(hiddenPath)) return;
+        content = await fs.readAsString(hiddenPath);
+      } else {
+        final hiddenFile = File(p.join(_collectionPath!, 'extra', 'hidden_messages.json'));
+        if (!await hiddenFile.exists()) return;
+        content = await hiddenFile.readAsString();
+      }
+
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      final channels = json['channels'] as Map<String, dynamic>? ?? {};
+
+      _hiddenMessageIds.clear();
+      channels.forEach((channelId, entries) {
+        final ids = (entries as List<dynamic>).map((e) => e.toString()).toSet();
+        _hiddenMessageIds[channelId] = ids;
+      });
+    } catch (e) {
+      print('Error loading hidden messages: $e');
+    }
+  }
+
+  Future<void> _saveHiddenMessages() async {
+    if (_collectionPath == null) return;
+
+    final extraPath = '$_collectionPath/extra';
+    final hiddenPath = '$extraPath/hidden_messages.json';
+
+    final data = {
+      'version': '1.0',
+      'channels': _hiddenMessageIds.map((channelId, ids) {
+        return MapEntry(channelId, ids.toList());
+      }),
+    };
+
+    final content = const JsonEncoder.withIndent('  ').convert(data);
+
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (!await fs.exists(extraPath)) {
+        await fs.createDirectory(extraPath, recursive: true);
+      }
+      await fs.writeAsString(hiddenPath, content);
+    } else {
+      final extraDir = Directory(p.join(_collectionPath!, 'extra'));
+      if (!await extraDir.exists()) {
+        await extraDir.create(recursive: true);
+      }
+      final hiddenFile = File(p.join(_collectionPath!, 'extra', 'hidden_messages.json'));
+      await hiddenFile.writeAsString(content);
+    }
+  }
+
+  bool isMessageHidden(String channelId, ChatMessage message) {
+    final ids = _hiddenMessageIds[channelId];
+    if (ids == null) return false;
+    return ids.contains(_hiddenMessageKey(message));
+  }
+
+  Future<void> hideMessage(String channelId, ChatMessage message) async {
+    final ids = _hiddenMessageIds.putIfAbsent(channelId, () => <String>{});
+    ids.add(_hiddenMessageKey(message));
+    await _saveHiddenMessages();
+  }
+
+  Future<void> unhideMessage(String channelId, ChatMessage message) async {
+    final ids = _hiddenMessageIds[channelId];
+    if (ids == null) return;
+    ids.remove(_hiddenMessageKey(message));
+    await _saveHiddenMessages();
   }
 
   /// Get collection path
@@ -359,12 +448,17 @@ class ChatService {
     }
 
     // Create config.json content
-    final config = channel.config ??
+    var config = channel.config ??
         ChatChannelConfig.defaults(
           id: channel.id,
           name: channel.name,
           description: channel.description,
         );
+
+    if (channel.isGroup && config.owner == null && _security.adminNpub != null) {
+      config = config.copyWith(owner: _security.adminNpub);
+    }
+
     final configContent = const JsonEncoder.withIndent('  ').convert(config.toJson());
 
     if (kIsWeb) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
@@ -25,6 +26,7 @@ class UpdateService {
   UpdateSettings? _settings;
   bool _initialized = false;
   ReleaseInfo? _latestRelease;
+  bool _latestReleaseReady = false;
   bool _isChecking = false;
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
@@ -42,6 +44,9 @@ class UpdateService {
 
   /// Notifier for download progress (0.0 to 1.0)
   final ValueNotifier<double> downloadProgress = ValueNotifier(0.0);
+
+  /// Notifier for completed download path (null when not ready)
+  final ValueNotifier<String?> completedDownloadPathNotifier = ValueNotifier(null);
 
   /// Flag to indicate if the UpdatePage is currently visible
   /// When true, the update banner should not be shown
@@ -82,19 +87,22 @@ class UpdateService {
         // If auto-check is disabled, still restore last known state for display
         final lastCheckedVersion = _settings?.lastCheckedVersion;
         if (lastCheckedVersion != null && lastCheckedVersion.isNotEmpty) {
+          // Create ReleaseInfo with cached release notes so changelog is visible
+          _latestRelease = ReleaseInfo(
+            version: lastCheckedVersion,
+            tagName: 'v$lastCheckedVersion',
+            name: 'Version $lastCheckedVersion',
+            body: _settings?.lastCheckedReleaseBody,
+            htmlUrl: _settings?.lastCheckedHtmlUrl,
+            stationBaseUrl: _settings?.lastCheckedStationUrl,
+            publishedAt: _settings?.lastCheckedPublishedAt,
+          );
+
+          _latestReleaseReady = _settings?.lastCheckedAssetAvailable ?? false;
+
           final wasUpdateAvailable = isNewerVersion(getCurrentVersion(), lastCheckedVersion);
-          if (wasUpdateAvailable) {
-            // Create ReleaseInfo with cached release notes so changelog is visible
-            _latestRelease = ReleaseInfo(
-              version: lastCheckedVersion,
-              tagName: 'v$lastCheckedVersion',
-              name: 'Version $lastCheckedVersion',
-              body: _settings?.lastCheckedReleaseBody,
-              htmlUrl: _settings?.lastCheckedHtmlUrl,
-              stationBaseUrl: _settings?.lastCheckedStationUrl,
-              publishedAt: _settings?.lastCheckedPublishedAt,
-            );
-            updateAvailable.value = true;
+          updateAvailable.value = wasUpdateAvailable && _latestReleaseReady;
+          if (updateAvailable.value) {
             LogService().log('Restored update available state: $lastCheckedVersion > ${getCurrentVersion()}');
           }
         }
@@ -176,7 +184,7 @@ class UpdateService {
         final stationRelease = await _checkStationForUpdates();
         if (stationRelease != null) {
           _latestRelease = stationRelease;
-          _updateCheckResult(stationRelease);
+          await _updateCheckResult(stationRelease);
           return stationRelease;
         }
         LogService().log('Station update check failed or unavailable, falling back to GitHub');
@@ -262,7 +270,7 @@ class UpdateService {
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       _latestRelease = ReleaseInfo.fromGitHubJson(json);
 
-      _updateCheckResult(_latestRelease!);
+      await _updateCheckResult(_latestRelease!);
       return _latestRelease;
     } catch (e) {
       LogService().log('Error checking GitHub for updates: $e');
@@ -271,7 +279,10 @@ class UpdateService {
   }
 
   /// Update settings and notify after successful check
-  void _updateCheckResult(ReleaseInfo release) {
+  Future<void> _updateCheckResult(ReleaseInfo release) async {
+    final hasAsset = await _isReleaseAvailableForPlatform(release);
+    _latestReleaseReady = hasAsset;
+
     _settings = _settings?.copyWith(
       lastCheckTime: DateTime.now(),
       lastCheckedVersion: release.version,
@@ -279,14 +290,42 @@ class UpdateService {
       lastCheckedHtmlUrl: release.htmlUrl,
       lastCheckedStationUrl: release.stationBaseUrl,
       lastCheckedPublishedAt: release.publishedAt,
+      lastCheckedAssetAvailable: hasAsset,
     );
     _saveSettings();
 
     final isNewer = isNewerVersion(getCurrentVersion(), release.version);
-    updateAvailable.value = isNewer;
+    final updateReady = isNewer && hasAsset;
+    updateAvailable.value = updateReady;
 
     LogService().log(
-        'Update check complete: current=$appVersion, latest=${release.version}, updateAvailable=$isNewer');
+        'Update check complete: current=$appVersion, latest=${release.version}, assetReady=$hasAsset, updateAvailable=$updateReady');
+
+    if (updateReady) {
+      unawaited(_maybeAutoDownload(release));
+    }
+  }
+
+  Future<void> _maybeAutoDownload(ReleaseInfo release) async {
+    if (_settings?.autoDownloadUpdates != true) return;
+    if (_isDownloading) return;
+
+    if (_completedDownloadVersion == release.version &&
+        _completedDownloadPath != null &&
+        await File(_completedDownloadPath!).exists()) {
+      return;
+    }
+
+    final existing = await findCompletedDownload(release);
+    if (existing != null) {
+      _setCompletedDownload(existing, release.version);
+      return;
+    }
+
+    final downloadPath = await downloadUpdate(release);
+    if (downloadPath != null) {
+      _setCompletedDownload(downloadPath, release.version);
+    }
   }
 
   /// Convert WebSocket URL to HTTP URL
@@ -342,6 +381,36 @@ class UpdateService {
 
     // Use asset URL (works for both station and GitHub releases)
     return release.getAssetUrl(assetType);
+  }
+
+  /// Check if a release has a downloadable asset for the current platform
+  Future<bool> _isReleaseAvailableForPlatform(ReleaseInfo release) async {
+    if (kIsWeb) return false;
+
+    final downloadUrl = getDownloadUrl(release);
+    if (downloadUrl == null || downloadUrl.isEmpty) {
+      return false;
+    }
+
+    // If a custom download pattern is used, verify the URL exists.
+    if (_settings?.downloadUrlPattern.isNotEmpty == true) {
+      return await _checkAssetUrlExists(downloadUrl);
+    }
+
+    return true;
+  }
+
+  Future<bool> _checkAssetUrlExists(String url) async {
+    try {
+      final response = await http.head(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Geogram-Updater'},
+      ).timeout(const Duration(seconds: 15));
+      return response.statusCode >= 200 && response.statusCode < 400;
+    } catch (e) {
+      LogService().log('Update asset check failed: $e');
+      return false;
+    }
   }
 
   /// Get updates directory path (unified with station structure)
@@ -758,6 +827,21 @@ class UpdateService {
       {void Function(double progress)? onProgress}) async {
     if (_isDownloading || kIsWeb) return null;
 
+    if (_completedDownloadVersion == release.version &&
+        _completedDownloadPath != null) {
+      final existingFile = File(_completedDownloadPath!);
+      if (await existingFile.exists()) {
+        return _completedDownloadPath;
+      }
+      clearCompletedDownload();
+    }
+
+    final existingDownload = await findCompletedDownload(release);
+    if (existingDownload != null) {
+      _setCompletedDownload(existingDownload, release.version);
+      return existingDownload;
+    }
+
     final downloadUrl = getDownloadUrl(release);
     if (downloadUrl == null) {
       LogService().log('No download URL available for platform: ${detectPlatform().name}');
@@ -924,8 +1008,7 @@ class UpdateService {
         onProgress?.call(1.0);
 
         // Store completed download state for UI persistence
-        _completedDownloadPath = tempFilePath;
-        _completedDownloadVersion = release.version;
+        _setCompletedDownload(tempFilePath, release.version);
 
         LogService().log('Downloaded $downloaded bytes to $tempFilePath');
         return tempFilePath;
@@ -1218,6 +1301,13 @@ class UpdateService {
   /// Check if currently downloading
   bool get isDownloading => _isDownloading;
 
+  /// Check if the latest release is a newer version with an available asset
+  bool get isLatestUpdateReady {
+    if (_latestRelease == null) return false;
+    if (!_latestReleaseReady) return false;
+    return isNewerVersion(getCurrentVersion(), _latestRelease!.version);
+  }
+
   /// Get current download progress (0.0 to 1.0)
   double get currentDownloadProgress => _downloadProgress;
 
@@ -1230,10 +1320,20 @@ class UpdateService {
   /// Get the version of the completed download (if any)
   String? get completedDownloadVersion => _completedDownloadVersion;
 
+  void _setCompletedDownload(String? path, String? version) {
+    _completedDownloadPath = path;
+    _completedDownloadVersion = version;
+    completedDownloadPathNotifier.value = path;
+  }
+
+  void restoreCompletedDownload(String path, String version) {
+    _setCompletedDownload(path, version);
+    LogService().log('Restored completed download: v$version at $path');
+  }
+
   /// Clear the completed download state (call after successful install or when user cancels)
   void clearCompletedDownload() {
-    _completedDownloadPath = null;
-    _completedDownloadVersion = null;
+    _setCompletedDownload(null, null);
     LogService().log('Cleared completed download state');
   }
 

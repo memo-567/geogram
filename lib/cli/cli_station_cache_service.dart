@@ -431,10 +431,29 @@ class CliRelayCacheService {
 
   /// Convert StationChatMessage to ChatMessage for export
   ChatMessage _stationChatToChatMessage(StationChatMessage msg) {
+    final metadata = <String, String>{};
+    if (msg.metadata.isNotEmpty) {
+      metadata.addAll(msg.metadata);
+    }
+    if (msg.createdAt != null) {
+      metadata['created_at'] = msg.createdAt.toString();
+    }
+    if (msg.npub != null && msg.npub!.isNotEmpty) {
+      metadata['npub'] = msg.npub!;
+    }
+    if (msg.signature != null && msg.signature!.isNotEmpty) {
+      metadata['signature'] = msg.signature!;
+      metadata['has_signature'] = 'true';
+    }
+    if (msg.verified) {
+      metadata['verified'] = 'true';
+    }
+
     return ChatMessage(
       author: msg.callsign,
       timestamp: msg.timestamp,
       content: msg.content,
+      metadata: metadata,
     );
   }
 
@@ -452,13 +471,14 @@ class CliRelayCacheService {
     // Determine if message has signature and is verified
     final hasSignature = signature != null && signature.isNotEmpty;
     // Messages with valid signature+npub are considered verified when loaded from trusted cache
-    final verified = hasSignature && npub != null && npub.isNotEmpty;
+    final verified = metadata['verified'] == 'true' || (hasSignature && npub != null && npub.isNotEmpty);
 
     return StationChatMessage(
       roomId: roomId,
       callsign: msg.author,
       content: msg.content,
       timestamp: msg.timestamp,
+      metadata: metadata,
       npub: npub,
       signature: signature,
       createdAt: createdAt,

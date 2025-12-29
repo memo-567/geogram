@@ -439,7 +439,11 @@ class DirectMessageService {
 
   /// Send a message in a DM conversation
   /// Throws [DMMustBeReachableException] if the remote device is not reachable
-  Future<void> sendMessage(String otherCallsign, String content) async {
+  Future<void> sendMessage(
+    String otherCallsign,
+    String content, {
+    Map<String, String>? metadata,
+  }) async {
     await initialize();
 
     final normalizedCallsign = otherCallsign.toUpperCase();
@@ -465,9 +469,14 @@ class DirectMessageService {
     final conversation = await getOrCreateConversation(normalizedCallsign);
 
     // 3. Create the message
+    final messageMetadata = <String, String>{};
+    if (metadata != null) {
+      messageMetadata.addAll(metadata);
+    }
     final message = ChatMessage.now(
       author: profile.callsign,
       content: content,
+      metadata: messageMetadata.isNotEmpty ? messageMetadata : null,
     );
 
     // 4. Sign the message per chat-format-specification.md
@@ -504,7 +513,12 @@ class DirectMessageService {
 
     // 5. Push to remote device's chat API FIRST
     // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
-    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+    final delivered = await _pushToRemoteChatAPI(
+      device,
+      signedEvent,
+      profile.callsign,
+      metadata: metadata,
+    );
 
     // 6. Only save locally if delivered successfully
     if (!delivered) {
@@ -703,7 +717,12 @@ class DirectMessageService {
   /// Sends the full signed NostrEvent (id, pubkey, created_at, kind, tags, content, sig)
   /// Uses station proxy if direct connection is not available
   /// Returns true if HTTP 200/201 (delivered), false otherwise
-  Future<bool> _pushToRemoteChatAPI(dynamic device, NostrEvent? signedEvent, String myCallsign) async {
+  Future<bool> _pushToRemoteChatAPI(
+    dynamic device,
+    NostrEvent? signedEvent,
+    String myCallsign, {
+    Map<String, String>? metadata,
+  }) async {
     if (kIsWeb) return false; // Web doesn't support direct push
     if (signedEvent == null) {
       LogService().log('DM: Cannot push - no signed event');
@@ -714,8 +733,10 @@ class DirectMessageService {
       // POST to remote: /api/chat/{myCallsign}/messages
       // The roomId on the remote is OUR callsign (symmetry: we write to their room named after us)
       final path = '/api/chat/$myCallsign/messages';
+      final extraMetadata = _filterOutboundMetadata(metadata);
       final body = jsonEncode({
         'event': signedEvent.toJson(),
+        if (extraMetadata.isNotEmpty) 'metadata': extraMetadata,
       });
 
       LogService().log('DM: Pushing signed event via chat API to ${device.callsign} path: $path');
@@ -745,6 +766,24 @@ class DirectMessageService {
       LogService().log('DM: Chat API push error: $e');
       return false;
     }
+  }
+
+  Map<String, String> _filterOutboundMetadata(Map<String, String>? metadata) {
+    if (metadata == null || metadata.isEmpty) return {};
+    const reserved = {
+      'created_at',
+      'npub',
+      'event_id',
+      'signature',
+      'verified',
+      'status',
+    };
+    final filtered = <String, String>{};
+    metadata.forEach((key, value) {
+      if (reserved.contains(key)) return;
+      filtered[key] = value;
+    });
+    return filtered;
   }
 
   /// Save an incoming/synced message without re-signing
