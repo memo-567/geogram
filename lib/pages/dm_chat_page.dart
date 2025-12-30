@@ -18,6 +18,7 @@ import '../widgets/voice_recorder_widget.dart';
 import '../services/audio_service.dart';
 import '../services/audio_platform_stub.dart'
     if (dart.library.io) '../services/audio_platform_io.dart';
+import 'photo_viewer_page.dart';
 
 /// Page for 1:1 direct message conversation
 class DMChatPage extends StatefulWidget {
@@ -382,6 +383,115 @@ class _DMChatPageState extends State<DMChatPage> {
     return null;
   }
 
+  /// Get attachment path for a message file
+  Future<String?> _getAttachmentPath(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return null;
+
+    final filename = message.attachedFile!;
+
+    // First check if file exists locally
+    final localPath = await _dmService.getFilePath(widget.otherCallsign, filename);
+    if (localPath != null) {
+      return localPath;
+    }
+
+    // If not local and device is online, try to download
+    // Respecting bandwidth policy: auto-download only if <= 3 MB and <= 7 days old
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final messageAge = DateTime.now().difference(message.dateTime);
+    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+
+    if (!shouldAutoDownload) return null;
+
+    final device = _devicesService.getDevice(widget.otherCallsign);
+    if (device?.isOnline ?? false) {
+      // Download via DM file sync
+      return await _dmService.downloadFile(widget.otherCallsign, filename);
+    }
+
+    return null;
+  }
+
+  /// Send a file message
+  Future<void> _sendFileMessage(String filePath, String? caption) async {
+    setState(() {
+      _isSending = true;
+    });
+
+    try {
+      await _dmService.sendFileMessage(widget.otherCallsign, filePath, caption);
+      _clearQuotedMessage();
+      await _loadMessages();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send file: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
+  }
+
+  /// Open image in full-screen viewer
+  Future<void> _openImage(ChatMessage message) async {
+    final filePath = await _getAttachmentPath(message);
+    if (filePath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image not available')),
+      );
+      return;
+    }
+
+    // Collect all image paths from messages
+    final imagePaths = <String>[];
+    for (final msg in _messages) {
+      if (!msg.hasFile) continue;
+      final path = await _getAttachmentPath(msg);
+      if (path == null) continue;
+      if (!_isImageFile(path)) continue;
+      imagePaths.add(path);
+    }
+
+    if (imagePaths.isEmpty) {
+      imagePaths.add(filePath);
+    }
+
+    var initialIndex = imagePaths.indexOf(filePath);
+    if (initialIndex < 0) {
+      imagePaths.add(filePath);
+      initialIndex = imagePaths.length - 1;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+
+  bool _isImageFile(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
+  }
+
   Future<void> _syncMessages() async {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final isOnline = device?.isOnline ?? false;
@@ -524,8 +634,10 @@ class _DMChatPageState extends State<DMChatPage> {
                   messages: _messages,
                   isGroupChat: false, // 1:1 DM conversation
                   getVoiceFilePath: _getVoiceFilePath,
+                  getAttachmentPath: _getAttachmentPath,
                   onMessageQuote: _setQuotedMessage,
                   onMessageReact: _toggleReaction,
+                  onImageOpen: _openImage,
                 ),
         ),
         // Message input / Voice recorder
@@ -545,8 +657,14 @@ class _DMChatPageState extends State<DMChatPage> {
         else
           // Message input - always enabled (queues when offline)
           MessageInputWidget(
-            onSend: (content, filePath) => _sendMessage(content),
-            allowFiles: false, // DMs don't support file attachments yet
+            onSend: (content, filePath) async {
+              if (filePath != null) {
+                await _sendFileMessage(filePath, content);
+              } else {
+                await _sendMessage(content);
+              }
+            },
+            allowFiles: isOnline, // Only allow files when device is online
             // Only show mic button on supported platforms (Linux, Android) and when online
             onMicPressed: isOnline && isVoiceSupported ? _startRecording : null,
             quotedMessage: _quotedMessage,

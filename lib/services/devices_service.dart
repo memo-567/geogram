@@ -10,6 +10,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as path;
 import '../models/device_source.dart';
 import '../models/station.dart';
 import 'station_cache_service.dart';
@@ -279,6 +280,16 @@ class DevicesService {
       case DebugAction.openRemoteChatRoom:
       case DebugAction.sendRemoteChatMessage:
         // Remote chat navigation is handled by DeviceDetailPage and RemoteChatBrowserPage
+        break;
+
+      case DebugAction.openStationChat:
+        // Station chat navigation is handled by main.dart
+        break;
+      case DebugAction.selectChatRoom:
+        // Chat room selection is handled by ChatBrowserPage
+        break;
+      case DebugAction.sendChatMessage:
+        // Chat message sending is handled by ChatBrowserPage
         break;
     }
   }
@@ -2181,6 +2192,90 @@ class DevicesService {
       }
     } catch (e) {
       LogService().log('DevicesService: Error syncing DMs with $callsign: $e');
+    }
+  }
+
+  /// Upload a file to a remote device's chat room
+  /// Returns the stored filename on success, null on failure
+  Future<String?> uploadChatFile({
+    required String callsign,
+    required String roomId,
+    required String filePath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        LogService().log('DevicesService: Upload failed - file not found: $filePath');
+        return null;
+      }
+
+      final bytes = await file.readAsBytes();
+      final filename = path.basename(filePath);
+
+      // Check 10 MB limit
+      if (bytes.length > 10 * 1024 * 1024) {
+        LogService().log('DevicesService: Upload failed - file too large: ${bytes.length} bytes');
+        return null;
+      }
+
+      LogService().log('DevicesService: Uploading chat file to $callsign/$roomId: $filename (${bytes.length} bytes)');
+
+      final response = await makeDeviceApiRequest(
+        callsign: callsign,
+        method: 'POST',
+        path: '/api/chat/rooms/$roomId/files',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Filename': filename,
+        },
+        body: base64Encode(bytes),
+      );
+
+      if (response != null && response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        final storedFilename = data['filename'] as String?;
+        LogService().log('DevicesService: Upload successful: $storedFilename');
+        return storedFilename;
+      } else {
+        LogService().log('DevicesService: Upload failed: ${response?.statusCode} - ${response?.body}');
+        return null;
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Upload error: $e');
+      return null;
+    }
+  }
+
+  /// Download a file from a remote device's chat room
+  /// Returns the local file path on success, null on failure
+  Future<String?> downloadChatFile({
+    required String callsign,
+    required String roomId,
+    required String filename,
+  }) async {
+    try {
+      LogService().log('DevicesService: Downloading chat file from $callsign/$roomId: $filename');
+
+      final response = await makeDeviceApiRequest(
+        callsign: callsign,
+        method: 'GET',
+        path: '/api/chat/rooms/$roomId/files/${Uri.encodeComponent(filename)}',
+      );
+
+      if (response != null && response.statusCode == 200) {
+        // Save to cache directory
+        final cacheService = StationCacheService();
+        await cacheService.saveChatFile(callsign, roomId, filename, response.bodyBytes);
+        final localPath = await cacheService.getChatFilePath(callsign, roomId, filename);
+        LogService().log('DevicesService: Download successful: $localPath');
+        return localPath;
+      } else {
+        LogService().log('DevicesService: Download failed: ${response?.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      LogService().log('DevicesService: Download error: $e');
+      return null;
     }
   }
 

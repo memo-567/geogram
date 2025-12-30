@@ -5,19 +5,26 @@
 
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import '../models/chat_message.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/signing_service.dart';
+import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/reaction_utils.dart';
+import '../widgets/message_input_widget.dart';
+import '../widgets/message_list_widget.dart';
+import '../widgets/voice_recorder_widget.dart';
+import '../services/audio_service.dart';
+import '../services/audio_platform_stub.dart'
+    if (dart.library.io) '../services/audio_platform_io.dart';
 import 'remote_chat_browser_page.dart';
+import 'photo_viewer_page.dart';
 
 /// Page for viewing messages in a chat room from a remote device
 class RemoteChatRoomPage extends StatefulWidget {
@@ -35,38 +42,34 @@ class RemoteChatRoomPage extends StatefulWidget {
 }
 
 class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
-  static const Map<String, String> _reactionEmojiMap = {
-    'thumbs-up': '👍',
-    'heart': '❤️',
-    'fire': '🔥',
-    'laugh': '😂',
-    'celebrate': '🎉',
-    'surprise': '😮',
-    'sad': '😢',
-  };
-
   final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
-  final ScrollController _scrollController = ScrollController();
-  final TextEditingController _messageController = TextEditingController();
+  final RelayCacheService _cacheService = RelayCacheService();
 
   List<ChatMessage> _messages = [];
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isRecording = false;
   String? _error;
   ChatMessage? _quotedMessage;
+
+  /// Track pending file downloads to avoid duplicate requests
+  final Set<String> _pendingDownloads = {};
 
   @override
   void initState() {
     super.initState();
+    _initServices();
     _loadMessages();
+  }
+
+  Future<void> _initServices() async {
+    await _cacheService.initialize();
   }
 
   @override
   void dispose() {
-    _scrollController.dispose();
-    _messageController.dispose();
     super.dispose();
   }
 
@@ -83,13 +86,6 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         setState(() {
           _messages = cachedMessages;
           _isLoading = false;
-        });
-
-        // Scroll to bottom after messages load
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          }
         });
 
         // Silently refresh from API in background
@@ -165,15 +161,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         LogService().log('RemoteChatRoomPage: Parsed ${data.length} messages');
 
         setState(() {
-          _messages = data.map((json) => ChatMessage.fromJson(json)).toList();
+          _messages = data.map((json) => ChatMessage.fromJson(json as Map<String, dynamic>)).toList();
           _isLoading = false;
-        });
-
-        // Scroll to bottom after messages load
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          }
         });
 
         LogService().log('RemoteChatRoomPage: Fetched ${_messages.length} messages from API');
@@ -182,7 +171,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       }
     } catch (e) {
       LogService().log('RemoteChatRoomPage: ERROR fetching messages: $e');
-      throw e;
+      rethrow;
     }
   }
 
@@ -192,13 +181,6 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       LogService().log('RemoteChatRoomPage: Background refresh failed: $e');
       // Don't update UI with error, keep showing cached data
     });
-  }
-
-  void _copyMessage(ChatMessage message) {
-    Clipboard.setData(ClipboardData(text: message.content));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Message copied to clipboard')),
-    );
   }
 
   void _setQuotedMessage(ChatMessage message) {
@@ -211,6 +193,235 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     setState(() {
       _quotedMessage = null;
     });
+  }
+
+  /// Start voice recording
+  void _startRecording() async {
+    // Check permission first
+    if (!await AudioService().hasPermission()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('microphone_permission_required'))),
+        );
+      }
+      return;
+    }
+    setState(() {
+      _isRecording = true;
+    });
+  }
+
+  /// Cancel voice recording
+  void _cancelRecording() {
+    setState(() {
+      _isRecording = false;
+    });
+  }
+
+  /// Send voice message
+  Future<void> _sendVoiceMessage(String filePath, int durationSeconds) async {
+    setState(() {
+      _isSending = true;
+      _isRecording = false;
+    });
+
+    try {
+      final profile = _profileService.getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        throw Exception(_i18n.t('nostr_keys_not_configured'));
+      }
+
+      // Validate file size (10 MB limit)
+      final file = File(filePath);
+      final fileSize = await file.length();
+      if (fileSize > 10 * 1024 * 1024) {
+        throw Exception(_i18n.t('file_too_large', params: ['10 MB']));
+      }
+
+      // Upload voice file to remote device
+      final uploadedFilename = await _devicesService.uploadChatFile(
+        callsign: widget.device.callsign,
+        roomId: widget.room.id,
+        filePath: filePath,
+      );
+
+      if (uploadedFilename == null) {
+        throw Exception(_i18n.t('file_upload_failed'));
+      }
+
+      // Create signed message with voice metadata
+      final signedEvent = await signingService.generateSignedEvent(
+        '', // Empty content for voice messages
+        {
+          'room': widget.room.id,
+          'callsign': profile.callsign,
+        },
+        profile,
+      );
+
+      if (signedEvent == null || signedEvent.sig == null) {
+        throw Exception('Failed to sign message');
+      }
+
+      final metadata = <String, String>{
+        'voice': uploadedFilename,
+        'voice_duration': durationSeconds.toString(),
+        'file_size': fileSize.toString(),
+      };
+
+      final payload = {
+        'event': signedEvent.toJson(),
+        'metadata': metadata,
+      };
+
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'POST',
+        path: '/api/chat/${widget.room.id}/messages',
+        body: jsonEncode(payload),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
+        await _fetchFromApi();
+      } else {
+        throw Exception('HTTP ${response?.statusCode ?? "null"}');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('failed_to_send_voice')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
+  }
+
+  /// Get voice file path for playback
+  Future<String?> _getVoiceFilePath(ChatMessage message) async {
+    if (!message.hasVoice || message.voiceFile == null) return null;
+
+    // Voice files use the same storage as regular file attachments
+    return _getAttachmentPath(ChatMessage(
+      author: message.author,
+      content: message.content,
+      timestamp: message.timestamp,
+      metadata: {'file': message.voiceFile!},
+    ));
+  }
+
+  /// Get attachment path for a message
+  /// Checks cache first, downloads if needed (respecting bandwidth limits)
+  Future<String?> _getAttachmentPath(ChatMessage message) async {
+    if (!message.hasFile) return null;
+
+    final filename = message.attachedFile;
+    if (filename == null) return null;
+
+    // Check if already cached
+    final cachedPath = await _cacheService.getChatFilePath(
+      widget.device.callsign,
+      widget.room.id,
+      filename,
+    );
+
+    if (cachedPath != null) {
+      return cachedPath;
+    }
+
+    // Check bandwidth-conscious download policy:
+    // Auto-download only if file is <= 3 MB and message is <= 7 days old
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final messageAge = DateTime.now().difference(message.dateTime);
+    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+
+    if (!shouldAutoDownload) {
+      // Don't auto-download, user must click download button
+      return null;
+    }
+
+    // Check if download already in progress
+    final downloadKey = '${widget.device.callsign}/${widget.room.id}/$filename';
+    if (_pendingDownloads.contains(downloadKey)) return null;
+    _pendingDownloads.add(downloadKey);
+
+    try {
+      // Download file
+      final localPath = await _devicesService.downloadChatFile(
+        callsign: widget.device.callsign,
+        roomId: widget.room.id,
+        filename: filename,
+      );
+
+      return localPath;
+    } finally {
+      _pendingDownloads.remove(downloadKey);
+    }
+  }
+
+  /// Open image in full-screen viewer
+  Future<void> _openImage(ChatMessage message) async {
+    final filePath = await _getAttachmentPath(message);
+    if (filePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('image_not_available'))),
+        );
+      }
+      return;
+    }
+
+    // Collect all image paths from messages
+    final imagePaths = <String>[];
+    for (final msg in _messages) {
+      if (!msg.hasFile) continue;
+      final path = await _getAttachmentPath(msg);
+      if (path == null) continue;
+      if (!_isImageFile(path)) continue;
+      imagePaths.add(path);
+    }
+
+    if (imagePaths.isEmpty) {
+      imagePaths.add(filePath);
+    }
+
+    var initialIndex = imagePaths.indexOf(filePath);
+    if (initialIndex < 0) {
+      imagePaths.add(filePath);
+      initialIndex = imagePaths.length - 1;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+
+  bool _isImageFile(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
   }
 
   bool _canDeleteMessage(ChatMessage message) {
@@ -355,92 +566,8 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     }
   }
 
-  bool _isDesktopPlatform() {
-    if (kIsWeb) return true;
-    return defaultTargetPlatform == TargetPlatform.macOS ||
-        defaultTargetPlatform == TargetPlatform.windows ||
-        defaultTargetPlatform == TargetPlatform.linux;
-  }
-
-  void _showMessageOptions(ChatMessage message) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              child: Wrap(
-                spacing: 12,
-                children: _reactionEmojiMap.entries.map((entry) {
-                  return InkWell(
-                    onTap: () {
-                      Navigator.pop(context);
-                      _toggleReaction(message, entry.key);
-                    },
-                    borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        entry.value,
-                        style: const TextStyle(fontSize: 18),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.reply),
-              title: const Text('Quote'),
-              onTap: () {
-                Navigator.pop(context);
-                _setQuotedMessage(message);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('Copy message'),
-              onTap: () {
-                Navigator.pop(context);
-                _copyMessage(message);
-              },
-            ),
-            if (_canDeleteMessage(message))
-              ListTile(
-                leading: Icon(
-                  Icons.delete,
-                  color: Theme.of(context).colorScheme.error,
-                ),
-                title: Text(
-                  'Delete message',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _deleteMessage(message);
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _sendMessage() async {
-    final content = _messageController.text.trim();
-    if (content.isEmpty || _isSending) return;
-
-    setState(() {
-      _isSending = true;
-    });
+  Future<void> _sendMessage(String content, String? filePath) async {
+    if (content.isEmpty && filePath == null) return;
 
     try {
       final profile = _profileService.getProfile();
@@ -484,6 +611,30 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         }
       }
 
+      // Upload file if attached
+      if (filePath != null) {
+        // Validate 10 MB limit
+        final file = File(filePath);
+        final fileSize = await file.length();
+        if (fileSize > 10 * 1024 * 1024) {
+          throw Exception(_i18n.t('file_too_large', params: ['10 MB']));
+        }
+
+        // Upload file to remote device
+        final uploadedFilename = await _devicesService.uploadChatFile(
+          callsign: widget.device.callsign,
+          roomId: widget.room.id,
+          filePath: filePath,
+        );
+
+        if (uploadedFilename != null) {
+          metadata['file'] = uploadedFilename;
+          metadata['file_size'] = fileSize.toString();
+        } else {
+          throw Exception(_i18n.t('file_upload_failed'));
+        }
+      }
+
       // Send as NOSTR-signed event per API specification
       final payload = {
         'event': signedEvent.toJson(),
@@ -501,17 +652,10 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       LogService().log('RemoteChatRoomPage: Response status=${response?.statusCode}');
 
       if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
-        // Clear input field
-        _messageController.clear();
         _clearQuotedMessage();
 
         // Reload messages to show the new one
         await _fetchFromApi();
-
-        // Scroll to bottom
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
 
         LogService().log('RemoteChatRoomPage: Message sent successfully');
       } else {
@@ -526,12 +670,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
           SnackBar(content: Text('Failed to send message: $e')),
         );
       }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSending = false;
-        });
-      }
+      rethrow;
     }
   }
 
@@ -599,454 +738,44 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                           ],
                         ),
                       )
-                    : _messages.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.chat_outlined,
-                                  size: 64,
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                                const SizedBox(height: 16),
-                                Text(
-                                  'No messages',
-                                  style: theme.textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Be the first to send a message!',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _messages.length,
-                            itemBuilder: (context, index) {
-                              final message = _messages[index];
-                              return _buildMessageBubble(theme, message);
-                            },
-                          ),
-          ),
-
-          // Message input area
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              border: Border(
-                top: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_quotedMessage != null) _buildReplyPreview(theme),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _messageController,
-                        decoration: InputDecoration(
-                          hintText: 'Type a message...',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                        ),
-                        maxLines: null,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _sendMessage(),
-                        enabled: !_isSending,
+                    : MessageListWidget(
+                        messages: _messages,
+                        isGroupChat: true,
+                        onMessageQuote: _setQuotedMessage,
+                        onMessageDelete: _deleteMessage,
+                        canDeleteMessage: _canDeleteMessage,
+                        onMessageReact: _toggleReaction,
+                        getAttachmentPath: _getAttachmentPath,
+                        getVoiceFilePath: _getVoiceFilePath,
+                        onImageOpen: _openImage,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: _isSending ? null : _sendMessage,
-                      icon: _isSending
-                          ? SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: theme.colorScheme.primary,
-                              ),
-                            )
-                          : Icon(
-                              Icons.send,
-                              color: theme.colorScheme.primary,
-                            ),
-                      tooltip: 'Send message',
-                    ),
-                  ],
-                ),
-              ],
-            ),
           ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildMessageBubble(ThemeData theme, ChatMessage message) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GestureDetector(
-        onLongPress: () => _showMessageOptions(message),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Author and timestamp header
-            Row(
-              children: [
-                Text(
-                  message.author,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'monospace',
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  message.timestamp,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                if (message.verified) ...[
-                  const SizedBox(width: 6),
-                  Icon(
-                    Icons.verified,
-                    size: 14,
-                    color: Colors.green,
-                  ),
-                ],
-                if (_isDesktopPlatform()) ...[
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.more_horiz, size: 16),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 24,
-                      minHeight: 24,
-                    ),
-                    tooltip: 'Message options',
-                    onPressed: () => _showMessageOptions(message),
-                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 4),
-
-            // Message content
+          // Message input / Voice recorder
+          if (_isSending)
             Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
+              padding: const EdgeInsets.all(16),
+              child: const Center(child: CircularProgressIndicator()),
+            )
+          else if (_isRecording)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: VoiceRecorderWidget(
+                onSend: _sendVoiceMessage,
+                onCancel: _cancelRecording,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (message.isQuote) _buildQuotePreview(theme, message),
-                  if (message.content.isNotEmpty)
-                    Text(
-                      message.content,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                ],
-              ),
+            )
+          else
+            MessageInputWidget(
+              onSend: _sendMessage,
+              allowFiles: true,
+              // Only show mic button on supported platforms
+              onMicPressed: isVoiceSupported ? _startRecording : null,
+              quotedMessage: _quotedMessage,
+              onClearQuote: _clearQuotedMessage,
             ),
-
-            if (message.reactions.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _buildReactionsRow(theme, message),
-            ],
-
-            // Location if available
-            if (message.latitude != null && message.longitude != null) ...[
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(
-                    Icons.location_on,
-                    size: 14,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${message.latitude!.toStringAsFixed(4)}, ${message.longitude!.toStringAsFixed(4)}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReactionsRow(ThemeData theme, ChatMessage message) {
-    final currentCallsign = _profileService.getProfile().callsign.toUpperCase();
-    final normalized = ReactionUtils.normalizeReactionMap(message.reactions);
-    final entries = normalized.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    final chips = <Widget>[];
-
-    for (final entry in entries) {
-      final reactionKey = entry.key;
-      final users = entry.value;
-      if (users.isEmpty) continue;
-      final reacted = users.any((u) => u.toUpperCase() == currentCallsign);
-      final label = '${_reactionLabel(reactionKey)} ${users.length}';
-
-      chips.add(
-        InkWell(
-          onTap: () => _toggleReaction(message, reactionKey),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: reacted
-                  ? theme.colorScheme.primary.withOpacity(0.15)
-                  : theme.colorScheme.surfaceVariant,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: reacted
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.outlineVariant,
-              ),
-            ),
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: reacted
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (chips.isEmpty) return const SizedBox.shrink();
-
-    return Wrap(
-      spacing: 6,
-      runSpacing: 4,
-      children: chips,
-    );
-  }
-
-  String _reactionLabel(String reactionKey) {
-    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
-    final emoji = _reactionEmojiMap[normalizedKey];
-    if (emoji != null) {
-      return emoji;
-    }
-    return normalizedKey;
-  }
-
-  Widget _buildQuotePreview(ThemeData theme, ChatMessage message) {
-    final author = message.quotedAuthor ?? 'Unknown';
-    final excerpt = message.quotedExcerpt ?? '';
-    final display = excerpt.isNotEmpty ? excerpt : 'Quoted message';
-    final truncated = display.length > 120 ? '${display.substring(0, 120)}...' : display;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(
-            color: theme.colorScheme.primary,
-            width: 3,
-          ),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            author,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            truncated,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
         ],
       ),
     );
   }
-
-  Widget _buildReplyPreview(ThemeData theme) {
-    final quoted = _quotedMessage!;
-    final excerpt = quoted.content.isNotEmpty ? quoted.content : 'Quoted message';
-    final truncated = excerpt.length > 120 ? '${excerpt.substring(0, 120)}...' : excerpt;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(
-            color: theme.colorScheme.primary,
-            width: 3,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  quoted.author,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  truncated,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: _clearQuotedMessage,
-            tooltip: 'Remove quote',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Chat message data model
-class ChatMessage {
-  final String author;
-  final String timestamp;
-  final String content;
-  final double? latitude;
-  final double? longitude;
-  final String? npub;
-  final String? signature;
-  final bool verified;
-  final Map<String, String> metadata;
-  final Map<String, List<String>> reactions;
-
-  ChatMessage({
-    required this.author,
-    required this.timestamp,
-    required this.content,
-    this.latitude,
-    this.longitude,
-    this.npub,
-    this.signature,
-    required this.verified,
-    Map<String, String>? metadata,
-    Map<String, List<String>>? reactions,
-  })  : metadata = metadata ?? {},
-        reactions = reactions ?? {};
-
-  factory ChatMessage.fromJson(Map<String, dynamic> json) {
-    final rawMetadata = json['metadata'] as Map?;
-    final metadata = rawMetadata != null
-        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
-        : <String, String>{};
-    final rawReactions = json['reactions'] as Map?;
-    final reactions = <String, List<String>>{};
-    if (rawReactions != null) {
-      rawReactions.forEach((key, value) {
-        if (value is List) {
-          reactions[key.toString()] =
-              value.map((entry) => entry.toString()).toList();
-        }
-      });
-    }
-    return ChatMessage(
-      author: json['author'] as String? ?? 'Unknown',
-      timestamp: json['timestamp'] as String? ?? '',
-      content: json['content'] as String? ?? '',
-      latitude: json['latitude'] as double?,
-      longitude: json['longitude'] as double?,
-      npub: (json['npub'] as String?) ?? metadata['npub'],
-      signature: (json['signature'] as String?) ?? metadata['signature'],
-      verified: json['verified'] as bool? ?? false,
-      metadata: metadata,
-      reactions: ReactionUtils.normalizeReactionMap(reactions),
-    );
-  }
-
-  ChatMessage copyWith({
-    String? author,
-    String? timestamp,
-    String? content,
-    double? latitude,
-    double? longitude,
-    String? npub,
-    String? signature,
-    bool? verified,
-    Map<String, String>? metadata,
-    Map<String, List<String>>? reactions,
-  }) {
-    return ChatMessage(
-      author: author ?? this.author,
-      timestamp: timestamp ?? this.timestamp,
-      content: content ?? this.content,
-      latitude: latitude ?? this.latitude,
-      longitude: longitude ?? this.longitude,
-      npub: npub ?? this.npub,
-      signature: signature ?? this.signature,
-      verified: verified ?? this.verified,
-      metadata: metadata ?? Map<String, String>.from(this.metadata),
-      reactions: reactions ?? Map<String, List<String>>.from(this.reactions),
-    );
-  }
-
-  bool get isQuote =>
-      metadata.containsKey('quote') ||
-      metadata.containsKey('quote_author') ||
-      metadata.containsKey('quote_excerpt');
-
-  String? get quotedAuthor => metadata['quote_author'];
-
-  String? get quotedExcerpt => metadata['quote_excerpt'];
 }

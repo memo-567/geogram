@@ -12,6 +12,7 @@ import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../platform/file_system_service.dart';
+import '../util/chat_format.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import 'profile_service.dart';
@@ -763,105 +764,16 @@ class ChatService {
   }
 
   /// Parse message text content (static for testing)
+  /// Uses unified ChatFormat parser for consistency with server
   static List<ChatMessage> parseMessageText(String content) {
-    // Split by message start pattern: "> 2" (messages start with year 2xxx)
-    final sections = content.split('> 2');
-    List<ChatMessage> messages = [];
-
-    // Skip first section (header)
-    for (int i = 1; i < sections.length; i++) {
-      try {
-        final section = '2${sections[i]}'; // Restore the "2" prefix
-        final message = _parseMessageSection(section);
-        if (message != null) {
-          messages.add(message);
-        }
-      } catch (e) {
-        print('Error parsing message section: $e');
-        continue; // Skip malformed messages
-      }
-    }
-
-    return messages;
-  }
-
-  /// Parse a single message section
-  static ChatMessage? _parseMessageSection(String section) {
-    final lines = section.split('\n');
-    if (lines.isEmpty) return null;
-
-    // Parse header: "2025-11-20 19:10_12 -- CR7BBQ"
-    final header = lines[0].trim();
-    if (header.length < 23) return null; // Min length check
-
-    final timestamp = header.substring(0, 19).trim(); // YYYY-MM-DD HH:MM_ss
-    final author = header.substring(23).trim(); // After " -- "
-
-    if (timestamp.isEmpty || author.isEmpty) return null;
-
-    // Parse content and metadata
-    StringBuffer contentBuffer = StringBuffer();
-    Map<String, String> metadata = {};
-    final Map<String, List<String>> reactions = {};
-    bool inContent = true;
-
-    for (int i = 1; i < lines.length; i++) {
-      final line = lines[i];
-
-      if (line.trim().startsWith('~~> ')) {
-        final unsignedLine = line.trim().substring(4); // Remove "~~> "
-        if (unsignedLine.startsWith('reaction:')) {
-          final reactionLine = unsignedLine.substring('reaction:'.length).trim();
-          final eqIndex = reactionLine.indexOf('=');
-          if (eqIndex > 0) {
-            final reaction = ReactionUtils.normalizeReactionKey(
-              reactionLine.substring(0, eqIndex).trim(),
-            );
-            final usersPart = reactionLine.substring(eqIndex + 1).trim();
-            final users = usersPart.isEmpty
-                ? <String>[]
-                : usersPart
-                    .split(',')
-                    .map((u) => u.trim().toUpperCase())
-                    .where((u) => u.isNotEmpty)
-                    .toSet()
-                    .toList();
-            if (reaction.isNotEmpty) {
-              final existing = reactions[reaction] ?? [];
-              final merged = {...existing, ...users}.toList();
-              reactions[reaction] = merged;
-            }
-          }
-        }
-        continue;
-      }
-
-      if (line.trim().startsWith('--> ')) {
-        inContent = false;
-        // Parse metadata: "--> key: value"
-        final metaLine = line.trim().substring(4); // Remove "--> "
-        final colonIndex = metaLine.indexOf(': ');
-        if (colonIndex > 0) {
-          final key = metaLine.substring(0, colonIndex);
-          final value = metaLine.substring(colonIndex + 2);
-          metadata[key] = value;
-        }
-      } else if (inContent && line.trim().isNotEmpty) {
-        // Content line
-        if (contentBuffer.isNotEmpty) {
-          contentBuffer.writeln();
-        }
-        contentBuffer.write(line);
-      }
-    }
-
-    return ChatMessage(
-      author: author,
-      timestamp: timestamp,
-      content: contentBuffer.toString().trim(),
-      metadata: metadata,
-      reactions: reactions,
-    );
+    final parsed = ChatFormat.parse(content);
+    return parsed.map((p) => ChatMessage(
+      author: p.author,
+      timestamp: p.timestamp,
+      content: p.content,
+      metadata: p.metadata,
+      reactions: p.reactions,
+    )).toList();
   }
 
   /// Save a message to appropriate file
@@ -1694,6 +1606,7 @@ class ChatService {
     String actorCallsign,
   ) {
     final updatedReactions = <String, List<String>>{};
+    final normalizedActor = actorCallsign.trim().toUpperCase();
 
     message.reactions.forEach((key, users) {
       final normalizedUsers = users
@@ -1707,17 +1620,24 @@ class ChatService {
     });
 
     final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
-    final list = updatedReactions[normalizedKey] ?? <String>[];
-    final existingIndex = list.indexWhere((u) => u.toUpperCase() == actorCallsign);
-    if (existingIndex >= 0) {
-      list.removeAt(existingIndex);
-    } else {
-      list.add(actorCallsign);
+
+    // Check if user already has this specific reaction (for toggle-off)
+    final currentList = updatedReactions[normalizedKey] ?? <String>[];
+    final alreadyHasThisReaction = currentList.any((u) => u.toUpperCase() == normalizedActor);
+
+    // Remove user from ALL reaction types first (enforce one reaction per user)
+    for (final key in updatedReactions.keys.toList()) {
+      updatedReactions[key]?.removeWhere((u) => u.toUpperCase() == normalizedActor);
+      if (updatedReactions[key]?.isEmpty ?? true) {
+        updatedReactions.remove(key);
+      }
     }
 
-    if (list.isEmpty) {
-      updatedReactions.remove(normalizedKey);
-    } else {
+    // If clicking the same reaction they had, just remove it (toggle off)
+    // Otherwise, add the new reaction
+    if (!alreadyHasThisReaction) {
+      final list = updatedReactions[normalizedKey] ?? <String>[];
+      list.add(normalizedActor);
       updatedReactions[normalizedKey] = list;
     }
 

@@ -1887,6 +1887,13 @@ Triggers a debug action.
 | `station_server_start` | Start the station server | None. Starts StationServerService on port (API port + 1) |
 | `station_server_stop` | Stop the station server | None. Stops the running station server |
 | `station_server_status` | Get station server status | None. Returns running state, port, and connected client count |
+| `open_station_chat` | Open the station chat browser | None. Opens ChatBrowserPage connected to preferred station (or p2p.radio) |
+| `select_chat_room` | Select a chat room by ID | `room_id` (required): Room ID to select (e.g., "general") |
+| `send_chat_message` | Send a message to the currently selected room (via UI) | `content` (optional): Message text, `image_path` (optional): Path to image file |
+| `station_set` | Set the preferred station | `url` (required): Station WebSocket URL, `name` (optional): Station name |
+| `station_connect` | Connect to preferred station | `url` (optional): Station WebSocket URL |
+| `station_status` | Get station connection status | None |
+| `station_send_chat` | Send a message to a station room (bypasses UI) | `room` (optional): Room ID (default: "general"), `content` (optional): Message text, `image_path` (optional): Absolute path to image file |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
@@ -1903,7 +1910,7 @@ Place feedback actions send signed events to the station and only update local c
 {
   "success": false,
   "error": "Unknown action: invalid_action",
-  "available_actions": ["navigate", "ble_scan", "ble_advertise", "refresh_devices", "local_scan", "connect_station", "disconnect_station"]
+  "available_actions": ["navigate", "ble_scan", "ble_advertise", "refresh_devices", "local_scan", "connect_station", "disconnect_station", "open_station_chat", "select_chat_room"]
 }
 ```
 
@@ -2077,6 +2084,56 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "alert_upload_photos", "alert_id": "38_7222_n9_1393_broken-sidewalk"}'
+
+# Open the station chat browser page
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "open_station_chat"}'
+# Opens ChatBrowserPage connected to the preferred station (or p2p.radio if none configured)
+
+# Select a specific chat room in the currently open chat browser
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "select_chat_room", "room_id": "general"}'
+# Selects the specified room and displays its messages
+
+# Send a chat message to the selected room
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "send_chat_message", "content": "Hello from debug API!"}'
+
+# Send a chat message with an image attachment
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "send_chat_message", "content": "Check out this photo", "image_path": "tests/images/photo_2025-03-25_10-33-43.jpg"}'
+# Relative paths are resolved from the project root; absolute paths are used as-is
+
+# Set preferred station
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_set", "url": "wss://p2p.radio", "name": "P2P Radio"}'
+
+# Connect to preferred station
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_connect"}'
+
+# Check station connection status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_status"}'
+# Returns: {"success": true, "connected": true, "preferred_url": "wss://p2p.radio", "preferred_name": "p2p.radio"}
+
+# Send a chat message directly to station (bypasses UI, more reliable for automation)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_send_chat", "room": "general", "content": "Hello from automation!"}'
+
+# Send a chat message with image to station (returns detailed logs)
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "station_send_chat", "room": "general", "content": "Check this photo", "image_path": "/absolute/path/to/image.jpg"}'
+# Returns: {"success": true, "metadata": {"file": "hash_filename.jpg", "file_size": "12345"}, "logs": [...]}
 ```
 
 ---

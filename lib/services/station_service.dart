@@ -1,6 +1,9 @@
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import '../connection/connection_manager.dart';
+import 'station_cache_service.dart';
 import '../models/station.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
@@ -857,9 +860,145 @@ class StationService {
     }
   }
 
+  /// Upload a file to a station chat room
+  /// Returns the uploaded filename on success, null on failure
+  Future<String?> uploadRoomFile(
+    String stationUrl,
+    String roomId,
+    String filePath,
+  ) async {
+    try {
+      LogService().log('Uploading file to room: $roomId');
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        LogService().log('Upload file not found: $filePath');
+        return null;
+      }
+
+      // Get authentication
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        LogService().log('Cannot upload: NOSTR keys not configured');
+        return null;
+      }
+
+      // Create signed event for authentication
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: 'upload',
+        tags: [
+          ['action', 'upload'],
+          ['room', roomId],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign upload event');
+        return null;
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+
+      final bytes = await file.readAsBytes();
+      final filename = p.basename(filePath);
+
+      // Construct the URL
+      final baseUrl = stationUrl.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
+      final uri = Uri.parse('$baseUrl/api/chat/rooms/$roomId/files');
+
+      final response = await http.post(
+        uri,
+        body: bytes,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Filename': filename,
+          'Authorization': 'Nostr $authEvent',
+        },
+      ).timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        final uploadedFilename = data['filename'] as String?;
+        LogService().log('File uploaded successfully: $uploadedFilename');
+        return uploadedFilename;
+      } else {
+        LogService().log('Failed to upload file: ${response.statusCode} - ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      LogService().log('Error uploading file: $e');
+      return null;
+    }
+  }
+
+  /// Download a file from a station chat room
+  /// Returns the local cached file path on success, null on failure
+  /// [cacheKey] is the device callsign to use for caching (e.g., "X3WFE4")
+  Future<String?> downloadRoomFile(
+    String stationUrl,
+    String roomId,
+    String filename, {
+    String? cacheKey,
+  }) async {
+    try {
+      LogService().log('Downloading room file: $roomId/$filename');
+
+      // Construct the URL
+      final baseUrl = stationUrl.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
+      final uri = Uri.parse('$baseUrl/api/chat/rooms/$roomId/files/$filename');
+
+      final response = await http.get(uri).timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        // Cache the file using provided key or fallback to station callsign from URL
+        final cacheService = RelayCacheService();
+        final effectiveCacheKey = cacheKey ?? _extractCallsignFromUrl(stationUrl) ?? stationUrl;
+        await cacheService.saveChatFile(
+          effectiveCacheKey,
+          roomId,
+          filename,
+          response.bodyBytes,
+        );
+
+        // Return the cached path
+        return await cacheService.getChatFilePath(effectiveCacheKey, roomId, filename);
+      } else {
+        LogService().log('Failed to download file: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      LogService().log('Error downloading file: $e');
+      return null;
+    }
+  }
+
+  /// Extract station callsign from URL path (e.g., "wss://p2p.radio/X3WFE4" → "X3WFE4")
+  String? _extractCallsignFromUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    final pathSegments = uri.pathSegments;
+    if (pathSegments.isNotEmpty) {
+      final firstSegment = pathSegments.first;
+      // Callsign pattern: X followed by alphanumeric
+      if (RegExp(r'^X[A-Z0-9]+$').hasMatch(firstSegment)) {
+        return firstSegment;
+      }
+    }
+    return null;
+  }
+
   /// Post a message to a station chat room as a NOSTR event
   /// Creates a signed kind 1 text note and sends via WebSocket or HTTP
-  Future<bool> postRoomMessage(
+  /// Returns the created_at timestamp (Unix seconds) on success, null on failure
+  Future<int?> postRoomMessage(
     String stationUrl,
     String roomId,
     String callsign,
@@ -899,7 +1038,7 @@ class StationService {
           final signedEvent = await signingService.signEvent(event, profile);
           if (signedEvent == null) {
             LogService().log('Failed to sign message event');
-            return false;
+            return null;
           }
 
           // Send via NOSTR protocol: ["EVENT", {...}]
@@ -921,7 +1060,7 @@ class StationService {
           // Use sendWithVerification for reliable delivery
           final sent = await _wsService.sendWithVerification({'nostr_event': nostrMessage});
           if (sent) {
-            return true;
+            return signedEvent.createdAt;
           } else {
             LogService().log('WebSocket send failed, falling back to HTTP');
             // Fall through to HTTP fallback below
@@ -952,7 +1091,7 @@ class StationService {
         final signedEvent = await signingService.signEvent(event, profile);
         if (signedEvent == null) {
           LogService().log('Failed to sign HTTP message event');
-          return false;
+          return null;
         }
 
         // Console output for debugging
@@ -998,17 +1137,17 @@ class StationService {
 
         if (response != null && response.statusCode == 201) {
           LogService().log('Message posted successfully (HTTP)');
-          return true;
+          return signedEvent.createdAt;
         } else {
           final status = response?.statusCode;
           final bodyText = response?.body ?? '';
           LogService().log('Failed to post message: $status - $bodyText');
-          return false;
+          return null;
         }
       }
     } catch (e) {
       LogService().log('Error posting message: $e');
-      return false;
+      return null;
     }
   }
 

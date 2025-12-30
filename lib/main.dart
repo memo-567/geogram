@@ -380,6 +380,7 @@ class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   int _unreadDmCount = 0;
   StreamSubscription<Map<String, int>>? _unreadSubscription;
+  StreamSubscription<DebugActionEvent>? _debugActionSubscription;
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final DebugController _debugController = DebugController();
@@ -405,6 +406,8 @@ class _HomePageState extends State<HomePage> {
     _debugController.panelNotifier.addListener(_onDebugNavigate);
     // Listen for debug toast requests
     _debugController.toastNotifier.addListener(_onDebugToast);
+    // Listen for debug action events (for station chat navigation)
+    _debugActionSubscription = _debugController.actionStream.listen(_onDebugAction);
 
     // Subscribe to DM unread count changes
     _unreadDmCount = DirectMessageService().totalUnreadCount;
@@ -428,6 +431,7 @@ class _HomePageState extends State<HomePage> {
     UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
     _debugController.panelNotifier.removeListener(_onDebugNavigate);
     _debugController.toastNotifier.removeListener(_onDebugToast);
+    _debugActionSubscription?.cancel();
     _unreadSubscription?.cancel();
     super.dispose();
   }
@@ -459,6 +463,67 @@ class _HomePageState extends State<HomePage> {
       // Reset the notifier to allow repeated toasts
       _debugController.toastNotifier.value = null;
       LogService().log('Debug: Toast shown: ${toast.message}');
+    }
+  }
+
+  /// Handle debug action events
+  void _onDebugAction(DebugActionEvent event) {
+    if (event.action == DebugAction.openStationChat) {
+      _handleOpenStationChat();
+    }
+  }
+
+  /// Handle opening the station chat app and first chat room
+  void _handleOpenStationChat() {
+    print('HomePage: Opening station chat via debug action');
+
+    // Get the connected station, or use default P2P Radio station
+    final stationService = StationService();
+    final preferred = stationService.getPreferredStation();
+
+    // Use default station if none configured
+    String stationUrl;
+    String stationName;
+    String? stationCallsign;
+
+    if (preferred != null) {
+      stationUrl = preferred.url;
+      stationName = preferred.name;
+      stationCallsign = preferred.callsign;
+      print('HomePage: Using preferred station: $stationName');
+    } else {
+      // Use default P2P Radio station
+      stationUrl = 'wss://p2p.radio';
+      stationName = 'P2P Radio';
+      stationCallsign = 'p2p_radio';
+      print('HomePage: No preferred station, using default P2P Radio');
+    }
+
+    // Convert WebSocket URL to HTTP URL for API calls (same as UI does)
+    String remoteUrl = stationUrl;
+    if (remoteUrl.startsWith('ws://')) {
+      remoteUrl = remoteUrl.replaceFirst('ws://', 'http://');
+    } else if (remoteUrl.startsWith('wss://')) {
+      remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
+    }
+
+    print('HomePage: Opening ChatBrowserPage with URL: $remoteUrl');
+
+    // Navigate to ChatBrowserPage with remote device parameters (same as UI)
+    // Auto-select the 'general' room
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatBrowserPage(
+            remoteDeviceUrl: remoteUrl,
+            remoteDeviceCallsign: stationCallsign,
+            remoteDeviceName: stationName,
+            initialRoomId: 'general',
+          ),
+        ),
+      );
+      print('HomePage: Navigation pushed with initialRoomId=general');
     }
   }
 

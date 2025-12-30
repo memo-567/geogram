@@ -4,9 +4,11 @@
  */
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' show pow;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../models/device_source.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -25,6 +27,8 @@ import '../services/debug_controller.dart';
 import '../util/event_bus.dart';
 import 'chat_browser_page.dart';
 import 'device_detail_page.dart';
+import 'remote_chat_browser_page.dart';
+import 'remote_chat_room_page.dart';
 import 'dm_chat_page.dart';
 import 'events_browser_page.dart';
 import 'report_browser_page.dart';
@@ -116,8 +120,91 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             ),
           );
         }
+      } else if (event.action == DebugAction.openStationChat) {
+        _handleOpenStationChat();
       }
     });
+  }
+
+  /// Handle opening the station chat app and first chat room
+  Future<void> _handleOpenStationChat() async {
+    LogService().log('DevicesBrowserPage: Opening station chat via debug action');
+
+    // Get the connected station
+    final stationService = StationService();
+    final preferred = stationService.getPreferredStation();
+
+    if (preferred == null) {
+      LogService().log('DevicesBrowserPage: No preferred station configured');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No station connected')),
+        );
+      }
+      return;
+    }
+
+    // Create a RemoteDevice for the station
+    final stationDevice = RemoteDevice(
+      callsign: preferred.callsign ?? 'STATION',
+      name: preferred.name,
+      url: preferred.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+      description: preferred.description,
+      collections: [],
+      source: DeviceSourceType.station,
+    );
+
+    try {
+      // Fetch chat rooms from the station using DevicesService API
+      LogService().log('DevicesBrowserPage: Fetching chat rooms from ${stationDevice.callsign}');
+      final devicesService = DevicesService();
+      final response = await devicesService.makeDeviceApiRequest(
+        callsign: stationDevice.callsign,
+        method: 'GET',
+        path: '/api/chat/rooms',
+      );
+
+      if (response == null || response.statusCode != 200) {
+        throw Exception('Failed to fetch chat rooms: ${response?.statusCode}');
+      }
+
+      final data = json.decode(response.body);
+      final List<dynamic> roomsData = data is Map ? (data['rooms'] ?? data) : data;
+
+      if (roomsData.isEmpty) {
+        LogService().log('DevicesBrowserPage: No chat rooms available');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No chat rooms available')),
+          );
+        }
+        return;
+      }
+
+      // Navigate to the first chat room
+      final firstRoomData = roomsData.first as Map<String, dynamic>;
+      final firstRoom = ChatRoom.fromJson(firstRoomData);
+      LogService().log('DevicesBrowserPage: Opening chat room ${firstRoom.id}');
+
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => RemoteChatRoomPage(
+              device: stationDevice,
+              room: firstRoom,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      LogService().log('DevicesBrowserPage: Error opening station chat: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
 
   /// Handle back button press from HomePage

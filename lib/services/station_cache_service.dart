@@ -182,13 +182,13 @@ class RelayCacheService {
         // Header
         buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
 
-        // Messages
+        // Messages (two empty lines between each for readability)
         for (final msg in dayMessages) {
           final chatMsg = _stationChatToChatMessage(msg);
           buffer.writeln();
+          buffer.writeln();
           buffer.write(chatMsg.exportAsText());
         }
-        buffer.writeln();
 
         await dailyFile.writeAsString(buffer.toString());
         totalSaved += dayMessages.length;
@@ -411,9 +411,34 @@ class RelayCacheService {
     return RegExp(r'^\d{4}$').hasMatch(name);
   }
 
+  /// Normalize timestamp to chat format: YYYY-MM-DD HH:MM_ss
+  /// Handles ISO 8601 formats:
+  ///   2025-12-11T07:51:59.000Z -> 2025-12-11 07:51_59
+  ///   2025-12-11T07:51:59 -> 2025-12-11 07:51_59
+  ///   Already correct format passes through unchanged
+  String _normalizeToChatTimestamp(String timestamp) {
+    // Already in correct format: YYYY-MM-DD HH:MM_ss (19 chars, with underscore)
+    if (timestamp.length == 19 && timestamp.contains('_')) {
+      return timestamp;
+    }
+
+    // Try to parse as ISO 8601
+    final parsed = DateTime.tryParse(timestamp);
+    if (parsed != null) {
+      // Convert to chat format: YYYY-MM-DD HH:MM_ss
+      return '${parsed.year}-${parsed.month.toString().padLeft(2, '0')}-${parsed.day.toString().padLeft(2, '0')} '
+          '${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}_${parsed.second.toString().padLeft(2, '0')}';
+    }
+
+    // Return as-is if can't parse
+    return timestamp;
+  }
+
   /// Convert StationChatMessage to ChatMessage for export
   ChatMessage _stationChatToChatMessage(StationChatMessage msg) {
-    // StationChatMessage timestamp is already in chat format: YYYY-MM-DD HH:MM_ss
+    // Normalize timestamp to chat format: YYYY-MM-DD HH:MM_ss
+    final normalizedTimestamp = _normalizeToChatTimestamp(msg.timestamp);
+
     final metadata = <String, String>{};
     if (msg.metadata.isNotEmpty) {
       metadata.addAll(msg.metadata);
@@ -434,7 +459,7 @@ class RelayCacheService {
 
     return ChatMessage(
       author: msg.callsign,
-      timestamp: msg.timestamp,
+      timestamp: normalizedTimestamp,
       content: msg.content,
       metadata: metadata.isNotEmpty ? metadata : null,
       reactions: msg.reactions,
@@ -531,9 +556,9 @@ class RelayCacheService {
         buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
         for (final msg in mergedMessages) {
           buffer.writeln();
+          buffer.writeln();
           buffer.write(msg.exportAsText());
         }
-        buffer.writeln();
 
         await dailyFile.writeAsString(buffer.toString());
       }
@@ -572,9 +597,9 @@ class RelayCacheService {
       buffer.writeln('# ${roomId.toUpperCase()}: $roomId from $dateStr');
       for (final msg in filtered) {
         buffer.writeln();
+        buffer.writeln();
         buffer.write(msg.exportAsText());
       }
-      buffer.writeln();
 
       await dailyFile.writeAsString(buffer.toString());
     } catch (e) {
@@ -695,4 +720,80 @@ class RelayCacheService {
       LogService().log('Error clearing all caches: $e');
     }
   }
+
+  // ==========================================================================
+  // Chat File Attachment Caching
+  // ==========================================================================
+
+  /// Save a chat file attachment to local cache
+  /// Path: devices/{callsign}/chat/{roomId}/files/{filename}
+  Future<void> saveChatFile(
+    String deviceCallsign,
+    String roomId,
+    String filename,
+    List<int> bytes,
+  ) async {
+    if (kIsWeb || _basePath == null) return;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return;
+
+      final filesDir = Directory('${cacheDir.path}/chat/$roomId/files');
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      final file = File('${filesDir.path}/$filename');
+      await file.writeAsBytes(bytes, flush: true);
+
+      LogService().log('RelayCacheService: Cached chat file $filename (${bytes.length} bytes)');
+    } catch (e) {
+      LogService().log('RelayCacheService: Error saving chat file: $e');
+    }
+  }
+
+  /// Get local path to a cached chat file
+  /// Returns null if file not cached
+  Future<String?> getChatFilePath(
+    String deviceCallsign,
+    String roomId,
+    String filename,
+  ) async {
+    if (kIsWeb || _basePath == null) return null;
+
+    try {
+      final cacheDir = await getDeviceCacheDir(deviceCallsign);
+      if (cacheDir == null) return null;
+
+      final filePath = '${cacheDir.path}/chat/$roomId/files/$filename';
+      final file = File(filePath);
+      if (await file.exists()) {
+        return filePath;
+      }
+      return null;
+    } catch (e) {
+      LogService().log('RelayCacheService: Error getting chat file path: $e');
+      return null;
+    }
+  }
+
+  /// Check if a chat file is cached
+  Future<bool> hasCachedChatFileAttachment(
+    String deviceCallsign,
+    String roomId,
+    String filename,
+  ) async {
+    if (kIsWeb || _basePath == null) return false;
+
+    try {
+      final path = await getChatFilePath(deviceCallsign, roomId, filename);
+      return path != null;
+    } catch (e) {
+      return false;
+    }
+  }
 }
+
+/// Alias for backward compatibility
+typedef StationCacheService = RelayCacheService;

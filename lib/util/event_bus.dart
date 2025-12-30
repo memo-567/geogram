@@ -355,3 +355,15 @@ class BLEStatusEvent extends AppEvent {
   @override
   String toString() => 'BLEStatusEvent(status: $status, message: $message)';
 }
+
+/// Chat messages loaded event
+/// Fired when messages are loaded from cache or server, used to trigger scroll to bottom
+class ChatMessagesLoadedEvent extends AppEvent {
+  final String? roomId;
+  final int messageCount;
+
+  ChatMessagesLoadedEvent({
+    this.roomId,
+    required this.messageCount,
+  });
+}

@@ -278,13 +278,16 @@ class ChatMessage implements Comparable<ChatMessage> {
       buffer.writeln(content);
     }
 
-    // Reserved keys that have special ordering (written at the end)
-    const reservedKeys = {'Poll', 'edited_at', 'npub', 'signature'};
+    // Reserved keys that have special ordering or should be excluded
+    // - verified/has_signature: useless in export - verification happens at load time
+    //   (anyone could edit the file and set verified=true, defeating the purpose)
+    // - created_at: written in specific order (needed for signature verification)
+    const reservedKeys = {'Poll', 'edited_at', 'created_at', 'npub', 'signature', 'verified', 'has_signature'};
 
-    // Metadata (excluding reserved keys which have special ordering)
+    // Metadata (excluding reserved keys which have special ordering or are excluded)
     for (var entry in metadata.entries) {
       if (reservedKeys.contains(entry.key)) {
-        continue; // Skip reserved keys - they're written in specific order
+        continue; // Skip reserved keys - they're written in specific order or excluded
       }
       buffer.writeln('--> ${entry.key}: ${entry.value}');
     }
@@ -292,6 +295,11 @@ class ChatMessage implements Comparable<ChatMessage> {
     // edited_at comes before npub/signature (if present)
     if (isEdited) {
       buffer.writeln('--> edited_at: $editedAt');
+    }
+
+    // created_at (needed for signature verification)
+    if (hasMeta('created_at')) {
+      buffer.writeln('--> created_at: ${getMeta('created_at')}');
     }
 
     // npub comes before signature (if present)
@@ -318,6 +326,7 @@ class ChatMessage implements Comparable<ChatMessage> {
   }
 
   /// Create ChatMessage from JSON
+  /// Handles both the chat file format (metadata-based) and API format (direct properties)
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final rawReactions = json['reactions'] as Map?;
     final reactions = <String, List<String>>{};
@@ -329,15 +338,39 @@ class ChatMessage implements Comparable<ChatMessage> {
         }
       });
     }
+
+    // Start with metadata from JSON
+    final rawMetadata = json['metadata'] as Map?;
+    final metadata = rawMetadata != null
+        ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
+        : <String, String>{};
+
+    // Merge direct API fields into metadata (API format compatibility)
+    if (json['latitude'] != null) {
+      metadata['lat'] = json['latitude'].toString();
+    }
+    if (json['longitude'] != null) {
+      metadata['lon'] = json['longitude'].toString();
+    }
+    if (json['npub'] != null && !metadata.containsKey('npub')) {
+      metadata['npub'] = json['npub'].toString();
+    }
+    if (json['signature'] != null && !metadata.containsKey('signature')) {
+      metadata['signature'] = json['signature'].toString();
+    }
+    if (json['verified'] == true) {
+      metadata['verified'] = 'true';
+    }
+
     return ChatMessage(
-      author: json['author'] as String,
-      timestamp: json['timestamp'] as String,
+      author: json['author'] as String? ?? 'Unknown',
+      timestamp: json['timestamp'] as String? ?? '',
       content: json['content'] as String? ?? '',
       messageType: ChatMessageType.values.firstWhere(
         (type) => type.name == (json['messageType'] as String? ?? 'simple'),
         orElse: () => ChatMessageType.simple,
       ),
-      metadata: Map<String, String>.from(json['metadata'] as Map? ?? {}),
+      metadata: metadata,
       reactions: ReactionUtils.normalizeReactionMap(reactions),
     );
   }

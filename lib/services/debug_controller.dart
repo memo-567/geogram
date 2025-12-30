@@ -92,6 +92,15 @@ enum DebugAction {
 
   /// Send message to remote chat room
   sendRemoteChatMessage,
+
+  /// Open station chat app and first chat room
+  openStationChat,
+
+  /// Select a specific chat room by ID
+  selectChatRoom,
+
+  /// Send a chat message with optional image to the selected room
+  sendChatMessage,
 }
 
 /// Toast message to be displayed
@@ -341,6 +350,24 @@ class DebugController {
     triggerAction(DebugAction.voiceStatus);
   }
 
+  /// Trigger opening station chat app and first chat room
+  void triggerOpenStationChat() {
+    triggerAction(DebugAction.openStationChat);
+  }
+
+  /// Trigger selecting a chat room by ID
+  void triggerSelectChatRoom(String roomId) {
+    triggerAction(DebugAction.selectChatRoom, params: {'room_id': roomId});
+  }
+
+  /// Trigger sending a chat message with optional image
+  void triggerSendChatMessage({String? content, String? imagePath}) {
+    triggerAction(DebugAction.sendChatMessage, params: {
+      'content': content ?? '',
+      'image_path': imagePath,
+    });
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -534,6 +561,26 @@ class DebugController {
           'place_path': '(optional) Absolute path to place folder for local cache update',
         },
       },
+      {
+        'action': 'open_station_chat',
+        'description': 'Open chat app and first chat room of the connected station',
+        'params': {},
+      },
+      {
+        'action': 'select_chat_room',
+        'description': 'Select a chat room by ID in the currently open chat browser',
+        'params': {
+          'room_id': 'Room ID to select (e.g., "general")',
+        },
+      },
+      {
+        'action': 'send_chat_message',
+        'description': 'Send a message with optional image to the selected chat room',
+        'params': {
+          'content': '(optional) Message text',
+          'image_path': '(optional) Path to image file to attach',
+        },
+      },
     ];
   }
 
@@ -654,6 +701,42 @@ class DebugController {
           'message': 'Device added: $callsign at $url',
           'callsign': callsign,
           'url': url,
+        };
+
+      case 'open_station_chat':
+        triggerOpenStationChat();
+        return {
+          'success': true,
+          'message': 'Opening station chat app and first chat room',
+        };
+
+      case 'select_chat_room':
+        final roomId = params['room_id'] as String?;
+        if (roomId == null || roomId.isEmpty) {
+          return {
+            'success': false,
+            'error': 'Missing room_id parameter',
+          };
+        }
+        triggerSelectChatRoom(roomId);
+        return {
+          'success': true,
+          'message': 'Selecting chat room: $roomId',
+        };
+
+      case 'send_chat_message':
+        final content = params['content'] as String? ?? '';
+        final imagePath = params['image_path'] as String?;
+        if (content.isEmpty && imagePath == null) {
+          return {
+            'success': false,
+            'error': 'Either content or image_path is required',
+          };
+        }
+        triggerSendChatMessage(content: content, imagePath: imagePath);
+        return {
+          'success': true,
+          'message': 'Sending chat message${imagePath != null ? " with image" : ""}',
         };
 
       default:

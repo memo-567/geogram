@@ -651,6 +651,184 @@ class DirectMessageService {
     LogService().log('DM: Sent voice message to $normalizedCallsign (${durationSeconds}s)');
   }
 
+  /// Send a file attachment to another user
+  /// Follows the same P2P pattern as voice messages
+  Future<void> sendFileMessage(String otherCallsign, String filePath, String? caption) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final profile = _myProfile;
+
+    // 1. Check reachability FIRST - must be reachable to send
+    final devicesService = DevicesService();
+    final device = devicesService.getDevice(normalizedCallsign);
+    final station = StationService().getConnectedRelay();
+    final hasStationProxy = station != null;
+    final hasDirectConnection = device != null && device.isOnline && device.url != null;
+
+    if (!hasDirectConnection && !hasStationProxy) {
+      throw DMMustBeReachableException(
+        'Cannot send file: device $normalizedCallsign is not reachable',
+      );
+    }
+
+    // 2. Check file size (10 MB limit)
+    final file = File(filePath);
+    final fileSize = await file.length();
+    if (fileSize > 10 * 1024 * 1024) {
+      throw Exception('File too large (max 10 MB)');
+    }
+
+    // 3. Get or create conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // 4. Copy file to conversation files folder (also calculates SHA1)
+    final copyResult = await _copyFile(filePath, conversation.path);
+    if (copyResult == null) {
+      throw DMDeliveryFailedException('Failed to copy file');
+    }
+    final storedFileName = copyResult.fileName;
+    final fileSha1 = copyResult.sha1Hash;
+    final originalName = copyResult.originalName;
+
+    // 5. Create the message with file metadata
+    // SHA1 hash is included in metadata for integrity verification
+    final message = ChatMessage.now(
+      author: profile.callsign,
+      content: caption ?? '',
+      metadata: {
+        'file': storedFileName,
+        'file_size': fileSize.toString(),
+        'file_name': originalName,
+        'sha1': fileSha1,
+      },
+    );
+
+    // 6. Sign the message
+    final signingService = SigningService();
+    await signingService.initialize();
+
+    NostrEvent? signedEvent;
+    if (signingService.canSign(profile)) {
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      // For file messages, we sign a descriptor string including SHA1 for integrity
+      final contentToSign = caption?.isNotEmpty == true
+          ? '$caption [file:$storedFileName:sha1=$fileSha1]'
+          : '[file:$storedFileName:sha1=$fileSha1]';
+      signedEvent = await signingService.generateSignedEvent(
+        contentToSign,
+        {
+          'room': normalizedCallsign,
+          'callsign': profile.callsign,
+          'file': storedFileName,
+          'sha1': fileSha1,
+        },
+        profile,
+        createdAt: createdAt,
+      );
+      if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
+        message.setMeta('created_at', signedEvent.createdAt.toString());
+        message.setMeta('npub', profile.npub);
+        message.setMeta('eventId', signedEvent.id!);
+        message.setMeta('signature', signedEvent.sig!);
+        message.setMeta('verified', 'true');
+      }
+    }
+
+    // 7. Push to remote device's chat API FIRST
+    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+
+    // 8. Only save locally if delivered successfully
+    if (!delivered) {
+      // Clean up copied file on failure
+      await _deleteFile(conversation.path, storedFileName);
+      throw DMDeliveryFailedException(
+        'Failed to deliver file to $normalizedCallsign',
+      );
+    }
+
+    // 9. Save locally (message was delivered)
+    await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
+
+    // Update conversation metadata
+    conversation.lastMessageTime = message.dateTime;
+    conversation.lastMessagePreview = '📎 $originalName';
+    conversation.lastMessageAuthor = profile.callsign;
+
+    // 10. Fire event and notify listeners
+    _fireMessageEvent(message, otherCallsign, fromSync: false);
+    _notifyListeners();
+
+    LogService().log('DM: Sent file to $normalizedCallsign: $originalName');
+  }
+
+  /// Copy a file to the conversation files folder with SHA1 naming
+  Future<({String fileName, String sha1Hash, String originalName})?> _copyFile(String sourcePath, String conversationPath) async {
+    try {
+      final sourceFile = File(sourcePath);
+      if (!await sourceFile.exists()) {
+        LogService().log('DM: Source file not found: $sourcePath');
+        return null;
+      }
+
+      final bytes = await sourceFile.readAsBytes();
+      final sha1Hash = sha1.convert(bytes).toString();
+      final originalName = p.basename(sourcePath);
+      final storedFileName = '${sha1Hash}_$originalName';
+
+      // Create files directory
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = Directory(p.join(storagePath, conversationPath, 'files'));
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      final destPath = p.join(filesDir.path, storedFileName);
+      await File(destPath).writeAsBytes(bytes, flush: true);
+
+      LogService().log('DM: Copied file to $destPath');
+      return (
+        fileName: storedFileName,
+        sha1Hash: sha1Hash,
+        originalName: originalName,
+      );
+    } catch (e) {
+      LogService().log('DM: Error copying file: $e');
+      return null;
+    }
+  }
+
+  /// Delete a file from conversation storage
+  Future<void> _deleteFile(String conversationPath, String fileName) async {
+    try {
+      final storagePath = StorageConfig().baseDir;
+      final filePath = p.join(storagePath, conversationPath, 'files', fileName);
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      LogService().log('DM: Error deleting file: $e');
+    }
+  }
+
+  /// Get local path to a DM file attachment
+  /// Returns null if file doesn't exist
+  Future<String?> getFilePath(String otherCallsign, String fileName) async {
+    await initialize();
+
+    final conversation = getConversation(otherCallsign.toUpperCase());
+    if (conversation == null) return null;
+
+    final storagePath = StorageConfig().baseDir;
+    final filePath = p.join(storagePath, conversation.path, 'files', fileName);
+    final file = File(filePath);
+    if (await file.exists()) {
+      return filePath;
+    }
+    return null;
+  }
+
   /// Queue a message for later delivery when recipient becomes reachable
   /// Used when the recipient device is offline
   /// Returns the queued ChatMessage with pending status
@@ -992,6 +1170,70 @@ class DirectMessageService {
       return filePath;
     } catch (e) {
       LogService().log('DM: Voice download error: $e');
+      return null;
+    }
+  }
+
+  /// Download a file attachment from a remote device
+  /// Returns local file path on success, null on failure
+  Future<String?> downloadFile(String otherCallsign, String fileName) async {
+    if (kIsWeb) return null;
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+
+    // Check if already exists locally
+    final existingPath = await getFilePath(normalizedCallsign, fileName);
+    if (existingPath != null) {
+      return existingPath;
+    }
+
+    // Security: prevent path traversal
+    if (fileName.contains('..') || fileName.contains('/') || fileName.contains('\\')) {
+      LogService().log('DM: Invalid file name: $fileName');
+      return null;
+    }
+
+    try {
+      // Request file from the sender's device
+      // The sender stored it in their chat/{myCallsign}/files/ folder
+      // Path: /{senderCallsign}/api/dm/{myCallsign}/files/{filename}
+      final myCallsign = _myCallsign;
+      final apiPath = '/$normalizedCallsign/api/dm/$myCallsign/files/$fileName';
+
+      LogService().log('DM: Downloading file from $normalizedCallsign: $fileName');
+
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: normalizedCallsign,
+        method: 'GET',
+        path: apiPath,
+      );
+
+      if (response == null) {
+        LogService().log('DM: No route to $normalizedCallsign for file download');
+        return null;
+      }
+
+      if (response.statusCode != 200) {
+        LogService().log('DM: File download failed: ${response.statusCode}');
+        return null;
+      }
+
+      // Create local files directory if needed
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save the file
+      final filePath = p.join(filesDir.path, fileName);
+      final file = File(filePath);
+      await file.writeAsBytes(response.bodyBytes);
+
+      LogService().log('DM: File downloaded: $filePath');
+      return filePath;
+    } catch (e) {
+      LogService().log('DM: File download error: $e');
       return null;
     }
   }

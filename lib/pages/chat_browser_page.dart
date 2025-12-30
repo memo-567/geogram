@@ -21,15 +21,21 @@ import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
+import '../services/debug_controller.dart';
 import '../services/group_sync_service.dart';
 import '../services/signing_service.dart';
 import '../models/device_source.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import '../util/event_bus.dart';
 import '../widgets/device_chat_sidebar.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
 import '../widgets/new_channel_dialog.dart';
+import '../widgets/voice_recorder_widget.dart';
+import '../services/audio_service.dart';
+import '../services/audio_platform_stub.dart'
+    if (dart.library.io) '../services/audio_platform_io.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
 import 'photo_viewer_page.dart';
@@ -44,12 +50,16 @@ class ChatBrowserPage extends StatefulWidget {
   final String? remoteDeviceCallsign;
   final String? remoteDeviceName;
 
+  /// Optional room ID to auto-select on load
+  final String? initialRoomId;
+
   const ChatBrowserPage({
     Key? key,
     this.collection,
     this.remoteDeviceUrl,
     this.remoteDeviceCallsign,
     this.remoteDeviceName,
+    this.initialRoomId,
   }) : super(key: key);
 
   /// Whether this is browsing a remote device
@@ -87,6 +97,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   bool _loadingRelayRooms = false;
   bool _stationReachable = false; // Track if station is currently reachable (default false until confirmed)
   bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
+  bool _isStationSending = false; // Sending message to station room
+  bool _isStationRecording = false; // Recording voice for station room
+  final Set<String> _recentlyUploadedFiles = {}; // Track files we just uploaded to skip re-downloading
 
   // All cached devices with their rooms (for offline viewing)
   List<CachedDeviceRooms> _cachedDeviceSources = [];
@@ -108,8 +121,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Station message polling timer (fallback for when WebSocket updates don't work)
   Timer? _messagePollingTimer;
 
+  // Debounce timer for update notifications (prevents duplicate refreshes)
+  Timer? _updateDebounceTimer;
+  bool _isRefreshingMessages = false;
+
   // File change subscription for CLI/external updates
   StreamSubscription<ChatFileChange>? _fileChangeSubscription;
+
+  // Debug action subscription for select_chat_room
+  StreamSubscription<DebugActionEvent>? _debugActionSubscription;
 
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
@@ -122,8 +142,56 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _setupUpdateListener();
     _subscribeToUnreadCounts();
     _subscribeToFileChanges();
+    _subscribeToDebugActions();
     _startRelayStatusChecker();
     _startMessagePolling();
+  }
+
+  /// Listen for debug API actions to select a chat room or send messages
+  void _subscribeToDebugActions() {
+    _debugActionSubscription = DebugController().actionStream.listen((event) {
+      if (event.action == DebugAction.selectChatRoom) {
+        final roomId = event.params?['room_id'] as String?;
+        if (roomId != null) {
+          print('DEBUG ChatBrowserPage: received selectChatRoom for $roomId');
+          _autoSelectRoom(roomId);
+        }
+      } else if (event.action == DebugAction.sendChatMessage) {
+        final content = event.params?['content'] as String? ?? '';
+        final imagePath = event.params?['image_path'] as String?;
+        print('DEBUG ChatBrowserPage: received sendChatMessage content="$content" image=$imagePath');
+        _handleDebugSendMessage(content, imagePath);
+      }
+    });
+  }
+
+  /// Handle sending a message from debug API
+  Future<void> _handleDebugSendMessage(String content, String? imagePath) async {
+    if (_selectedStationRoom == null) {
+      print('DEBUG ChatBrowserPage: no room selected, cannot send message');
+      return;
+    }
+
+    // Resolve relative image path to absolute
+    String? resolvedImagePath = imagePath;
+    if (imagePath != null && !imagePath.startsWith('/')) {
+      // Resolve relative to project's tests/images folder
+      resolvedImagePath = '/home/brito/code/geograms/geogram/$imagePath';
+      print('DEBUG ChatBrowserPage: resolved image path to $resolvedImagePath');
+    }
+
+    // Verify the image exists
+    if (resolvedImagePath != null) {
+      final file = File(resolvedImagePath);
+      if (!await file.exists()) {
+        print('DEBUG ChatBrowserPage: image file not found at $resolvedImagePath');
+        return;
+      }
+    }
+
+    print('DEBUG ChatBrowserPage: sending message to room ${_selectedStationRoom!.id}');
+    await _sendMessage(content, resolvedImagePath);
+    print('DEBUG ChatBrowserPage: message sent');
   }
 
   void _setStateIfMounted(VoidCallback callback) {
@@ -176,9 +244,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _updateSubscription?.cancel();
     _unreadSubscription?.cancel();
     _fileChangeSubscription?.cancel();
+    _debugActionSubscription?.cancel();
     _chatService.stopWatching();
     _stationStatusTimer?.cancel();
     _messagePollingTimer?.cancel();
+    _updateDebounceTimer?.cancel();
     super.dispose();
   }
 
@@ -199,14 +269,25 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (update.collectionType == 'chat') {
       // Refresh if we're viewing the room that got updated
       if (_selectedStationRoom != null && _selectedStationRoom!.id == update.path) {
-        _refreshRelayMessages();
+        // Debounce to prevent duplicate refreshes (server sends multiple WebSocket messages)
+        _updateDebounceTimer?.cancel();
+        _updateDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+          _refreshRelayMessages();
+        });
       }
     }
   }
 
   /// Refresh station messages without showing loading indicator
   Future<void> _refreshRelayMessages() async {
-    await _syncStationMessages();
+    // Prevent overlapping refreshes
+    if (_isRefreshingMessages) return;
+    _isRefreshingMessages = true;
+    try {
+      await _syncStationMessages();
+    } finally {
+      _isRefreshingMessages = false;
+    }
   }
 
   /// Ensure WebSocket is connected for real-time updates
@@ -414,13 +495,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Load station chat rooms - MUST await to ensure rooms are loaded before UI renders
       await _loadRelayRooms();
 
-      // Auto-select first station room in wide screen mode (where sidebar is visible alongside content)
-      if (mounted) {
+      // Auto-select room after UI is ready
+      if (widget.initialRoomId != null && mounted) {
+        // Schedule selection after frame to ensure UI is ready
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _autoSelectRoom(widget.initialRoomId!);
+        });
+      } else if (mounted && _stationRooms.isNotEmpty) {
+        // Wide screen auto-select first room
         final screenWidth = MediaQuery.of(context).size.width;
-        final isWideScreen = screenWidth >= 600;
-
-        if (isWideScreen && _stationRooms.isNotEmpty) {
-          // Select first station room (station rooms are shown first in the UI)
+        if (screenWidth >= 600) {
           await _selectRelayRoom(_stationRooms.first);
         }
       }
@@ -464,7 +548,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         });
       }
 
-      unawaited(_fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!));
+      // If initialRoomId is set, await the fetch so we can select the room
+      // Otherwise use unawaited for faster UI response
+      if (widget.initialRoomId != null) {
+        await _fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!);
+      } else {
+        unawaited(_fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!));
+      }
       return;
     }
 
@@ -698,6 +788,30 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await _selectRelayRoom(room);
   }
 
+  /// Auto-select a room by ID (used for debug API and initialRoomId)
+  void _autoSelectRoom(String roomId) {
+    print('DEBUG _autoSelectRoom: looking for $roomId in ${_stationRooms.length} rooms');
+    if (_stationRooms.isEmpty) {
+      print('DEBUG _autoSelectRoom: no rooms loaded yet');
+      return;
+    }
+
+    print('DEBUG _autoSelectRoom: available rooms = ${_stationRooms.map((r) => r.id).toList()}');
+    final room = _stationRooms.cast<StationChatRoom?>().firstWhere(
+      (r) => r?.id == roomId,
+      orElse: () => null,
+    );
+
+    if (room != null) {
+      print('DEBUG _autoSelectRoom: found room, selecting...');
+      _selectRelayRoom(room);
+    } else {
+      print('DEBUG _autoSelectRoom: room $roomId not found, selecting first room');
+      // Fall back to first room if specified room not found
+      _selectRelayRoom(_stationRooms.first);
+    }
+  }
+
   Future<void> _selectRelayRoom(StationChatRoom room) async {
     // Mark this room as current (clears unread count)
     _chatNotificationService.setCurrentRoom(room.id);
@@ -762,6 +876,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _stationMessages = trimmed;
       _isLoading = false;
     });
+
+    // Fire event to notify MessageListWidget to scroll to bottom
+    if (trimmed.isNotEmpty) {
+      EventBus().fire(ChatMessagesLoadedEvent(
+        roomId: _selectedStationRoom?.id,
+        messageCount: trimmed.length,
+      ));
+    }
   }
 
   /// Download and cache raw chat files from the station
@@ -874,22 +996,79 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Handle station room message
     if (_selectedStationRoom != null) {
-      final metadata = <String, String>{};
-      if (_quotedMessage != null) {
-        metadata['quote'] = _quotedMessage!.timestamp;
-        metadata['quote_author'] = _quotedMessage!.author;
-        if (_quotedMessage!.content.isNotEmpty) {
-          final excerpt = _quotedMessage!.content.length > 120
-              ? _quotedMessage!.content.substring(0, 120)
-              : _quotedMessage!.content;
-          metadata['quote_excerpt'] = excerpt;
+      setState(() {
+        _isStationSending = true;
+      });
+
+      try {
+        final metadata = <String, String>{};
+
+        // Handle file attachment - upload to station first
+        if (filePath != null) {
+          final file = File(filePath);
+          final fileSize = await file.length();
+          if (fileSize > 10 * 1024 * 1024) {
+            throw Exception(_i18n.t('file_too_large', params: ['10 MB']));
+          }
+
+          final uploadedFilename = await _stationService.uploadRoomFile(
+            _selectedStationRoom!.stationUrl,
+            _selectedStationRoom!.id,
+            filePath,
+          );
+
+          if (uploadedFilename != null) {
+            metadata['file'] = uploadedFilename;
+            metadata['file_size'] = fileSize.toString();
+
+            // Cache the file locally so we don't need to re-download it
+            // and can show thumbnail immediately
+            if (_lastRelayCacheKey != null && _selectedStationRoom != null) {
+              final bytes = await file.readAsBytes();
+              await _cacheService.saveChatFile(
+                _lastRelayCacheKey!,
+                _selectedStationRoom!.id,
+                uploadedFilename,
+                bytes,
+              );
+              LogService().log('Cached uploaded file locally: $uploadedFilename');
+            }
+          } else {
+            throw Exception(_i18n.t('file_upload_failed'));
+          }
+        }
+
+        if (_quotedMessage != null) {
+          metadata['quote'] = _quotedMessage!.timestamp;
+          metadata['quote_author'] = _quotedMessage!.author;
+          if (_quotedMessage!.content.isNotEmpty) {
+            final excerpt = _quotedMessage!.content.length > 120
+                ? _quotedMessage!.content.substring(0, 120)
+                : _quotedMessage!.content;
+            metadata['quote_excerpt'] = excerpt;
+          }
+        }
+
+        await _sendRelayMessage(
+          content,
+          metadata: metadata.isNotEmpty ? metadata : null,
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$e'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isStationSending = false;
+          });
         }
       }
-
-      await _sendRelayMessage(
-        content,
-        metadata: metadata.isNotEmpty ? metadata : null,
-      );
       return;
     }
 
@@ -980,7 +1159,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Send as a properly signed NOSTR event (kind 1 text note)
       // StationService handles creating the event, signing with BIP-340 Schnorr,
       // and sending via WebSocket or HTTP
-      final success = await _stationService.postRoomMessage(
+      // Returns the created_at timestamp (Unix seconds) on success, null on failure
+      final createdAt = await _stationService.postRoomMessage(
         _selectedStationRoom!.stationUrl,
         _selectedStationRoom!.id,
         currentProfile.callsign,
@@ -988,12 +1168,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         metadata: metadata,
       );
 
-      if (success) {
-        // Add optimistic update with verified status
-        // Since we signed the message ourselves, it should be verified
-        final now = DateTime.now();
-        final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+      if (createdAt != null) {
+        // Optimistic update - use the SAME timestamp that was sent to the server
+        // This ensures deduplication works when the server broadcasts the message back
+        // IMPORTANT: Keep in UTC to match how server stores and cache normalizes timestamps
+        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000, isUtc: true);
+        // Use normalized chat timestamp format: YYYY-MM-DD HH:MM_ss
+        final timestamp = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+            '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}_${dt.second.toString().padLeft(2, '0')}';
 
         final newMessage = StationChatMessage(
           timestamp: timestamp,
@@ -1002,9 +1184,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           roomId: _selectedStationRoom!.id,
           metadata: metadata,
           npub: currentProfile.npub,
-          verified: true,      // We signed it, so it's verified
-          hasSignature: true,  // Message was signed
+          verified: true,
+          hasSignature: true,
         );
+
+        // Track uploaded file to avoid re-downloading
+        if (metadata != null && metadata.containsKey('file')) {
+          _recentlyUploadedFiles.add(metadata['file']!);
+        }
 
         _setStateIfMounted(() {
           _stationMessages.add(newMessage);
@@ -1016,7 +1203,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _quotedMessage = null;
         });
 
-        // Cache the new message using the consistent cache key
+        // Cache the message locally (normalized timestamp will deduplicate with server response)
         if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
           await _cacheService.mergeMessages(
             _lastRelayCacheKey!,
@@ -1263,63 +1450,166 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   Future<void> _toggleStationReaction(ChatMessage message, String reaction) async {
     if (_selectedStationRoom == null) return;
+
+    final roomId = _selectedStationRoom!.id;
+    final currentProfile = _profileService.getProfile();
+    final myCallsign = currentProfile.callsign.toUpperCase();
+
+    // Find the message in the list
+    final messageList = List<StationChatMessage>.from(
+      _stationMessageCache[roomId] ?? _stationMessages,
+    );
+    final index = messageList.indexWhere((msg) =>
+        msg.timestamp == message.timestamp &&
+        msg.callsign.toUpperCase() == message.author.toUpperCase());
+
+    if (index == -1) return;
+
+    final existing = messageList[index];
+    final originalReactions = Map<String, List<String>>.from(
+      existing.reactions.map((k, v) => MapEntry(k, List<String>.from(v))),
+    );
+
+    // Compute optimistic reactions (one reaction per user per message)
+    final optimisticReactions = Map<String, List<String>>.from(
+      existing.reactions.map((k, v) => MapEntry(k, List<String>.from(v))),
+    );
+
+    // Check if user already has this specific reaction (for toggle-off)
+    final reactionList = optimisticReactions[reaction] ?? <String>[];
+    final alreadyHasThisReaction = reactionList.any((c) => c.toUpperCase() == myCallsign);
+
+    // Remove user from ALL reaction types first (enforce one reaction per user)
+    for (final key in optimisticReactions.keys.toList()) {
+      optimisticReactions[key]?.removeWhere((c) => c.toUpperCase() == myCallsign);
+      if (optimisticReactions[key]?.isEmpty ?? true) {
+        optimisticReactions.remove(key);
+      }
+    }
+
+    // If clicking the same reaction they had, just remove it (toggle off)
+    // Otherwise, add the new reaction
+    if (!alreadyHasThisReaction) {
+      final newList = optimisticReactions[reaction] ?? <String>[];
+      newList.add(currentProfile.callsign);
+      optimisticReactions[reaction] = newList;
+    }
+
+    // Apply optimistic update immediately (preserving all other fields including metadata)
+    final optimisticMessage = StationChatMessage(
+      timestamp: existing.timestamp,
+      callsign: existing.callsign,
+      content: existing.content,
+      roomId: existing.roomId,
+      metadata: existing.metadata,
+      reactions: optimisticReactions,
+      npub: existing.npub,
+      pubkey: existing.pubkey,
+      signature: existing.signature,
+      eventId: existing.eventId,
+      createdAt: existing.createdAt,
+      verified: existing.verified,
+      hasSignature: existing.hasSignature,
+    );
+    messageList[index] = optimisticMessage;
+    _stationMessageCache[roomId] = messageList;
+    _applyStationMessageLimit(messageList);
+
+    // If station is offline, just keep the optimistic update (will sync later)
     if (!_stationReachable) {
-      _showError('Station is offline');
       return;
     }
 
+    // Now call server in background
     try {
-      final roomId = _selectedStationRoom!.id;
-      final updatedReactions = await _stationService.toggleRoomReaction(
+      final serverReactions = await _stationService.toggleRoomReaction(
         _selectedStationRoom!.stationUrl,
         roomId,
         message.timestamp,
         reaction,
       );
 
-      if (updatedReactions == null) {
+      if (serverReactions == null) {
+        // Server failed, revert to original
+        _revertReaction(roomId, index, existing, originalReactions);
         _showError('Failed to react');
         return;
       }
 
-      final updatedList = List<StationChatMessage>.from(
+      // Update with server's authoritative reactions (in case of race conditions)
+      final serverMessage = StationChatMessage(
+        timestamp: existing.timestamp,
+        callsign: existing.callsign,
+        content: existing.content,
+        roomId: existing.roomId,
+        metadata: existing.metadata,
+        reactions: serverReactions,
+        npub: existing.npub,
+        pubkey: existing.pubkey,
+        signature: existing.signature,
+        eventId: existing.eventId,
+        createdAt: existing.createdAt,
+        verified: existing.verified,
+        hasSignature: existing.hasSignature,
+      );
+
+      // Re-fetch the current list (might have changed during async operation)
+      final currentList = List<StationChatMessage>.from(
         _stationMessageCache[roomId] ?? _stationMessages,
       );
-      final index = updatedList.indexWhere((msg) =>
+      final currentIndex = currentList.indexWhere((msg) =>
           msg.timestamp == message.timestamp &&
           msg.callsign.toUpperCase() == message.author.toUpperCase());
-      if (index != -1) {
-        final existing = updatedList[index];
-        final updatedMessage = StationChatMessage(
-          timestamp: existing.timestamp,
-          callsign: existing.callsign,
-          content: existing.content,
-          roomId: existing.roomId,
-          metadata: existing.metadata,
-          reactions: updatedReactions,
-          npub: existing.npub,
-          pubkey: existing.pubkey,
-          signature: existing.signature,
-          eventId: existing.eventId,
-          createdAt: existing.createdAt,
-          verified: existing.verified,
-          hasSignature: existing.hasSignature,
-        );
-        updatedList[index] = updatedMessage;
-        _stationMessageCache[roomId] = updatedList;
-        _applyStationMessageLimit(updatedList);
+      if (currentIndex != -1) {
+        currentList[currentIndex] = serverMessage;
+        _stationMessageCache[roomId] = currentList;
+        _applyStationMessageLimit(currentList);
 
+        // Persist to cache
         final cacheKey = _lastRelayCacheKey ?? '';
         if (cacheKey.isNotEmpty) {
-          await _cacheService.mergeMessages(
-            cacheKey,
-            roomId,
-            [updatedMessage],
-          );
+          await _cacheService.mergeMessages(cacheKey, roomId, [serverMessage]);
         }
       }
     } catch (e) {
+      // Server call failed, revert to original
+      _revertReaction(roomId, index, existing, originalReactions);
       _showError('Failed to react: $e');
+    }
+  }
+
+  /// Revert a reaction to original state after server failure
+  void _revertReaction(
+    String roomId,
+    int originalIndex,
+    StationChatMessage existing,
+    Map<String, List<String>> originalReactions,
+  ) {
+    final currentList = List<StationChatMessage>.from(
+      _stationMessageCache[roomId] ?? _stationMessages,
+    );
+    final currentIndex = currentList.indexWhere((msg) =>
+        msg.timestamp == existing.timestamp &&
+        msg.callsign.toUpperCase() == existing.callsign.toUpperCase());
+    if (currentIndex != -1) {
+      final revertedMessage = StationChatMessage(
+        timestamp: existing.timestamp,
+        callsign: existing.callsign,
+        content: existing.content,
+        roomId: existing.roomId,
+        metadata: existing.metadata,
+        reactions: originalReactions,
+        npub: existing.npub,
+        pubkey: existing.pubkey,
+        signature: existing.signature,
+        eventId: existing.eventId,
+        createdAt: existing.createdAt,
+        verified: existing.verified,
+        hasSignature: existing.hasSignature,
+      );
+      currentList[currentIndex] = revertedMessage;
+      _stationMessageCache[roomId] = currentList;
+      _applyStationMessageLimit(currentList);
     }
   }
 
@@ -1333,6 +1623,208 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _setStateIfMounted(() {
       _quotedMessage = null;
     });
+  }
+
+  // ========== Station Room Voice Recording ==========
+
+  /// Start voice recording for station room
+  void _startStationRecording() async {
+    if (!await AudioService().hasPermission()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('microphone_permission_required'))),
+        );
+      }
+      return;
+    }
+    setState(() {
+      _isStationRecording = true;
+    });
+  }
+
+  /// Cancel voice recording for station room
+  void _cancelStationRecording() {
+    setState(() {
+      _isStationRecording = false;
+    });
+  }
+
+  /// Send voice message to station room
+  Future<void> _sendStationVoiceMessage(String filePath, int durationSeconds) async {
+    if (_selectedStationRoom == null || !_stationReachable) return;
+
+    setState(() {
+      _isStationSending = true;
+      _isStationRecording = false;
+    });
+
+    try {
+      final currentProfile = _profileService.getProfile();
+
+      // Validate file size (10 MB limit)
+      final file = File(filePath);
+      final fileSize = await file.length();
+      if (fileSize > 10 * 1024 * 1024) {
+        throw Exception(_i18n.t('file_too_large', params: ['10 MB']));
+      }
+
+      // Upload voice file to station
+      final uploadedFilename = await _stationService.uploadRoomFile(
+        _selectedStationRoom!.stationUrl,
+        _selectedStationRoom!.id,
+        filePath,
+      );
+
+      if (uploadedFilename == null) {
+        throw Exception(_i18n.t('file_upload_failed'));
+      }
+
+      // Send message with voice metadata
+      final metadata = <String, String>{
+        'voice': uploadedFilename,
+        'voice_duration': durationSeconds.toString(),
+        'file_size': fileSize.toString(),
+      };
+
+      final createdAt = await _stationService.postRoomMessage(
+        _selectedStationRoom!.stationUrl,
+        _selectedStationRoom!.id,
+        currentProfile.callsign,
+        '', // Empty content for voice messages
+        metadata: metadata,
+      );
+
+      if (createdAt != null) {
+        // Refresh to show the new message
+        await _refreshRelayMessages();
+      } else {
+        throw Exception(_i18n.t('failed_to_send_voice'));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('failed_to_send_voice')}: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStationSending = false;
+        });
+      }
+    }
+  }
+
+  /// Get voice file path for playback in station room messages
+  Future<String?> _getStationVoiceFilePath(ChatMessage message) async {
+    if (!message.hasVoice || message.voiceFile == null) return null;
+
+    // Voice files use the same storage as regular file attachments
+    return _getStationAttachmentPath(ChatMessage(
+      author: message.author,
+      content: message.content,
+      timestamp: message.timestamp,
+      metadata: {'file': message.voiceFile!},
+    ));
+  }
+
+  /// Get attachment path for station room messages
+  Future<String?> _getStationAttachmentPath(ChatMessage message) async {
+    if (!message.hasFile) return null;
+
+    final filename = message.attachedFile;
+    if (filename == null) return null;
+    if (_lastRelayCacheKey == null || _selectedStationRoom == null) return null;
+
+    // Check if already cached
+    final cachedPath = await _cacheService.getChatFilePath(
+      _lastRelayCacheKey!,
+      _selectedStationRoom!.id,
+      filename,
+    );
+
+    if (cachedPath != null) {
+      return cachedPath;
+    }
+
+    // Skip downloading files we just uploaded (bandwidth optimization)
+    if (_recentlyUploadedFiles.contains(filename)) {
+      LogService().log('Skipping download of recently uploaded file: $filename');
+      return null;
+    }
+
+    // Check bandwidth-conscious download policy:
+    // Auto-download only if file is <= 3 MB and message is <= 7 days old
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final messageAge = DateTime.now().difference(message.dateTime);
+    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+
+    if (!shouldAutoDownload || !_stationReachable) {
+      return null;
+    }
+
+    try {
+      // Download file from station
+      final localPath = await _stationService.downloadRoomFile(
+        _selectedStationRoom!.stationUrl,
+        _selectedStationRoom!.id,
+        filename,
+        cacheKey: _lastRelayCacheKey,
+      );
+
+      return localPath;
+    } catch (e) {
+      LogService().log('Error downloading station attachment: $e');
+      return null;
+    }
+  }
+
+  /// Open image from station room message
+  Future<void> _openStationImage(ChatMessage message) async {
+    final filePath = await _getStationAttachmentPath(message);
+    if (filePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('image_not_available'))),
+        );
+      }
+      return;
+    }
+
+    // Collect all image paths from station messages
+    final imagePaths = <String>[];
+    final convertedMessages = _convertStationMessages(_stationMessages);
+    for (final msg in convertedMessages) {
+      if (!msg.hasFile) continue;
+      final imgPath = await _getStationAttachmentPath(msg);
+      if (imgPath == null) continue;
+      if (!_isImageFile(imgPath)) continue;
+      imagePaths.add(imgPath);
+    }
+
+    if (imagePaths.isEmpty) {
+      imagePaths.add(filePath);
+    }
+
+    var initialIndex = imagePaths.indexOf(filePath);
+    if (initialIndex < 0) {
+      imagePaths.add(filePath);
+      initialIndex = imagePaths.length - 1;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PhotoViewerPage(
+          imagePaths: imagePaths,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
   }
 
   bool _isMessageHidden(ChatMessage message) {
@@ -1425,7 +1917,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  String? _resolveAttachedFilePath(ChatMessage message) {
+  Future<String?> _resolveAttachedFilePath(ChatMessage message) async {
     if (!message.hasFile) return null;
     if (widget.isRemoteDevice || widget.collection == null) return null;
 
@@ -1463,7 +1955,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   Future<void> _openAttachedImage(ChatMessage message) async {
-    final filePath = _resolveAttachedFilePath(message);
+    final filePath = await _resolveAttachedFilePath(message);
     if (filePath == null) {
       _showError('Image not available');
       return;
@@ -1477,7 +1969,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final imagePaths = <String>[];
     for (final msg in _messages) {
       if (!msg.hasFile) continue;
-      final path = _resolveAttachedFilePath(msg);
+      final path = await _resolveAttachedFilePath(msg);
       if (path == null) continue;
       if (!_isImageFile(path)) continue;
       if (!file_helper.fileExists(path)) continue;
@@ -1978,30 +2470,24 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Widget _buildRelayRoomChat(ThemeData theme) {
     return Column(
       children: [
-        // Message list using converted messages
+        // Message list using converted messages - same as other chat UIs
         Expanded(
           child: MessageListWidget(
             messages: _convertStationMessages(_stationMessages),
             isGroupChat: true,
             isLoading: _isLoading,
             onLoadMore: _loadMoreStationMessages,
-            onFileOpen: (_) {}, // Station messages don't support file attachments
             onMessageDelete: _deleteStationMessage,
             canDeleteMessage: _canDeleteStationMessage,
             onMessageQuote: _setQuotedMessage,
             onMessageReact: _toggleStationReaction,
+            getAttachmentPath: _getStationAttachmentPath,
+            getVoiceFilePath: _getStationVoiceFilePath,
+            onImageOpen: _openStationImage,
           ),
         ),
-        // Message input (no file upload for station) - disabled when offline
-        if (_stationReachable)
-          MessageInputWidget(
-            onSend: _sendMessage,
-            maxLength: 1000,
-            allowFiles: false,
-            quotedMessage: _quotedMessage,
-            onClearQuote: _clearQuotedMessage,
-          )
-        else
+        // Message input with voice recording and file attachments - same as other chat UIs
+        if (!_stationReachable)
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -2029,6 +2515,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ),
               ],
             ),
+          )
+        else if (_isStationSending)
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: const Center(child: CircularProgressIndicator()),
+          )
+        else if (_isStationRecording)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: VoiceRecorderWidget(
+              onSend: _sendStationVoiceMessage,
+              onCancel: _cancelStationRecording,
+            ),
+          )
+        else
+          MessageInputWidget(
+            onSend: _sendMessage,
+            maxLength: 1000,
+            allowFiles: true,
+            onMicPressed: isVoiceSupported ? _startStationRecording : null,
+            quotedMessage: _quotedMessage,
+            onClearQuote: _clearQuotedMessage,
           ),
       ],
     );

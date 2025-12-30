@@ -2727,8 +2727,17 @@ class LogApiService {
       }
 
       // Create message with metadata
-      // Order: created_at, npub, event_id, signature (signature last for readability)
+      // Start with any extra metadata from the request (e.g., quote info)
       final metadata = <String, String>{};
+      if (body.containsKey('metadata') && body['metadata'] is Map) {
+        final extraMeta = body['metadata'] as Map;
+        extraMeta.forEach((key, value) {
+          if (key is String && value is String) {
+            metadata[key] = value;
+          }
+        });
+      }
+      // Add signature-related fields (order: created_at, npub, event_id, signature last)
       if (createdAt != null) metadata['created_at'] = createdAt.toString();
       if (npub != null) metadata['npub'] = npub;
       if (eventId != null) metadata['event_id'] = eventId;
@@ -7297,6 +7306,111 @@ class LogApiService {
             headers: headers,
           );
 
+        case 'station_send_chat':
+          // Send a chat message to a station room (with optional image)
+          final room = params['room'] as String? ?? 'general';
+          final content = params['content'] as String? ?? '';
+          final imagePath = params['image_path'] as String?;
+
+          // Get preferred station
+          final preferred = stationService.getPreferredStation();
+          if (preferred == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'No preferred station configured. Use station_set first.',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final metadata = <String, String>{};
+          final logs = <String>[];
+
+          logs.add('Station URL: ${preferred.url}');
+          logs.add('Room: $room');
+          logs.add('Content: $content');
+
+          // If image path is provided, upload it first
+          if (imagePath != null && imagePath.isNotEmpty) {
+            logs.add('Image path: $imagePath');
+            final imageFile = io.File(imagePath);
+            if (!await imageFile.exists()) {
+              return shelf.Response.badRequest(
+                body: jsonEncode({
+                  'success': false,
+                  'error': 'Image file not found: $imagePath',
+                  'logs': logs,
+                }),
+                headers: headers,
+              );
+            }
+
+            final fileSize = await imageFile.length();
+            logs.add('Image size: $fileSize bytes');
+
+            // Upload the file
+            logs.add('Uploading image...');
+            final uploadedFilename = await stationService.uploadRoomFile(
+              preferred.url,
+              room,
+              imagePath,
+            );
+
+            if (uploadedFilename == null) {
+              logs.add('ERROR: File upload failed');
+              return shelf.Response.ok(
+                jsonEncode({
+                  'success': false,
+                  'error': 'File upload failed',
+                  'logs': logs,
+                }),
+                headers: headers,
+              );
+            }
+
+            logs.add('Upload successful: $uploadedFilename');
+            metadata['file'] = uploadedFilename;
+            metadata['file_size'] = fileSize.toString();
+          }
+
+          // Send the message
+          logs.add('Sending message...');
+          final createdAt = await stationService.postRoomMessage(
+            preferred.url,
+            room,
+            profile.callsign,
+            content,
+            metadata: metadata.isNotEmpty ? metadata : null,
+          );
+
+          if (createdAt != null) {
+            logs.add('Message sent successfully, created_at: $createdAt');
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'Message sent successfully',
+                'room': room,
+                'content': content,
+                'metadata': metadata,
+                'created_at': createdAt,
+                'logs': logs,
+              }),
+              headers: headers,
+            );
+          } else {
+            logs.add('ERROR: Failed to send message');
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Failed to send message',
+                'logs': logs,
+              }),
+              headers: headers,
+            );
+          }
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -7310,6 +7424,7 @@ class LogApiService {
                 'station_server_start',
                 'station_server_stop',
                 'station_server_status',
+                'station_send_chat',
               ],
             }),
             headers: headers,

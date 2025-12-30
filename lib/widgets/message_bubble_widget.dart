@@ -14,8 +14,8 @@ import 'voice_player_widget.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 
 /// Widget for displaying a single chat message bubble
-class MessageBubbleWidget extends StatelessWidget {
-  static const Map<String, String> _reactionEmojiMap = {
+class MessageBubbleWidget extends StatefulWidget {
+  static const Map<String, String> reactionEmojiMap = {
     'thumbs-up': '👍',
     'heart': '❤️',
     'fire': '🔥',
@@ -35,13 +35,16 @@ class MessageBubbleWidget extends StatelessWidget {
   final bool canDelete;
   final bool isHidden;
   final VoidCallback? onUnhide;
-  final String? attachmentPath;
   final VoidCallback? onImageOpen;
   final void Function(String reaction)? onReact;
   /// Path to the voice file (for voice messages)
   final String? voiceFilePath;
   /// Callback to request download of voice file from remote
   final Future<String?> Function()? onVoiceDownloadRequested;
+  /// Callback to request attachment file path (async)
+  final Future<String?> Function()? onAttachmentPathRequested;
+  /// Callback when content size changes (e.g., image loaded)
+  final VoidCallback? onContentSizeChanged;
 
   const MessageBubbleWidget({
     Key? key,
@@ -57,10 +60,78 @@ class MessageBubbleWidget extends StatelessWidget {
     this.onVoiceDownloadRequested,
     this.isHidden = false,
     this.onUnhide,
-    this.attachmentPath,
+    this.onAttachmentPathRequested,
     this.onImageOpen,
     this.onReact,
+    this.onContentSizeChanged,
   }) : super(key: key);
+
+  @override
+  State<MessageBubbleWidget> createState() => _MessageBubbleWidgetState();
+}
+
+class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
+  String? _attachmentPath;
+  bool _isLoadingAttachment = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAttachmentPath();
+  }
+
+  @override
+  void didUpdateWidget(MessageBubbleWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only reload if the message identity or file attachment actually changed
+    // Don't reset if only reactions/metadata changed (preserves image display)
+    final oldFile = oldWidget.message.attachedFile;
+    final newFile = widget.message.attachedFile;
+    final timestampChanged = oldWidget.message.timestamp != widget.message.timestamp;
+    final fileChanged = oldFile != newFile;
+
+    if (timestampChanged || fileChanged) {
+      _attachmentPath = null;
+      _loadAttachmentPath();
+    } else if (_attachmentPath == null && widget.message.hasFile && !_isLoadingAttachment) {
+      // If we have a file but no path yet, try loading it
+      _loadAttachmentPath();
+    }
+  }
+
+  Future<void> _loadAttachmentPath() async {
+    if (widget.onAttachmentPathRequested == null || !widget.message.hasFile) {
+      return;
+    }
+    if (_isLoadingAttachment) return;
+
+    setState(() {
+      _isLoadingAttachment = true;
+    });
+
+    try {
+      final path = await widget.onAttachmentPathRequested!();
+      if (mounted) {
+        final hadNoPath = _attachmentPath == null;
+        setState(() {
+          _attachmentPath = path;
+          _isLoadingAttachment = false;
+        });
+        // Notify parent that content size changed (image loaded)
+        if (hadNoPath && path != null && widget.onContentSizeChanged != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            widget.onContentSizeChanged?.call();
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingAttachment = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,11 +142,11 @@ class MessageBubbleWidget extends StatelessWidget {
     final normalizedCallsign = currentCallsign.toUpperCase();
 
     // Compare case-insensitively for callsigns, or by npub if available
-    final isOwnMessage = message.author.toUpperCase() == currentCallsign.toUpperCase() ||
-        (message.npub != null &&
-         message.npub!.isNotEmpty &&
+    final isOwnMessage = widget.message.author.toUpperCase() == currentCallsign.toUpperCase() ||
+        (widget.message.npub != null &&
+         widget.message.npub!.isNotEmpty &&
          currentProfile.npub.isNotEmpty &&
-         message.npub == currentProfile.npub);
+         widget.message.npub == currentProfile.npub);
 
     // Get sender's preferred color from cached device status
     final Color bubbleColor;
@@ -84,18 +155,18 @@ class MessageBubbleWidget extends StatelessWidget {
       bubbleColor = theme.colorScheme.primaryContainer;
       textColor = theme.colorScheme.onPrimaryContainer;
     } else {
-      final device = DevicesService().getDevice(message.author);
+      final device = DevicesService().getDevice(widget.message.author);
       bubbleColor = _getBubbleColor(device?.preferredColor, theme);
       textColor = _getTextColor(device?.preferredColor, theme);
     }
 
-    final hasActions = (onQuote != null) || (onHide != null) || (canDelete && onDelete != null);
+    final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null);
     final isImageAttachment = _isImageAttachment();
-    final imageWidget = isImageAttachment && attachmentPath != null
+    final imageWidget = isImageAttachment && _attachmentPath != null
         ? file_helper.buildFileImage(
-            attachmentPath!,
-            width: 220,
-            height: 140,
+            _attachmentPath!,
+            width: 280,
+            height: 200,
             fit: BoxFit.cover,
           )
         : null;
@@ -113,11 +184,11 @@ class MessageBubbleWidget extends StatelessWidget {
               isOwnMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             // Author name (only for group chats and other people's messages)
-            if (isGroupChat && !isOwnMessage)
+            if (widget.isGroupChat && !isOwnMessage)
               Padding(
                 padding: const EdgeInsets.only(left: 12, bottom: 4),
                 child: Text(
-                  message.author,
+                  widget.message.author,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
@@ -139,15 +210,15 @@ class MessageBubbleWidget extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (isHidden)
+                    if (widget.isHidden)
                       _buildHiddenMessage(theme, textColor)
                     else ...[
-                      if (message.isQuote) _buildQuotePreview(theme),
+                      if (widget.message.isQuote) _buildQuotePreview(theme),
                       if (showImagePreview)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: InkWell(
-                            onTap: onImageOpen ?? onFileOpen,
+                            onTap: widget.onImageOpen ?? widget.onFileOpen,
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(12),
                               child: imageWidget,
@@ -155,29 +226,29 @@ class MessageBubbleWidget extends StatelessWidget {
                           ),
                         ),
                       // Voice message player (takes priority over text content)
-                      if (message.hasVoice)
+                      if (widget.message.hasVoice)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: VoicePlayerWidget(
-                            key: ValueKey('voice_${message.voiceFile}'),
-                            filePath: voiceFilePath ?? '',
-                            durationSeconds: message.voiceDuration,
-                            isLocal: voiceFilePath != null,
-                            onDownloadRequested: onVoiceDownloadRequested,
+                            key: ValueKey('voice_${widget.message.voiceFile}'),
+                            filePath: widget.voiceFilePath ?? '',
+                            durationSeconds: widget.message.voiceDuration,
+                            isLocal: widget.voiceFilePath != null,
+                            onDownloadRequested: widget.onVoiceDownloadRequested,
                           ),
                         )
                       // Text message content
-                      else if (message.content.isNotEmpty)
+                      else if (widget.message.content.isNotEmpty)
                         SelectableText(
-                          message.content,
+                          widget.message.content,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: textColor,
                           ),
                         ),
                       // Metadata chips (file, location, poll - but NOT signature)
-                      if (((!isImageAttachment || !showImagePreview) && message.hasFile) ||
-                          message.hasLocation ||
-                          message.isPoll)
+                      if (((!isImageAttachment || !showImagePreview) && widget.message.hasFile) ||
+                          widget.message.hasLocation ||
+                          widget.message.isPoll)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: _buildMetadataChips(context, theme, isOwnMessage),
@@ -190,14 +261,14 @@ class MessageBubbleWidget extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            message.displayTime,
+                            widget.message.displayTime,
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: textColor.withOpacity(0.7),
                               fontSize: 11,
                             ),
                           ),
                           // Verified indicator (signature verified by server)
-                          if (message.isVerified) ...[
+                          if (widget.message.isVerified) ...[
                             const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -230,7 +301,7 @@ class MessageBubbleWidget extends StatelessWidget {
                             ),
                           ]
                           // Failed verification (has signature but verification failed - possible spoofing)
-                          else if (message.isSigned) ...[
+                          else if (widget.message.isSigned) ...[
                             const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -263,7 +334,7 @@ class MessageBubbleWidget extends StatelessWidget {
                             ),
                           ],
                           // Pending status (queued for offline delivery)
-                          if (message.isPending) ...[
+                          if (widget.message.isPending) ...[
                             const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -296,7 +367,7 @@ class MessageBubbleWidget extends StatelessWidget {
                             ),
                           ]
                           // Failed delivery status
-                          else if (message.isFailed) ...[
+                          else if (widget.message.isFailed) ...[
                             const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -346,7 +417,7 @@ class MessageBubbleWidget extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (message.reactions.isNotEmpty)
+                    if (widget.message.reactions.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: _buildReactionsRow(theme, normalizedCallsign),
@@ -362,8 +433,8 @@ class MessageBubbleWidget extends StatelessWidget {
   }
 
   bool _isImageAttachment() {
-    if (!message.hasFile) return false;
-    final name = (attachmentPath ?? message.attachedFile ?? '').toLowerCase();
+    if (!widget.message.hasFile) return false;
+    final name = (_attachmentPath ?? widget.message.attachedFile ?? '').toLowerCase();
     return name.endsWith('.jpg') ||
         name.endsWith('.jpeg') ||
         name.endsWith('.png') ||
@@ -396,10 +467,10 @@ class MessageBubbleWidget extends StatelessWidget {
             fontStyle: FontStyle.italic,
           ),
         ),
-        if (onUnhide != null) ...[
+        if (widget.onUnhide != null) ...[
           const SizedBox(width: 8),
           TextButton(
-            onPressed: onUnhide,
+            onPressed: widget.onUnhide,
             child: const Text('Show'),
           ),
         ],
@@ -408,8 +479,8 @@ class MessageBubbleWidget extends StatelessWidget {
   }
 
   Widget _buildQuotePreview(ThemeData theme) {
-    final author = message.quotedAuthor ?? 'Unknown';
-    final excerpt = message.quotedExcerpt ?? '';
+    final author = widget.message.quotedAuthor ?? 'Unknown';
+    final excerpt = widget.message.quotedExcerpt ?? '';
     final display = excerpt.isNotEmpty ? excerpt : 'Quoted message';
     final truncated = display.length > 120 ? '${display.substring(0, 120)}...' : display;
 
@@ -453,7 +524,7 @@ class MessageBubbleWidget extends StatelessWidget {
     List<Widget> chips = [];
 
     // File attachment chip
-    if (message.hasFile) {
+    if (widget.message.hasFile) {
       chips.add(
         ActionChip(
           avatar: Icon(
@@ -462,10 +533,10 @@ class MessageBubbleWidget extends StatelessWidget {
             color: theme.colorScheme.primary,
           ),
           label: Text(
-            message.attachedFile ?? 'File',
+            widget.message.attachedFile ?? 'File',
             style: theme.textTheme.bodySmall,
           ),
-          onPressed: onFileOpen,
+          onPressed: widget.onFileOpen,
           backgroundColor: theme.colorScheme.surface,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -474,7 +545,7 @@ class MessageBubbleWidget extends StatelessWidget {
     }
 
     // Location chip
-    if (message.hasLocation) {
+    if (widget.message.hasLocation) {
       chips.add(
         ActionChip(
           avatar: Icon(
@@ -483,10 +554,10 @@ class MessageBubbleWidget extends StatelessWidget {
             color: theme.colorScheme.primary,
           ),
           label: Text(
-            '${message.latitude?.toStringAsFixed(4)}, ${message.longitude?.toStringAsFixed(4)}',
+            '${widget.message.latitude?.toStringAsFixed(4)}, ${widget.message.longitude?.toStringAsFixed(4)}',
             style: theme.textTheme.bodySmall,
           ),
-          onPressed: onLocationView,
+          onPressed: widget.onLocationView,
           backgroundColor: theme.colorScheme.surface,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -495,7 +566,7 @@ class MessageBubbleWidget extends StatelessWidget {
     }
 
     // Poll chip
-    if (message.isPoll) {
+    if (widget.message.isPoll) {
       chips.add(
         Chip(
           avatar: Icon(
@@ -524,7 +595,7 @@ class MessageBubbleWidget extends StatelessWidget {
   }
 
   Widget _buildReactionsRow(ThemeData theme, String currentCallsign) {
-    final normalized = ReactionUtils.normalizeReactionMap(message.reactions);
+    final normalized = ReactionUtils.normalizeReactionMap(widget.message.reactions);
     final entries = normalized.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     final chips = <Widget>[];
@@ -539,7 +610,7 @@ class MessageBubbleWidget extends StatelessWidget {
 
       chips.add(
         InkWell(
-          onTap: onReact != null ? () => onReact!(reactionKey) : null,
+          onTap: widget.onReact != null ? () => widget.onReact!(reactionKey) : null,
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -578,7 +649,7 @@ class MessageBubbleWidget extends StatelessWidget {
 
   String _reactionLabel(String reactionKey) {
     final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
-    final emoji = _reactionEmojiMap[normalizedKey];
+    final emoji = MessageBubbleWidget.reactionEmojiMap[normalizedKey];
     if (emoji != null) {
       return emoji;
     }
@@ -593,16 +664,16 @@ class MessageBubbleWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (onReact != null)
+            if (widget.onReact != null)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
                 child: Wrap(
                   spacing: 12,
-                  children: _reactionEmojiMap.entries.map((entry) {
+                  children: MessageBubbleWidget.reactionEmojiMap.entries.map((entry) {
                     return InkWell(
                       onTap: () {
                         Navigator.pop(context);
-                        onReact!(entry.key);
+                        widget.onReact!(entry.key);
                       },
                       borderRadius: BorderRadius.circular(16),
                       child: Container(
@@ -620,20 +691,20 @@ class MessageBubbleWidget extends StatelessWidget {
                   }).toList(),
                 ),
               ),
-            if (onQuote != null)
+            if (widget.onQuote != null)
               ListTile(
                 leading: const Icon(Icons.reply),
                 title: const Text('Reply'),
                 onTap: () {
                   Navigator.pop(context);
-                  onQuote!();
+                  widget.onQuote!();
                 },
               ),
             ListTile(
               leading: const Icon(Icons.copy),
               title: const Text('Copy message'),
               onTap: () {
-                Clipboard.setData(ClipboardData(text: message.content));
+                Clipboard.setData(ClipboardData(text: widget.message.content));
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -643,13 +714,13 @@ class MessageBubbleWidget extends StatelessWidget {
                 );
               },
             ),
-            if (onHide != null)
+            if (widget.onHide != null)
               ListTile(
                 leading: const Icon(Icons.visibility_off),
                 title: const Text('Hide message'),
                 onTap: () {
                   Navigator.pop(context);
-                  onHide!();
+                  widget.onHide!();
                 },
               ),
             ListTile(
@@ -660,7 +731,7 @@ class MessageBubbleWidget extends StatelessWidget {
                 _showMessageInfo(context);
               },
             ),
-            if (canDelete && onDelete != null)
+            if (widget.canDelete && widget.onDelete != null)
               ListTile(
                 leading: Icon(
                   Icons.delete,
@@ -698,8 +769,8 @@ class MessageBubbleWidget extends StatelessWidget {
           FilledButton(
             onPressed: () {
               Navigator.pop(context);
-              if (onDelete != null) {
-                onDelete!();
+              if (widget.onDelete != null) {
+                widget.onDelete!();
               }
             },
             style: FilledButton.styleFrom(
@@ -723,18 +794,18 @@ class MessageBubbleWidget extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildInfoRow('Author', message.author),
-              _buildInfoRow('Timestamp', message.timestamp),
-              if (message.npub != null)
-                _buildInfoRow('npub', message.npub!),
-              if (message.hasFile)
-                _buildInfoRow('File', message.attachedFile!),
-              if (message.hasLocation)
+              _buildInfoRow('Author', widget.message.author),
+              _buildInfoRow('Timestamp', widget.message.timestamp),
+              if (widget.message.npub != null)
+                _buildInfoRow('npub', widget.message.npub!),
+              if (widget.message.hasFile)
+                _buildInfoRow('File', widget.message.attachedFile!),
+              if (widget.message.hasLocation)
                 _buildInfoRow('Location',
-                    '${message.latitude}, ${message.longitude}'),
-              if (message.isSigned) ...[
-                _buildInfoRow('Signature', message.signature!),
-                _buildInfoRow('Verified', message.isVerified ? 'Yes' : 'No'),
+                    '${widget.message.latitude}, ${widget.message.longitude}'),
+              if (widget.message.isSigned) ...[
+                _buildInfoRow('Signature', widget.message.signature!),
+                _buildInfoRow('Verified', widget.message.isVerified ? 'Yes' : 'No'),
               ],
             ],
           ),

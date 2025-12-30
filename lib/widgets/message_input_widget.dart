@@ -284,15 +284,40 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
     );
   }
 
+  /// Maximum file size: 10 MB
+  static const int _maxFileSize = 10 * 1024 * 1024;
+
   /// Pick a file to attach
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles();
 
       if (result != null && result.files.single.path != null) {
+        // Check file size
+        final file = File(result.files.single.path!);
+        final fileSize = await file.length();
+        if (fileSize > _maxFileSize) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(_i18n.t('file_too_large', params: ['10 MB'])),
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+            );
+          }
+          return;
+        }
+
         setState(() {
           _selectedFilePath = result.files.single.path;
           _selectedFileName = result.files.single.name;
+        });
+
+        // Auto-focus text field after selecting file
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _focusNode.requestFocus();
+          }
         });
       }
     } catch (e) {
@@ -315,9 +340,31 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       );
 
       if (result != null && result.files.single.path != null) {
+        // Check file size
+        final file = File(result.files.single.path!);
+        final fileSize = await file.length();
+        if (fileSize > _maxFileSize) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(_i18n.t('file_too_large', params: ['10 MB'])),
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+            );
+          }
+          return;
+        }
+
         setState(() {
           _selectedFilePath = result.files.single.path;
           _selectedFileName = result.files.single.name;
+        });
+
+        // Auto-focus text field after selecting image
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _focusNode.requestFocus();
+          }
         });
       }
     } catch (e) {

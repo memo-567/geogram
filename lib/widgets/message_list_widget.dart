@@ -20,7 +20,7 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onMessageHide;
   final bool Function(ChatMessage)? isMessageHidden;
   final Function(ChatMessage)? onMessageUnhide;
-  final String? Function(ChatMessage)? getAttachmentPath;
+  final Future<String?> Function(ChatMessage)? getAttachmentPath;
   final Function(ChatMessage)? onImageOpen;
   final void Function(ChatMessage, String)? onMessageReact;
   /// Callback to get voice file path for a message
@@ -52,27 +52,28 @@ class MessageListWidget extends StatefulWidget {
 class _MessageListWidgetState extends State<MessageListWidget> {
   final ScrollController _scrollController = ScrollController();
   bool _autoScroll = true;
+  int _lastMessageCount = 0;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollListener);
+    _lastMessageCount = widget.messages.length;
 
     // Auto-scroll to bottom on first load
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottom(animate: false);
-    });
+    _requestScrollToBottom(animate: false);
   }
 
   @override
   void didUpdateWidget(MessageListWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Auto-scroll to bottom when new messages arrive (if already at bottom)
-    if (widget.messages.length > oldWidget.messages.length && _autoScroll) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToBottom();
-      });
+    final oldCount = _lastMessageCount;
+    _lastMessageCount = widget.messages.length;
+
+    // Scroll to bottom when messages are added (if autoScroll is enabled)
+    if (widget.messages.length > oldCount && _autoScroll) {
+      _requestScrollToBottom(animate: oldCount > 0);
     }
   }
 
@@ -80,6 +81,29 @@ class _MessageListWidgetState extends State<MessageListWidget> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Request a scroll to bottom, retrying until the scroll controller is ready
+  void _requestScrollToBottom({bool animate = true, int attempts = 0}) {
+    if (!mounted || attempts > 10) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      if (_scrollController.hasClients && _scrollController.position.hasContentDimensions) {
+        _scrollToBottom(animate: animate);
+      } else {
+        // Controller not ready yet, retry
+        _requestScrollToBottom(animate: animate, attempts: attempts + 1);
+      }
+    });
+  }
+
+  /// Called when a message's content size changes (e.g., image loaded)
+  void _onContentSizeChanged() {
+    if (_autoScroll && mounted) {
+      _requestScrollToBottom(animate: false);
+    }
   }
 
   /// Listen for scroll events
@@ -185,8 +209,8 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     onUnhide: widget.onMessageUnhide != null
                         ? () => widget.onMessageUnhide!(message)
                         : null,
-                    attachmentPath: widget.getAttachmentPath != null
-                        ? widget.getAttachmentPath!(message)
+                    onAttachmentPathRequested: widget.getAttachmentPath != null && message.hasFile
+                        ? () => widget.getAttachmentPath!(message)
                         : null,
                     onImageOpen: widget.onImageOpen != null
                         ? () => widget.onImageOpen!(message)
@@ -198,6 +222,8 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     onVoiceDownloadRequested: widget.getVoiceFilePath != null && message.hasVoice
                         ? () => widget.getVoiceFilePath!(message)
                         : null,
+                    // Scroll to bottom when image loads
+                    onContentSizeChanged: _autoScroll ? _onContentSizeChanged : null,
                   );
                 },
               ),

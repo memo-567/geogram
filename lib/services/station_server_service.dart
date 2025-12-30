@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -555,10 +556,10 @@ class StationServerService {
 
       // CORS headers
       request.response.headers.add('Access-Control-Allow-Origin', '*');
-      request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       request.response.headers.add(
           'Access-Control-Allow-Headers',
-          'Content-Type, Authorization, X-Device-Callsign');
+          'Content-Type, Authorization, X-Device-Callsign, X-Filename');
 
       if (method == 'OPTIONS') {
         request.response.statusCode = 200;
@@ -593,6 +594,12 @@ class StationServerService {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
         await _handleRoomMessages(request);
+      } else if (_isChatFileUploadPath(path, method)) {
+        // Handle chat file uploads: POST /api/chat/rooms/{roomId}/files
+        await _handleChatFileUpload(request);
+      } else if (_isChatFileFetchPath(path, method)) {
+        // Handle chat file downloads: GET /api/chat/rooms/{roomId}/files/{filename}
+        await _handleChatFileFetch(request);
       } else if (path == '/api/updates/latest') {
         await _handleUpdatesLatest(request);
       } else if (path.startsWith('/updates/')) {
@@ -2085,6 +2092,257 @@ class StationServerService {
     // Must have at least 3 segments: /{callsign}/api/{something}
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
     return parts.length >= 3 && parts[1] == 'api';
+  }
+
+  /// Check if path is a chat file upload path
+  /// Pattern: POST /api/chat/rooms/{roomId}/files
+  bool _isChatFileUploadPath(String path, String method) {
+    if (method != 'POST') return false;
+    // Pattern: /api/chat/rooms/{roomId}/files
+    final regex = RegExp(r'^/api/chat/rooms/[^/]+/files$');
+    return regex.hasMatch(path);
+  }
+
+  /// Check if path is a chat file fetch path
+  /// Pattern: GET /api/chat/rooms/{roomId}/files/{filename}
+  bool _isChatFileFetchPath(String path, String method) {
+    if (method != 'GET') return false;
+    // Pattern: /api/chat/rooms/{roomId}/files/{filename}
+    final regex = RegExp(r'^/api/chat/rooms/[^/]+/files/.+$');
+    return regex.hasMatch(path);
+  }
+
+  /// Handle chat file upload - store file locally in chat collection
+  /// POST /api/chat/rooms/{roomId}/files
+  Future<void> _handleChatFileUpload(HttpRequest request) async {
+    final requestPath = request.uri.path;
+    // Parse: /api/chat/rooms/{roomId}/files
+    final regex = RegExp(r'^/api/chat/rooms/([^/]+)/files$');
+    final match = regex.firstMatch(requestPath);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final roomId = match.group(1)!;
+
+    // Verify NOSTR authentication
+    final authNpub = _verifyNostrAuth(request);
+    final canAccess = await _canAccessChatRoom(roomId, authNpub);
+    if (!canAccess) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Access denied',
+        'code': 'ROOM_ACCESS_DENIED',
+      }));
+      return;
+    }
+
+    LogService().log('Chat file upload: room=$roomId');
+
+    try {
+      // Read the file content from request body
+      var bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      // Handle base64 encoding if specified
+      final transferEncoding = request.headers.value('Content-Transfer-Encoding') ??
+          request.headers.value('content-transfer-encoding');
+      if (transferEncoding != null && transferEncoding.toLowerCase().contains('base64')) {
+        try {
+          bytes = base64Decode(utf8.decode(bytes));
+        } catch (e) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid base64 payload'}));
+          return;
+        }
+      }
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': false,
+          'error': 'Empty file',
+        }));
+        return;
+      }
+
+      // Enforce 10 MB file size limit
+      final maxSize = 10 * 1024 * 1024; // 10 MB
+      if (bytes.length > maxSize) {
+        request.response.statusCode = 413;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': false,
+          'error': 'File too large (max 10 MB)',
+          'maxSize': maxSize,
+          'actualSize': bytes.length,
+        }));
+        return;
+      }
+
+      // Get original filename from header or generate one
+      final originalFilename = request.headers.value('X-Filename') ??
+          request.headers.value('x-filename') ??
+          'file_${DateTime.now().millisecondsSinceEpoch}';
+
+      // Calculate SHA1 for unique filename
+      final sha1Hash = sha1.convert(bytes).toString();
+      final extension = originalFilename.contains('.')
+          ? originalFilename.substring(originalFilename.lastIndexOf('.'))
+          : '';
+      final storedFilename = '${sha1Hash}_$originalFilename';
+
+      // Get the chat collection directory
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+      final collectionPath = chatService.collectionPath;
+
+      if (collectionPath == null) {
+        request.response.statusCode = 500;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': false,
+          'error': 'Chat collection not initialized',
+        }));
+        return;
+      }
+
+      // Create files directory for the room
+      final filesPath = '$collectionPath/$roomId/files';
+      final filesDir = Directory(filesPath);
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save the file
+      final filePath = '$filesPath/$storedFilename';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      LogService().log('Chat file saved: $filePath (${bytes.length} bytes)');
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'filename': storedFilename,
+        'size': bytes.length,
+        'sha1': sha1Hash,
+      }));
+    } catch (e) {
+      LogService().log('Error saving chat file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': e.toString(),
+      }));
+    }
+  }
+
+  /// Handle chat file fetch - serve file from chat collection
+  /// GET /api/chat/rooms/{roomId}/files/{filename}
+  Future<void> _handleChatFileFetch(HttpRequest request) async {
+    final requestPath = request.uri.path;
+    // Parse: /api/chat/rooms/{roomId}/files/{filename}
+    final regex = RegExp(r'^/api/chat/rooms/([^/]+)/files/(.+)$');
+    final match = regex.firstMatch(requestPath);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid path');
+      return;
+    }
+
+    final roomId = match.group(1)!;
+    final filename = Uri.decodeComponent(match.group(2)!);
+
+    LogService().log('Chat file fetch: room=$roomId, file=$filename');
+
+    try {
+      // Get the chat collection directory
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+      final collectionPath = chatService.collectionPath;
+
+      if (collectionPath == null) {
+        request.response.statusCode = 404;
+        request.response.write('Chat collection not found');
+        return;
+      }
+
+      // Construct file path
+      final filePath = '$collectionPath/$roomId/files/$filename';
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        request.response.statusCode = 404;
+        request.response.write('File not found');
+        return;
+      }
+
+      // Determine content type based on extension
+      String contentType = 'application/octet-stream';
+      final lowerFilename = filename.toLowerCase();
+      if (lowerFilename.endsWith('.jpg') || lowerFilename.endsWith('.jpeg')) {
+        contentType = 'image/jpeg';
+      } else if (lowerFilename.endsWith('.png')) {
+        contentType = 'image/png';
+      } else if (lowerFilename.endsWith('.gif')) {
+        contentType = 'image/gif';
+      } else if (lowerFilename.endsWith('.webp')) {
+        contentType = 'image/webp';
+      } else if (lowerFilename.endsWith('.pdf')) {
+        contentType = 'application/pdf';
+      } else if (lowerFilename.endsWith('.mp3')) {
+        contentType = 'audio/mpeg';
+      } else if (lowerFilename.endsWith('.mp4')) {
+        contentType = 'video/mp4';
+      } else if (lowerFilename.endsWith('.webm')) {
+        contentType = 'video/webm';
+      } else if (lowerFilename.endsWith('.txt')) {
+        contentType = 'text/plain';
+      } else if (lowerFilename.endsWith('.json')) {
+        contentType = 'application/json';
+      }
+
+      // Stream file to response
+      final bytes = await file.readAsBytes();
+      request.response.headers.contentType = ContentType.parse(contentType);
+      request.response.headers.contentLength = bytes.length;
+
+      // Extract display filename from stored name (remove SHA1 prefix)
+      final displayName = _extractDisplayFilename(filename);
+      request.response.headers.set(
+        'Content-Disposition',
+        'inline; filename="$displayName"',
+      );
+
+      request.response.add(bytes);
+    } catch (e) {
+      LogService().log('Error serving chat file: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal server error');
+    }
+  }
+
+  /// Extract display filename from stored filename (removes SHA1 prefix)
+  String _extractDisplayFilename(String storedFilename) {
+    // Format: {sha1}_{original_filename}
+    final underscoreIndex = storedFilename.indexOf('_');
+    if (underscoreIndex > 0 && underscoreIndex == 40) {
+      // SHA1 is 40 characters
+      return storedFilename.substring(41);
+    }
+    return storedFilename;
   }
 
   /// Check if path is an alert file upload path

@@ -200,6 +200,8 @@ class DMNotificationService {
     required String fromCallsign,
     required String content,
     required bool verified,
+    String? fileName,
+    String? imagePath,
   }) async {
     if (!_initialized || !_isMobilePlatform()) return;
 
@@ -219,6 +221,8 @@ class DMNotificationService {
       fromCallsign: fromCallsign,
       content: content,
       verified: verified,
+      fileName: fileName,
+      imagePath: imagePath,
     );
   }
 
@@ -285,15 +289,49 @@ class DMNotificationService {
     required String fromCallsign,
     required String content,
     required bool verified,
+    String? fileName,
+    String? imagePath,
   }) async {
     final settings = NotificationService().getSettings();
 
-    final displayContent = content.length > 100
-        ? '${content.substring(0, 100)}...'
-        : content;
+    // Build display content: show text content, or file description if no text
+    String displayContent;
+    if (content.isNotEmpty) {
+      displayContent = content.length > 100
+          ? '${content.substring(0, 100)}...'
+          : content;
+      // Add file indicator if there's also a file
+      if (fileName != null && fileName.isNotEmpty) {
+        displayContent = '$displayContent 📎';
+      }
+    } else if (fileName != null && fileName.isNotEmpty) {
+      // No text content, show file description
+      final isImage = _isImageFile(fileName);
+      final isVoice = _isVoiceFile(fileName);
+      if (isImage) {
+        displayContent = '📷 Image';
+      } else if (isVoice) {
+        displayContent = '🎤 Voice message';
+      } else {
+        displayContent = '📎 $fileName';
+      }
+    } else {
+      displayContent = '';
+    }
 
     final verifiedBadge = verified ? '✓ ' : '';
     final title = '$verifiedBadge$fromCallsign • $roomId';
+
+    // Build Android notification details with optional BigPicture style
+    StyleInformation? styleInfo;
+    if (imagePath != null && imagePath.isNotEmpty) {
+      styleInfo = BigPictureStyleInformation(
+        FilePathAndroidBitmap(imagePath),
+        contentTitle: title,
+        summaryText: displayContent.isNotEmpty ? displayContent : null,
+        hideExpandedLargeIcon: true,
+      );
+    }
 
     final androidDetails = AndroidNotificationDetails(
       'chat_channel',
@@ -304,6 +342,8 @@ class DMNotificationService {
       enableVibration: settings.vibrationEnabled,
       playSound: settings.soundEnabled,
       groupKey: _messageGroupKey,
+      styleInformation: styleInfo,
+      largeIcon: imagePath != null ? FilePathAndroidBitmap(imagePath) : null,
     );
 
     final iosDetails = DarwinNotificationDetails(
@@ -329,6 +369,25 @@ class DMNotificationService {
 
     _recordRecentMessage('$title: $displayContent');
     await _showSummaryNotification();
+  }
+
+  bool _isImageFile(String filename) {
+    final lower = filename.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
+  }
+
+  bool _isVoiceFile(String filename) {
+    final lower = filename.toLowerCase();
+    return lower.endsWith('.m4a') ||
+        lower.endsWith('.aac') ||
+        lower.endsWith('.mp3') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.ogg');
   }
 
   /// Handle notification tap

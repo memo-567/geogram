@@ -3,9 +3,14 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as path;
 import '../platform/file_image_helper.dart' as file_helper;
+import '../services/i18n_service.dart';
 
 /// Full-screen photo viewer with zoom, pan, and swipe navigation
 class PhotoViewerPage extends StatefulWidget {
@@ -27,6 +32,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late int _currentIndex;
   final Map<int, TransformationController> _transformationControllers = {};
   final FocusNode _focusNode = FocusNode();
+  final I18nService _i18n = I18nService();
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -93,10 +100,77 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
+  /// Save the current image to a user-selected location
+  Future<void> _saveImage() async {
+    if (kIsWeb) return;
+
+    final imagePath = widget.imagePaths[_currentIndex];
+    if (_isNetworkImage(imagePath)) {
+      // For network images, we'd need to download first - not implemented yet
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('cannot_save_network_image'))),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      final sourceFile = File(imagePath);
+      if (!await sourceFile.exists()) {
+        throw Exception(_i18n.t('file_not_found'));
+      }
+
+      // Get the original filename
+      final originalName = path.basename(imagePath);
+
+      // Let user pick save location
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: _i18n.t('save_image_as'),
+        fileName: originalName,
+        type: FileType.image,
+      );
+
+      if (result == null) {
+        // User cancelled
+        return;
+      }
+
+      // Copy file to the selected location
+      await sourceFile.copy(result);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('image_saved')),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('failed_to_save_image', params: ['$e'])),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
@@ -117,6 +191,22 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         ),
         centerTitle: true,
         actions: [
+          // Save/Download button
+          if (!kIsWeb)
+            IconButton(
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.download, color: Colors.white),
+              onPressed: _isSaving ? null : _saveImage,
+              tooltip: _i18n.t('save_image'),
+            ),
           IconButton(
             icon: const Icon(Icons.zoom_out_map, color: Colors.white),
             onPressed: _resetZoom,

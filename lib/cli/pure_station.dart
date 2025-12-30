@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as path;
@@ -23,6 +24,7 @@ import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
+import '../util/chat_format.dart';
 import '../models/update_settings.dart' show UpdateAssetType;
 
 /// App version - use central version.dart for consistency
@@ -360,6 +362,7 @@ class ChatMessage {
   final bool verified;       // Signature verified (runtime, not stored)
   final bool hasSignature;   // Has valid signature
   final Map<String, List<String>> reactions;
+  final Map<String, String> metadata;  // File attachments, voice messages, etc.
 
   ChatMessage({
     required this.id,
@@ -372,9 +375,11 @@ class ChatMessage {
     this.verified = false,
     bool? hasSignature,
     Map<String, List<String>>? reactions,
+    Map<String, String>? metadata,
   }) : timestamp = timestamp ?? DateTime.now().toUtc(),  // Use UTC for consistent timestamps
        hasSignature = hasSignature ?? (signature != null && signature.isNotEmpty),
-       reactions = reactions ?? {};
+       reactions = reactions ?? {},
+       metadata = metadata ?? {};
 
   factory ChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
     final sig = json['signature'] as String?;
@@ -398,6 +403,15 @@ class ChatMessage {
       });
     }
 
+    // Parse metadata
+    final rawMetadata = json['metadata'] as Map?;
+    final metadata = <String, String>{};
+    if (rawMetadata != null) {
+      rawMetadata.forEach((key, value) {
+        metadata[key.toString()] = value.toString();
+      });
+    }
+
     return ChatMessage(
       id: json['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
       roomId: json['room_id'] as String? ?? roomId,
@@ -409,6 +423,7 @@ class ChatMessage {
       verified: json['verified'] as bool? ?? false,
       hasSignature: json['has_signature'] as bool? ?? (sig != null && sig.isNotEmpty),
       reactions: ReactionUtils.normalizeReactionMap(reactions),
+      metadata: metadata,
     );
   }
 
@@ -424,6 +439,7 @@ class ChatMessage {
         'verified': verified,
         'has_signature': hasSignature,
         if (reactions.isNotEmpty) 'reactions': reactions,
+        if (metadata.isNotEmpty) 'metadata': metadata,
       };
 }
 
@@ -898,151 +914,36 @@ class PureStationServer {
   }
 
   /// Parse messages from a chat file (text format per specification)
+  /// Uses unified ChatFormat parser for consistency with client
   Future<void> _parseMessagesFromFile(ChatRoom room, File chatFile) async {
     try {
-      final lines = await chatFile.readAsLines();
-      String? currentTimestamp;
-      String? currentCallsign;
-      String? currentNpub;
-      String? currentSignature;
-      int? currentCreatedAt;  // Unix timestamp from client for signature verification
-      final Map<String, List<String>> currentReactions = {};
-      final contentBuffer = StringBuffer();
+      final content = await chatFile.readAsString();
+      final parsed = ChatFormat.parse(content);
 
-      for (final line in lines) {
-        // Message header: > YYYY-MM-DD HH:MM_ss -- CALLSIGN
-        if (line.startsWith('> ') && line.contains(' -- ')) {
-          // Save previous message
-          if (currentTimestamp != null && currentCallsign != null) {
-            final content = contentBuffer.toString().trim();
-            final timestamp = _parseTimestamp(currentTimestamp);
-            final hasSig = currentSignature != null && currentSignature!.isNotEmpty;
+      for (final p in parsed) {
+        // Extract metadata fields
+        final npub = p.getMeta('npub');
+        final signature = p.getMeta('signature');
+        final createdAtUnix = p.createdAt;
+        final hasSig = signature != null && signature.isNotEmpty;
 
-            // Reconstruct NOSTR event to get ID and verify signature
-            String? eventId;
-            bool verified = false;
-            if (hasSig && currentNpub != null) {
-              final event = _reconstructNostrEvent(
-                npub: currentNpub,
-                content: content,
-                signature: currentSignature,
-                roomId: room.id,
-                callsign: currentCallsign,
-                timestamp: timestamp,
-                createdAtUnix: currentCreatedAt,  // Use stored Unix timestamp if available
-              );
-              if (event != null) {
-                eventId = event.id;
-                verified = event.verify();
-              }
-            }
-
-            // Use stored Unix timestamp for message DateTime if available
-            final msgTimestamp = currentCreatedAt != null
-                ? DateTime.fromMillisecondsSinceEpoch(currentCreatedAt! * 1000, isUtc: true)
-                : timestamp;
-
-            final msg = ChatMessage(
-              id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
-              roomId: room.id,
-              senderCallsign: currentCallsign,
-              senderNpub: currentNpub,
-              signature: currentSignature,
-              content: content,
-              timestamp: msgTimestamp,
-              verified: verified,
-              hasSignature: hasSig,
-              reactions: ReactionUtils.normalizeReactionMap(currentReactions),
-            );
-            room.messages.add(msg);
-          }
-
-          // Parse new header
-          final separatorIdx = line.indexOf(' -- ');
-          if (separatorIdx > 2) {
-            currentTimestamp = line.substring(2, separatorIdx);
-            currentCallsign = line.substring(separatorIdx + 4).trim();
-            contentBuffer.clear();
-            currentNpub = null;
-            currentSignature = null;
-            currentCreatedAt = null;
-            currentReactions.clear();
-          }
-        }
-        // Skip file header (# CALLSIGN: Title)
-        else if (line.startsWith('# ')) {
-          continue;
-        }
-        // Metadata line (--> key: value)
-        else if (line.startsWith('--> ')) {
-          final metadata = line.substring(4);
-          final colonIdx = metadata.indexOf(': ');
-          if (colonIdx > 0) {
-            final key = metadata.substring(0, colonIdx).trim();
-            final value = metadata.substring(colonIdx + 2).trim();
-            switch (key) {
-              case 'npub':
-                currentNpub = value;
-                break;
-              case 'signature':
-                currentSignature = value;
-                break;
-              case 'created_at':
-                currentCreatedAt = int.tryParse(value);
-                break;
-              case 'reaction':
-                final splitIdx = value.indexOf('=');
-                if (splitIdx > 0) {
-                  final reactionKey = ReactionUtils.normalizeReactionKey(
-                    value.substring(0, splitIdx),
-                  );
-                  final rawUsers = value.substring(splitIdx + 1);
-                  final users = rawUsers
-                      .split(',')
-                      .map((u) => u.trim().toUpperCase())
-                      .where((u) => u.isNotEmpty)
-                      .toList();
-                  if (reactionKey.isNotEmpty && users.isNotEmpty) {
-                    final existing = currentReactions[reactionKey] ?? <String>[];
-                    currentReactions[reactionKey] = [...existing, ...users];
-                  }
-                }
-                break;
-              // Legacy fields (ignored, recalculated from npub + signature)
-              case 'pubkey':
-              case 'event_id':
-              case 'verified':
-                break;
-            }
-          }
-        }
-        // Content line
-        else if (currentTimestamp != null) {
-          if (contentBuffer.isNotEmpty) {
-            contentBuffer.write('\n');
-          }
-          contentBuffer.write(line);
-        }
-      }
-
-      // Save last message
-      if (currentTimestamp != null && currentCallsign != null) {
-        final content = contentBuffer.toString().trim();
-        final timestamp = _parseTimestamp(currentTimestamp);
-        final hasSig = currentSignature != null && currentSignature!.isNotEmpty;
+        // Parse timestamp from string or use created_at Unix timestamp
+        final timestamp = createdAtUnix != null
+            ? DateTime.fromMillisecondsSinceEpoch(createdAtUnix * 1000, isUtc: true)
+            : ChatFormat.parseTimestamp(p.timestamp);
 
         // Reconstruct NOSTR event to get ID and verify signature
         String? eventId;
         bool verified = false;
-        if (hasSig && currentNpub != null) {
+        if (hasSig && npub != null) {
           final event = _reconstructNostrEvent(
-            npub: currentNpub,
-            content: content,
-            signature: currentSignature,
+            npub: npub,
+            content: p.content,
+            signature: signature,
             roomId: room.id,
-            callsign: currentCallsign,
+            callsign: p.author,
             timestamp: timestamp,
-            createdAtUnix: currentCreatedAt,
+            createdAtUnix: createdAtUnix,
           );
           if (event != null) {
             eventId = event.id;
@@ -1050,21 +951,18 @@ class PureStationServer {
           }
         }
 
-        final msgTimestamp = currentCreatedAt != null
-            ? DateTime.fromMillisecondsSinceEpoch(currentCreatedAt! * 1000, isUtc: true)
-            : timestamp;
-
         final msg = ChatMessage(
           id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
           roomId: room.id,
-          senderCallsign: currentCallsign,
-          senderNpub: currentNpub,
-          signature: currentSignature,
-          content: content,
-          timestamp: msgTimestamp,
+          senderCallsign: p.author,
+          senderNpub: npub,
+          signature: signature,
+          content: p.content,
+          timestamp: timestamp,
           verified: verified,
           hasSignature: hasSig,
-          reactions: ReactionUtils.normalizeReactionMap(currentReactions),
+          reactions: p.reactions,
+          metadata: p.metadata,
         );
         room.messages.add(msg);
       }
@@ -1270,17 +1168,25 @@ class PureStationServer {
         buffer.writeln('> $timestamp -- ${msg.senderCallsign}');
         buffer.writeln(msg.content);
 
-        // Write NOSTR metadata
+        // Write message metadata (file attachments, location, etc.)
+        // Skip reserved keys that have special ordering
+        const reservedKeys = {'created_at', 'npub', 'signature', 'verified', 'has_signature'};
+        for (final entry in msg.metadata.entries) {
+          if (reservedKeys.contains(entry.key)) continue;
+          buffer.writeln('--> ${entry.key}: ${entry.value}');
+        }
+
+        // Write NOSTR metadata (order: created_at, npub, signature - signature MUST be last)
+        if (msg.hasSignature) {
+          buffer.writeln('--> created_at: ${msg.timestamp.millisecondsSinceEpoch ~/ 1000}');
+        }
         if (msg.senderNpub != null && msg.senderNpub!.isNotEmpty) {
           buffer.writeln('--> npub: ${msg.senderNpub}');
         }
         if (msg.signature != null && msg.signature!.isNotEmpty) {
           buffer.writeln('--> signature: ${msg.signature}');
         }
-        // Store Unix timestamp for signature verification (required for cross-timezone consistency)
-        if (msg.hasSignature) {
-          buffer.writeln('--> created_at: ${msg.timestamp.millisecondsSinceEpoch ~/ 1000}');
-        }
+        // Unsigned reactions (~~> prefix)
         final reactions = ReactionUtils.normalizeReactionMap(msg.reactions);
         if (reactions.isNotEmpty) {
           final entries = reactions.entries.toList()
@@ -1295,9 +1201,11 @@ class PureStationServer {
             if (users.isEmpty) {
               continue;
             }
-            buffer.writeln('--> reaction: ${entry.key}=${users.join(',')}');
+            buffer.writeln('~~> reaction: ${entry.key}=${users.join(',')}');
           }
         }
+        // Two empty lines between messages for readability
+        buffer.writeln();
         buffer.writeln();
       }
 
@@ -1982,10 +1890,10 @@ class PureStationServer {
 
       if (_settings.enableCors) {
         request.response.headers.add('Access-Control-Allow-Origin', '*');
-        request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+        request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         request.response.headers.add(
             'Access-Control-Allow-Headers',
-            'Content-Type, Authorization, X-Device-Callsign');
+            'Content-Type, Authorization, X-Device-Callsign, X-Filename');
       }
 
       if (method == 'OPTIONS') {
@@ -2027,9 +1935,15 @@ class PureStationServer {
       } else if (_isChatReactionPath(path)) {
         final callsign = _parseCallsignFromPath(path) ?? _settings.callsign;
         await _handleRoomMessageReactions(request, callsign);
+      } else if (_isChatFilesListPath(path) && method == 'POST') {
+        // POST /api/chat/rooms/{roomId}/files - upload file to chat room
+        await _handleChatFileUpload(request);
       } else if (_isChatFilesListPath(path)) {
-        // /api/chat/rooms/{roomId}/files - list chat files for caching
+        // GET /api/chat/rooms/{roomId}/files - list chat files for caching
         await _handleChatFilesList(request);
+      } else if (_isChatFileDownloadPath(path)) {
+        // GET /api/chat/rooms/{roomId}/files/{filename} - download chat file
+        await _handleChatFileDownload(request);
       } else if (_isChatFileContentPath(path)) {
         // /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
         await _handleChatFileContent(request);
@@ -4831,6 +4745,8 @@ class PureStationServer {
       final json = c.toJson();
       // Add is_online field
       json['is_online'] = true;
+      // Remove IP address for privacy
+      json.remove('address');
       return json;
     }).toList();
 
@@ -5833,6 +5749,11 @@ class PureStationServer {
     return RegExp(r'^/api/chat/rooms/[^/]+/files$').hasMatch(path);
   }
 
+  /// Check if path is a chat file download request (/api/chat/rooms/{roomId}/files/{filename})
+  bool _isChatFileDownloadPath(String path) {
+    return RegExp(r'^/api/chat/rooms/[^/]+/files/.+$').hasMatch(path);
+  }
+
   bool _isChatReactionPath(String path) {
     if (RegExp(r'^/api/chat/rooms/[^/]+/messages/.+/reactions$').hasMatch(path)) {
       return true;
@@ -6468,6 +6389,15 @@ class PureStationServer {
           }
         }
 
+        // Extract metadata (file attachments, etc.)
+        final rawMetadata = data['metadata'] as Map?;
+        final metadata = <String, String>{};
+        if (rawMetadata != null) {
+          rawMetadata.forEach((key, value) {
+            metadata[key.toString()] = value.toString();
+          });
+        }
+
         // Create message
         final msg = ChatMessage(
           id: eventId ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -6481,6 +6411,7 @@ class PureStationServer {
               : DateTime.now().toUtc(),
           verified: isVerified,
           hasSignature: hasSig,
+          metadata: metadata,
         );
 
         room.messages.add(msg);
@@ -6818,6 +6749,177 @@ class PureStationServer {
       'files': files,
       'count': files.length,
     }));
+  }
+
+  /// Handle POST /api/chat/rooms/{roomId}/files - upload file to chat room
+  Future<void> _handleChatFileUpload(HttpRequest request) async {
+    final path = request.uri.path;
+    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files$').firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path'}));
+      return;
+    }
+
+    final roomId = match.group(1)!;
+    final room = _chatRooms[roomId];
+
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    // Verify NOSTR authentication
+    final authEvent = _verifyNostrEventWithTags(request, 'upload', roomId);
+    if (authEvent == null) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Authentication required',
+        'code': 'AUTH_REQUIRED',
+      }));
+      return;
+    }
+
+    try {
+      // Read the file content from request body
+      var bytes = await request.fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      if (bytes.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Empty file'}));
+        return;
+      }
+
+      // Enforce 10 MB file size limit
+      final maxSize = 10 * 1024 * 1024;
+      if (bytes.length > maxSize) {
+        request.response.statusCode = 413;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'File too large (max 10 MB)',
+          'maxSize': maxSize,
+          'actualSize': bytes.length,
+        }));
+        return;
+      }
+
+      // Get original filename from header or generate one
+      final originalFilename = request.headers.value('X-Filename') ??
+          request.headers.value('x-filename') ??
+          'file_${DateTime.now().millisecondsSinceEpoch}';
+
+      // Calculate SHA1 for unique filename
+      final sha1Hash = sha1.convert(bytes).toString();
+      final storedFilename = '${sha1Hash}_$originalFilename';
+
+      // Create files directory for the room
+      final filesDir = Directory('${_getChatDataPath()}/$roomId/files');
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save the file
+      final filePath = '${filesDir.path}/$storedFilename';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      _log('INFO', 'Chat file uploaded: $storedFilename (${bytes.length} bytes) to room $roomId');
+
+      request.response.statusCode = 201;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'filename': storedFilename,
+        'size': bytes.length,
+        'sha1': sha1Hash,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error uploading chat file: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  /// Handle GET /api/chat/rooms/{roomId}/files/{filename} - download chat file
+  Future<void> _handleChatFileDownload(HttpRequest request) async {
+    final path = request.uri.path;
+    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files/(.+)$').firstMatch(path);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path'}));
+      return;
+    }
+
+    final roomId = match.group(1)!;
+    final filename = match.group(2)!;
+
+    // Validate filename to prevent path traversal
+    if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid filename'}));
+      return;
+    }
+
+    final room = _chatRooms[roomId];
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    final file = File('${_getChatDataPath()}/$roomId/files/$filename');
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'File not found'}));
+      return;
+    }
+
+    // Determine content type based on filename
+    String contentType = 'application/octet-stream';
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      contentType = 'image/jpeg';
+    } else if (lower.endsWith('.png')) {
+      contentType = 'image/png';
+    } else if (lower.endsWith('.gif')) {
+      contentType = 'image/gif';
+    } else if (lower.endsWith('.webp')) {
+      contentType = 'image/webp';
+    } else if (lower.endsWith('.pdf')) {
+      contentType = 'application/pdf';
+    } else if (lower.endsWith('.m4a')) {
+      contentType = 'audio/m4a';
+    } else if (lower.endsWith('.mp3')) {
+      contentType = 'audio/mpeg';
+    } else if (lower.endsWith('.wav')) {
+      contentType = 'audio/wav';
+    }
+
+    try {
+      final bytes = await file.readAsBytes();
+      request.response.headers.contentType = ContentType.parse(contentType);
+      request.response.headers.contentLength = bytes.length;
+      request.response.add(bytes);
+    } catch (e) {
+      _log('ERROR', 'Error serving chat file: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error reading file');
+    }
   }
 
   /// Handle GET /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
