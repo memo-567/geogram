@@ -102,12 +102,14 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       final availableCount = apps.values.where((a) => a.isAvailable).length;
       LogService().log('DeviceDetailPage: ${availableCount} available apps for ${widget.device.callsign}');
 
+      if (!mounted) return;
       setState(() {
         _apps = apps;
         _isLoading = false;
       });
     } catch (e) {
       LogService().log('DeviceDetailPage: Error loading apps: $e');
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;

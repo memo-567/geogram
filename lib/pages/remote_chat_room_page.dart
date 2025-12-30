@@ -16,6 +16,7 @@ import '../services/signing_service.dart';
 import '../services/storage_config.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import '../util/reaction_utils.dart';
 import 'remote_chat_browser_page.dart';
 
 /// Page for viewing messages in a chat room from a remote device
@@ -34,6 +35,16 @@ class RemoteChatRoomPage extends StatefulWidget {
 }
 
 class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
+  static const Map<String, String> _reactionEmojiMap = {
+    'thumbs-up': '👍',
+    'heart': '❤️',
+    'fire': '🔥',
+    'laugh': '😂',
+    'celebrate': '🎉',
+    'surprise': '😮',
+    'sad': '😢',
+  };
+
   final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
@@ -264,6 +275,86 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     }
   }
 
+  Future<void> _toggleReaction(ChatMessage message, String reaction) async {
+    try {
+      final profile = _profileService.getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        throw Exception('NOSTR keys not configured');
+      }
+
+      final reactionKey = ReactionUtils.normalizeReactionKey(reaction);
+      if (reactionKey.isEmpty) {
+        throw Exception('Invalid reaction');
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: 'react',
+        tags: [
+          ['action', 'react'],
+          ['room', widget.room.id],
+          ['timestamp', message.timestamp],
+          ['reaction', reactionKey],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        throw Exception('Failed to sign reaction event');
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      final response = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'POST',
+        path: '/api/chat/${widget.room.id}/messages/${Uri.encodeComponent(message.timestamp)}/reactions',
+        headers: {
+          'Authorization': 'Nostr $authEvent',
+        },
+      );
+
+      if (response != null && response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final rawReactions = data['reactions'] as Map?;
+        final reactions = <String, List<String>>{};
+        if (rawReactions != null) {
+          rawReactions.forEach((key, value) {
+            if (value is List) {
+              reactions[key.toString()] =
+                  value.map((entry) => entry.toString()).toList();
+            }
+          });
+        }
+        final normalized = ReactionUtils.normalizeReactionMap(reactions);
+
+        if (mounted) {
+          setState(() {
+            final index = _messages.indexWhere((msg) =>
+                msg.timestamp == message.timestamp &&
+                msg.author == message.author);
+            if (index != -1) {
+              _messages[index] = message.copyWith(reactions: normalized);
+            }
+          });
+        }
+      } else {
+        throw Exception('HTTP ${response?.statusCode ?? "null"}');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to react: $e')),
+        );
+      }
+    }
+  }
+
   bool _isDesktopPlatform() {
     if (kIsWeb) return true;
     return defaultTargetPlatform == TargetPlatform.macOS ||
@@ -278,6 +369,32 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              child: Wrap(
+                spacing: 12,
+                children: _reactionEmojiMap.entries.map((entry) {
+                  return InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      _toggleReaction(message, entry.key);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        entry.value,
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
             ListTile(
               leading: const Icon(Icons.reply),
               title: const Text('Quote'),
@@ -587,7 +704,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: GestureDetector(
-        onLongPress: () => _copyMessage(message),
+        onLongPress: () => _showMessageOptions(message),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -655,6 +772,11 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
               ),
             ),
 
+            if (message.reactions.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _buildReactionsRow(theme, message),
+            ],
+
             // Location if available
             if (message.latitude != null && message.longitude != null) ...[
               const SizedBox(height: 4),
@@ -680,6 +802,68 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildReactionsRow(ThemeData theme, ChatMessage message) {
+    final currentCallsign = _profileService.getProfile().callsign.toUpperCase();
+    final normalized = ReactionUtils.normalizeReactionMap(message.reactions);
+    final entries = normalized.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final chips = <Widget>[];
+
+    for (final entry in entries) {
+      final reactionKey = entry.key;
+      final users = entry.value;
+      if (users.isEmpty) continue;
+      final reacted = users.any((u) => u.toUpperCase() == currentCallsign);
+      final label = '${_reactionLabel(reactionKey)} ${users.length}';
+
+      chips.add(
+        InkWell(
+          onTap: () => _toggleReaction(message, reactionKey),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: reacted
+                  ? theme.colorScheme.primary.withOpacity(0.15)
+                  : theme.colorScheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: reacted
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.outlineVariant,
+              ),
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: reacted
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: chips,
+    );
+  }
+
+  String _reactionLabel(String reactionKey) {
+    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
+    final emoji = _reactionEmojiMap[normalizedKey];
+    if (emoji != null) {
+      return emoji;
+    }
+    return normalizedKey;
   }
 
   Widget _buildQuotePreview(ThemeData theme, ChatMessage message) {
@@ -786,6 +970,7 @@ class ChatMessage {
   final String? signature;
   final bool verified;
   final Map<String, String> metadata;
+  final Map<String, List<String>> reactions;
 
   ChatMessage({
     required this.author,
@@ -797,13 +982,25 @@ class ChatMessage {
     this.signature,
     required this.verified,
     Map<String, String>? metadata,
-  }) : metadata = metadata ?? {};
+    Map<String, List<String>>? reactions,
+  })  : metadata = metadata ?? {},
+        reactions = reactions ?? {};
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final rawMetadata = json['metadata'] as Map?;
     final metadata = rawMetadata != null
         ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
         : <String, String>{};
+    final rawReactions = json['reactions'] as Map?;
+    final reactions = <String, List<String>>{};
+    if (rawReactions != null) {
+      rawReactions.forEach((key, value) {
+        if (value is List) {
+          reactions[key.toString()] =
+              value.map((entry) => entry.toString()).toList();
+        }
+      });
+    }
     return ChatMessage(
       author: json['author'] as String? ?? 'Unknown',
       timestamp: json['timestamp'] as String? ?? '',
@@ -814,6 +1011,33 @@ class ChatMessage {
       signature: (json['signature'] as String?) ?? metadata['signature'],
       verified: json['verified'] as bool? ?? false,
       metadata: metadata,
+      reactions: ReactionUtils.normalizeReactionMap(reactions),
+    );
+  }
+
+  ChatMessage copyWith({
+    String? author,
+    String? timestamp,
+    String? content,
+    double? latitude,
+    double? longitude,
+    String? npub,
+    String? signature,
+    bool? verified,
+    Map<String, String>? metadata,
+    Map<String, List<String>>? reactions,
+  }) {
+    return ChatMessage(
+      author: author ?? this.author,
+      timestamp: timestamp ?? this.timestamp,
+      content: content ?? this.content,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      npub: npub ?? this.npub,
+      signature: signature ?? this.signature,
+      verified: verified ?? this.verified,
+      metadata: metadata ?? Map<String, String>.from(this.metadata),
+      reactions: reactions ?? Map<String, List<String>>.from(this.reactions),
     );
   }
 

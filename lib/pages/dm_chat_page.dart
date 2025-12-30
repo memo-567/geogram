@@ -10,6 +10,7 @@ import '../models/dm_conversation.dart';
 import '../services/direct_message_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
+import '../services/profile_service.dart';
 import '../util/event_bus.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
@@ -47,6 +48,7 @@ class _DMChatPageState extends State<DMChatPage> {
   // Event subscriptions
   EventSubscription<DirectMessageReceivedEvent>? _messageSubscription;
   EventSubscription<DirectMessageSyncEvent>? _syncSubscription;
+  EventSubscription<DMMessageDeliveredEvent>? _deliverySubscription;
 
   @override
   void initState() {
@@ -61,6 +63,7 @@ class _DMChatPageState extends State<DMChatPage> {
     _dmService.setCurrentConversation(null);
     _messageSubscription?.cancel();
     _syncSubscription?.cancel();
+    _deliverySubscription?.cancel();
     super.dispose();
   }
 
@@ -82,6 +85,14 @@ class _DMChatPageState extends State<DMChatPage> {
         }
       }
     });
+
+    // Listen for queued message delivery
+    _deliverySubscription = EventBus().on<DMMessageDeliveredEvent>((event) {
+      if (event.callsign.toUpperCase() == widget.otherCallsign.toUpperCase()) {
+        // Reload messages to update status from pending to delivered
+        _loadMessages();
+      }
+    });
   }
 
   Future<void> _initializeChat() async {
@@ -98,6 +109,9 @@ class _DMChatPageState extends State<DMChatPage> {
       _dmService.setCurrentConversation(widget.otherCallsign);
 
       await _loadMessages();
+
+      // If device is online, try to flush any queued messages
+      _tryFlushQueue();
     } catch (e) {
       setState(() {
         _error = 'Failed to initialize chat: $e';
@@ -107,6 +121,30 @@ class _DMChatPageState extends State<DMChatPage> {
     setState(() {
       _isLoading = false;
     });
+  }
+
+  /// Try to flush queued messages if device is online
+  void _tryFlushQueue() {
+    final device = _devicesService.getDevice(widget.otherCallsign);
+    final isOnline = device?.isOnline ?? false;
+
+    if (isOnline) {
+      // Flush in background - don't await
+      _dmService.flushQueue(widget.otherCallsign).then((delivered) {
+        if (delivered > 0 && mounted) {
+          _loadMessages(); // Reload to update status
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$delivered queued message(s) delivered'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }).catchError((e) {
+        // Ignore errors - queue will be retried later
+      });
+    }
   }
 
   Future<void> _loadMessages() async {
@@ -146,21 +184,70 @@ class _DMChatPageState extends State<DMChatPage> {
         }
       }
 
-      await _dmService.sendMessage(
-        widget.otherCallsign,
-        content.trim(),
-        metadata: metadata.isNotEmpty ? metadata : null,
-      );
+      // Check if device is online
+      final device = _devicesService.getDevice(widget.otherCallsign);
+      final isOnline = device?.isOnline ?? false;
+
+      if (isOnline) {
+        // Try to send immediately
+        await _dmService.sendMessage(
+          widget.otherCallsign,
+          content.trim(),
+          metadata: metadata.isNotEmpty ? metadata : null,
+        );
+      } else {
+        // Queue for later delivery
+        await _dmService.queueMessage(
+          widget.otherCallsign,
+          content.trim(),
+          metadata: metadata.isNotEmpty ? metadata : null,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('message_queued')),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
       await _loadMessages();
     } on DMMustBeReachableException {
-      // Device is not reachable - show specific error
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('device_not_reachable')),
-            backgroundColor: Colors.orange,
-          ),
+      // Device became unreachable - queue instead
+      try {
+        final metadata = <String, String>{};
+        if (_quotedMessage != null) {
+          metadata['quote'] = _quotedMessage!.timestamp;
+          metadata['quote_author'] = _quotedMessage!.author;
+          if (_quotedMessage!.content.isNotEmpty) {
+            final excerpt = _quotedMessage!.content.length > 120
+                ? _quotedMessage!.content.substring(0, 120)
+                : _quotedMessage!.content;
+            metadata['quote_excerpt'] = excerpt;
+          }
+        }
+        await _dmService.queueMessage(
+          widget.otherCallsign,
+          content.trim(),
+          metadata: metadata.isNotEmpty ? metadata : null,
         );
+        await _loadMessages();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('message_queued')),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to queue message: $e')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -224,6 +311,38 @@ class _DMChatPageState extends State<DMChatPage> {
     });
   }
 
+  Future<void> _toggleReaction(ChatMessage message, String reaction) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final updated = await _dmService.toggleReaction(
+        widget.otherCallsign,
+        message.timestamp,
+        profile.callsign,
+        reaction,
+      );
+
+      if (updated == null) {
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          final index = _messages.indexWhere((msg) =>
+              msg.timestamp == updated.timestamp && msg.author == updated.author);
+          if (index != -1) {
+            _messages[index] = updated;
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to react: $e')),
+        );
+      }
+    }
+  }
+
   void _startRecording() async {
     // Check permission first
     if (!await AudioService().hasPermission()) {
@@ -247,12 +366,27 @@ class _DMChatPageState extends State<DMChatPage> {
 
   Future<String?> _getVoiceFilePath(ChatMessage message) async {
     if (!message.hasVoice || message.voiceFile == null) return null;
-    return await _dmService.getVoiceFilePath(widget.otherCallsign, message.voiceFile!);
+
+    // First check if file exists locally
+    final localPath = await _dmService.getVoiceFilePath(widget.otherCallsign, message.voiceFile!);
+    if (localPath != null) {
+      return localPath;
+    }
+
+    // If not local and device is online, try to download
+    final device = _devicesService.getDevice(widget.otherCallsign);
+    if (device?.isOnline ?? false) {
+      return await _dmService.downloadVoiceFile(widget.otherCallsign, message.voiceFile!);
+    }
+
+    return null;
   }
 
   Future<void> _syncMessages() async {
     final device = _devicesService.getDevice(widget.otherCallsign);
-    if (device?.url == null) {
+    final isOnline = device?.isOnline ?? false;
+
+    if (!isOnline) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(_i18n.t('device_not_reachable'))),
       );
@@ -263,6 +397,10 @@ class _DMChatPageState extends State<DMChatPage> {
       SnackBar(content: Text(_i18n.t('syncing'))),
     );
 
+    // First, flush any queued messages
+    final delivered = await _dmService.flushQueue(widget.otherCallsign);
+
+    // Then sync to get messages from them
     final result = await _dmService.syncWithDevice(
       widget.otherCallsign,
       deviceUrl: device!.url,
@@ -271,10 +409,11 @@ class _DMChatPageState extends State<DMChatPage> {
     if (mounted) {
       if (result.success) {
         await _loadMessages();
+        final queueInfo = delivered > 0 ? ', $delivered queued sent' : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent',
+              'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent$queueInfo',
             ),
           ),
         );
@@ -353,7 +492,7 @@ class _DMChatPageState extends State<DMChatPage> {
 
     return Column(
       children: [
-        // Offline banner
+        // Offline banner - messages will be queued
         if (!isOnline)
           Container(
             width: double.infinity,
@@ -361,11 +500,11 @@ class _DMChatPageState extends State<DMChatPage> {
             color: Colors.orange.shade100,
             child: Row(
               children: [
-                Icon(Icons.wifi_off, size: 16, color: Colors.orange.shade900),
+                Icon(Icons.schedule, size: 16, color: Colors.orange.shade900),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    _i18n.t('device_offline_cannot_send'),
+                    _i18n.t('device_offline_messages_queued'),
                     style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
                   ),
                 ),
@@ -386,6 +525,7 @@ class _DMChatPageState extends State<DMChatPage> {
                   isGroupChat: false, // 1:1 DM conversation
                   getVoiceFilePath: _getVoiceFilePath,
                   onMessageQuote: _setQuotedMessage,
+                  onMessageReact: _toggleReaction,
                 ),
         ),
         // Message input / Voice recorder
@@ -402,28 +542,15 @@ class _DMChatPageState extends State<DMChatPage> {
               onCancel: _cancelRecording,
             ),
           )
-        else if (isOnline)
+        else
+          // Message input - always enabled (queues when offline)
           MessageInputWidget(
             onSend: (content, filePath) => _sendMessage(content),
             allowFiles: false, // DMs don't support file attachments yet
-            // Only show mic button on supported platforms (Linux, Android)
-            onMicPressed: isVoiceSupported ? _startRecording : null,
+            // Only show mic button on supported platforms (Linux, Android) and when online
+            onMicPressed: isOnline && isVoiceSupported ? _startRecording : null,
             quotedMessage: _quotedMessage,
             onClearQuote: _clearQuotedMessage,
-          )
-        else
-          // Disabled input when offline
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              enabled: false,
-              decoration: InputDecoration(
-                hintText: _i18n.t('device_offline'),
-                border: const OutlineInputBorder(),
-                filled: true,
-                fillColor: Colors.grey.shade200,
-              ),
-            ),
           ),
       ],
     );

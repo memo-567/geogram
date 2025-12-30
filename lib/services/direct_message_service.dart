@@ -16,6 +16,7 @@ import '../platform/file_system_service.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
+import '../util/reaction_utils.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
@@ -378,6 +379,11 @@ class DirectMessageService {
     } catch (e) {
       LogService().log('Error loading DM conversations: $e');
     }
+
+    // Notify listeners that conversations have been loaded
+    if (_conversations.isNotEmpty) {
+      _notifyListeners();
+    }
   }
 
   /// Load a single conversation from its path
@@ -645,6 +651,219 @@ class DirectMessageService {
     LogService().log('DM: Sent voice message to $normalizedCallsign (${durationSeconds}s)');
   }
 
+  /// Queue a message for later delivery when recipient becomes reachable
+  /// Used when the recipient device is offline
+  /// Returns the queued ChatMessage with pending status
+  Future<ChatMessage> queueMessage(
+    String otherCallsign,
+    String content, {
+    Map<String, String>? metadata,
+  }) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final profile = _myProfile;
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // Create message with current timestamp (composition time - this is preserved)
+    final messageMetadata = <String, String>{};
+    if (metadata != null) {
+      messageMetadata.addAll(metadata);
+    }
+    messageMetadata['status'] = 'pending'; // Mark as pending
+
+    final message = ChatMessage.now(
+      author: profile.callsign,
+      content: content,
+      metadata: messageMetadata,
+    );
+
+    // Sign the message (signature includes composition timestamp)
+    final signingService = SigningService();
+    await signingService.initialize();
+
+    if (signingService.canSign(profile)) {
+      // Convert message timestamp to Unix seconds for signing
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      final signedEvent = await signingService.generateSignedEvent(
+        content,
+        {
+          'room': normalizedCallsign,
+          'callsign': profile.callsign,
+        },
+        profile,
+        createdAt: createdAt,
+      );
+      if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
+        message.setMeta('created_at', signedEvent.createdAt.toString());
+        message.setMeta('npub', profile.npub);
+        message.setMeta('eventId', signedEvent.id!);
+        message.setMeta('signature', signedEvent.sig!);
+        message.setMeta('verified', 'true');
+      }
+    }
+
+    // Save to queue file (separate from delivered messages)
+    await _saveToQueue(normalizedCallsign, message);
+
+    // Update conversation metadata
+    conversation.lastMessageTime = message.dateTime;
+    conversation.lastMessagePreview = content.length > 50 ? '${content.substring(0, 50)}...' : content;
+    conversation.lastMessageAuthor = profile.callsign;
+
+    // Fire event and notify listeners
+    _fireMessageEvent(message, normalizedCallsign, fromSync: false);
+    _notifyListeners();
+
+    LogService().log('DM: Queued message for $normalizedCallsign (offline)');
+    return message;
+  }
+
+  /// Attempt to deliver all queued messages for a callsign
+  /// Called when device becomes reachable
+  /// Returns the number of messages successfully delivered
+  Future<int> flushQueue(String callsign) async {
+    await initialize();
+
+    final normalizedCallsign = callsign.toUpperCase();
+    final queuedMessages = await loadQueuedMessages(normalizedCallsign);
+
+    if (queuedMessages.isEmpty) return 0;
+
+    LogService().log('DM Queue: Flushing ${queuedMessages.length} messages to $normalizedCallsign');
+
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+    final profile = _myProfile;
+
+    int delivered = 0;
+
+    for (final message in queuedMessages) {
+      try {
+        // Rebuild signed event from stored metadata
+        final signedEvent = _rebuildSignedEventFromMessage(message, normalizedCallsign);
+
+        if (signedEvent == null) {
+          LogService().log('DM Queue: Cannot rebuild signed event for ${message.timestamp}');
+          continue;
+        }
+
+        // Attempt delivery using makeDeviceApiRequest directly
+        final success = await _pushQueuedMessage(
+          normalizedCallsign,
+          signedEvent,
+          profile.callsign,
+          metadata: message.metadata,
+        );
+
+        if (success) {
+          // Update status to delivered
+          message.setMeta('status', 'delivered');
+
+          // Move from queue to delivered messages file
+          await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
+          await _removeFromQueue(normalizedCallsign, message.timestamp);
+          delivered++;
+
+          // Fire delivery event for UI updates
+          EventBus().fire(DMMessageDeliveredEvent(
+            callsign: normalizedCallsign,
+            messageTimestamp: message.timestamp,
+          ));
+
+          LogService().log('DM Queue: Delivered message ${message.timestamp} to $normalizedCallsign');
+        } else {
+          // Mark as failed but keep in queue for retry
+          message.setMeta('status', 'failed');
+          LogService().log('DM Queue: Failed to deliver message ${message.timestamp} to $normalizedCallsign');
+        }
+      } catch (e) {
+        LogService().log('DM Queue: Error delivering message ${message.timestamp}: $e');
+        message.setMeta('status', 'failed');
+      }
+    }
+
+    LogService().log('DM Queue: Delivered $delivered/${queuedMessages.length} messages to $normalizedCallsign');
+    _notifyListeners();
+    return delivered;
+  }
+
+  /// Push a queued message to remote device
+  /// Similar to _pushToRemoteChatAPI but uses callsign directly instead of device object
+  Future<bool> _pushQueuedMessage(
+    String targetCallsign,
+    NostrEvent signedEvent,
+    String myCallsign, {
+    Map<String, String>? metadata,
+  }) async {
+    if (kIsWeb) return false;
+
+    try {
+      final path = '/api/chat/$myCallsign/messages';
+      final extraMetadata = _filterOutboundMetadata(metadata);
+      final body = jsonEncode({
+        'event': signedEvent.toJson(),
+        if (extraMetadata.isNotEmpty) 'metadata': extraMetadata,
+      });
+
+      LogService().log('DM Queue: Pushing message to $targetCallsign via $path');
+
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: targetCallsign,
+        method: 'POST',
+        path: path,
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+
+      if (response == null) {
+        LogService().log('DM Queue: No route to $targetCallsign');
+        return false;
+      }
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        LogService().log('DM Queue: Message delivered successfully to $targetCallsign');
+        return true;
+      } else {
+        LogService().log('DM Queue: Delivery failed: ${response.statusCode} - ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      LogService().log('DM Queue: Delivery error: $e');
+      return false;
+    }
+  }
+
+  /// Rebuild a NostrEvent from stored message metadata
+  /// Used when flushing queued messages
+  NostrEvent? _rebuildSignedEventFromMessage(ChatMessage message, String roomId) {
+    final npub = message.npub;
+    final signature = message.signature;
+    final eventId = message.getMeta('eventId');
+    final createdAtStr = message.getMeta('created_at');
+
+    if (npub == null || signature == null || eventId == null || createdAtStr == null) {
+      LogService().log('DM Queue: Cannot rebuild event - missing metadata');
+      return null;
+    }
+
+    final pubkeyHex = NostrCrypto.decodeNpub(npub);
+    final createdAt = int.parse(createdAtStr);
+
+    return NostrEvent(
+      id: eventId,
+      pubkey: pubkeyHex,
+      createdAt: createdAt,
+      kind: 1,
+      tags: [
+        ['t', 'chat'],
+        ['room', roomId],
+        ['callsign', message.author],
+      ],
+      content: message.content,
+      sig: signature,
+    );
+  }
+
   /// Copy voice file to conversation files folder
   /// Returns (filename, sha1Hash) or null on failure
   Future<({String fileName, String sha1Hash})?> _copyVoiceFile(String sourcePath, String conversationPath) async {
@@ -711,6 +930,70 @@ class DirectMessageService {
       return filePath;
     }
     return null;
+  }
+
+  /// Download a voice file from a remote device
+  /// Returns the local file path on success, null on failure
+  Future<String?> downloadVoiceFile(String otherCallsign, String voiceFileName) async {
+    if (kIsWeb) return null;
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+
+    // Check if already exists locally
+    final existingPath = await getVoiceFilePath(normalizedCallsign, voiceFileName);
+    if (existingPath != null) {
+      return existingPath;
+    }
+
+    // Security: prevent path traversal
+    if (voiceFileName.contains('..') || voiceFileName.contains('/') || voiceFileName.contains('\\')) {
+      LogService().log('DM: Invalid voice filename: $voiceFileName');
+      return null;
+    }
+
+    try {
+      // Request file from the sender's device
+      // The sender stored it in their chat/{myCallsign}/files/ folder
+      // Path: /{senderCallsign}/api/dm/{myCallsign}/files/{filename}
+      final myCallsign = _myCallsign;
+      final path = '/$normalizedCallsign/api/dm/$myCallsign/files/$voiceFileName';
+
+      LogService().log('DM: Downloading voice file from $normalizedCallsign: $voiceFileName');
+
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: normalizedCallsign,
+        method: 'GET',
+        path: path,
+      );
+
+      if (response == null) {
+        LogService().log('DM: No route to $normalizedCallsign for voice download');
+        return null;
+      }
+
+      if (response.statusCode != 200) {
+        LogService().log('DM: Voice download failed: ${response.statusCode}');
+        return null;
+      }
+
+      // Create local files directory if needed
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save the file
+      final filePath = p.join(filesDir.path, voiceFileName);
+      final file = File(filePath);
+      await file.writeAsBytes(response.bodyBytes);
+
+      LogService().log('DM: Voice file downloaded: $filePath');
+      return filePath;
+    } catch (e) {
+      LogService().log('DM: Voice download error: $e');
+      return null;
+    }
   }
 
   /// Push message to remote device using POST /api/chat/{myCallsign}/messages
@@ -870,6 +1153,115 @@ class DirectMessageService {
     }
   }
 
+  // ============================================================
+  // MESSAGE QUEUE METHODS (for offline message queuing)
+  // ============================================================
+
+  /// Get path for message queue file
+  String _getQueuePath(String callsign) {
+    return '$_chatBasePath/${callsign.toUpperCase()}/queue.txt';
+  }
+
+  /// Save message to queue file for later delivery
+  Future<void> _saveToQueue(String callsign, ChatMessage message) async {
+    final queuePath = _getQueuePath(callsign);
+
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      String existing = '';
+      if (await fs.exists(queuePath)) {
+        existing = await fs.readAsString(queuePath);
+      }
+      await fs.writeAsString(queuePath, '$existing\n${message.exportAsText()}\n');
+    } else {
+      final file = File(queuePath);
+      final sink = file.openWrite(mode: FileMode.append);
+      try {
+        sink.write('\n');
+        sink.write(message.exportAsText());
+        sink.write('\n');
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    }
+  }
+
+  /// Load queued messages for a callsign
+  Future<List<ChatMessage>> loadQueuedMessages(String callsign) async {
+    final queuePath = _getQueuePath(callsign.toUpperCase());
+
+    try {
+      String? content;
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(queuePath)) {
+          content = await fs.readAsString(queuePath);
+        }
+      } else {
+        final file = File(queuePath);
+        if (await file.exists()) {
+          content = await file.readAsString();
+        }
+      }
+
+      if (content == null || content.isEmpty) return [];
+      return ChatService.parseMessageText(content);
+    } catch (e) {
+      LogService().log('Error loading queued messages for $callsign: $e');
+      return [];
+    }
+  }
+
+  /// Remove a message from queue after successful delivery
+  Future<void> _removeFromQueue(String callsign, String timestamp) async {
+    final queuedMessages = await loadQueuedMessages(callsign);
+    final remaining = queuedMessages.where((m) => m.timestamp != timestamp).toList();
+
+    if (remaining.isEmpty) {
+      // Delete queue file if empty
+      await _deleteQueueFile(callsign);
+    } else {
+      // Rewrite queue with remaining messages
+      await _rewriteQueue(callsign, remaining);
+    }
+  }
+
+  /// Delete the queue file for a callsign
+  Future<void> _deleteQueueFile(String callsign) async {
+    final queuePath = _getQueuePath(callsign.toUpperCase());
+
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (await fs.exists(queuePath)) {
+        await fs.delete(queuePath);
+      }
+    } else {
+      final file = File(queuePath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+  }
+
+  /// Rewrite queue file with remaining messages
+  Future<void> _rewriteQueue(String callsign, List<ChatMessage> messages) async {
+    final queuePath = _getQueuePath(callsign.toUpperCase());
+
+    final buffer = StringBuffer();
+    for (final message in messages) {
+      buffer.write('\n');
+      buffer.write(message.exportAsText());
+      buffer.write('\n');
+    }
+
+    if (kIsWeb) {
+      await FileSystemService.instance.writeAsString(queuePath, buffer.toString());
+    } else {
+      await File(queuePath).writeAsString(buffer.toString());
+    }
+  }
+
   /// Load messages from a DM conversation
   /// Loads from all messages-{npub}.txt files and legacy messages.txt
   /// Each file is tied to a specific cryptographic identity
@@ -970,6 +1362,10 @@ class DirectMessageService {
         }
       }
 
+      // Also include queued messages (pending delivery)
+      final queuedMessages = await loadQueuedMessages(normalizedCallsign);
+      allMessages.addAll(queuedMessages);
+
       // Sort by timestamp
       allMessages.sort();
 
@@ -983,6 +1379,151 @@ class DirectMessageService {
       LogService().log('Error loading DM messages: $e');
       return [];
     }
+  }
+
+  Future<ChatMessage?> toggleReaction(
+    String otherCallsign,
+    String timestamp,
+    String actorCallsign,
+    String reaction,
+  ) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final path = getDMPath(normalizedCallsign);
+    final reactionKey = ReactionUtils.normalizeReactionKey(reaction);
+    final actorKey = actorCallsign.trim().toUpperCase();
+    if (reactionKey.isEmpty || actorKey.isEmpty) {
+      throw Exception('Invalid reaction or callsign');
+    }
+
+    final messageFiles = await _listMessageFiles(path);
+    for (final filePath in messageFiles) {
+      String content;
+      if (kIsWeb) {
+        if (!await FileSystemService.instance.exists(filePath)) {
+          continue;
+        }
+        content = await FileSystemService.instance.readAsString(filePath);
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) {
+          continue;
+        }
+        content = await file.readAsString();
+      }
+
+      final messages = ChatService.parseMessageText(content);
+      final index = messages.indexWhere((msg) => msg.timestamp == timestamp);
+      if (index == -1) continue;
+
+      final updated = _toggleMessageReaction(messages[index], reactionKey, actorKey);
+      messages[index] = updated;
+
+      final header = _extractMessageHeader(content, updated);
+      await _rewriteMessagesFile(filePath, header, messages);
+      return updated;
+    }
+
+    return null;
+  }
+
+  Future<List<String>> _listMessageFiles(String path) async {
+    final messageFiles = <String>[];
+
+    if (kIsWeb) {
+      final fs = FileSystemService.instance;
+      if (await fs.exists(path)) {
+        final entities = await fs.list(path);
+        for (final entity in entities) {
+          final filename = p.basename(entity.path);
+          if (filename == 'messages.txt' || filename.startsWith('messages-')) {
+            messageFiles.add(entity.path);
+          }
+        }
+      }
+    } else {
+      final dir = Directory(path);
+      if (await dir.exists()) {
+        await for (final entity in dir.list()) {
+          if (entity is File) {
+            final filename = p.basename(entity.path);
+            if (filename == 'messages.txt' || filename.startsWith('messages-')) {
+              messageFiles.add(entity.path);
+            }
+          }
+        }
+      }
+    }
+
+    return messageFiles;
+  }
+
+  String _extractMessageHeader(String content, ChatMessage message) {
+    if (content.isNotEmpty) {
+      final firstLine = content.split('\n').first.trim();
+      if (firstLine.startsWith('#')) {
+        return firstLine;
+      }
+    }
+    return '# DM: Direct Chat from ${message.datePortion}';
+  }
+
+  Future<void> _rewriteMessagesFile(
+    String filePath,
+    String header,
+    List<ChatMessage> messages,
+  ) async {
+    final buffer = StringBuffer();
+    buffer.writeln(header);
+    for (final message in messages) {
+      buffer.writeln();
+      buffer.write(message.exportAsText());
+    }
+    buffer.writeln();
+
+    if (kIsWeb) {
+      await FileSystemService.instance.writeAsString(filePath, buffer.toString());
+    } else {
+      final file = File(filePath);
+      await file.writeAsString(buffer.toString());
+    }
+  }
+
+  ChatMessage _toggleMessageReaction(
+    ChatMessage message,
+    String reactionKey,
+    String actorCallsign,
+  ) {
+    final updatedReactions = <String, List<String>>{};
+
+    message.reactions.forEach((key, users) {
+      final normalizedUsers = users
+          .map((u) => u.trim().toUpperCase())
+          .where((u) => u.isNotEmpty)
+          .toSet()
+          .toList();
+      if (normalizedUsers.isNotEmpty) {
+        updatedReactions[ReactionUtils.normalizeReactionKey(key)] = normalizedUsers;
+      }
+    });
+
+    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
+    final list = updatedReactions[normalizedKey] ?? <String>[];
+    final existingIndex = list.indexWhere((u) => u.toUpperCase() == actorCallsign);
+    if (existingIndex >= 0) {
+      list.removeAt(existingIndex);
+    } else {
+      list.add(actorCallsign);
+    }
+
+    if (list.isEmpty) {
+      updatedReactions.remove(normalizedKey);
+    } else {
+      updatedReactions[normalizedKey] = list;
+    }
+
+    return message.copyWith(reactions: updatedReactions);
   }
 
   /// Load messages since a specific timestamp
@@ -1279,6 +1820,16 @@ class DirectMessageService {
       }
     }
     return counts;
+  }
+
+  /// Get all conversation callsigns (for showing chat icon on devices with history)
+  Set<String> get conversationCallsigns {
+    return _conversations.keys.toSet();
+  }
+
+  /// Check if a conversation exists with a specific callsign
+  bool hasConversation(String callsign) {
+    return _conversations.containsKey(callsign.toUpperCase());
   }
 
   /// Get unread count for a specific conversation

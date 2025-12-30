@@ -1,3 +1,5 @@
+import '../util/reaction_utils.dart';
+
 /// Model for a chat room from a remote station
 class StationChatRoom {
   final String id;
@@ -56,6 +58,7 @@ class StationChatMessage {
   final String content;
   final String roomId;
   final Map<String, String> metadata;
+  final Map<String, List<String>> reactions;
   final String? npub;      // Author's NOSTR public key (bech32)
   final String? pubkey;    // Author's public key (hex)
   final String? signature; // Message signature (BIP-340 Schnorr)
@@ -70,6 +73,7 @@ class StationChatMessage {
     required this.content,
     required this.roomId,
     Map<String, String>? metadata,
+    Map<String, List<String>>? reactions,
     this.npub,
     this.pubkey,
     this.signature,
@@ -77,13 +81,24 @@ class StationChatMessage {
     this.createdAt,
     this.verified = false,
     this.hasSignature = false,
-  }) : metadata = metadata ?? {};
+  })  : metadata = metadata ?? {},
+        reactions = reactions ?? {};
 
   factory StationChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
     final rawMetadata = json['metadata'] as Map?;
     final metadata = rawMetadata != null
         ? rawMetadata.map((key, value) => MapEntry(key.toString(), value.toString()))
         : <String, String>{};
+    final rawReactions = json['reactions'] as Map?;
+    final reactions = <String, List<String>>{};
+    if (rawReactions != null) {
+      rawReactions.forEach((key, value) {
+        if (value is List) {
+          reactions[key.toString()] =
+              value.map((entry) => entry.toString()).toList();
+        }
+      });
+    }
     final npub = (json['npub'] as String?) ?? metadata['npub'];
     final signature = (json['signature'] as String?) ?? metadata['signature'];
     final eventId = (json['event_id'] as String?) ?? metadata['event_id'];
@@ -114,6 +129,7 @@ class StationChatMessage {
       content: json['content'] as String? ?? '',
       roomId: roomId,
       metadata: metadata,
+      reactions: ReactionUtils.normalizeReactionMap(reactions),
       npub: npub,
       pubkey: json['pubkey'] as String?,
       signature: signature,
@@ -158,6 +174,7 @@ class StationChatMessage {
       content: content,
       roomId: roomId,
       metadata: const <String, String>{},
+      reactions: const <String, List<String>>{},
       pubkey: pubkey,
       signature: eventJson['sig'] as String?,
       eventId: eventJson['id'] as String?,

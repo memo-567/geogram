@@ -63,8 +63,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   String? _error;
   int _totalUnreadMessages = 0;
   Map<String, int> _dmUnreadCounts = {};
+  Set<String> _conversationCallsigns = {}; // Devices with chat history
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   StreamSubscription<Map<String, int>>? _dmUnreadSubscription;
+  StreamSubscription<dynamic>? _dmConversationsSubscription;
   Timer? _refreshTimer;
 
   // Multi-select mode
@@ -217,12 +219,23 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
       }
     });
 
-    // Subscribe to DM unread counts
+    // Subscribe to DM unread counts and track conversation callsigns
     _dmUnreadCounts = _dmService.unreadCounts;
+    _conversationCallsigns = _dmService.conversationCallsigns;
     _dmUnreadSubscription = _dmService.unreadCountsStream.listen((counts) {
       if (mounted) {
         setState(() {
           _dmUnreadCounts = counts;
+          _conversationCallsigns = _dmService.conversationCallsigns;
+        });
+      }
+    });
+
+    // Subscribe to conversations stream to update when conversations are loaded
+    _dmConversationsSubscription = _dmService.conversationsStream.listen((_) {
+      if (mounted) {
+        setState(() {
+          _conversationCallsigns = _dmService.conversationCallsigns;
         });
       }
     });
@@ -237,6 +250,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
       await _devicesService.initialize();
       await _cacheService.initialize();
+      await _dmService.initialize();
 
       // Listen to device updates - UI will update automatically as devices are discovered
       _devicesService.devicesStream.listen((devices) {
@@ -266,6 +280,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _refreshTimer?.cancel();
     _unreadSubscription?.cancel();
     _dmUnreadSubscription?.cancel();
+    _dmConversationsSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _bleStatusSubscription?.cancel();
     _debugActionSubscription?.cancel();
@@ -1350,8 +1365,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Direct message button with unread badge
-          // Only show for online devices that are not stations (stations can't reply)
-          if (device.isOnline && !isStation)
+          // Show for online devices OR devices with existing conversation history
+          // Stations can't reply so exclude them
+          if (!isStation && (device.isOnline || _conversationCallsigns.contains(device.callsign)))
             Badge(
               isLabelVisible: (_dmUnreadCounts[device.callsign] ?? 0) > 0,
               label: Text(
@@ -1362,11 +1378,16 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
               child: IconButton(
                 icon: Icon(
                   Icons.message_outlined,
-                  color: theme.colorScheme.primary,
+                  // Gray out icon when offline (read-only mode)
+                  color: device.isOnline
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant,
                   size: 20,
                 ),
                 onPressed: () => _openDirectMessage(device),
-                tooltip: _i18n.t('send_message'),
+                tooltip: device.isOnline
+                    ? _i18n.t('send_message')
+                    : _i18n.t('view_messages'),
               ),
             ),
           // Menu button with pin and delete options

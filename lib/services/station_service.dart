@@ -12,6 +12,7 @@ import '../services/chat_notification_service.dart';
 import '../services/signing_service.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../util/reaction_utils.dart';
 
 class _StationApiResponse {
   final int statusCode;
@@ -1058,6 +1059,93 @@ class StationService {
     } catch (e) {
       LogService().log('Error deleting message: $e');
       return false;
+    }
+  }
+
+  /// Toggle a reaction on a station chat message
+  /// Returns updated reactions map or null on failure
+  Future<Map<String, List<String>>?> toggleRoomReaction(
+    String stationUrl,
+    String roomId,
+    String timestamp,
+    String reaction,
+  ) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        LogService().log('Cannot react: NOSTR keys not configured');
+        return null;
+      }
+
+      final reactionKey = ReactionUtils.normalizeReactionKey(reaction);
+      if (reactionKey.isEmpty) {
+        LogService().log('Cannot react: empty reaction');
+        return null;
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: 'react',
+        tags: [
+          ['action', 'react'],
+          ['room', roomId],
+          ['timestamp', timestamp],
+          ['reaction', reactionKey],
+          ['callsign', profile.callsign],
+        ],
+      );
+      event.calculateId();
+
+      final signedEvent = await signingService.signEvent(event, profile);
+      if (signedEvent == null) {
+        LogService().log('Failed to sign reaction event');
+        return null;
+      }
+
+      final authEvent = base64Encode(utf8.encode(jsonEncode(signedEvent.toJson())));
+      Future<_StationApiResponse?> sendReaction(String path) {
+        return _stationApiRequest(
+          stationUrl: stationUrl,
+          method: 'POST',
+          path: path,
+          headers: {'Authorization': 'Nostr $authEvent'},
+        );
+      }
+
+      var response = await sendReaction(
+        '/api/chat/rooms/$roomId/messages/${Uri.encodeComponent(timestamp)}/reactions',
+      );
+
+      if (response != null && response.statusCode != 200) {
+        response = await sendReaction(
+          '/api/chat/$roomId/messages/${Uri.encodeComponent(timestamp)}/reactions',
+        );
+      }
+
+      if (response != null && response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final rawReactions = data['reactions'] as Map?;
+        final reactions = <String, List<String>>{};
+        if (rawReactions != null) {
+          rawReactions.forEach((key, value) {
+            if (value is List) {
+              reactions[key.toString()] =
+                  value.map((entry) => entry.toString()).toList();
+            }
+          });
+        }
+        return ReactionUtils.normalizeReactionMap(reactions);
+      }
+
+      LogService().log('Failed to toggle reaction: ${response?.statusCode}');
+      return null;
+    } catch (e) {
+      LogService().log('Error toggling reaction: $e');
+      return null;
     }
   }
 

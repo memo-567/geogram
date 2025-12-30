@@ -1226,20 +1226,29 @@ class DevicesService {
     return isNowOnline;
   }
 
-  /// Trigger DM sync with a device that just came online
+  /// Trigger DM queue flush and sync with a device that just came online
   /// deviceUrl can be null if using station proxy exclusively
   void _triggerDMSync(String callsign, String? deviceUrl) {
-    LogService().log('DevicesService: Device $callsign came online, triggering DM sync');
+    LogService().log('DevicesService: Device $callsign came online, triggering DM queue flush and sync');
 
-    // Run sync in background (don't await)
-    DirectMessageService().syncWithDevice(callsign, deviceUrl: deviceUrl).then((result) {
+    final dmService = DirectMessageService();
+
+    // First, flush any queued messages for this device
+    dmService.flushQueue(callsign).then((delivered) {
+      if (delivered > 0) {
+        LogService().log('DevicesService: Delivered $delivered queued messages to $callsign');
+      }
+
+      // Then sync to get any messages from them
+      return dmService.syncWithDevice(callsign, deviceUrl: deviceUrl);
+    }).then((result) {
       if (result.success) {
         LogService().log('DevicesService: DM sync with $callsign completed - received: ${result.messagesReceived}, sent: ${result.messagesSent}');
       } else {
         LogService().log('DevicesService: DM sync with $callsign failed: ${result.error}');
       }
     }).catchError((e) {
-      LogService().log('DevicesService: DM sync with $callsign error: $e');
+      LogService().log('DevicesService: DM operations with $callsign error: $e');
     });
   }
 

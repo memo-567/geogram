@@ -8,6 +8,7 @@ import 'dart:io';
 import '../models/station_chat_room.dart';
 import '../models/chat_message.dart';
 import 'pure_storage_config.dart';
+import '../util/reaction_utils.dart';
 
 /// Pure Dart service for caching station device data locally (CLI version)
 /// Creates folders with device callsign for storing collections from each node
@@ -397,10 +398,39 @@ class CliRelayCacheService {
     // Parse content and metadata
     StringBuffer contentBuffer = StringBuffer();
     Map<String, String> metadata = {};
+    final Map<String, List<String>> reactions = {};
     bool inContent = true;
 
     for (int i = 1; i < lines.length; i++) {
       final line = lines[i];
+
+      if (line.trim().startsWith('~~> ')) {
+        final unsignedLine = line.trim().substring(4);
+        if (unsignedLine.startsWith('reaction:')) {
+          final reactionLine = unsignedLine.substring('reaction:'.length).trim();
+          final eqIndex = reactionLine.indexOf('=');
+          if (eqIndex > 0) {
+            final reaction = ReactionUtils.normalizeReactionKey(
+              reactionLine.substring(0, eqIndex).trim(),
+            );
+            final usersPart = reactionLine.substring(eqIndex + 1).trim();
+            final users = usersPart.isEmpty
+                ? <String>[]
+                : usersPart
+                    .split(',')
+                    .map((u) => u.trim().toUpperCase())
+                    .where((u) => u.isNotEmpty)
+                    .toSet()
+                    .toList();
+            if (reaction.isNotEmpty) {
+              final existing = reactions[reaction] ?? [];
+              final merged = {...existing, ...users}.toList();
+              reactions[reaction] = merged;
+            }
+          }
+        }
+        continue;
+      }
 
       if (line.trim().startsWith('--> ')) {
         inContent = false;
@@ -426,6 +456,7 @@ class CliRelayCacheService {
       timestamp: timestamp,
       content: contentBuffer.toString().trim(),
       metadata: metadata,
+      reactions: reactions,
     );
   }
 
@@ -454,6 +485,7 @@ class CliRelayCacheService {
       timestamp: msg.timestamp,
       content: msg.content,
       metadata: metadata,
+      reactions: msg.reactions,
     );
   }
 
@@ -479,6 +511,7 @@ class CliRelayCacheService {
       content: msg.content,
       timestamp: msg.timestamp,
       metadata: metadata,
+      reactions: msg.reactions,
       npub: npub,
       signature: signature,
       createdAt: createdAt,

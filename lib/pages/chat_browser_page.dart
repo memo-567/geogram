@@ -859,6 +859,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         timestamp: rm.timestamp,
         content: rm.content,
         metadata: metadata.isNotEmpty ? metadata : null,
+        reactions: rm.reactions,
       );
     }).toList();
   }
@@ -1228,6 +1229,97 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _showSuccess('Message deleted');
     } catch (e) {
       _showError('Failed to delete message: $e');
+    }
+  }
+
+  Future<void> _toggleLocalReaction(ChatMessage message, String reaction) async {
+    if (_selectedChannel == null) return;
+
+    try {
+      final currentProfile = _profileService.getProfile();
+      final updated = await _chatService.toggleReaction(
+        channelId: _selectedChannel!.id,
+        timestamp: message.timestamp,
+        actorCallsign: currentProfile.callsign,
+        reaction: reaction,
+      );
+
+      if (updated == null) {
+        _showError('Message not found');
+        return;
+      }
+
+      _setStateIfMounted(() {
+        final index = _messages.indexWhere((msg) =>
+            msg.timestamp == updated.timestamp && msg.author == updated.author);
+        if (index != -1) {
+          _messages[index] = updated;
+        }
+      });
+    } catch (e) {
+      _showError('Failed to react: $e');
+    }
+  }
+
+  Future<void> _toggleStationReaction(ChatMessage message, String reaction) async {
+    if (_selectedStationRoom == null) return;
+    if (!_stationReachable) {
+      _showError('Station is offline');
+      return;
+    }
+
+    try {
+      final roomId = _selectedStationRoom!.id;
+      final updatedReactions = await _stationService.toggleRoomReaction(
+        _selectedStationRoom!.stationUrl,
+        roomId,
+        message.timestamp,
+        reaction,
+      );
+
+      if (updatedReactions == null) {
+        _showError('Failed to react');
+        return;
+      }
+
+      final updatedList = List<StationChatMessage>.from(
+        _stationMessageCache[roomId] ?? _stationMessages,
+      );
+      final index = updatedList.indexWhere((msg) =>
+          msg.timestamp == message.timestamp &&
+          msg.callsign.toUpperCase() == message.author.toUpperCase());
+      if (index != -1) {
+        final existing = updatedList[index];
+        final updatedMessage = StationChatMessage(
+          timestamp: existing.timestamp,
+          callsign: existing.callsign,
+          content: existing.content,
+          roomId: existing.roomId,
+          metadata: existing.metadata,
+          reactions: updatedReactions,
+          npub: existing.npub,
+          pubkey: existing.pubkey,
+          signature: existing.signature,
+          eventId: existing.eventId,
+          createdAt: existing.createdAt,
+          verified: existing.verified,
+          hasSignature: existing.hasSignature,
+        );
+        updatedList[index] = updatedMessage;
+        _stationMessageCache[roomId] = updatedList;
+        _applyStationMessageLimit(updatedList);
+
+        final cacheKey = _lastRelayCacheKey ?? '';
+        if (cacheKey.isNotEmpty) {
+          await _cacheService.mergeMessages(
+            cacheKey,
+            roomId,
+            [updatedMessage],
+          );
+        }
+      }
+    } catch (e) {
+      _showError('Failed to react: $e');
     }
   }
 
@@ -1726,6 +1818,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                   onMessageUnhide: _unhideMessage,
                                   getAttachmentPath: _resolveAttachedFilePath,
                                   onImageOpen: _openAttachedImage,
+                                  onMessageReact: _toggleLocalReaction,
                                 ),
                               ),
                               // Message input
@@ -1770,6 +1863,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     onMessageUnhide: _unhideMessage,
                     getAttachmentPath: _resolveAttachedFilePath,
                     onImageOpen: _openAttachedImage,
+                    onMessageReact: _toggleLocalReaction,
                   ),
                 ),
                 // Message input
@@ -1895,6 +1989,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onMessageDelete: _deleteStationMessage,
             canDeleteMessage: _canDeleteStationMessage,
             onMessageQuote: _setQuotedMessage,
+            onMessageReact: _toggleStationReaction,
           ),
         ),
         // Message input (no file upload for station) - disabled when offline

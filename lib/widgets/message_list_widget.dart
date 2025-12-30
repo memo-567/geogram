@@ -22,6 +22,7 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onMessageUnhide;
   final String? Function(ChatMessage)? getAttachmentPath;
   final Function(ChatMessage)? onImageOpen;
+  final void Function(ChatMessage, String)? onMessageReact;
   /// Callback to get voice file path for a message
   final Future<String?> Function(ChatMessage)? getVoiceFilePath;
 
@@ -40,6 +41,7 @@ class MessageListWidget extends StatefulWidget {
     this.onMessageUnhide,
     this.getAttachmentPath,
     this.onImageOpen,
+    this.onMessageReact,
     this.getVoiceFilePath,
   }) : super(key: key);
 
@@ -188,6 +190,9 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                         : null,
                     onImageOpen: widget.onImageOpen != null
                         ? () => widget.onImageOpen!(message)
+                        : null,
+                    onReact: widget.onMessageReact != null
+                        ? (reaction) => widget.onMessageReact!(message, reaction)
                         : null,
                     // Voice message support
                     onVoiceDownloadRequested: widget.getVoiceFilePath != null && message.hasVoice

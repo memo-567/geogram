@@ -325,6 +325,33 @@ Maybe later
 --> quote: 2025-09-07 19:10_16
 ```
 
+#### Reactions (Unsigned)
+
+**Purpose**: Attach emoji reactions to a message without affecting its signature.
+
+**Format**: One line per reaction type using the unsigned prefix.
+
+```
+~~> reaction: thumbs-up=X1AAA,X1BBB
+~~> reaction: heart=X1CCC
+```
+
+**Rules**:
+- Reactions must appear **after** the `signature` line (if present).
+- Reactions use the `~~>` prefix so they are **outside** the signed block.
+- Each reaction type is stored on a separate line.
+- Callsigns are deduplicated per reaction type.
+
+**Example**:
+```
+> 2025-09-07 19:10_16 -- CR7BBQ
+Great news everyone!
+--> npub: npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3z0qwe
+--> signature: 3a4f8c92e1b5d6a7f2e9c4b8d1a6e3f9c2b5e8a1d4f7c0b3e6a9d2f5c8e1b4a7
+~~> reaction: thumbs-up=X1AAA,X1BBB
+~~> reaction: heart=X1CCC
+```
+
 #### Polls
 
 **Purpose**: Create a poll with options and track votes

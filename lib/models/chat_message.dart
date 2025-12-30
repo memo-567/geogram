@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import '../util/reaction_utils.dart';
+
 /// Represents a single chat message following the Geogram chat format specification
 class ChatMessage implements Comparable<ChatMessage> {
   /// Author's callsign (e.g., CR7BBQ, X135AS)
@@ -20,13 +22,18 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Metadata key-value pairs (file, lat, lon, quote, npub, signature, etc.)
   final Map<String, String> metadata;
 
+  /// Unsigned reactions stored outside the signed block
+  final Map<String, List<String>> reactions;
+
   ChatMessage({
     required this.author,
     required this.timestamp,
     required this.content,
     this.messageType = ChatMessageType.simple,
     Map<String, String>? metadata,
-  }) : metadata = metadata ?? {};
+    Map<String, List<String>>? reactions,
+  })  : metadata = metadata ?? {},
+        reactions = reactions ?? {};
 
   /// Create a simple message without metadata
   factory ChatMessage.simple({
@@ -47,6 +54,7 @@ class ChatMessage implements Comparable<ChatMessage> {
     required String author,
     required String content,
     Map<String, String>? metadata,
+    Map<String, List<String>>? reactions,
   }) {
     final now = DateTime.now();
     final timestamp = formatTimestamp(now);
@@ -56,6 +64,7 @@ class ChatMessage implements Comparable<ChatMessage> {
       timestamp: timestamp,
       content: content,
       metadata: metadata,
+      reactions: reactions,
     );
   }
 
@@ -295,11 +304,31 @@ class ChatMessage implements Comparable<ChatMessage> {
       buffer.writeln('--> signature: $signature');
     }
 
+    if (reactions.isNotEmpty) {
+      final normalized = ReactionUtils.normalizeReactionMap(reactions);
+      final keys = normalized.keys.toList()..sort();
+      for (final key in keys) {
+        final users = normalized[key] ?? [];
+        if (users.isEmpty) continue;
+        buffer.writeln('~~> reaction: $key=${users.join(',')}');
+      }
+    }
+
     return buffer.toString().trim();
   }
 
   /// Create ChatMessage from JSON
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final rawReactions = json['reactions'] as Map?;
+    final reactions = <String, List<String>>{};
+    if (rawReactions != null) {
+      rawReactions.forEach((key, value) {
+        if (value is List) {
+          reactions[key.toString()] =
+              value.map((entry) => entry.toString()).toList();
+        }
+      });
+    }
     return ChatMessage(
       author: json['author'] as String,
       timestamp: json['timestamp'] as String,
@@ -309,6 +338,7 @@ class ChatMessage implements Comparable<ChatMessage> {
         orElse: () => ChatMessageType.simple,
       ),
       metadata: Map<String, String>.from(json['metadata'] as Map? ?? {}),
+      reactions: ReactionUtils.normalizeReactionMap(reactions),
     );
   }
 
@@ -320,6 +350,7 @@ class ChatMessage implements Comparable<ChatMessage> {
       'content': content,
       'messageType': messageType.name,
       'metadata': metadata,
+      'reactions': reactions,
     };
   }
 
@@ -364,6 +395,7 @@ class ChatMessage implements Comparable<ChatMessage> {
     String? content,
     ChatMessageType? messageType,
     Map<String, String>? metadata,
+    Map<String, List<String>>? reactions,
   }) {
     return ChatMessage(
       author: author ?? this.author,
@@ -371,6 +403,7 @@ class ChatMessage implements Comparable<ChatMessage> {
       content: content ?? this.content,
       messageType: messageType ?? this.messageType,
       metadata: metadata ?? Map<String, String>.from(this.metadata),
+      reactions: reactions ?? Map<String, List<String>>.from(this.reactions),
     );
   }
 }

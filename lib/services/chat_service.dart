@@ -13,6 +13,7 @@ import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../platform/file_system_service.dart';
 import '../util/event_bus.dart';
+import '../util/reaction_utils.dart';
 import 'profile_service.dart';
 
 /// Notification when chat files change
@@ -801,10 +802,39 @@ class ChatService {
     // Parse content and metadata
     StringBuffer contentBuffer = StringBuffer();
     Map<String, String> metadata = {};
+    final Map<String, List<String>> reactions = {};
     bool inContent = true;
 
     for (int i = 1; i < lines.length; i++) {
       final line = lines[i];
+
+      if (line.trim().startsWith('~~> ')) {
+        final unsignedLine = line.trim().substring(4); // Remove "~~> "
+        if (unsignedLine.startsWith('reaction:')) {
+          final reactionLine = unsignedLine.substring('reaction:'.length).trim();
+          final eqIndex = reactionLine.indexOf('=');
+          if (eqIndex > 0) {
+            final reaction = ReactionUtils.normalizeReactionKey(
+              reactionLine.substring(0, eqIndex).trim(),
+            );
+            final usersPart = reactionLine.substring(eqIndex + 1).trim();
+            final users = usersPart.isEmpty
+                ? <String>[]
+                : usersPart
+                    .split(',')
+                    .map((u) => u.trim().toUpperCase())
+                    .where((u) => u.isNotEmpty)
+                    .toSet()
+                    .toList();
+            if (reaction.isNotEmpty) {
+              final existing = reactions[reaction] ?? [];
+              final merged = {...existing, ...users}.toList();
+              reactions[reaction] = merged;
+            }
+          }
+        }
+        continue;
+      }
 
       if (line.trim().startsWith('--> ')) {
         inContent = false;
@@ -830,6 +860,7 @@ class ChatService {
       timestamp: timestamp,
       content: contentBuffer.toString().trim(),
       metadata: metadata,
+      reactions: reactions,
     );
   }
 
@@ -1544,6 +1575,153 @@ class ChatService {
     }
 
     return true;
+  }
+
+  /// Toggle a reaction for a message by timestamp
+  /// Returns updated message or null if not found
+  Future<ChatMessage?> toggleReaction({
+    required String channelId,
+    required String timestamp,
+    required String actorCallsign,
+    required String reaction,
+  }) async {
+    if (_collectionPath == null) {
+      throw Exception('Collection not initialized');
+    }
+
+    final channel = getChannel(channelId);
+    if (channel == null) {
+      throw Exception('Channel not found: $channelId');
+    }
+
+    final reactionKey = ReactionUtils.normalizeReactionKey(reaction);
+    final actorKey = actorCallsign.trim().toUpperCase();
+    if (reactionKey.isEmpty || actorKey.isEmpty) {
+      throw Exception('Invalid reaction or callsign');
+    }
+
+    final channelPath = '$_collectionPath/${channel.folder}';
+
+    // Parse the timestamp to get the date for daily files
+    DateTime messageDate;
+    try {
+      final datePart = timestamp.substring(0, 10);
+      final parts = datePart.split('-');
+      messageDate = DateTime(
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        int.parse(parts[2]),
+      );
+    } catch (e) {
+      throw Exception('Invalid timestamp format: $timestamp');
+    }
+
+    List<ChatMessage> messages;
+    int targetIndex = -1;
+
+    if (channel.isMain) {
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        if (!await fs.exists(messageFilePath)) {
+          return null;
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        if (!await messageFile.exists()) {
+          return null;
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    } else {
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        final messageFilePath = '$channelPath/messages.txt';
+        if (!await fs.exists(messageFilePath)) {
+          return null;
+        }
+        messages = await _parseMessageFilePath(messageFilePath);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        if (!await messageFile.exists()) {
+          return null;
+        }
+        messages = await _parseMessageFile(messageFile);
+      }
+    }
+
+    for (int i = 0; i < messages.length; i++) {
+      if (messages[i].timestamp == timestamp) {
+        targetIndex = i;
+        break;
+      }
+    }
+
+    if (targetIndex == -1) {
+      return null;
+    }
+
+    final updatedMessage = _toggleMessageReaction(messages[targetIndex], reactionKey, actorKey);
+    messages[targetIndex] = updatedMessage;
+
+    if (channel.isMain) {
+      if (kIsWeb) {
+        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final channelDir = Directory(channelPath);
+        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    } else {
+      if (kIsWeb) {
+        final messageFilePath = '$channelPath/messages.txt';
+        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
+      } else {
+        final messageFile = File(p.join(channelPath, 'messages.txt'));
+        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
+      }
+    }
+
+    return updatedMessage;
+  }
+
+  ChatMessage _toggleMessageReaction(
+    ChatMessage message,
+    String reactionKey,
+    String actorCallsign,
+  ) {
+    final updatedReactions = <String, List<String>>{};
+
+    message.reactions.forEach((key, users) {
+      final normalizedUsers = users
+          .map((u) => u.trim().toUpperCase())
+          .where((u) => u.isNotEmpty)
+          .toSet()
+          .toList();
+      if (normalizedUsers.isNotEmpty) {
+        updatedReactions[ReactionUtils.normalizeReactionKey(key)] = normalizedUsers;
+      }
+    });
+
+    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
+    final list = updatedReactions[normalizedKey] ?? <String>[];
+    final existingIndex = list.indexWhere((u) => u.toUpperCase() == actorCallsign);
+    if (existingIndex >= 0) {
+      list.removeAt(existingIndex);
+    } else {
+      list.add(actorCallsign);
+    }
+
+    if (list.isEmpty) {
+      updatedReactions.remove(normalizedKey);
+    } else {
+      updatedReactions[normalizedKey] = list;
+    }
+
+    return message.copyWith(reactions: updatedReactions);
   }
 
   // ============================================================

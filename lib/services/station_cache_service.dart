@@ -437,13 +437,14 @@ class RelayCacheService {
       timestamp: msg.timestamp,
       content: msg.content,
       metadata: metadata.isNotEmpty ? metadata : null,
+      reactions: msg.reactions,
     );
   }
 
   /// Convert ChatMessage to StationChatMessage for loading
   /// Extracts NOSTR metadata (npub, signature, created_at) from ChatMessage.metadata
   StationChatMessage _chatMessageToRelayChat(ChatMessage msg, String roomId) {
-    final metadata = msg.metadata ?? {};
+    final metadata = msg.metadata;
 
     // Extract NOSTR fields from metadata
     final npub = metadata['npub'];
@@ -462,6 +463,7 @@ class RelayCacheService {
       content: msg.content,
       timestamp: msg.timestamp,
       metadata: metadata,
+      reactions: msg.reactions,
       npub: npub,
       signature: signature,
       createdAt: createdAt,

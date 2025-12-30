@@ -1071,8 +1071,21 @@ Posts a message to a chat room.
 - `quote`: Timestamp of the quoted message
 - `quote_author`: Callsign of the quoted author
 - `quote_excerpt`: Short excerpt for display
+- Reactions are stored as unsigned lines after the signature:
+  - `~~> reaction: thumbs-up=X1AAA,X1BBB`
 
 Images are attached as files; clients may render them inline based on file extension.
+
+#### POST /api/chat/{roomId}/messages/{timestamp}/reactions
+
+Toggle a reaction on a message (requires NOSTR auth).
+
+**Required NOSTR tags:**
+- `action=react`
+- `room={roomId}`
+- `timestamp={message_timestamp}`
+- `reaction={reactionName}`
+- `callsign={yourCallsign}`
 
 #### GET /api/chat/{roomId}/roles
 

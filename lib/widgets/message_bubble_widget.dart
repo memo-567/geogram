@@ -9,11 +9,22 @@ import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/devices_service.dart';
+import '../util/reaction_utils.dart';
 import 'voice_player_widget.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 
 /// Widget for displaying a single chat message bubble
 class MessageBubbleWidget extends StatelessWidget {
+  static const Map<String, String> _reactionEmojiMap = {
+    'thumbs-up': '👍',
+    'heart': '❤️',
+    'fire': '🔥',
+    'laugh': '😂',
+    'celebrate': '🎉',
+    'surprise': '😮',
+    'sad': '😢',
+  };
+
   final ChatMessage message;
   final bool isGroupChat;
   final VoidCallback? onFileOpen;
@@ -26,6 +37,7 @@ class MessageBubbleWidget extends StatelessWidget {
   final VoidCallback? onUnhide;
   final String? attachmentPath;
   final VoidCallback? onImageOpen;
+  final void Function(String reaction)? onReact;
   /// Path to the voice file (for voice messages)
   final String? voiceFilePath;
   /// Callback to request download of voice file from remote
@@ -47,6 +59,7 @@ class MessageBubbleWidget extends StatelessWidget {
     this.onUnhide,
     this.attachmentPath,
     this.onImageOpen,
+    this.onReact,
   }) : super(key: key);
 
   @override
@@ -55,6 +68,7 @@ class MessageBubbleWidget extends StatelessWidget {
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
     final currentCallsign = currentProfile.callsign;
+    final normalizedCallsign = currentCallsign.toUpperCase();
 
     // Compare case-insensitively for callsigns, or by npub if available
     final isOwnMessage = message.author.toUpperCase() == currentCallsign.toUpperCase() ||
@@ -248,6 +262,72 @@ class MessageBubbleWidget extends StatelessWidget {
                               ),
                             ),
                           ],
+                          // Pending status (queued for offline delivery)
+                          if (message.isPending) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.schedule,
+                                    size: 11,
+                                    color: Colors.orange.shade700,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    'queued',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.orange.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ]
+                          // Failed delivery status
+                          else if (message.isFailed) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.error_outline,
+                                    size: 11,
+                                    color: Colors.red.shade700,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    'failed',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.red.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           // Options menu button (desktop)
                           if (hasActions && _isDesktopPlatform()) ...[
                             const SizedBox(width: 6),
@@ -266,6 +346,11 @@ class MessageBubbleWidget extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if (message.reactions.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: _buildReactionsRow(theme, normalizedCallsign),
+                      ),
                   ],
                 ),
               ),
@@ -438,6 +523,68 @@ class MessageBubbleWidget extends StatelessWidget {
     );
   }
 
+  Widget _buildReactionsRow(ThemeData theme, String currentCallsign) {
+    final normalized = ReactionUtils.normalizeReactionMap(message.reactions);
+    final entries = normalized.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final chips = <Widget>[];
+
+    for (final entry in entries) {
+      final reactionKey = entry.key;
+      final users = entry.value;
+      if (users.isEmpty) continue;
+      final count = users.length;
+      final reacted = users.any((u) => u.toUpperCase() == currentCallsign);
+      final label = '${_reactionLabel(reactionKey)} $count';
+
+      chips.add(
+        InkWell(
+          onTap: onReact != null ? () => onReact!(reactionKey) : null,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: reacted
+                  ? theme.colorScheme.primary.withOpacity(0.15)
+                  : theme.colorScheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: reacted
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.outlineVariant,
+              ),
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: reacted
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: chips,
+    );
+  }
+
+  String _reactionLabel(String reactionKey) {
+    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
+    final emoji = _reactionEmojiMap[normalizedKey];
+    if (emoji != null) {
+      return emoji;
+    }
+    return normalizedKey;
+  }
+
   /// Show message options (copy, etc.)
   void _showMessageOptions(BuildContext context) {
     showModalBottomSheet(
@@ -446,6 +593,33 @@ class MessageBubbleWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (onReact != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                child: Wrap(
+                  spacing: 12,
+                  children: _reactionEmojiMap.entries.map((entry) {
+                    return InkWell(
+                      onTap: () {
+                        Navigator.pop(context);
+                        onReact!(entry.key);
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceVariant,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          entry.value,
+                          style: const TextStyle(fontSize: 18),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
             if (onQuote != null)
               ListTile(
                 leading: const Icon(Icons.reply),

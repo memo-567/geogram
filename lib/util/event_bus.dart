@@ -284,6 +284,18 @@ class DirectMessageSyncEvent extends AppEvent {
   });
 }
 
+/// Queued DM message was successfully delivered
+/// Fired when a message from the offline queue has been sent
+class DMMessageDeliveredEvent extends AppEvent {
+  final String callsign;         // The recipient's callsign
+  final String messageTimestamp; // The message timestamp (unique identifier)
+
+  DMMessageDeliveredEvent({
+    required this.callsign,
+    required this.messageTimestamp,
+  });
+}
+
 /// Connection type for ConnectionStateChangedEvent
 enum ConnectionType {
   internet,   // General internet connectivity (can reach external hosts)

@@ -382,7 +382,13 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
       // Clear input on success
       _controller.clear();
       _clearFile();
-      _focusNode.requestFocus();
+
+      // Request focus after the frame to ensure it persists through rebuilds
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _focusNode.requestFocus();
+        }
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

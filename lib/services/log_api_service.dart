@@ -26,6 +26,7 @@ import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../util/nostr_event.dart';
+import '../util/reaction_utils.dart';
 import 'audio_service.dart';
 import 'backup_service.dart';
 import '../models/backup_models.dart';
@@ -291,6 +292,13 @@ class LogApiService {
       if (roomId != null && request.method == 'GET') {
         return await _handleChatFilesRequest(request, roomId, headers);
       }
+    }
+
+    // Chat message reactions
+    if (urlPath.startsWith('api/chat/') &&
+        urlPath.contains('/messages/') &&
+        urlPath.endsWith('/reactions')) {
+      return await _handleChatMessageReactionRequest(request, urlPath, headers);
     }
 
     // Chat message edit/delete endpoints
@@ -1845,8 +1853,8 @@ class LogApiService {
 
   /// Extract room ID from paths like 'api/chat/{roomId}/messages'
   String? _extractRoomIdFromPath(String urlPath) {
-    // Pattern: api/chat/{roomId}/messages or api/chat/{roomId}/files
-    final regex = RegExp(r'^api/chat/([^/]+)/(messages|files)$');
+    // Pattern: api/chat/{roomId}/messages or api/chat/rooms/{roomId}/messages
+    final regex = RegExp(r'^api/chat/(?:rooms/)?([^/]+)/(messages|files)$');
     final match = regex.firstMatch(urlPath);
     if (match != null) {
       return Uri.decodeComponent(match.group(1)!);
@@ -2261,12 +2269,13 @@ class LogApiService {
         return await _handleRemoteDeviceChatMessages(deviceCallsign, roomId, request, headers);
       }
 
-      // Check if roomId looks like a callsign (uppercase alphanumeric)
-      // If so, this is a DM channel - use DirectMessageService
+      await _initializeChatServiceIfNeeded();
+
+      final chatService = ChatService();
+      final channel = chatService.getChannel(roomId);
       final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
 
-      if (isCallsignLike) {
-        // This is a DM request - use DirectMessageService
+      if (channel == null && isCallsignLike) {
         final dmService = DirectMessageService();
         await dmService.initialize();
 
@@ -2289,6 +2298,7 @@ class LogApiService {
             'npub': msg.npub,
             'signature': msg.signature,
             'verified': msg.isVerified,
+            'reactions': msg.reactions,
           };
         }).toList();
 
@@ -2303,11 +2313,6 @@ class LogApiService {
           headers: headers,
         );
       }
-
-      // Regular chat room - use ChatService
-      await _initializeChatServiceIfNeeded();
-
-      final chatService = ChatService();
 
       // Check if chat service is initialized
       if (chatService.collectionPath == null) {
@@ -2380,6 +2385,7 @@ class LogApiService {
           'latitude': msg.latitude,
           'longitude': msg.longitude,
           'metadata': msg.metadata,
+          'reactions': msg.reactions,
         };
       }).toList();
 
@@ -2409,19 +2415,15 @@ class LogApiService {
     Map<String, String> headers,
   ) async {
     try {
-      // Check if roomId looks like a callsign (uppercase alphanumeric)
-      // If so, this is a DM channel - route through DirectMessageService
-      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
-
-      if (isCallsignLike) {
-        // This is a DM request - handle via DirectMessageService
-        return await _handleDMViaChatAPI(request, roomId.toUpperCase(), headers);
-      }
-
-      // Regular chat room - use ChatService
       await _initializeChatServiceIfNeeded();
 
       final chatService = ChatService();
+      final channel = chatService.getChannel(roomId);
+      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+      if (channel == null && isCallsignLike) {
+        return await _handleDMViaChatAPI(request, roomId.toUpperCase(), headers);
+      }
 
       // Check if chat service is initialized
       if (chatService.collectionPath == null) {
@@ -2431,8 +2433,6 @@ class LogApiService {
         );
       }
 
-      // Check if room exists
-      final channel = chatService.getChannel(roomId);
       if (channel == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'Room not found', 'roomId': roomId}),
@@ -3064,7 +3064,7 @@ class LogApiService {
 
       // Extract roomId and timestamp from path: api/chat/{roomId}/messages/{timestamp}
       // Timestamp format: YYYY-MM-DD HH:MM_ss (URL encoded: YYYY-MM-DD%20HH%3AMM_ss)
-      final regex = RegExp(r'^api/chat/([^/]+)/messages/(.+)$');
+      final regex = RegExp(r'^api/chat/(?:rooms/)?([^/]+)/messages/(.+)$');
       final match = regex.firstMatch(urlPath);
       if (match == null) {
         return shelf.Response.badRequest(
@@ -3233,6 +3233,160 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error in message modification: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle reaction toggle requests
+  /// POST /api/chat/{roomId}/messages/{timestamp}/reactions
+  Future<shelf.Response> _handleChatMessageReactionRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      if (request.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+
+      final regex = RegExp(r'^api/chat/(?:rooms/)?([^/]+)/messages/(.+)/reactions$');
+      final match = regex.firstMatch(urlPath);
+      if (match == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid path format'}),
+          headers: headers,
+        );
+      }
+
+      final roomId = Uri.decodeComponent(match.group(1)!);
+      final timestamp = Uri.decodeComponent(match.group(2)!);
+
+      final event = _verifyNostrEventWithTags(request, 'react', roomId);
+      if (event == null) {
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'Invalid or missing NOSTR authentication',
+            'code': 'AUTH_REQUIRED',
+          }),
+          headers: headers,
+        );
+      }
+
+      final timestampTag = event.getTagValue('timestamp');
+      if (timestampTag != null && timestampTag != timestamp) {
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'Timestamp mismatch between URL and event',
+            'code': 'TIMESTAMP_MISMATCH',
+          }),
+          headers: headers,
+        );
+      }
+
+      final reactionTag = event.getTagValue('reaction');
+      if (reactionTag == null || reactionTag.trim().isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing reaction tag'}),
+          headers: headers,
+        );
+      }
+
+      final callsignTag = event.getTagValue('callsign');
+      if (callsignTag == null || callsignTag.trim().isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing callsign tag'}),
+          headers: headers,
+        );
+      }
+
+      final reactionKey = ReactionUtils.normalizeReactionKey(reactionTag);
+      final actorCallsign = callsignTag.trim();
+
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+      final channel = chatService.getChannel(roomId);
+      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+      if (channel == null && isCallsignLike) {
+        final dmService = DirectMessageService();
+        await dmService.initialize();
+        final updated = await dmService.toggleReaction(
+          roomId.toUpperCase(),
+          timestamp,
+          actorCallsign,
+          reactionKey,
+        );
+
+        if (updated == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'roomId': roomId.toUpperCase(),
+            'timestamp': timestamp,
+            'reaction': reactionKey,
+            'reactions': updated.reactions,
+          }),
+          headers: headers,
+        );
+      }
+
+      if (chatService.collectionPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'No chat collection loaded'}),
+          headers: headers,
+        );
+      }
+
+      final canAccess = await _canAccessChatRoom(roomId, event.npub);
+      if (!canAccess) {
+        return shelf.Response.forbidden(
+          jsonEncode({
+            'error': 'Access denied',
+            'code': 'ROOM_ACCESS_DENIED',
+          }),
+          headers: headers,
+        );
+      }
+
+      final updated = await chatService.toggleReaction(
+        channelId: roomId,
+        timestamp: timestamp,
+        actorCallsign: actorCallsign,
+        reaction: reactionKey,
+      );
+
+      if (updated == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'roomId': roomId,
+          'timestamp': timestamp,
+          'reaction': reactionKey,
+          'reactions': updated.reactions,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling reaction toggle: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

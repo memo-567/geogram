@@ -22,6 +22,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 import '../util/event_bus.dart';
+import '../util/reaction_utils.dart';
 import '../models/update_settings.dart' show UpdateAssetType;
 
 /// App version - use central version.dart for consistency
@@ -358,6 +359,7 @@ class ChatMessage {
   final DateTime timestamp;
   final bool verified;       // Signature verified (runtime, not stored)
   final bool hasSignature;   // Has valid signature
+  final Map<String, List<String>> reactions;
 
   ChatMessage({
     required this.id,
@@ -369,8 +371,10 @@ class ChatMessage {
     DateTime? timestamp,
     this.verified = false,
     bool? hasSignature,
+    Map<String, List<String>>? reactions,
   }) : timestamp = timestamp ?? DateTime.now().toUtc(),  // Use UTC for consistent timestamps
-       hasSignature = hasSignature ?? (signature != null && signature.isNotEmpty);
+       hasSignature = hasSignature ?? (signature != null && signature.isNotEmpty),
+       reactions = reactions ?? {};
 
   factory ChatMessage.fromJson(Map<String, dynamic> json, String roomId) {
     final sig = json['signature'] as String?;
@@ -383,6 +387,17 @@ class ChatMessage {
         parsedTime = parsedTime.toUtc();
       }
     }
+    final rawReactions = json['reactions'] as Map?;
+    final reactions = <String, List<String>>{};
+    if (rawReactions != null) {
+      rawReactions.forEach((key, value) {
+        if (value is List) {
+          reactions[key.toString()] =
+              value.map((entry) => entry.toString()).toList();
+        }
+      });
+    }
+
     return ChatMessage(
       id: json['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
       roomId: json['room_id'] as String? ?? roomId,
@@ -393,6 +408,7 @@ class ChatMessage {
       timestamp: parsedTime ?? DateTime.now().toUtc(),
       verified: json['verified'] as bool? ?? false,
       hasSignature: json['has_signature'] as bool? ?? (sig != null && sig.isNotEmpty),
+      reactions: ReactionUtils.normalizeReactionMap(reactions),
     );
   }
 
@@ -407,6 +423,7 @@ class ChatMessage {
         'created_at': timestamp.millisecondsSinceEpoch ~/ 1000,  // Unix timestamp for signature verification
         'verified': verified,
         'has_signature': hasSignature,
+        if (reactions.isNotEmpty) 'reactions': reactions,
       };
 }
 
@@ -889,6 +906,7 @@ class PureStationServer {
       String? currentNpub;
       String? currentSignature;
       int? currentCreatedAt;  // Unix timestamp from client for signature verification
+      final Map<String, List<String>> currentReactions = {};
       final contentBuffer = StringBuffer();
 
       for (final line in lines) {
@@ -934,6 +952,7 @@ class PureStationServer {
               timestamp: msgTimestamp,
               verified: verified,
               hasSignature: hasSig,
+              reactions: ReactionUtils.normalizeReactionMap(currentReactions),
             );
             room.messages.add(msg);
           }
@@ -947,6 +966,7 @@ class PureStationServer {
             currentNpub = null;
             currentSignature = null;
             currentCreatedAt = null;
+            currentReactions.clear();
           }
         }
         // Skip file header (# CALLSIGN: Title)
@@ -969,6 +989,24 @@ class PureStationServer {
                 break;
               case 'created_at':
                 currentCreatedAt = int.tryParse(value);
+                break;
+              case 'reaction':
+                final splitIdx = value.indexOf('=');
+                if (splitIdx > 0) {
+                  final reactionKey = ReactionUtils.normalizeReactionKey(
+                    value.substring(0, splitIdx),
+                  );
+                  final rawUsers = value.substring(splitIdx + 1);
+                  final users = rawUsers
+                      .split(',')
+                      .map((u) => u.trim().toUpperCase())
+                      .where((u) => u.isNotEmpty)
+                      .toList();
+                  if (reactionKey.isNotEmpty && users.isNotEmpty) {
+                    final existing = currentReactions[reactionKey] ?? <String>[];
+                    currentReactions[reactionKey] = [...existing, ...users];
+                  }
+                }
                 break;
               // Legacy fields (ignored, recalculated from npub + signature)
               case 'pubkey':
@@ -1026,6 +1064,7 @@ class PureStationServer {
           timestamp: msgTimestamp,
           verified: verified,
           hasSignature: hasSig,
+          reactions: ReactionUtils.normalizeReactionMap(currentReactions),
         );
         room.messages.add(msg);
       }
@@ -1241,6 +1280,23 @@ class PureStationServer {
         // Store Unix timestamp for signature verification (required for cross-timezone consistency)
         if (msg.hasSignature) {
           buffer.writeln('--> created_at: ${msg.timestamp.millisecondsSinceEpoch ~/ 1000}');
+        }
+        final reactions = ReactionUtils.normalizeReactionMap(msg.reactions);
+        if (reactions.isNotEmpty) {
+          final entries = reactions.entries.toList()
+            ..sort((a, b) => a.key.compareTo(b.key));
+          for (final entry in entries) {
+            final users = entry.value
+                .map((u) => u.trim().toUpperCase())
+                .where((u) => u.isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort();
+            if (users.isEmpty) {
+              continue;
+            }
+            buffer.writeln('--> reaction: ${entry.key}=${users.join(',')}');
+          }
         }
         buffer.writeln();
       }
@@ -1927,7 +1983,9 @@ class PureStationServer {
       if (_settings.enableCors) {
         request.response.headers.add('Access-Control-Allow-Origin', '*');
         request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        request.response.headers.add('Access-Control-Allow-Headers', 'Content-Type');
+        request.response.headers.add(
+            'Access-Control-Allow-Headers',
+            'Content-Type, Authorization, X-Device-Callsign');
       }
 
       if (method == 'OPTIONS') {
@@ -1966,6 +2024,9 @@ class PureStationServer {
       } else if (RegExp(r'^/api/chat/rooms/[^/]+/messages$').hasMatch(path)) {
         // /api/chat/rooms/{roomId}/messages (station shorthand)
         await _handleRoomMessages(request, _settings.callsign);
+      } else if (_isChatReactionPath(path)) {
+        final callsign = _parseCallsignFromPath(path) ?? _settings.callsign;
+        await _handleRoomMessageReactions(request, callsign);
       } else if (_isChatFilesListPath(path)) {
         // /api/chat/rooms/{roomId}/files - list chat files for caching
         await _handleChatFilesList(request);
@@ -5772,6 +5833,13 @@ class PureStationServer {
     return RegExp(r'^/api/chat/rooms/[^/]+/files$').hasMatch(path);
   }
 
+  bool _isChatReactionPath(String path) {
+    if (RegExp(r'^/api/chat/rooms/[^/]+/messages/.+/reactions$').hasMatch(path)) {
+      return true;
+    }
+    return RegExp(r'^/[A-Z0-9]+/api/chat/rooms/[^/]+/messages/.+/reactions$').hasMatch(path);
+  }
+
   /// Check if path is a chat file content request (/api/chat/rooms/{roomId}/file/{year}/{filename})
   bool _isChatFileContentPath(String path) {
     return RegExp(r'^/api/chat/rooms/[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
@@ -6453,6 +6521,229 @@ class PureStationServer {
         request.response.write(jsonEncode({'error': 'Invalid request: $e'}));
       }
     }
+  }
+
+  Future<void> _handleRoomMessageReactions(HttpRequest request, String targetCallsign) async {
+    if (request.method != 'POST') {
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
+      return;
+    }
+
+    final apiPath = _getApiPathWithoutCallsign(request.uri.path);
+    final match = RegExp(r'^/api/chat/rooms/([^/]+)/messages/(.+)/reactions$').firstMatch(apiPath);
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid reaction path'}));
+      return;
+    }
+
+    final roomId = Uri.decodeComponent(match.group(1)!);
+    final timestampRaw = Uri.decodeComponent(match.group(2)!);
+
+    final event = _verifyNostrEventWithTags(request, 'react', roomId);
+    if (event == null) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid or missing NOSTR authentication',
+        'code': 'AUTH_REQUIRED',
+      }));
+      return;
+    }
+
+    final timestampTag = event.getTagValue('timestamp');
+    if (timestampTag != null && timestampTag != timestampRaw) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Timestamp mismatch between URL and event',
+        'code': 'TIMESTAMP_MISMATCH',
+      }));
+      return;
+    }
+
+    final reactionTag = event.getTagValue('reaction');
+    if (reactionTag == null || reactionTag.trim().isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing reaction tag'}));
+      return;
+    }
+
+    final callsignTag = event.getTagValue('callsign');
+    if (callsignTag == null || callsignTag.trim().isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing callsign tag'}));
+      return;
+    }
+
+    final reactionKey = ReactionUtils.normalizeReactionKey(reactionTag);
+    if (reactionKey.isEmpty || !ReactionUtils.supportedReactions.contains(reactionKey)) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Unsupported reaction',
+        'reaction': reactionKey,
+        'supported_reactions': ReactionUtils.supportedReactions,
+      }));
+      return;
+    }
+
+    final room = _chatRooms[roomId];
+    if (room == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Room not found'}));
+      return;
+    }
+
+    final targetTime = _parseApiTimestamp(timestampRaw);
+    final index = room.messages.indexWhere((msg) =>
+        _messageTimestampMatches(msg, timestampRaw, targetTime));
+    if (index == -1) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}));
+      return;
+    }
+
+    final actorCallsign = callsignTag.trim().toUpperCase();
+    final updated = _toggleMessageReaction(room.messages[index], reactionKey, actorCallsign);
+    room.messages[index] = updated;
+
+    await _saveRoomMessages(roomId, targetCallsign);
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'success': true,
+      'room_id': roomId,
+      'timestamp': timestampRaw,
+      'reaction': reactionKey,
+      'reactions': updated.reactions,
+    }));
+  }
+
+  NostrEvent? _verifyNostrEventWithTags(
+    HttpRequest request,
+    String expectedAction,
+    String expectedRoomId,
+  ) {
+    final authHeader = request.headers.value('authorization');
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        _log('WARN', 'Chat reaction auth failed - invalid signature');
+        return null;
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if ((now - event.createdAt).abs() > 300) {
+        _log('WARN', 'Chat reaction auth failed - event expired');
+        return null;
+      }
+
+      final actionTag = event.getTagValue('action');
+      if (actionTag != expectedAction) {
+        _log('WARN', 'Chat reaction auth failed - action mismatch: $actionTag');
+        return null;
+      }
+
+      final roomTag = event.getTagValue('room');
+      if (roomTag != expectedRoomId) {
+        _log('WARN', 'Chat reaction auth failed - room mismatch: $roomTag');
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      _log('WARN', 'Chat reaction auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  DateTime? _parseApiTimestamp(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.contains('T')) {
+      final parsed = DateTime.tryParse(trimmed);
+      return parsed?.toUtc();
+    }
+    if (trimmed.contains(' ')) {
+      return _parseTimestamp(trimmed).toUtc();
+    }
+    final parsed = DateTime.tryParse(trimmed);
+    return parsed?.toUtc();
+  }
+
+  bool _messageTimestampMatches(ChatMessage message, String raw, DateTime? targetTime) {
+    final trimmed = raw.trim();
+    if (targetTime != null) {
+      final msgTime = message.timestamp.toUtc();
+      if (msgTime.difference(targetTime).inSeconds == 0) {
+        return true;
+      }
+    }
+
+    final iso = message.timestamp.toUtc().toIso8601String();
+    if (trimmed == iso) {
+      return true;
+    }
+
+    final formatted = _formatChatTimestamp(message.timestamp.toUtc());
+    return trimmed == formatted;
+  }
+
+  String _formatChatTimestamp(DateTime dt) {
+    return '${_formatDate(dt)} ${_formatTime(dt)}';
+  }
+
+  ChatMessage _toggleMessageReaction(
+    ChatMessage message,
+    String reactionKey,
+    String actorCallsign,
+  ) {
+    final updatedReactions = ReactionUtils.normalizeReactionMap(message.reactions);
+    final normalizedKey = ReactionUtils.normalizeReactionKey(reactionKey);
+    final normalizedActor = actorCallsign.trim().toUpperCase();
+
+    final list = List<String>.from(updatedReactions[normalizedKey] ?? <String>[]);
+    final existingIndex = list.indexWhere((u) => u.toUpperCase() == normalizedActor);
+    if (existingIndex >= 0) {
+      list.removeAt(existingIndex);
+    } else {
+      list.add(normalizedActor);
+    }
+
+    if (list.isEmpty) {
+      updatedReactions.remove(normalizedKey);
+    } else {
+      updatedReactions[normalizedKey] = list.toSet().toList()..sort();
+    }
+
+    return ChatMessage(
+      id: message.id,
+      roomId: message.roomId,
+      senderCallsign: message.senderCallsign,
+      senderNpub: message.senderNpub,
+      signature: message.signature,
+      content: message.content,
+      timestamp: message.timestamp,
+      verified: message.verified,
+      hasSignature: message.hasSignature,
+      reactions: updatedReactions,
+    );
   }
 
   String? _extractRoomId(String path) {

@@ -13,13 +13,16 @@ import '../services/config_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
+import '../services/collection_service.dart';
 import '../services/direct_message_service.dart';
+import '../services/chat_service.dart';
 import '../services/app_args.dart';
 import '../services/event_service.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
 import '../models/blog_post.dart';
+import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/event.dart';
 import '../models/update_settings.dart';
@@ -27,6 +30,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../util/reaction_utils.dart';
 import '../util/event_bus.dart';
 import '../version.dart';
 
@@ -552,7 +556,9 @@ class StationServerService {
       // CORS headers
       request.response.headers.add('Access-Control-Allow-Origin', '*');
       request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      request.response.headers.add('Access-Control-Allow-Headers', 'Content-Type');
+      request.response.headers.add(
+          'Access-Control-Allow-Headers',
+          'Content-Type, Authorization, X-Device-Callsign');
 
       if (method == 'OPTIONS') {
         request.response.statusCode = 200;
@@ -579,6 +585,10 @@ class StationServerService {
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
         // POST /api/alerts/{alertId}/{action} - alert feedback (using shared handler)
         await _handleAlertFeedback(request);
+      } else if (path.startsWith('/api/chat/') &&
+          path.contains('/messages/') &&
+          path.endsWith('/reactions')) {
+        await _handleRoomMessageReactions(request);
       } else if (path == '/api/chat/rooms') {
         await _handleChatRooms(request);
       } else if (path.startsWith('/api/chat/rooms/') && path.endsWith('/messages')) {
@@ -1012,47 +1022,934 @@ class StationServerService {
 ''');
   }
 
+  Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {
+    try {
+      final chatService = ChatService();
+      if (chatService.collectionPath != null) {
+        return true;
+      }
+
+      final collectionsDir = CollectionService().collectionsDirectory;
+      final chatDir = Directory(path.join(collectionsDir.path, 'chat'));
+      if (!await chatDir.exists()) {
+        if (createIfMissing) {
+          await chatDir.create(recursive: true);
+          LogService().log('StationServerService: Created chat directory at ${chatDir.path}');
+        } else {
+          return false;
+        }
+      }
+
+      final profile = ProfileService().getProfile();
+      await chatService.initializeCollection(chatDir.path, creatorNpub: profile.npub);
+      LogService().log('StationServerService: ChatService initialized with ${chatService.channels.length} channels');
+      return true;
+    } catch (e) {
+      LogService().log('StationServerService: Error initializing ChatService: $e');
+      return false;
+    }
+  }
+
+  String? _verifyNostrAuth(HttpRequest request) {
+    final authHeader = request.headers.value('authorization');
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        LogService().log('StationServerService: NOSTR auth failed - invalid signature');
+        return null;
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if ((now - event.createdAt).abs() > 300) {
+        LogService().log('StationServerService: NOSTR auth failed - event too old');
+        return null;
+      }
+
+      return event.npub;
+    } catch (e) {
+      LogService().log('StationServerService: NOSTR auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  NostrEvent? _verifyNostrEventWithTags(
+    HttpRequest request,
+    String expectedAction,
+    String expectedRoomId,
+  ) {
+    final authHeader = request.headers.value('authorization');
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        LogService().log('StationServerService: NOSTR event verification failed - invalid signature');
+        return null;
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if ((now - event.createdAt).abs() > 300) {
+        LogService().log('StationServerService: NOSTR event verification failed - expired');
+        return null;
+      }
+
+      final actionTag = event.getTagValue('action');
+      if (actionTag != expectedAction) {
+        LogService().log(
+          'StationServerService: NOSTR event verification failed - action mismatch: $actionTag != $expectedAction',
+        );
+        return null;
+      }
+
+      final roomTag = event.getTagValue('room');
+      if (roomTag != expectedRoomId) {
+        LogService().log(
+          'StationServerService: NOSTR event verification failed - room mismatch: $roomTag != $expectedRoomId',
+        );
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      LogService().log('StationServerService: NOSTR event verification failed - parse error: $e');
+      return null;
+    }
+  }
+
+  Future<bool> _canAccessChatRoom(String roomId, String? npub, {String? callsign}) async {
+    final chatService = ChatService();
+    final channel = chatService.getChannel(roomId);
+    if (channel == null) {
+      return false;
+    }
+
+    final config = channel.config;
+    final visibility = config?.visibility ?? 'PUBLIC';
+
+    if (visibility == 'PUBLIC') {
+      return true;
+    }
+
+    if (npub == null && callsign == null) {
+      return false;
+    }
+
+    final security = chatService.security;
+    if (npub != null && security.isAdmin(npub)) {
+      return true;
+    }
+
+    if (visibility == 'RESTRICTED' && config != null) {
+      if (config.isBanned(npub)) {
+        return false;
+      }
+      if (config.canAccess(npub)) {
+        return true;
+      }
+    }
+
+    if (channel.participants.contains('*')) {
+      return true;
+    }
+
+    if (channel.isDirect && callsign != null) {
+      if (channel.participants.any((p) => p.toUpperCase() == callsign.toUpperCase())) {
+        return true;
+      }
+      if (roomId.toUpperCase() == callsign.toUpperCase()) {
+        return true;
+      }
+    }
+
+    if (npub != null) {
+      final participants = chatService.participants;
+      for (final entry in participants.entries) {
+        if (entry.value == npub && channel.participants.contains(entry.key)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  Future<void> _ensureDefaultChatChannel(ChatService chatService) async {
+    if (chatService.channels.isNotEmpty) {
+      return;
+    }
+
+    final collectionPath = chatService.collectionPath;
+    if (collectionPath == null) {
+      return;
+    }
+
+    final generalDir = Directory(path.join(collectionPath, 'general'));
+    final mainDir = Directory(path.join(collectionPath, 'main'));
+    final useGeneral = await generalDir.exists() && !await mainDir.exists();
+
+    final channel = useGeneral
+        ? ChatChannel(
+            id: 'general',
+            type: ChatChannelType.group,
+            name: 'General',
+            folder: 'general',
+            participants: ['*'],
+            description: 'General discussion',
+            created: DateTime.now(),
+          )
+        : ChatChannel.main(
+            name: 'Main',
+            description: 'Public group chat',
+          );
+
+    try {
+      await chatService.createChannel(channel);
+    } catch (e) {
+      LogService().log('StationServerService: Error creating default chat channel: $e');
+    }
+  }
+
   /// Handle /api/chat/rooms endpoint
   Future<void> _handleChatRooms(HttpRequest request) async {
-    final profile = ProfileService().getProfile();
+    try {
+      final profile = ProfileService().getProfile();
+      final initialized = await _initializeChatServiceIfNeeded(createIfMissing: true);
+      final chatService = ChatService();
 
-    final response = {
-      'station': profile.callsign,
-      'rooms': [
-        {
-          'id': 'general',
-          'name': 'General',
-          'description': 'General discussion',
-          'member_count': _clients.length,
-          'is_public': true,
+      if (!initialized || chatService.collectionPath == null) {
+        final response = {
+          'callsign': profile.callsign,
+          'station': profile.callsign,
+          'rooms': <Map<String, dynamic>>[],
+          'total': 0,
+          'authenticated': false,
+          'message': 'Chat service not available',
+        };
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(response));
+        return;
+      }
+
+      await _ensureDefaultChatChannel(chatService);
+
+      final authNpub = _verifyNostrAuth(request);
+      final rooms = <Map<String, dynamic>>[];
+
+      for (final channel in chatService.channels) {
+        final visibility = channel.config?.visibility ?? 'PUBLIC';
+
+        if (visibility == 'RESTRICTED') {
+          final config = channel.config;
+          if (config == null) {
+            continue;
+          }
+          if (authNpub == null || !config.canAccess(authNpub)) {
+            continue;
+          }
         }
-      ],
-    };
 
-    request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode(response));
+        final canAccess = await _canAccessChatRoom(channel.id, authNpub);
+        if (!canAccess && visibility != 'PUBLIC') {
+          continue;
+        }
+
+        final roomInfo = <String, dynamic>{
+          'id': channel.id,
+          'name': channel.name,
+          'description': channel.description,
+          'type': channel.isMain ? 'main' : (channel.isDirect ? 'direct' : 'group'),
+          'visibility': visibility,
+          'participants': channel.participants,
+          'lastMessage': channel.lastMessageTime?.toIso8601String(),
+        };
+
+        if (visibility == 'RESTRICTED' && channel.config != null) {
+          final config = channel.config!;
+          roomInfo['role'] = config.isOwner(authNpub)
+              ? 'owner'
+              : config.isAdmin(authNpub)
+                  ? 'admin'
+                  : config.isModerator(authNpub)
+                      ? 'moderator'
+                      : 'member';
+          roomInfo['memberCount'] = config.members.length +
+              config.moderatorNpubs.length +
+              config.admins.length + 1;
+        }
+
+        rooms.add(roomInfo);
+      }
+
+      final response = {
+        'callsign': profile.callsign,
+        'station': profile.callsign,
+        'rooms': rooms,
+        'total': rooms.length,
+        'authenticated': authNpub != null,
+      };
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(response));
+    } catch (e) {
+      LogService().log('StationServerService: Error handling chat rooms request: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
   }
 
   /// Handle /api/chat/rooms/{roomId}/messages endpoint
   Future<void> _handleRoomMessages(HttpRequest request) async {
-    final path = request.uri.path;
-    // Extract room ID from path
-    final parts = path.split('/');
-    final roomId = parts.length > 4 ? parts[4] : 'general';
+    final segments = request.uri.pathSegments;
+    final roomId = segments.length > 3 ? segments[3] : 'general';
 
     if (request.method == 'GET') {
-      // Return empty messages for now
-      final response = {
-        'room': roomId,
-        'messages': <Map<String, dynamic>>[],
-      };
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode(response));
-    } else if (request.method == 'POST') {
-      // Handle message posting
+      try {
+        await _initializeChatServiceIfNeeded();
+        final chatService = ChatService();
+        await _ensureDefaultChatChannel(chatService);
+
+        final channel = chatService.getChannel(roomId);
+        final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+        if (channel == null && isCallsignLike) {
+          final dmService = DirectMessageService();
+          await dmService.initialize();
+
+          final queryParams = request.uri.queryParameters;
+          final limitParam = queryParams['limit'];
+          int limit = 50;
+          if (limitParam != null) {
+            limit = int.tryParse(limitParam) ?? 50;
+            limit = limit.clamp(1, 500);
+          }
+
+          final messages = await dmService.loadMessages(roomId.toUpperCase(), limit: limit);
+          final messageList = messages.map((msg) {
+            return {
+              'author': msg.author,
+              'timestamp': msg.timestamp,
+              'content': msg.content,
+              'npub': msg.npub,
+              'signature': msg.signature,
+              'verified': msg.isVerified,
+              'reactions': msg.reactions,
+            };
+          }).toList();
+
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'roomId': roomId.toUpperCase(),
+            'messages': messageList,
+            'count': messageList.length,
+            'hasMore': false,
+            'limit': limit,
+          }));
+          return;
+        }
+
+        if (chatService.collectionPath == null) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
+          return;
+        }
+
+        if (channel == null) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Room not found', 'roomId': roomId}));
+          return;
+        }
+
+        final authNpub = _verifyNostrAuth(request);
+        final canAccess = await _canAccessChatRoom(roomId, authNpub);
+        if (!canAccess) {
+          request.response.statusCode = 403;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'Access denied',
+            'code': 'ROOM_ACCESS_DENIED',
+          }));
+          return;
+        }
+
+        final queryParams = request.uri.queryParameters;
+        final limitParam = queryParams['limit'];
+        final beforeParam = queryParams['before'];
+        final afterParam = queryParams['after'];
+
+        int limit = 50;
+        if (limitParam != null) {
+          limit = int.tryParse(limitParam) ?? 50;
+          limit = limit.clamp(1, 500);
+        }
+
+        DateTime? startDate;
+        DateTime? endDate;
+        if (afterParam != null) {
+          startDate = DateTime.tryParse(afterParam);
+        }
+        if (beforeParam != null) {
+          endDate = DateTime.tryParse(beforeParam);
+        }
+
+        final messages = await chatService.loadMessages(
+          roomId,
+          startDate: startDate,
+          endDate: endDate,
+          limit: limit + 1,
+        );
+
+        final hasMore = messages.length > limit;
+        final returnMessages = hasMore ? messages.sublist(0, limit) : messages;
+        final messageList = returnMessages.map((msg) {
+          return {
+            'author': msg.author,
+            'timestamp': msg.timestamp,
+            'content': msg.content,
+            'npub': msg.npub,
+            'signature': msg.signature,
+            'verified': msg.isVerified,
+            'hasFile': msg.hasFile,
+            'file': msg.attachedFile,
+            'hasLocation': msg.hasLocation,
+            'latitude': msg.latitude,
+            'longitude': msg.longitude,
+            'metadata': msg.metadata,
+            'reactions': msg.reactions,
+          };
+        }).toList();
+
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'roomId': roomId,
+          'messages': messageList,
+          'count': messageList.length,
+          'hasMore': hasMore,
+          'limit': limit,
+        }));
+      } catch (e) {
+        LogService().log('StationServerService: Error handling chat messages request: $e');
+        request.response.statusCode = 500;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': e.toString()}));
+      }
+      return;
+    }
+
+    if (request.method == 'POST') {
+      try {
+        await _initializeChatServiceIfNeeded(createIfMissing: true);
+        final chatService = ChatService();
+        await _ensureDefaultChatChannel(chatService);
+
+        final channel = chatService.getChannel(roomId);
+        final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+        // Handle DM messages - when roomId is a callsign (the sender's callsign)
+        if (channel == null && isCallsignLike) {
+          await _handleIncomingDMMessage(request, roomId.toUpperCase());
+          return;
+        }
+
+        if (chatService.collectionPath == null) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
+          return;
+        }
+
+        if (channel == null) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Room not found', 'roomId': roomId}));
+          return;
+        }
+
+        if (channel.config?.readonly == true) {
+          request.response.statusCode = 403;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Room is read-only', 'code': 'ROOM_READ_ONLY'}));
+          return;
+        }
+
+        final bodyStr = await utf8.decodeStream(request);
+        if (bodyStr.isEmpty) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing request body'}));
+          return;
+        }
+
+        final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+        String author;
+        String content;
+        int? createdAt;
+        String? npub;
+        String? signature;
+        String? eventId;
+        final extraMetadata = <String, String>{};
+
+        final rawMetadata = body['metadata'] ?? body['meta'];
+        if (rawMetadata is Map) {
+          rawMetadata.forEach((key, value) {
+            if (value == null) return;
+            extraMetadata[key.toString()] = value.toString();
+          });
+        }
+
+        if (body.containsKey('event')) {
+          final eventData = body['event'] as Map<String, dynamic>;
+          final event = NostrEvent.fromJson(eventData);
+
+          if (!event.verify()) {
+            request.response.statusCode = 403;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Invalid event signature', 'code': 'INVALID_SIGNATURE'}));
+            return;
+          }
+
+          if (event.kind != NostrEventKind.textNote) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({
+              'error': 'Invalid event kind',
+              'expected': NostrEventKind.textNote,
+              'received': event.kind,
+            }));
+            return;
+          }
+
+          final roomTag = event.getTagValue('room');
+          if (roomTag != null && roomTag != roomId) {
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({
+              'error': 'Room tag mismatch',
+              'expected': roomId,
+              'received': roomTag,
+            }));
+            return;
+          }
+
+          author = event.getTagValue('callsign') ?? event.callsign;
+          final canAccess = await _canAccessChatRoom(roomId, event.npub, callsign: author);
+          if (!canAccess) {
+            request.response.statusCode = 403;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({
+              'error': 'Event author not authorized for this room',
+              'code': 'AUTHOR_ACCESS_DENIED',
+            }));
+            return;
+          }
+
+          content = event.content;
+          createdAt = event.createdAt;
+          npub = event.npub;
+          signature = event.sig;
+          eventId = event.id;
+        } else if (body.containsKey('content')) {
+          content = body['content'] as String;
+          author = body['callsign'] as String? ?? ProfileService().getProfile().callsign;
+          npub = body['npub'] as String?;
+          signature = body['signature'] as String?;
+          eventId = body['event_id'] as String?;
+          createdAt = body['created_at'] as int?;
+        } else {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'Missing content or event field',
+            'hint': 'Provide either \"content\" or \"event\"',
+          }));
+          return;
+        }
+
+        final maxLength = channel.config?.maxSizeText ?? 10000;
+        if (content.length > maxLength) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'Content too long',
+            'maxLength': maxLength,
+            'received': content.length,
+          }));
+          return;
+        }
+
+        final metadata = <String, String>{};
+        if (createdAt != null) metadata['created_at'] = createdAt.toString();
+        if (npub != null) metadata['npub'] = npub;
+        if (eventId != null) metadata['event_id'] = eventId;
+        if (signature != null) metadata['signature'] = signature;
+        if (extraMetadata.isNotEmpty) {
+          const reserved = {
+            'created_at',
+            'npub',
+            'event_id',
+            'signature',
+            'verified',
+            'status',
+          };
+          extraMetadata.forEach((key, value) {
+            if (reserved.contains(key)) return;
+            metadata[key] = value;
+          });
+        }
+
+        final message = ChatMessage.now(
+          author: author,
+          content: content,
+          metadata: metadata,
+        );
+
+        await chatService.saveMessage(roomId, message);
+
+        request.response.statusCode = 201;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': true,
+          'timestamp': message.timestamp,
+          'author': author,
+          'eventId': eventId,
+        }));
+      } catch (e) {
+        LogService().log('StationServerService: Error posting chat message: $e');
+        request.response.statusCode = 500;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': e.toString()}));
+      }
+      return;
+    }
+
+    request.response.statusCode = 405;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'error': 'Method not allowed'}));
+  }
+
+  /// Handle incoming DM message POST
+  /// When roomId is a callsign, this is a 1:1 DM from that callsign to us
+  /// The sender posts to our /api/chat/{theirCallsign}/messages endpoint
+  Future<void> _handleIncomingDMMessage(HttpRequest request, String senderCallsign) async {
+    try {
+      final bodyStr = await utf8.decodeStream(request);
+      if (bodyStr.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Missing request body'}));
+        return;
+      }
+
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+      String author;
+      String content;
+      int? createdAt;
+      String? npub;
+      String? signature;
+      String? eventId;
+      final extraMetadata = <String, String>{};
+
+      // Parse optional metadata
+      final rawMetadata = body['metadata'] ?? body['meta'];
+      if (rawMetadata is Map) {
+        rawMetadata.forEach((key, value) {
+          if (value == null) return;
+          extraMetadata[key.toString()] = value.toString();
+        });
+      }
+
+      // Parse event or content
+      String? voiceFile;
+      String? voiceDuration;
+      String? voiceSha1;
+
+      if (body.containsKey('event')) {
+        final eventData = body['event'] as Map<String, dynamic>;
+        final event = NostrEvent.fromJson(eventData);
+
+        // Verify signature
+        if (!event.verify()) {
+          request.response.statusCode = 403;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Invalid event signature', 'code': 'INVALID_SIGNATURE'}));
+          return;
+        }
+
+        if (event.kind != NostrEventKind.textNote) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({
+            'error': 'Invalid event kind',
+            'expected': NostrEventKind.textNote,
+            'received': event.kind,
+          }));
+          return;
+        }
+
+        author = event.getTagValue('callsign') ?? event.callsign;
+        content = event.content;
+        createdAt = event.createdAt;
+        npub = event.npub;
+        signature = event.sig;
+        eventId = event.id;
+
+        // Extract voice message tags if present
+        voiceFile = event.getTagValue('voice');
+        voiceDuration = event.getTagValue('duration');
+        voiceSha1 = event.getTagValue('sha1');
+
+        // For voice messages, the content is a descriptor string - clear it for display
+        // The actual voice info comes from the tags
+        if (voiceFile != null) {
+          content = ''; // Voice messages have empty display content
+        }
+      } else if (body.containsKey('content')) {
+        content = body['content'] as String;
+        author = body['callsign'] as String? ?? senderCallsign;
+        npub = body['npub'] as String?;
+        signature = body['signature'] as String?;
+        eventId = body['event_id'] as String?;
+        createdAt = body['created_at'] as int?;
+      } else {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Missing content or event field',
+          'hint': 'Provide either \"content\" or \"event\"',
+        }));
+        return;
+      }
+
+      // Build message metadata
+      final metadata = <String, String>{};
+      if (createdAt != null) metadata['created_at'] = createdAt.toString();
+      if (npub != null) metadata['npub'] = npub;
+      if (eventId != null) metadata['eventId'] = eventId;
+      if (signature != null) metadata['signature'] = signature;
+      metadata['verified'] = 'true'; // Signature was verified above
+
+      // Add voice message metadata if present
+      if (voiceFile != null) metadata['voice'] = voiceFile;
+      if (voiceDuration != null) metadata['duration'] = voiceDuration;
+      if (voiceSha1 != null) metadata['sha1'] = voiceSha1;
+
+      // Add extra metadata (excluding reserved fields)
+      const reserved = {'created_at', 'npub', 'event_id', 'eventId', 'signature', 'verified', 'status'};
+      extraMetadata.forEach((key, value) {
+        if (!reserved.contains(key)) {
+          metadata[key] = value;
+        }
+      });
+
+      // Create the message with the original timestamp from created_at
+      ChatMessage message;
+      if (createdAt != null) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+        final timestampStr = ChatMessage.formatTimestamp(dt);
+        message = ChatMessage(
+          author: author,
+          timestamp: timestampStr,
+          content: content,
+          metadata: metadata,
+        );
+      } else {
+        message = ChatMessage.now(
+          author: author,
+          content: content,
+          metadata: metadata,
+        );
+      }
+
+      // Save to DM service - this fires DirectMessageReceivedEvent for notifications
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      await dmService.saveIncomingMessage(senderCallsign, message);
+
+      final msgType = voiceFile != null ? 'voice message' : 'text message';
+      LogService().log('StationServerService: Received DM $msgType from $author (via $senderCallsign)');
+
       request.response.statusCode = 201;
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'status': 'ok'}));
+      request.response.write(jsonEncode({
+        'success': true,
+        'timestamp': message.timestamp,
+        'author': author,
+        'eventId': eventId,
+      }));
+    } catch (e) {
+      LogService().log('StationServerService: Error handling incoming DM: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  /// Handle /api/chat/rooms/{roomId}/messages/{timestamp}/reactions endpoint
+  Future<void> _handleRoomMessageReactions(HttpRequest request) async {
+    if (request.method != 'POST') {
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
+      return;
+    }
+
+    final path = request.uri.path;
+    final regex = RegExp(r'^/api/chat/(?:rooms/)?([^/]+)/messages/(.+)/reactions$');
+    final match = regex.firstMatch(path);
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid path format'}));
+      return;
+    }
+
+    final roomId = Uri.decodeComponent(match.group(1)!);
+    final timestamp = Uri.decodeComponent(match.group(2)!);
+
+    final event = _verifyNostrEventWithTags(request, 'react', roomId);
+    if (event == null) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid or missing NOSTR authentication',
+        'code': 'AUTH_REQUIRED',
+      }));
+      return;
+    }
+
+    final timestampTag = event.getTagValue('timestamp');
+    if (timestampTag != null && timestampTag != timestamp) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Timestamp mismatch between URL and event',
+        'code': 'TIMESTAMP_MISMATCH',
+      }));
+      return;
+    }
+
+    final reactionTag = event.getTagValue('reaction');
+    if (reactionTag == null || reactionTag.trim().isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing reaction tag'}));
+      return;
+    }
+
+    final callsignTag = event.getTagValue('callsign');
+    if (callsignTag == null || callsignTag.trim().isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Missing callsign tag'}));
+      return;
+    }
+
+    final reactionKey = ReactionUtils.normalizeReactionKey(reactionTag);
+    if (reactionKey.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid reaction key'}));
+      return;
+    }
+    final actorCallsign = callsignTag.trim();
+
+    try {
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+      final channel = chatService.getChannel(roomId);
+      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+
+      if (channel == null && isCallsignLike) {
+        final dmService = DirectMessageService();
+        await dmService.initialize();
+        final updated = await dmService.toggleReaction(
+          roomId.toUpperCase(),
+          timestamp,
+          actorCallsign,
+          reactionKey,
+        );
+
+        if (updated == null) {
+          request.response.statusCode = 404;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}));
+          return;
+        }
+
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': true,
+          'roomId': roomId.toUpperCase(),
+          'timestamp': timestamp,
+          'reaction': reactionKey,
+          'reactions': updated.reactions,
+        }));
+        return;
+      }
+
+      if (chatService.collectionPath == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
+        return;
+      }
+
+      final canAccess = await _canAccessChatRoom(roomId, event.npub);
+      if (!canAccess) {
+        request.response.statusCode = 403;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Access denied',
+          'code': 'ROOM_ACCESS_DENIED',
+        }));
+        return;
+      }
+
+      final updated = await chatService.toggleReaction(
+        channelId: roomId,
+        timestamp: timestamp,
+        actorCallsign: actorCallsign,
+        reaction: reactionKey,
+      );
+
+      if (updated == null) {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Message not found', 'code': 'NOT_FOUND'}));
+        return;
+      }
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'roomId': roomId,
+        'timestamp': timestamp,
+        'reaction': reactionKey,
+        'reactions': updated.reactions,
+      }));
+    } catch (e) {
+      LogService().log('StationServerService: Error handling reaction toggle: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
     }
   }
 
@@ -3504,6 +4401,49 @@ class StationServerService {
           request.response.statusCode = 405;
           request.response.write('Method not allowed');
         }
+      } else if (pathParts.length == 6 && pathParts[4] == 'files' && method == 'GET') {
+        // GET /{callsign}/api/dm/{otherCallsign}/files/{filename}
+        // Serve voice files and other DM attachments
+        final otherCallsign = pathParts[3].toUpperCase();
+        final filename = pathParts[5];
+
+        // Security: prevent path traversal
+        if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+          request.response.statusCode = 400;
+          request.response.write('Invalid filename');
+          return;
+        }
+
+        // Get the file path
+        final filePath = await dmService.getVoiceFilePath(otherCallsign, filename);
+        if (filePath == null) {
+          request.response.statusCode = 404;
+          request.response.write('File not found');
+          return;
+        }
+
+        final file = File(filePath);
+        if (!await file.exists()) {
+          request.response.statusCode = 404;
+          request.response.write('File not found');
+          return;
+        }
+
+        // Determine content type
+        String contentType = 'application/octet-stream';
+        if (filename.endsWith('.webm')) {
+          contentType = 'audio/webm';
+        } else if (filename.endsWith('.ogg')) {
+          contentType = 'audio/ogg';
+        } else if (filename.endsWith('.mp3')) {
+          contentType = 'audio/mpeg';
+        } else if (filename.endsWith('.wav')) {
+          contentType = 'audio/wav';
+        }
+
+        request.response.headers.set('Content-Type', contentType);
+        request.response.headers.set('Content-Length', await file.length());
+        await file.openRead().pipe(request.response);
       } else {
         request.response.statusCode = 404;
         request.response.write('DM endpoint not found');

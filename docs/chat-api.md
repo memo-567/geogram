@@ -124,7 +124,11 @@ Get messages from a chat room.
       "hasLocation": true,
       "latitude": 38.7223,
       "longitude": -9.1393,
-      "metadata": {}
+      "metadata": {},
+      "reactions": {
+        "thumbs-up": ["X1AAA", "X1BBB"],
+        "heart": ["X1CCC"]
+      }
     }
   ],
   "count": 1,
@@ -252,6 +256,68 @@ The NOSTR event must include specific tags:
 
 **Error Responses:**
 - `403 Forbidden`: Invalid NOSTR signature, not authorized (not author or moderator)
+- `404 Not Found`: Message not found
+
+---
+
+### POST /api/chat/{roomId}/messages/{timestamp}/reactions
+
+Toggle a reaction on a message. The same callsign cannot appear twice for the same reaction type.
+
+**Path Parameters:**
+- `roomId`: The channel ID
+- `timestamp`: Message timestamp (URL-encoded format: `YYYY-MM-DD%20HH%3AMM_ss`)
+
+**Headers:**
+- `Authorization: Nostr <signed_event>` (required): NOSTR event with reaction tags
+
+**Authorization Event Requirements:**
+The NOSTR event must include specific tags:
+- `["action", "react"]`
+- `["room", "{roomId}"]`
+- `["timestamp", "{timestamp}"]`
+- `["reaction", "{reactionName}"]` (e.g., `thumbs-up`, `heart`)
+- `["callsign", "{yourCallsign}"]`
+
+**Example Event:**
+```json
+{
+  "pubkey": "author_hex_pubkey",
+  "created_at": 1733923456,
+  "kind": 1,
+  "tags": [
+    ["t", "chat"],
+    ["action", "react"],
+    ["room", "main"],
+    ["timestamp", "2025-12-11 14:30_25"],
+    ["reaction", "thumbs-up"],
+    ["callsign", "X1AAA"]
+  ],
+  "content": "react",
+  "sig": "hex_signature"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "roomId": "main",
+  "timestamp": "2025-12-11 14:30_25",
+  "reaction": "thumbs-up",
+  "reactions": {
+    "thumbs-up": ["X1AAA", "X1BBB"],
+    "heart": ["X1CCC"]
+  }
+}
+```
+
+**Notes:**
+- Reactions are stored as unsigned lines in the message file (outside the signed block).
+- The endpoint toggles the user's callsign for the requested reaction.
+
+**Error Responses:**
+- `403 Forbidden`: Invalid NOSTR signature or not authorized
 - `404 Not Found`: Message not found
 
 ---
