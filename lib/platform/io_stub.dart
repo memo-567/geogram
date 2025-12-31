@@ -643,6 +643,7 @@ abstract class HttpHeaders {
   static const contentLengthHeader = 'content-length';
 
   ContentType? contentType;
+  int contentLength = -1;
 
   void add(String name, Object value);
   void set(String name, Object value);

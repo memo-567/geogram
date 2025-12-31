@@ -384,14 +384,14 @@ class UpdateService {
 
     try {
       final tempDir = await getTemporaryDirectory();
-      await _cleanupDownloadsInDir(tempDir, keepVersion);
+      await _cleanupDownloadsInDir(tempDir as dynamic, keepVersion);
 
       // Also clean external cache on Android
       if (Platform.isAndroid) {
         final externalCacheDirs = await getExternalCacheDirectories();
         if (externalCacheDirs != null) {
           for (final dir in externalCacheDirs) {
-            await _cleanupDownloadsInDir(dir, keepVersion);
+            await _cleanupDownloadsInDir(dir as dynamic, keepVersion);
           }
         }
       }
@@ -401,7 +401,7 @@ class UpdateService {
   }
 
   /// Clean up old update files in a specific directory
-  Future<void> _cleanupDownloadsInDir(Directory dir, String keepVersion) async {
+  Future<void> _cleanupDownloadsInDir(dynamic dir, String keepVersion) async {
     try {
       final files = dir.listSync();
       for (final entity in files) {
