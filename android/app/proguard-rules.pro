@@ -15,3 +15,8 @@
 # Keep TFLite Flutter plugin
 -keep class com.tfliteflutter.** { *; }
 -dontwarn com.tfliteflutter.**
+
+# Google Play Core (for deferred components, not used but referenced by Flutter)
+-dontwarn com.google.android.play.core.splitcompat.**
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.tasks.**
