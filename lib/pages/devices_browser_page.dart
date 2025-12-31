@@ -122,6 +122,17 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         }
       } else if (event.action == DebugAction.openStationChat) {
         _handleOpenStationChat();
+      } else if (event.action == DebugAction.openDM) {
+        final callsign = event.params['callsign'] as String?;
+        if (callsign != null) {
+          LogService().log('DevicesBrowserPage: Opening DM with $callsign via debug action');
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DMChatPage(otherCallsign: callsign.toUpperCase()),
+            ),
+          );
+        }
       }
     });
   }

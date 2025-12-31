@@ -106,6 +106,16 @@ class DevicesService {
     _subscribeToProfileChanges();
 
     _isInitialized = true;
+
+    // Trigger initial local network discovery in background after short delay
+    // This gives other local instances time to start before we scan
+    final localhostScanEnabled = AppArgs().scanLocalhostEnabled;
+    if (localhostScanEnabled && !internetOnly) {
+      Future.delayed(const Duration(seconds: 5), () {
+        LogService().log('DevicesService: Running initial local network scan...');
+        _discoverLocalDevices(force: true);
+      });
+    }
   }
 
   /// Subscribe to station connection events to auto-update station device
@@ -242,6 +252,14 @@ class DevicesService {
         }
         break;
 
+      case DebugAction.sendDMFile:
+        final dmFileCallsign = event.params['callsign'] as String?;
+        final dmFilePath = event.params['file_path'] as String?;
+        if (dmFileCallsign != null && dmFilePath != null) {
+          await _sendDirectMessageFile(dmFileCallsign, dmFilePath);
+        }
+        break;
+
       case DebugAction.syncDM:
         final callsign = event.params['callsign'] as String?;
         final url = event.params['url'] as String?;
@@ -273,7 +291,8 @@ class DevicesService {
         break;
 
       case DebugAction.openDeviceDetail:
-        // Device detail page navigation is handled by DevicesBrowserPage
+      case DebugAction.openDM:
+        // Device/DM page navigation is handled by DevicesBrowserPage
         break;
 
       case DebugAction.openRemoteChatApp:
@@ -2139,6 +2158,9 @@ class DevicesService {
       }
       _notifyListeners();
     }
+
+    // Sync device URL to ConnectionManager (especially LAN transport)
+    _syncDeviceToConnectionManager(normalizedCallsign);
   }
 
   /// Remove a device
@@ -2163,6 +2185,18 @@ class DevicesService {
       LogService().log('DevicesService: DM sent to $callsign');
     } catch (e) {
       LogService().log('DevicesService: Error sending DM to $callsign: $e');
+    }
+  }
+
+  /// Send a file in a direct message to another device
+  Future<void> _sendDirectMessageFile(String callsign, String filePath) async {
+    try {
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+      await dmService.sendFileMessage(callsign, filePath, null);
+      LogService().log('DevicesService: DM file sent to $callsign: $filePath');
+    } catch (e) {
+      LogService().log('DevicesService: Error sending DM file to $callsign: $e');
     }
   }
 

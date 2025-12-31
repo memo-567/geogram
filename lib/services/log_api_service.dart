@@ -369,6 +369,18 @@ class LogApiService {
       }
     }
 
+    // GET/POST /api/dm/{callsign}/files/{filename} - DM file uploads and downloads
+    final dmFileMatch = RegExp(r'^api/dm/([^/]+)/files/(.+)$').firstMatch(urlPath);
+    if (dmFileMatch != null) {
+      final senderCallsign = Uri.decodeComponent(dmFileMatch.group(1)!).toUpperCase();
+      final filename = Uri.decodeComponent(dmFileMatch.group(2)!);
+      if (request.method == 'GET') {
+        return await _handleDMFileGetRequest(request, senderCallsign, filename, headers);
+      } else if (request.method == 'POST') {
+        return await _handleDMFilePostRequest(request, senderCallsign, filename, headers);
+      }
+    }
+
     // Backup API endpoints
     if (urlPath.startsWith('api/backup/')) {
       return await _handleBackupRequest(request, urlPath, headers);
@@ -2741,7 +2753,11 @@ class LogApiService {
       if (createdAt != null) metadata['created_at'] = createdAt.toString();
       if (npub != null) metadata['npub'] = npub;
       if (eventId != null) metadata['event_id'] = eventId;
-      if (signature != null) metadata['signature'] = signature;
+      if (signature != null) {
+        metadata['signature'] = signature;
+        // Mark as verified since we verified the signature above
+        metadata['verified'] = 'true';
+      }
 
       final message = ChatMessage.now(
         author: author,
@@ -4118,6 +4134,171 @@ class LogApiService {
       );
     } catch (e) {
       LogService().log('LogApiService: Error syncing DM: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/dm/{callsign}/files/{filename} - serve DM file
+  Future<shelf.Response> _handleDMFileGetRequest(
+    shelf.Request request,
+    String senderCallsign,
+    String filename,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Security: prevent path traversal
+      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Invalid filename'}),
+          headers: headers,
+        );
+      }
+
+      final dmService = DirectMessageService();
+      await dmService.initialize();
+
+      // Try to find the file in DM storage
+      var filePath = await dmService.getVoiceFilePath(senderCallsign, filename);
+      filePath ??= await dmService.getFilePath(senderCallsign, filename);
+
+      if (filePath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'File not found'}),
+          headers: headers,
+        );
+      }
+
+      final file = io.File(filePath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'File not found'}),
+          headers: headers,
+        );
+      }
+
+      // Determine content type from file extension
+      final lowerName = filename.toLowerCase();
+      String contentType = 'application/octet-stream';
+      if (lowerName.endsWith('.webm')) {
+        contentType = 'audio/webm';
+      } else if (lowerName.endsWith('.ogg')) {
+        contentType = 'audio/ogg';
+      } else if (lowerName.endsWith('.mp3')) {
+        contentType = 'audio/mpeg';
+      } else if (lowerName.endsWith('.wav')) {
+        contentType = 'audio/wav';
+      } else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) {
+        contentType = 'image/jpeg';
+      } else if (lowerName.endsWith('.png')) {
+        contentType = 'image/png';
+      } else if (lowerName.endsWith('.gif')) {
+        contentType = 'image/gif';
+      } else if (lowerName.endsWith('.webp')) {
+        contentType = 'image/webp';
+      } else if (lowerName.endsWith('.pdf')) {
+        contentType = 'application/pdf';
+      }
+
+      final fileBytes = await file.readAsBytes();
+      return shelf.Response.ok(
+        fileBytes,
+        headers: {
+          ...headers,
+          'Content-Type': contentType,
+          'Content-Length': fileBytes.length.toString(),
+        },
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error serving DM file: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/dm/{callsign}/files/{filename} - receive DM file upload
+  Future<shelf.Response> _handleDMFilePostRequest(
+    shelf.Request request,
+    String senderCallsign,
+    String filename,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Security: prevent path traversal
+      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Invalid filename'}),
+          headers: headers,
+        );
+      }
+
+      // Read file bytes from request body
+      var bytes = await request.read().fold<List<int>>(
+        <int>[],
+        (previous, element) => previous..addAll(element),
+      );
+
+      // Handle base64 encoding if specified
+      final transferEncoding = request.headers['content-transfer-encoding'];
+      if (transferEncoding != null && transferEncoding.toLowerCase().contains('base64')) {
+        try {
+          bytes = base64Decode(utf8.decode(bytes));
+        } catch (e) {
+          return shelf.Response(
+            400,
+            body: jsonEncode({'error': 'Invalid base64 payload'}),
+            headers: headers,
+          );
+        }
+      }
+
+      if (bytes.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Empty file'}),
+          headers: headers,
+        );
+      }
+
+      // 10 MB limit
+      if (bytes.length > 10 * 1024 * 1024) {
+        return shelf.Response(
+          413,
+          body: jsonEncode({'error': 'File too large (max 10 MB)'}),
+          headers: headers,
+        );
+      }
+
+      // Ensure DM files directory exists
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = io.Directory('$storagePath/chat/$senderCallsign/files');
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save file
+      final filePath = '${filesDir.path}/$filename';
+      final file = io.File(filePath);
+      await file.writeAsBytes(bytes);
+
+      LogService().log('DM FILE RECEIVE SUCCESS: Received $filename from $senderCallsign (${bytes.length} bytes)');
+
+      return shelf.Response(
+        201,
+        body: jsonEncode({
+          'success': true,
+          'filename': filename,
+          'size': bytes.length,
+          'path': '/api/dm/$senderCallsign/files/$filename',
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('DM FILE RECEIVE FAILED: Error from $senderCallsign: $e');
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

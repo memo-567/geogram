@@ -101,6 +101,12 @@ enum DebugAction {
 
   /// Send a chat message with optional image to the selected room
   sendChatMessage,
+
+  /// Send a file in a direct message
+  sendDMFile,
+
+  /// Open DM conversation with a specific device
+  openDM,
 }
 
 /// Toast message to be displayed
@@ -368,6 +374,22 @@ class DebugController {
     });
   }
 
+  /// Trigger sending a file in a direct message
+  void triggerSendDMFile({required String callsign, required String filePath}) {
+    triggerAction(
+      DebugAction.sendDMFile,
+      params: {'callsign': callsign, 'file_path': filePath},
+    );
+  }
+
+  /// Trigger opening DM conversation with a device
+  void triggerOpenDM({required String callsign}) {
+    triggerAction(
+      DebugAction.openDM,
+      params: {'callsign': callsign},
+    );
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -581,6 +603,21 @@ class DebugController {
           'image_path': '(optional) Path to image file to attach',
         },
       },
+      {
+        'action': 'send_dm_file',
+        'description': 'Send a file in a direct message to another device',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+          'file_path': 'Absolute path to the file to send (required)',
+        },
+      },
+      {
+        'action': 'open_dm',
+        'description': 'Open direct message conversation with a device',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+        },
+      },
     ];
   }
 
@@ -737,6 +774,35 @@ class DebugController {
         return {
           'success': true,
           'message': 'Sending chat message${imagePath != null ? " with image" : ""}',
+        };
+
+      case 'send_dm_file':
+        final callsign = params['callsign'] as String?;
+        final filePath = params['file_path'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        if (filePath == null || filePath.isEmpty) {
+          return {'success': false, 'error': 'Missing file_path parameter'};
+        }
+        triggerSendDMFile(callsign: callsign, filePath: filePath);
+        return {
+          'success': true,
+          'message': 'DM file send triggered to $callsign',
+          'callsign': callsign,
+          'file_path': filePath,
+        };
+
+      case 'open_dm':
+        final callsign = params['callsign'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        triggerOpenDM(callsign: callsign);
+        return {
+          'success': true,
+          'message': 'Opening DM conversation with $callsign',
+          'callsign': callsign,
         };
 
       default:

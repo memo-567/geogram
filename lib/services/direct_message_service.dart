@@ -659,6 +659,8 @@ class DirectMessageService {
     final normalizedCallsign = otherCallsign.toUpperCase();
     final profile = _myProfile;
 
+    LogService().log('DM FILE SEND: Starting file transfer to $normalizedCallsign: $filePath');
+
     // 1. Check reachability FIRST - must be reachable to send
     final devicesService = DevicesService();
     final device = devicesService.getDevice(normalizedCallsign);
@@ -719,19 +721,16 @@ class DirectMessageService {
       },
     );
 
-    // 7. Sign the message
+    // 7. Sign the message (same pattern as sendMessage - sign the caption, file info in tags)
     final signingService = SigningService();
     await signingService.initialize();
 
     NostrEvent? signedEvent;
     if (signingService.canSign(profile)) {
       final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
-      // For file messages, we sign a descriptor string including SHA1 for integrity
-      final contentToSign = caption?.isNotEmpty == true
-          ? '$caption [file:$storedFileName:sha1=$fileSha1]'
-          : '[file:$storedFileName:sha1=$fileSha1]';
+      // Sign the caption content (empty for file-only), file info goes in tags
       signedEvent = await signingService.generateSignedEvent(
-        contentToSign,
+        caption ?? '',
         {
           'room': normalizedCallsign,
           'callsign': profile.callsign,
@@ -750,13 +749,19 @@ class DirectMessageService {
       }
     }
 
-    // 8. Push message to remote device's chat API
-    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+    // 8. Push message to remote device's chat API (include file metadata)
+    final delivered = await _pushToRemoteChatAPI(
+      device,
+      signedEvent,
+      profile.callsign,
+      metadata: message.metadata,
+    );
 
     // 9. Only save locally if message delivered successfully
     if (!delivered) {
       // Clean up copied file on failure
       await _deleteFile(conversation.path, storedFileName);
+      LogService().log('DM FILE SEND FAILED: Message delivery failed to $normalizedCallsign');
       throw DMDeliveryFailedException(
         'Failed to deliver file to $normalizedCallsign',
       );
@@ -774,7 +779,7 @@ class DirectMessageService {
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
 
-    LogService().log('DM: Sent file to $normalizedCallsign: $originalName');
+    LogService().log('DM FILE SEND SUCCESS: Sent $originalName to $normalizedCallsign (${fileSize} bytes)');
   }
 
   /// Copy a file to the conversation files folder with SHA1 naming

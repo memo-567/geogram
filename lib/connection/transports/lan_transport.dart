@@ -147,6 +147,8 @@ class LanTransport extends Transport with TransportMixin {
     Duration timeout,
     Stopwatch stopwatch,
   ) async {
+    // For LAN transport, we send directly to the device's local server
+    // No callsign prefix needed - unlike station relay, we're talking directly to the target
     final uri = Uri.parse('$baseUrl${message.path}');
     final method = message.method?.toUpperCase() ?? 'GET';
     final headers = message.headers ?? {'Content-Type': 'application/json'};
@@ -213,6 +215,7 @@ class LanTransport extends Transport with TransportMixin {
       path = '/api/chat/${message.path ?? "general"}/messages';
     }
 
+    // For LAN transport, send directly to device - no callsign prefix needed
     final uri = Uri.parse('$baseUrl$path');
     final body = message.signedEvent != null
         ? jsonEncode(message.signedEvent)
@@ -247,9 +250,11 @@ class LanTransport extends Transport with TransportMixin {
     Stopwatch stopwatch,
   ) async {
     // Sync requests go to /api/dm/sync/{callsign}
-    final uri = Uri.parse('$baseUrl/api/dm/sync/${message.targetCallsign}');
+    // For LAN transport, send directly to device - no callsign prefix needed
+    final targetCallsign = message.targetCallsign.toUpperCase();
+    final uri = Uri.parse('$baseUrl/api/dm/sync/$targetCallsign');
 
-    LogService().log('LanTransport: GET sync from ${message.targetCallsign}');
+    LogService().log('LanTransport: GET sync from $targetCallsign');
 
     final response = await http.get(
       uri,

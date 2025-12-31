@@ -1859,6 +1859,8 @@ Triggers a debug action.
 | `disconnect_station` | Disconnect from current station | None |
 | `send_dm` | Send a direct message | `callsign`: Target callsign (required), `content`: Message (required) |
 | `sync_dm` | Sync DMs with a device | `callsign`: Target callsign (required), `url` (optional): Device URL |
+| `open_dm` | Open DM conversation UI with a device | `callsign`: Target device callsign (required) |
+| `send_dm_file` | Send a file in a direct message | `callsign`: Target callsign (required), `file_path`: Absolute path to file (required) |
 | `voice_record` | Record audio for testing | `duration` (optional): Seconds to record (default: 5) |
 | `voice_stop` | Stop recording and get file path | None |
 | `voice_status` | Get recording/playback status | None |
@@ -1967,6 +1969,16 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "sync_dm", "callsign": "REMOTE-42", "url": "http://192.168.1.100:3456"}'
+
+# Open DM conversation UI with a device
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "open_dm", "callsign": "REMOTE-42"}'
+
+# Send a file (image) in a direct message
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "send_dm_file", "callsign": "REMOTE-42", "file_path": "/tmp/photo.jpg"}'
 
 # Enable backup provider mode
 curl -X POST http://localhost:3456/api/debug \
