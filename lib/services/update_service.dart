@@ -58,6 +58,10 @@ class UpdateService {
   static const _progressUpdateInterval = Duration(milliseconds: 100);
   static const _progressMinChange = 0.01; // 1%
 
+  /// Periodic update checking timer
+  Timer? _periodicCheckTimer;
+  static const _periodicCheckInterval = Duration(minutes: 30);
+
   /// Initialize update service
   Future<void> initialize() async {
     if (_initialized) return;
@@ -83,6 +87,8 @@ class UpdateService {
       if (_settings?.autoCheckUpdates == true) {
         // Check for updates immediately on startup
         checkForUpdates();
+        // Start periodic checking in the background
+        _startPeriodicChecking();
       } else {
         // If auto-check is disabled, still restore last known state for display
         final lastCheckedVersion = _settings?.lastCheckedVersion;
@@ -110,6 +116,25 @@ class UpdateService {
     } catch (e) {
       LogService().log('Error initializing UpdateService: $e');
     }
+  }
+
+  /// Start periodic background checking for updates
+  void _startPeriodicChecking() {
+    _periodicCheckTimer?.cancel();
+    _periodicCheckTimer = Timer.periodic(_periodicCheckInterval, (_) {
+      // Only check if not already checking or downloading
+      if (!_isChecking && !_isDownloading) {
+        LogService().log('UpdateService: Periodic update check triggered');
+        checkForUpdates();
+      }
+    });
+    LogService().log('UpdateService: Started periodic checking (every ${_periodicCheckInterval.inMinutes} minutes)');
+  }
+
+  /// Stop periodic checking (call when disposing if needed)
+  void stopPeriodicChecking() {
+    _periodicCheckTimer?.cancel();
+    _periodicCheckTimer = null;
   }
 
   /// Load settings from config
@@ -310,6 +335,18 @@ class UpdateService {
     if (_settings?.autoDownloadUpdates != true) return;
     if (_isDownloading) return;
 
+    // If we have a completed download for a DIFFERENT (older) version, clean it up
+    if (_completedDownloadVersion != null &&
+        _completedDownloadVersion != release.version &&
+        _completedDownloadPath != null) {
+      LogService().log('Cleaning up old download for v$_completedDownloadVersion (new version: ${release.version})');
+      await _cleanupOldDownload(_completedDownloadPath!);
+      _setCompletedDownload(null, null);
+    }
+
+    // Clean up any other old version files in temp directory
+    await _cleanupOldDownloads(release.version);
+
     if (_completedDownloadVersion == release.version &&
         _completedDownloadPath != null &&
         await File(_completedDownloadPath!).exists()) {
@@ -325,6 +362,60 @@ class UpdateService {
     final downloadPath = await downloadUpdate(release);
     if (downloadPath != null) {
       _setCompletedDownload(downloadPath, release.version);
+    }
+  }
+
+  /// Clean up a single old download file
+  Future<void> _cleanupOldDownload(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        LogService().log('Cleaned up old download: $path');
+      }
+    } catch (e) {
+      LogService().log('Error cleaning up old download: $e');
+    }
+  }
+
+  /// Clean up all old version download files, keeping only the specified version
+  Future<void> _cleanupOldDownloads(String keepVersion) async {
+    if (kIsWeb) return;
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      await _cleanupDownloadsInDir(tempDir, keepVersion);
+
+      // Also clean external cache on Android
+      if (Platform.isAndroid) {
+        final externalCacheDirs = await getExternalCacheDirectories();
+        if (externalCacheDirs != null) {
+          for (final dir in externalCacheDirs) {
+            await _cleanupDownloadsInDir(dir, keepVersion);
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('Error cleaning up old downloads: $e');
+    }
+  }
+
+  /// Clean up old update files in a specific directory
+  Future<void> _cleanupDownloadsInDir(Directory dir, String keepVersion) async {
+    try {
+      final files = dir.listSync();
+      for (final entity in files) {
+        if (entity is File) {
+          final name = entity.path.split(Platform.pathSeparator).last;
+          // Match geogram-update-{version}.{ext} or geogram-update-{version}.{ext}.partial
+          if (name.startsWith('geogram-update-') && !name.contains(keepVersion)) {
+            await entity.delete();
+            LogService().log('Deleted old update file: $name');
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors during cleanup (file might be in use, etc.)
     }
   }
 
@@ -1401,8 +1492,17 @@ class UpdateService {
   }
 
   /// Apply downloaded update (platform-specific)
-  Future<bool> applyUpdate(String updateFilePath) async {
+  /// If [expectedVersion] is provided, validates that it's newer than the current version
+  Future<bool> applyUpdate(String updateFilePath, {String? expectedVersion}) async {
     if (kIsWeb) return false;
+
+    // Validate version if provided - prevent installing same/older version
+    if (expectedVersion != null) {
+      if (!isNewerVersion(getCurrentVersion(), expectedVersion)) {
+        LogService().log('Skipping install: version $expectedVersion is not newer than ${getCurrentVersion()}');
+        return false;
+      }
+    }
 
     try {
       final platform = detectPlatform();

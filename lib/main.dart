@@ -32,6 +32,7 @@ import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
 import 'services/backup_service.dart';
+import 'services/window_state_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -61,6 +62,7 @@ import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
 import 'pages/station_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
+import 'pages/bot_page.dart';
 import 'pages/backup_browser_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
@@ -119,24 +121,10 @@ void main() async {
   await AppArgs().applyAndroidExtras();
 
   // Initialize window manager for desktop platforms (not web or mobile)
+  // Note: Actual window positioning happens after ConfigService is initialized
   if (!kIsWeb) {
     try {
-      // Only import and use window_manager on desktop platforms
-      // This code will be tree-shaken out on web builds
       await windowManager.ensureInitialized();
-
-      const windowOptions = WindowOptions(
-        size: Size(1200, 800),
-        center: true,
-        backgroundColor: Colors.transparent,
-        skipTaskbar: false,
-        titleBarStyle: TitleBarStyle.normal,
-      );
-
-      await windowManager.waitUntilReadyToShow(windowOptions, () async {
-        await windowManager.show();
-        await windowManager.focus();
-      });
     } catch (e) {
       // Silently fail if window_manager is not available
       // This handles Android and iOS platforms
@@ -171,6 +159,54 @@ void main() async {
       ConfigService().init().then((_) => LogService().log('ConfigService initialized')),
       I18nService().init().then((_) => LogService().log('I18nService initialized')),
     ]);
+
+    // Restore window position and size on desktop platforms
+    if (!kIsWeb) {
+      try {
+        final windowStateService = WindowStateService();
+        final savedState = await windowStateService.getSavedState();
+        final validatedState = await windowStateService.validateState(savedState);
+
+        final windowOptions = WindowOptions(
+          size: validatedState.size,
+          center: validatedState.shouldCenter,
+          backgroundColor: Colors.transparent,
+          skipTaskbar: false,
+          titleBarStyle: TitleBarStyle.normal,
+        );
+
+        await windowManager.waitUntilReadyToShow(windowOptions, () async {
+          // Apply saved position if not centering
+          if (!validatedState.shouldCenter && validatedState.position != null) {
+            await windowManager.setPosition(validatedState.position!);
+          }
+
+          // Apply maximized state
+          if (validatedState.isMaximized) {
+            await windowManager.maximize();
+          }
+
+          await windowManager.show();
+          await windowManager.focus();
+
+          // Start listening for window changes to persist state
+          await windowStateService.startListening();
+        });
+        LogService().log('Window state restored: ${validatedState.size.width}x${validatedState.size.height}, maximized=${validatedState.isMaximized}');
+      } catch (e) {
+        // Fallback: show window with defaults if restoration fails
+        LogService().log('Window state restoration failed: $e');
+        try {
+          await windowManager.waitUntilReadyToShow(const WindowOptions(
+            size: Size(1200, 800),
+            center: true,
+          ), () async {
+            await windowManager.show();
+            await windowManager.focus();
+          });
+        } catch (_) {}
+      }
+    }
 
     // Initialize web theme service (extracts bundled themes on first run)
     await WebThemeService().init();
@@ -389,6 +425,7 @@ class _HomePageState extends State<HomePage> {
     CollectionsPage(),
     MapsBrowserPage(),
     DevicesBrowserPage(),
+    BotPage(),
     SettingsPage(),
     LogPage(),
   ];
@@ -749,7 +786,7 @@ class _HomePageState extends State<HomePage> {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
               // Navigate to Updates page and start download immediately
               setState(() {
-                _selectedIndex = 3; // Settings tab
+                _selectedIndex = 4; // Settings tab
               });
               // After settings page loads, navigate to Updates with autoInstall
               WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -817,7 +854,7 @@ class _HomePageState extends State<HomePage> {
               tooltip: _i18n.t('settings'),
               onPressed: () {
                 setState(() {
-                  _selectedIndex = 3; // Navigate to Settings
+                  _selectedIndex = 4; // Navigate to Settings
                 });
               },
             ),
@@ -862,6 +899,11 @@ class _HomePageState extends State<HomePage> {
             ),
             label: Text(_i18n.t('devices')),
           ),
+          NavigationDrawerDestination(
+            icon: const Icon(Icons.smart_toy_outlined),
+            selectedIcon: const Icon(Icons.smart_toy),
+            label: Text(_i18n.t('bot')),
+          ),
           const Divider(),
           NavigationDrawerDestination(
             icon: const Icon(Icons.settings_outlined),
@@ -877,7 +919,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: _pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
+        selectedIndex: _selectedIndex < 4 ? _selectedIndex : 0,
         onDestinationSelected: (int index) {
           setState(() {
             _selectedIndex = index;
@@ -906,6 +948,11 @@ class _HomePageState extends State<HomePage> {
               child: const Icon(Icons.devices),
             ),
             label: _i18n.t('devices'),
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.smart_toy_outlined),
+            selectedIcon: const Icon(Icons.smart_toy),
+            label: _i18n.t('bot'),
           ),
         ],
       ),

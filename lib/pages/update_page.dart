@@ -68,17 +68,10 @@ class _UpdatePageState extends State<UpdatePage> {
       _latestRelease = _updateService.getLatestRelease();
       _backups = await _updateService.listBackups();
 
-      // Check if there's already a completed download ready to install
-      // This handles the case where download completed in background
+      // Check if there's already a completed download ready to install (in-memory state)
+      // Note: Filesystem check moved to after background update check to use latest version
       if (_updateService.hasCompletedDownload) {
         _completedDownloadPath = _updateService.completedDownloadPath;
-      } else if (_latestRelease != null) {
-        // Check filesystem for completed download (in case app was restarted)
-        final foundPath = await _updateService.findCompletedDownload(_latestRelease!);
-        if (foundPath != null) {
-          _updateService.restoreCompletedDownload(foundPath, _latestRelease!.version);
-          _completedDownloadPath = foundPath;
-        }
       }
     } catch (e) {
       _error = e.toString();
@@ -121,6 +114,24 @@ class _UpdatePageState extends State<UpdatePage> {
       if (release != null) {
         _latestRelease = release;
         final updateReady = _updateService.isLatestUpdateReady;
+
+        // Check filesystem for completed download matching the NEW version
+        // This handles the case where app was restarted after a download completed
+        if (!_updateService.hasCompletedDownload) {
+          final foundPath = await _updateService.findCompletedDownload(release);
+          if (foundPath != null) {
+            _updateService.restoreCompletedDownload(foundPath, release.version);
+            _setStateIfMounted(() {
+              _completedDownloadPath = foundPath;
+            });
+          }
+        } else {
+          // Update completed download path from service (in case auto-download completed)
+          _setStateIfMounted(() {
+            _completedDownloadPath = _updateService.completedDownloadPath;
+          });
+        }
+
         _setStateIfMounted(() {
           _statusMessage = updateReady
               ? _i18n.t('update_available_msg', params: [release.version])
@@ -251,7 +262,11 @@ class _UpdatePageState extends State<UpdatePage> {
     });
 
     try {
-      final success = await _updateService.applyUpdate(_completedDownloadPath!);
+      // Pass the expected version to validate we're not installing same/older version
+      final success = await _updateService.applyUpdate(
+        _completedDownloadPath!,
+        expectedVersion: _latestRelease?.version,
+      );
       if (success) {
         // Clear the completed download state after successful install
         _updateService.clearCompletedDownload();

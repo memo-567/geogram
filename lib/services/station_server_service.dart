@@ -22,6 +22,8 @@ import '../services/event_service.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
+import '../bot/services/vision_model_manager.dart';
+import '../bot/models/vision_model_info.dart';
 import '../models/blog_post.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -353,6 +355,7 @@ class StationServerService {
   bool _running = false;
   DateTime? _startTime;
   String? _tilesDirectory;
+  String? _appDir; // Base app directory for models and other files
   int? _runningPort; // Actual port the server is running on
 
   // Pending HTTP proxy requests (requestId -> completer)
@@ -427,6 +430,7 @@ class StationServerService {
 
     // Create tiles directory
     final appDir = await getApplicationSupportDirectory();
+    _appDir = appDir.path;
     _tilesDirectory = '${appDir.path}/tiles';
     await Directory(_tilesDirectory!).create(recursive: true);
 
@@ -505,6 +509,10 @@ class StationServerService {
 
       // Start update polling if enabled
       _startUpdatePolling();
+
+      // Download all vision models for offline-first client access
+      // Run in background to not block server startup
+      downloadAllVisionModels();
 
       return true;
     } catch (e) {
@@ -606,6 +614,8 @@ class StationServerService {
         await _handleUpdateDownload(request);
       } else if (path.startsWith('/tiles/')) {
         await _handleTileRequest(request);
+      } else if (path.startsWith('/bot/models/')) {
+        await _handleBotModelRequest(request);
       } else if (_isBlogPath(path)) {
         await _handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
@@ -2074,6 +2084,232 @@ class StationServerService {
       LogService().log('Failed to save tile to disk: $e');
     }
   }
+
+  // ============================================================
+  // Bot Vision Models Server (Offline-First Pattern)
+  // ============================================================
+
+  /// Handle bot model download requests
+  /// URL pattern: /bot/models/{modelId}.{ext}
+  Future<void> _handleBotModelRequest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method not allowed');
+      return;
+    }
+
+    if (_appDir == null) {
+      request.response.statusCode = 500;
+      request.response.write('Server not initialized');
+      return;
+    }
+
+    final requestPath = request.uri.path;
+    // Parse: /bot/models/{filename}
+    // e.g., /bot/models/mobilenet-v3.tflite or /bot/models/llava-7b-q3.gguf
+    final regex = RegExp(r'/bot/models/([^/]+\.(tflite|gguf))$');
+    final match = regex.firstMatch(requestPath);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid model path');
+      return;
+    }
+
+    final filename = match.group(1)!;
+    final modelPath = path.join(_appDir!, 'bot', 'models', 'vision', filename);
+    final file = File(modelPath);
+
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.write('Model not found: $filename');
+      return;
+    }
+
+    try {
+      final fileSize = await file.length();
+      request.response.headers.contentType = ContentType('application', 'octet-stream');
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.add('Content-Disposition', 'attachment; filename="$filename"');
+
+      // Stream the file
+      await request.response.addStream(file.openRead());
+      LogService().log('StationServer: Served bot model $filename (${_formatBytes(fileSize)})');
+    } catch (e) {
+      LogService().log('StationServer: Error serving bot model $filename: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error serving model');
+    }
+  }
+
+  /// Download all vision models at station startup (offline-first pattern)
+  /// This ensures clients can download models from the station even without internet
+  /// Only downloads if sufficient disk space is available
+  Future<void> downloadAllVisionModels() async {
+    if (_appDir == null) {
+      LogService().log('StationServer: Cannot download vision models - not initialized');
+      return;
+    }
+
+    final modelsDir = path.join(_appDir!, 'bot', 'models', 'vision');
+    await Directory(modelsDir).create(recursive: true);
+
+    // Check initial disk space
+    final initialFreeSpace = await _getFreeDiskSpace(modelsDir);
+    if (initialFreeSpace != null) {
+      LogService().log(
+          'StationServer: Available disk space: ${_formatBytes(initialFreeSpace)}');
+      if (initialFreeSpace < _minFreeSpaceBuffer) {
+        LogService().log(
+            'StationServer: Insufficient disk space to download vision models (need at least ${_formatBytes(_minFreeSpaceBuffer)} free)');
+        return;
+      }
+    }
+
+    LogService().log('StationServer: Checking vision models for download...');
+    var downloadedCount = 0;
+    var alreadyAvailable = 0;
+    var skippedDueToSpace = 0;
+
+    for (final model in VisionModels.available) {
+      final ext = model.format == 'tflite' ? 'tflite' : 'gguf';
+      final modelPath = path.join(modelsDir, '${model.id}.$ext');
+      final file = File(modelPath);
+
+      if (await file.exists()) {
+        // Verify file size
+        final actualSize = await file.length();
+        final tolerance = model.size * 0.05;
+        if ((actualSize - model.size).abs() < tolerance) {
+          alreadyAvailable++;
+          continue;
+        }
+        // File exists but wrong size - delete and re-download
+        await file.delete();
+      }
+
+      // Check disk space before each download
+      final freeSpace = await _getFreeDiskSpace(modelsDir);
+      if (freeSpace != null) {
+        final requiredSpace = model.size + _minFreeSpaceBuffer;
+        if (freeSpace < requiredSpace) {
+          LogService().log(
+              'StationServer: Skipping ${model.id} - insufficient disk space '
+              '(need ${_formatBytes(requiredSpace)}, have ${_formatBytes(freeSpace)})');
+          skippedDueToSpace++;
+          continue;
+        }
+      }
+
+      LogService().log('StationServer: Downloading vision model: ${model.id} (${model.sizeString})');
+      try {
+        await _downloadModelFromInternet(model.url, modelPath);
+        downloadedCount++;
+        LogService().log('StationServer: Downloaded ${model.id} successfully');
+      } catch (e) {
+        LogService().log('StationServer: Failed to download ${model.id}: $e');
+      }
+    }
+
+    if (downloadedCount > 0 || alreadyAvailable > 0 || skippedDueToSpace > 0) {
+      var summary = 'StationServer: Vision models - $alreadyAvailable available, $downloadedCount downloaded';
+      if (skippedDueToSpace > 0) {
+        summary += ', $skippedDueToSpace skipped (disk space)';
+      }
+      LogService().log(summary);
+    }
+  }
+
+  /// Download a model from internet URL
+  Future<void> _downloadModelFromInternet(String url, String targetPath) async {
+    final request = http.Request('GET', Uri.parse(url));
+    request.headers['User-Agent'] = 'Geogram-Desktop-Station/$appVersion';
+
+    final client = http.Client();
+    try {
+      final response = await client.send(request);
+
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}: Failed to download model');
+      }
+
+      final tempPath = '$targetPath.tmp';
+      final tempFile = File(tempPath);
+      await tempFile.parent.create(recursive: true);
+      final sink = tempFile.openWrite();
+
+      await for (final chunk in response.stream) {
+        sink.add(chunk);
+      }
+
+      await sink.close();
+
+      // Move temp file to final location
+      await tempFile.rename(targetPath);
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Format bytes to human readable string
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    } else if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
+    } else {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+  }
+
+  /// Get free disk space for the given directory (in bytes)
+  /// Returns null if unable to determine
+  Future<int?> _getFreeDiskSpace(String dirPath) async {
+    try {
+      if (Platform.isLinux || Platform.isMacOS) {
+        // Use df command on Unix-like systems
+        final result = await Process.run('df', ['-k', dirPath]);
+        if (result.exitCode == 0) {
+          final lines = (result.stdout as String).split('\n');
+          if (lines.length >= 2) {
+            // Parse the second line: Filesystem 1K-blocks Used Available Use% Mounted
+            final parts = lines[1].split(RegExp(r'\s+'));
+            if (parts.length >= 4) {
+              final availableKb = int.tryParse(parts[3]);
+              if (availableKb != null) {
+                return availableKb * 1024; // Convert KB to bytes
+              }
+            }
+          }
+        }
+      } else if (Platform.isWindows) {
+        // Use wmic on Windows
+        final result = await Process.run('wmic', [
+          'logicaldisk',
+          'where',
+          'DeviceID="${dirPath.substring(0, 2)}"',
+          'get',
+          'FreeSpace',
+          '/value',
+        ]);
+        if (result.exitCode == 0) {
+          final match =
+              RegExp(r'FreeSpace=(\d+)').firstMatch(result.stdout as String);
+          if (match != null) {
+            return int.tryParse(match.group(1)!);
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('StationServer: Failed to get disk space: $e');
+    }
+    return null;
+  }
+
+  /// Minimum free space buffer to maintain (1 GB)
+  static const int _minFreeSpaceBuffer = 1024 * 1024 * 1024;
 
   /// Check if path is a blog URL (/{callsign}/blog/{filename}.html)
   bool _isBlogPath(String path) {

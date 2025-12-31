@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.6.69+1
+version: 1.6.70+1
 
 environment:
   sdk: ^3.10.0
@@ -69,6 +69,9 @@ dependencies:
   just_audio: ^0.9.36       # Cross-platform audio playback (non-Linux)
   ffi: ^2.1.0               # FFI for native libopus bindings on Linux
   flutter_local_notifications: ^18.0.1  # Local push notifications for Android/iOS
+  image_picker: ^1.1.2           # Camera + gallery image picker for bot vision
+  image: ^4.3.0                  # Image preprocessing for vision models
+  tflite_flutter: ^0.11.0        # TensorFlow Lite for lightweight vision models
 
 dev_dependencies:
   flutter_test:
