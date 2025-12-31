@@ -53,6 +53,10 @@ class _MessageListWidgetState extends State<MessageListWidget> {
   final ScrollController _scrollController = ScrollController();
   bool _autoScroll = true;
   int _lastMessageCount = 0;
+  /// Cooldown to prevent rapid scrolling when multiple images load
+  DateTime? _lastScrollTime;
+  /// Track when user last manually scrolled (to prevent hijacking their scroll)
+  DateTime? _lastUserScrollTime;
 
   @override
   void initState() {
@@ -101,9 +105,23 @@ class _MessageListWidgetState extends State<MessageListWidget> {
 
   /// Called when a message's content size changes (e.g., image loaded)
   void _onContentSizeChanged() {
-    if (_autoScroll && mounted) {
-      _requestScrollToBottom(animate: false);
+    if (!_autoScroll || !mounted) return;
+
+    final now = DateTime.now();
+
+    // Don't scroll if user recently scrolled away (respect user intent)
+    if (_lastUserScrollTime != null &&
+        now.difference(_lastUserScrollTime!).inSeconds < 2) {
+      return;
     }
+
+    // Cooldown: don't scroll if we scrolled recently (prevents rapid scrolling)
+    if (_lastScrollTime != null &&
+        now.difference(_lastScrollTime!).inMilliseconds < 500) {
+      return;
+    }
+
+    _requestScrollToBottom(animate: false);
   }
 
   /// Listen for scroll events
@@ -113,6 +131,10 @@ class _MessageListWidgetState extends State<MessageListWidget> {
       final atBottom = _scrollController.position.pixels >=
           _scrollController.position.maxScrollExtent - 100;
       if (_autoScroll != atBottom) {
+        // User scrolled away from bottom - track this to prevent hijacking
+        if (_autoScroll && !atBottom) {
+          _lastUserScrollTime = DateTime.now();
+        }
         setState(() {
           _autoScroll = atBottom;
         });
@@ -130,6 +152,8 @@ class _MessageListWidgetState extends State<MessageListWidget> {
   /// Scroll to bottom of list
   void _scrollToBottom({bool animate = true}) {
     if (!_scrollController.hasClients) return;
+
+    _lastScrollTime = DateTime.now();
 
     if (animate) {
       _scrollController.animateTo(
