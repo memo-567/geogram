@@ -2317,7 +2317,7 @@ class StationServerService {
       // Stream file to response
       final bytes = await file.readAsBytes();
       request.response.headers.contentType = ContentType.parse(contentType);
-      request.response.headers.contentLength = bytes.length;
+      request.response.headers.set('Content-Length', bytes.length);
 
       // Extract display filename from stored name (remove SHA1 prefix)
       final displayName = _extractDisplayFilename(filename);
@@ -4714,9 +4714,10 @@ class StationServerService {
             contentType = 'application/pdf';
           }
 
+          final fileBytes = await file.readAsBytes();
           request.response.headers.set('Content-Type', contentType);
-          request.response.headers.set('Content-Length', await file.length());
-          await file.openRead().pipe(request.response);
+          request.response.headers.set('Content-Length', fileBytes.length);
+          request.response.add(fileBytes);
 
         } else if (method == 'POST') {
           // Receive file upload from remote DM sender
