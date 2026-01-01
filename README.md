@@ -38,53 +38,69 @@ This means the same conversation continues regardless of how you're connected. S
 
 Geogram provides a suite of apps designed for community coordination and information sharing. Each app stores data in human-readable text formats that sync between devices through any available transport.
 
-### [Chat](docs/apps/chat-format-specification.md)
+### Chat
 
 Real-time messaging with room-based channels and direct messages. Chat supports file attachments, voice messages, location sharing, and polls. Messages can be cryptographically signed to verify sender identity. The chat system works across all connection types, from high-speed LAN to low-bandwidth Bluetooth, automatically adapting message delivery to available transports.
 
 In off-grid scenarios, chat enables coordination between field teams, emergency responders, or community members who come within Bluetooth range of each other. Messages queue locally and sync when devices reconnect, ensuring nothing is lost even with intermittent connectivity.
 
-### [Blog](docs/apps/blog-format-specification.md)
+See [docs/apps/chat-format-specification.md](docs/apps/chat-format-specification.md)
+
+### Blog
 
 Long-form publishing with markdown content, drafts, tags, and comments. Blogs provide individual or organizational publishing platforms that work entirely offline. Posts organize chronologically with year-based folders and support file attachments through SHA1-based deduplication.
 
 Blogs enable local journalism, community newsletters, and personal documentation in environments without internet hosting. A local publication can distribute articles to readers who sync when they visit community gathering points, creating a sneakernet distribution network for information.
 
-### [Events](docs/apps/events-format-specification.md)
+See [docs/apps/blog-format-specification.md](docs/apps/blog-format-specification.md)
+
+### Events
 
 Community calendars with event details, locations, media galleries, and participant tracking. Events support both physical locations with GPS coordinates and online gatherings. Multi-day events, registration systems, and update timelines keep communities informed about activities.
 
 For organizing community gatherings, emergency drills, or mutual aid distributions, events provide the scheduling and coordination layer. Information propagates through the network as devices sync, ensuring even members with intermittent connectivity learn about upcoming activities.
 
-### [Places](docs/apps/places-format-specification.md)
+See [docs/apps/events-format-specification.md](docs/apps/events-format-specification.md)
+
+### Places
 
 Geographic points of interest organized by coordinate-based regions. Places document permanent or semi-permanent locations with descriptions, photos, and community reactions. A grid system divides the globe into manageable regions that scale automatically as density increases.
 
 Communities can document water sources, shelter locations, supply caches, hazards, or any other geographic knowledge without relying on commercial mapping services. This information persists locally and syncs between members, building a community-maintained geographic database.
 
-### [Alerts](docs/apps/alert-format-specification.md)
+See [docs/apps/places-format-specification.md](docs/apps/places-format-specification.md)
+
+### Alerts
 
 Geographic alert system with severity classification and community verification. Alerts document hazards, infrastructure problems, or situations requiring attention at specific coordinates. Four severity levels (emergency, urgent, attention, info) prioritize response while status tracking follows issues from open through resolution.
 
 Communities use alerts to maintain shared awareness of local conditions. A downed power line, flooded road, or unsafe structure gets documented with photos and location, then verified by others who encounter it. Updates track progress as situations evolve, and resolution proof closes the loop when issues are addressed.
 
-### [Inventory](docs/apps/inventory-format-specification.md)
+See [docs/apps/alert-format-specification.md](docs/apps/alert-format-specification.md)
+
+### Inventory
 
 Personal and shared asset tracking with folder organization up to five levels deep. Inventory tracks items with quantity, purchase date, expiration, and media attachments. Over 200 predefined item types cover off-grid contexts: vehicles, tools, food, medical supplies, communications equipment.
 
 The borrowing system tracks who has what, with support for both callsign-identified community members and free-text entries for external borrowers. Usage and refill tracking monitors consumables. Communities can share inventory visibility through groups while keeping sensitive items private.
 
-### [Transfer](docs/apps/transfer-format-specification.md)
+See [docs/apps/inventory-format-specification.md](docs/apps/inventory-format-specification.md)
+
+### Transfer
 
 Unified download and upload management across all apps. Transfer handles file movement with queue prioritization, resume capability for interrupted transfers, and patient mode that waits up to 30 days for offline peers. Automatic retry with exponential backoff handles unreliable connections.
 
 When syncing with devices that appear intermittently, transfer queues pending files and completes them as connections become available. Priority levels (urgent, high, normal, low) ensure critical files move first. Ban lists block unwanted transfers from specific callsigns.
 
-### [Bot](docs/apps/bot-format-specification.md)
+See [docs/apps/transfer-format-specification.md](docs/apps/transfer-format-specification.md)
+
+### Bot
 
 Offline AI assistant using local GGUF models. The bot provides Q&A about station data, content moderation, semantic search, and voice transcription through Whisper. Model selection adapts to device hardware, from lightweight models on phones to larger models on capable stations.
 
 Stations can provide AI assistance without internet API calls. Content moderation runs locally, search works across all apps, and voice input enables hands-free interaction. The bot indexes station content automatically, making accumulated knowledge searchable.
+
+See [docs/apps/bot-format-specification.md](docs/apps/bot-format-specification.md)
 
 ## Upcoming
 
