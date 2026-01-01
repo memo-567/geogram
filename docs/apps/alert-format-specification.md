@@ -1,8 +1,8 @@
-# Report Format Specification
+# Alert Format Specification
 
 **Version**: 1.4
-**Last Updated**: 2025-12-24
-**Status**: Draft
+**Last Updated**: 2026-01-01
+**Status**: Active
 
 ## Table of Contents
 
