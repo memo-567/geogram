@@ -1,12 +1,17 @@
 #!/bin/bash
 #
-# Release script for Geogram Desktop
+# Release script for Geogram
 # Usage: ./release.sh [version]
 #
 # Without arguments: automatically increments patch version (1.6.2 -> 1.6.3)
 # With version: uses the specified version (e.g., ./release.sh 1.7.0)
 #
-# Changelog is automatically generated from commit messages since last release.
+# This script:
+#   - Updates pubspec.yaml with new version
+#   - Generates changelog from commit messages
+#   - Updates F-Droid metadata (fdroid/dev.geogram.yml)
+#   - Creates fastlane changelog for the version
+#   - Commits, tags, and pushes to trigger builds
 #
 
 set -e
@@ -113,6 +118,11 @@ fi
 echo -e "${GREEN}Updating pubspec.yaml...${NC}"
 sed -i "s/^version: .*/version: $VERSION+1/" pubspec.yaml
 
+# Step 1b: Calculate versionCode (commit count after this release)
+# We add 1 because the release commit will increase the count
+COMMIT_COUNT=$(($(git rev-list --count HEAD) + 1))
+echo -e "${GREEN}Version code will be: $COMMIT_COUNT${NC}"
+
 # Step 2: Save version to file
 echo -e "${GREEN}Saving version to $VERSION_FILE...${NC}"
 echo "$VERSION" > "$VERSION_FILE"
@@ -138,6 +148,26 @@ else
     echo "# Geogram Desktop Changelog
 
 $CHANGELOG_ENTRY" > CHANGELOG.md
+fi
+
+# Step 3b: Update F-Droid metadata
+echo -e "${GREEN}Updating F-Droid metadata...${NC}"
+
+# Update fdroid/dev.geogram.yml
+if [ -f "fdroid/dev.geogram.yml" ]; then
+    sed -i "s/versionName: .*/versionName: $VERSION/" fdroid/dev.geogram.yml
+    sed -i "s/versionCode: .*/versionCode: $COMMIT_COUNT/" fdroid/dev.geogram.yml
+    sed -i "s/commit: v.*/commit: v$VERSION/" fdroid/dev.geogram.yml
+    sed -i "s/CurrentVersion: .*/CurrentVersion: $VERSION/" fdroid/dev.geogram.yml
+    sed -i "s/CurrentVersionCode: .*/CurrentVersionCode: $COMMIT_COUNT/" fdroid/dev.geogram.yml
+    echo "  - Updated fdroid/dev.geogram.yml"
+fi
+
+# Create fastlane changelog for this version
+FASTLANE_CHANGELOG_DIR="fastlane/metadata/android/en-US/changelogs"
+if [ -d "$FASTLANE_CHANGELOG_DIR" ]; then
+    echo "$CHANGELOG" > "$FASTLANE_CHANGELOG_DIR/$COMMIT_COUNT.txt"
+    echo "  - Created $FASTLANE_CHANGELOG_DIR/$COMMIT_COUNT.txt"
 fi
 
 # Step 4: Stage all changes
@@ -177,3 +207,8 @@ echo "GitHub Actions is now building all platforms."
 echo "Monitor progress at: https://github.com/$REPO_URL/actions"
 echo ""
 echo "Release page: https://github.com/$REPO_URL/releases/tag/v$VERSION"
+echo ""
+echo -e "${CYAN}F-Droid:${NC}"
+echo "  - Metadata updated in fdroid/dev.geogram.yml"
+echo "  - Changelog created in fastlane/metadata/android/en-US/changelogs/"
+echo "  - F-Droid will pick up the new version automatically from the tag"
