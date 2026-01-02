@@ -49,6 +49,28 @@ jobs:
     - name: Build Windows Release
       run: flutter build windows --release
 
+    - name: Bundle Visual C++ Runtime
+      shell: powershell
+      run: |
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        $vcRedistPath = "$vsPath\VC\Redist\MSVC"
+        $latestRedist = Get-ChildItem $vcRedistPath | Sort-Object Name -Descending | Select-Object -First 1
+        $dllPath = "$($latestRedist.FullName)\x64\Microsoft.VC143.CRT"
+
+        # If VC143 doesn't exist, try VC142
+        if (-not (Test-Path $dllPath)) {
+          $dllPath = "$($latestRedist.FullName)\x64\Microsoft.VC142.CRT"
+        }
+
+        $targetPath = "build\windows\x64\runner\Release"
+
+        Copy-Item "$dllPath\msvcp140.dll" $targetPath -Force
+        Copy-Item "$dllPath\vcruntime140.dll" $targetPath -Force
+        Copy-Item "$dllPath\vcruntime140_1.dll" $targetPath -Force
+
+        Write-Host "Bundled VC++ Runtime DLLs to $targetPath"
+        Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name
+
     - name: Create portable archive
       run: |
         cd build/windows/x64/runner/Release
