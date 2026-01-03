@@ -1107,22 +1107,24 @@ class _EventFilesSectionState extends State<EventFilesSection> {
       children: [
         Row(
           children: [
-            Text(
-              i18n.t('event_files'),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
+            Expanded(
+              child: Text(
+                i18n.t('event_files'),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-            const Spacer(),
             IconButton(
               icon: const Icon(Icons.refresh, size: 20),
               onPressed: _loadFiles,
               tooltip: i18n.t('refresh'),
             ),
-            OutlinedButton.icon(
+            IconButton(
+              icon: const Icon(Icons.add_photo_alternate),
               onPressed: widget.onUploadFiles,
-              icon: const Icon(Icons.add_photo_alternate, size: 18),
-              label: Text(i18n.t('add_files')),
+              tooltip: i18n.t('add_files'),
             ),
           ],
         ),
