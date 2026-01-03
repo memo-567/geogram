@@ -626,6 +626,13 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       appBar: AppBar(
         title: Text(title),
       ),
+      floatingActionButton: widget.isRemoteDevice
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _createNewEvent,
+              icon: const Icon(Icons.add),
+              label: Text(_i18n.t('add')),
+            ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : LayoutBuilder(
@@ -670,29 +677,6 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       color: theme.colorScheme.surface,
       child: Column(
         children: [
-          // Toolbar
-          if (!widget.isRemoteDevice)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    onPressed: _createNewEvent,
-                    tooltip: _i18n.t('new_event'),
-                  ),
-                ],
-              ),
-            ),
           // Search bar
           Padding(
             padding: const EdgeInsets.all(16),
