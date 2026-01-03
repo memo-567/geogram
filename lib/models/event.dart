@@ -322,7 +322,6 @@ class Event {
     buffer.writeln('# EVENT: $title');
     buffer.writeln();
     buffer.writeln('CREATED: $timestamp');
-    buffer.writeln('AUTHOR: $author');
 
     // Multi-day fields (optional)
     if (startDate != null) {
@@ -340,9 +339,6 @@ class Event {
     // Moderators (optional)
     if (moderators.isNotEmpty) {
       buffer.writeln('MODERATORS: ${moderators.join(', ')}');
-    }
-    if (groupAccess.isNotEmpty) {
-      buffer.writeln('GROUPS: ${groupAccess.join(', ')}');
     }
 
     // Location
@@ -414,14 +410,8 @@ class Event {
     }
     final timestamp = createdLine.substring(9).trim();
 
-    // Line 4: AUTHOR: callsign
-    final authorLine = lines[3];
-    if (!authorLine.startsWith('AUTHOR: ')) {
-      throw Exception('Invalid author line');
-    }
-    final author = authorLine.substring(8).trim();
-
-    // Parse optional fields
+    // Parse optional fields (AUTHOR is now optional, discovered from folder path)
+    String author = '';
     String? startDate;
     String? endDate;
     List<String> admins = [];
@@ -432,13 +422,16 @@ class Event {
     String? agenda;
     String visibility = 'public'; // Default to public
 
-    int currentLine = 4;
+    int currentLine = 3;
 
     // Parse header fields until we hit blank line
     while (currentLine < lines.length && lines[currentLine].trim().isNotEmpty) {
       final line = lines[currentLine];
 
-      if (line.startsWith('START_DATE: ')) {
+      if (line.startsWith('AUTHOR: ')) {
+        // Legacy field - still parse for backwards compatibility
+        author = line.substring(8).trim();
+      } else if (line.startsWith('START_DATE: ')) {
         startDate = line.substring(12).trim();
       } else if (line.startsWith('END_DATE: ')) {
         endDate = line.substring(10).trim();
@@ -449,6 +442,7 @@ class Event {
         final modsStr = line.substring(12).trim();
         moderators = modsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
       } else if (line.startsWith('GROUPS: ')) {
+        // Legacy field - still parse for backwards compatibility
         final groupsStr = line.substring(8).trim();
         groupAccess = groupsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
       } else if (line.startsWith('LOCATION: ')) {
