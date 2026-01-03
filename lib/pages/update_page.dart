@@ -27,6 +27,7 @@ class _UpdatePageState extends State<UpdatePage> {
   String? _statusMessage;
   String? _completedDownloadPath; // Track completed download ready to install
   VoidCallback? _completedDownloadListener;
+  bool _showLinuxRestartDialog = false; // Linux: Show restart dialog after staging
 
   @override
   void initState() {
@@ -268,6 +269,8 @@ class _UpdatePageState extends State<UpdatePage> {
         expectedVersion: _latestRelease?.version,
       );
       if (success) {
+        // Clear update available state to prevent duplicate alerts after restart
+        _updateService.updateAvailable.value = false;
         // Clear the completed download state after successful install
         _updateService.clearCompletedDownload();
         _completedDownloadPath = null;
@@ -276,6 +279,12 @@ class _UpdatePageState extends State<UpdatePage> {
         if (platform == UpdatePlatform.android) {
           _setStateIfMounted(() {
             _statusMessage = _i18n.t('apk_installer_launched');
+          });
+        } else if (!kIsWeb && Platform.isLinux && _updateService.hasPendingLinuxUpdate) {
+          // Linux: Show restart dialog (update is staged, needs restart to apply)
+          _setStateIfMounted(() {
+            _statusMessage = null;
+            _showLinuxRestartDialog = true;
           });
         } else {
           final backups = await _updateService.listBackups();
@@ -535,6 +544,45 @@ class _UpdatePageState extends State<UpdatePage> {
               _buildUpdateStatusCard(hasUpdate),
 
               const SizedBox(height: 16),
+
+              // Linux Restart Dialog - shows after update is staged
+              if (_showLinuxRestartDialog)
+                Card(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.restart_alt,
+                          size: 48,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _i18n.t('update_ready_restart'),
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _i18n.t('update_ready_restart_msg'),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          onPressed: () => _updateService.applyPendingLinuxUpdate(),
+                          icon: const Icon(Icons.restart_alt),
+                          label: Text(_i18n.t('restart_now')),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              if (_showLinuxRestartDialog) const SizedBox(height: 16),
 
               // Download Progress
               if (_updateService.isDownloading)

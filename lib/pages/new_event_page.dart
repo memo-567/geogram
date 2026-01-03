@@ -18,6 +18,7 @@ import '../services/collection_service.dart';
 import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/location_service.dart';
 import 'location_picker_page.dart';
 
 /// Full-screen page for creating a new event
@@ -253,6 +254,17 @@ class _NewEventPageState extends State<NewEventPage>
             '${result.latitude.toStringAsFixed(6)},${result.longitude.toStringAsFixed(6)}';
         _selectedPlace = null;
       });
+
+      // Find nearest city and set location name
+      final nearestCity = await LocationService().findNearestCity(
+        result.latitude,
+        result.longitude,
+      );
+      if (nearestCity != null && mounted) {
+        setState(() {
+          _locationNameController.text = '${nearestCity.city}, ${nearestCity.country}';
+        });
+      }
     }
   }
 
@@ -599,14 +611,6 @@ class _NewEventPageState extends State<NewEventPage>
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              _i18n.t('cancel'),
-              style: TextStyle(color: theme.colorScheme.onPrimary),
-            ),
-          ),
-          const SizedBox(width: 8),
           FilledButton.icon(
             onPressed: _create,
             icon: const Icon(Icons.check, size: 18),
@@ -864,17 +868,6 @@ class _NewEventPageState extends State<NewEventPage>
             border: const OutlineInputBorder(),
           ),
         ),
-        const SizedBox(height: 24),
-        TextFormField(
-          controller: _contentController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('event_description'),
-            border: const OutlineInputBorder(),
-            alignLabelWithHint: true,
-          ),
-          maxLines: 8,
-        ),
-
         // Photos section
         const SizedBox(height: 24),
         Row(
@@ -935,6 +928,18 @@ class _NewEventPageState extends State<NewEventPage>
               return _buildPhotoTile(theme, photo, isPrimary, index);
             },
           ),
+
+        // Event Description
+        const SizedBox(height: 24),
+        TextFormField(
+          controller: _contentController,
+          decoration: InputDecoration(
+            labelText: _i18n.t('event_description'),
+            border: const OutlineInputBorder(),
+            alignLabelWithHint: true,
+          ),
+          maxLines: 8,
+        ),
       ],
     );
   }

@@ -4,8 +4,11 @@
 /// jurisdiction and payment terms.
 library;
 
-import '../../services/location_service.dart';
 import '../../services/config_service.dart';
+import '../../services/location_service.dart';
+
+// Re-export JurisdictionInfo for convenience
+export '../../services/location_service.dart' show JurisdictionInfo;
 
 /// User preferences for wallet operations.
 class WalletSettings {
@@ -113,87 +116,13 @@ class WalletSettings {
   }
 
   /// Detect jurisdiction from coordinates using worldcities database.
+  /// Delegates to LocationService.detectJurisdiction for centralized handling.
   static Future<JurisdictionInfo?> detectJurisdiction(
     double latitude,
     double longitude,
   ) async {
     final locationService = LocationService();
-    await locationService.init();
-
-    final result = await locationService.findNearestCity(latitude, longitude);
-    if (result == null) return null;
-
-    return JurisdictionInfo(
-      country: result.country,
-      region: result.adminName,
-      city: result.city,
-      countryCode: _getCountryCode(result.country),
-    );
-  }
-
-  /// Get ISO2 country code from country name.
-  /// This is a simplified mapping - the full list is in the worldcities CSV.
-  static String? _getCountryCode(String country) {
-    // Common countries - for full mapping, use the CSV data
-    const countryToCode = {
-      'United States': 'US',
-      'United Kingdom': 'GB',
-      'Germany': 'DE',
-      'France': 'FR',
-      'Spain': 'ES',
-      'Italy': 'IT',
-      'Portugal': 'PT',
-      'Netherlands': 'NL',
-      'Belgium': 'BE',
-      'Switzerland': 'CH',
-      'Austria': 'AT',
-      'Sweden': 'SE',
-      'Norway': 'NO',
-      'Denmark': 'DK',
-      'Finland': 'FI',
-      'Poland': 'PL',
-      'Czech Republic': 'CZ',
-      'Czechia': 'CZ',
-      'Hungary': 'HU',
-      'Greece': 'GR',
-      'Ireland': 'IE',
-      'Canada': 'CA',
-      'Australia': 'AU',
-      'New Zealand': 'NZ',
-      'Japan': 'JP',
-      'South Korea': 'KR',
-      'China': 'CN',
-      'India': 'IN',
-      'Brazil': 'BR',
-      'Mexico': 'MX',
-      'Argentina': 'AR',
-      'Chile': 'CL',
-      'Colombia': 'CO',
-      'Russia': 'RU',
-      'Turkey': 'TR',
-      'South Africa': 'ZA',
-      'Israel': 'IL',
-      'Singapore': 'SG',
-      'Malaysia': 'MY',
-      'Thailand': 'TH',
-      'Indonesia': 'ID',
-      'Philippines': 'PH',
-      'Vietnam': 'VN',
-      'Ukraine': 'UA',
-      'Romania': 'RO',
-      'Bulgaria': 'BG',
-      'Croatia': 'HR',
-      'Slovenia': 'SI',
-      'Slovakia': 'SK',
-      'Estonia': 'EE',
-      'Latvia': 'LV',
-      'Lithuania': 'LT',
-      'Luxembourg': 'LU',
-      'Malta': 'MT',
-      'Cyprus': 'CY',
-      'Iceland': 'IS',
-    };
-    return countryToCode[country];
+    return locationService.detectJurisdiction(latitude, longitude);
   }
 
   /// Load settings from ConfigService.
@@ -211,32 +140,6 @@ class WalletSettings {
     final config = ConfigService();
     config.setNestedValue('settings.wallet', toJson());
   }
-}
-
-/// Jurisdiction information from location detection.
-class JurisdictionInfo {
-  final String country;
-  final String? region;
-  final String? city;
-  final String? countryCode;
-
-  JurisdictionInfo({
-    required this.country,
-    this.region,
-    this.city,
-    this.countryCode,
-  });
-
-  /// Full jurisdiction string for legal documents.
-  String get fullJurisdiction {
-    if (region != null && region!.isNotEmpty) {
-      return '$region, $country';
-    }
-    return country;
-  }
-
-  @override
-  String toString() => fullJurisdiction;
 }
 
 /// Payment frequency options for installment plans.

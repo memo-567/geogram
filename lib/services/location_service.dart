@@ -80,19 +80,61 @@ class CityEntry {
   }
 }
 
+/// Jurisdiction information from location detection.
+/// Used for legal documents and contracts.
+class JurisdictionInfo {
+  final String country;
+  final String? region;
+  final String? city;
+  final String? countryCode;
+
+  JurisdictionInfo({
+    required this.country,
+    this.region,
+    this.city,
+    this.countryCode,
+  });
+
+  /// Full jurisdiction string for legal documents.
+  /// Returns "Region, Country" or just "Country" if no region.
+  String get fullJurisdiction {
+    if (region != null && region!.isNotEmpty) {
+      return '$region, $country';
+    }
+    return country;
+  }
+
+  @override
+  String toString() => fullJurisdiction;
+}
+
 /// Result of nearest city lookup
 class NearestCityResult {
   final String country;
+  final String iso2;
+  final String iso3;
   final String adminName;
   final String city;
+  final String capital;
   final double distance; // in kilometers
 
   NearestCityResult({
     required this.country,
+    this.iso2 = '',
+    this.iso3 = '',
     required this.adminName,
     required this.city,
+    this.capital = '',
     required this.distance,
   });
+
+  /// Get jurisdiction info for legal documents.
+  JurisdictionInfo get jurisdiction => JurisdictionInfo(
+        country: country,
+        region: adminName,
+        city: city,
+        countryCode: iso2.isNotEmpty ? iso2 : null,
+      );
 
   /// Get folder path for this location (Country/Region/City or Country/City)
   String get folderPath {
@@ -249,8 +291,11 @@ class LocationService {
 
     return NearestCityResult(
       country: nearest.country,
+      iso2: nearest.iso2,
+      iso3: nearest.iso3,
       adminName: nearest.adminName,
       city: nearest.cityAscii,
+      capital: nearest.capital,
       distance: minDistance,
     );
   }
@@ -279,6 +324,107 @@ class LocationService {
     return degrees * pi / 180;
   }
 
+  /// Find the N nearest cities to given coordinates
+  Future<List<NearestCityResult>> findNearestCities(
+    double lat,
+    double lng, {
+    int count = 5,
+  }) async {
+    if (!_isLoaded) {
+      await init();
+    }
+
+    if (_cities == null || _cities!.isEmpty) {
+      return [];
+    }
+
+    // Calculate distance for all cities
+    final citiesWithDistance = <MapEntry<CityEntry, double>>[];
+    for (final city in _cities!) {
+      final distance = _calculateDistance(lat, lng, city.lat, city.lng);
+      citiesWithDistance.add(MapEntry(city, distance));
+    }
+
+    // Sort by distance
+    citiesWithDistance.sort((a, b) => a.value.compareTo(b.value));
+
+    // Return top N
+    return citiesWithDistance.take(count).map((entry) {
+      return NearestCityResult(
+        country: entry.key.country,
+        iso2: entry.key.iso2,
+        iso3: entry.key.iso3,
+        adminName: entry.key.adminName,
+        city: entry.key.cityAscii,
+        capital: entry.key.capital,
+        distance: entry.value,
+      );
+    }).toList();
+  }
+
+  /// Find a city by name (case-insensitive search)
+  /// Returns the first match or null if not found
+  Future<CityEntry?> findCityByName(String name) async {
+    if (!_isLoaded) {
+      await init();
+    }
+
+    if (_cities == null || _cities!.isEmpty) {
+      return null;
+    }
+
+    final searchName = name.toLowerCase().trim();
+
+    // Try exact match first (city or cityAscii)
+    for (final city in _cities!) {
+      if (city.city.toLowerCase() == searchName ||
+          city.cityAscii.toLowerCase() == searchName) {
+        return city;
+      }
+    }
+
+    // Try partial match
+    for (final city in _cities!) {
+      if (city.city.toLowerCase().contains(searchName) ||
+          city.cityAscii.toLowerCase().contains(searchName)) {
+        return city;
+      }
+    }
+
+    return null;
+  }
+
+  /// Get the full CityEntry for the nearest city
+  Future<CityEntry?> getNearestCityEntry(double lat, double lng) async {
+    if (!_isLoaded) {
+      await init();
+    }
+
+    if (_cities == null || _cities!.isEmpty) {
+      return null;
+    }
+
+    CityEntry? nearest;
+    double minDistance = double.infinity;
+
+    for (final city in _cities!) {
+      final distance = _calculateDistance(lat, lng, city.lat, city.lng);
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearest = city;
+      }
+    }
+
+    return nearest;
+  }
+
+  /// Calculate distance between two coordinates (public access)
+  /// Returns distance in kilometers
+  double calculateDistance(double lat1, double lng1, double lat2, double lng2) {
+    return _calculateDistance(lat1, lng1, lat2, lng2);
+  }
+
   /// Check if the service is loaded
   bool get isLoaded => _isLoaded;
 
@@ -302,6 +448,17 @@ class LocationService {
 
     final sortedCountries = countries.toList()..sort();
     return sortedCountries;
+  }
+
+  /// Detect jurisdiction from coordinates using worldcities database.
+  /// Returns jurisdiction info suitable for legal documents.
+  Future<JurisdictionInfo?> detectJurisdiction(
+    double latitude,
+    double longitude,
+  ) async {
+    final result = await findNearestCity(latitude, longitude);
+    if (result == null) return null;
+    return result.jurisdiction;
   }
 
   /// Detect location via IP address using ip-api.com (free, no API key required)

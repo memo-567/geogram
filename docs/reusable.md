@@ -640,6 +640,103 @@ MessageInputWidget(
 
 ---
 
+## Services
+
+### LocationService
+
+**File:** `lib/services/location_service.dart`
+
+Find nearest cities and country information from GPS coordinates using the worldcities database (~44,000 cities).
+
+**Initialization:**
+```dart
+final locationService = LocationService();
+await locationService.init();
+```
+
+**Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `findNearestCity(lat, lng)` | `NearestCityResult?` | Find the single nearest city |
+| `findNearestCities(lat, lng, {count})` | `List<NearestCityResult>` | Find N nearest cities (default: 5) |
+| `findCityByName(name)` | `CityEntry?` | Search city by name (case-insensitive) |
+| `getNearestCityEntry(lat, lng)` | `CityEntry?` | Get full city data for nearest city |
+| `detectJurisdiction(lat, lng)` | `JurisdictionInfo?` | Get jurisdiction info for legal docs |
+| `calculateDistance(lat1, lng1, lat2, lng2)` | `double` | Distance in km (Haversine formula) |
+| `getAllCountries()` | `List<String>` | All unique countries sorted |
+
+**NearestCityResult Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `country` | String | Country name |
+| `iso2` | String | ISO 3166-1 alpha-2 code (e.g., "US", "PT") |
+| `iso3` | String | ISO 3166-1 alpha-3 code (e.g., "USA", "PRT") |
+| `adminName` | String | Region/state/province name |
+| `city` | String | City name (ASCII) |
+| `capital` | String | "primary", "admin", or empty |
+| `distance` | double | Distance in kilometers |
+| `folderPath` | String | Sanitized path: Country/Region/City |
+
+**CityEntry Fields:**
+All of the above plus: `lat`, `lng`, `population`, `id`
+
+**JurisdictionInfo Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `country` | String | Country name |
+| `region` | String? | Region/state/province name |
+| `city` | String? | City name |
+| `countryCode` | String? | ISO2 country code |
+| `fullJurisdiction` | String | Formatted: "Region, Country" or "Country" |
+
+**Usage Examples:**
+
+```dart
+// Find nearest city to coordinates
+final result = await LocationService().findNearestCity(38.7223, -9.1393);
+if (result != null) {
+  print('${result.city}, ${result.country} (${result.iso2})');
+  print('Distance: ${result.distance.toStringAsFixed(1)} km');
+  print('Folder path: ${result.folderPath}');
+}
+
+// Find 10 nearest cities
+final cities = await LocationService().findNearestCities(
+  38.7223, -9.1393,
+  count: 10,
+);
+for (final city in cities) {
+  print('${city.city}: ${city.distance.toStringAsFixed(1)} km');
+}
+
+// Search city by name
+final tokyo = await LocationService().findCityByName('Tokyo');
+if (tokyo != null) {
+  print('${tokyo.city}, ${tokyo.country}');
+  print('Population: ${tokyo.population}');
+  print('Coordinates: ${tokyo.lat}, ${tokyo.lng}');
+}
+
+// Calculate distance between two points
+final distance = LocationService().calculateDistance(
+  38.7223, -9.1393,  // Lisbon
+  40.4168, -3.7038,  // Madrid
+);
+print('Distance: ${distance.toStringAsFixed(0)} km');
+
+// Detect jurisdiction for legal documents
+final jurisdiction = await LocationService().detectJurisdiction(38.7223, -9.1393);
+if (jurisdiction != null) {
+  print('Jurisdiction: ${jurisdiction.fullJurisdiction}');
+  print('Country code: ${jurisdiction.countryCode}');
+}
+```
+
+**Database:** `assets/worldcities.csv` (SimpleMaps World Cities Database)
+
+---
+
 ## Summary Table
 
 | Component | Location | Type | Main Use |
@@ -661,3 +758,4 @@ MessageInputWidget(
 | FolderTreeWidget | widgets/inventory/ | Tree | Folder navigation |
 | MessageBubbleWidget | widgets/ | Message | Chat bubbles |
 | MessageInputWidget | widgets/ | Input | Message composer |
+| LocationService | services/ | Service | City lookup from coordinates |

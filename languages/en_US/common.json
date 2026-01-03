@@ -1516,6 +1516,9 @@
   "tap_to_check_updates": "Tap to check for updates",
   "check_for_updates": "Check for Updates",
   "tap_to_check_new_versions": "Tap to check for new versions",
+  "update_ready_restart": "Update Ready",
+  "update_ready_restart_msg": "The update has been downloaded and staged. Click restart to apply it.",
+  "restart_now": "Restart Now",
   "security": "Security",
   "security_and_privacy": "Security and privacy settings",
   "api_access": "API Access",
@@ -1950,5 +1953,14 @@
   "transfer_days": "{0}d",
   "collection_type_transfer": "Transfer",
   "collection_type_desc_transfer": "Centralized download and upload center with progress tracking, retry logic, and metrics.",
-  "collection_type_features_transfer": "Resume capability|Automatic retry|Patient mode|Priority queue|Ban list|Metrics"
+  "collection_type_features_transfer": "Resume capability|Automatic retry|Patient mode|Priority queue|Ban list|Metrics",
+  "vanity_generator": "Vanity Generator",
+  "vanity_generator_description": "Search for a custom pattern in your callsign. Enter up to 4 letters or numbers to find in the generated callsign.",
+  "pattern": "Pattern",
+  "start": "Start",
+  "pause": "Pause",
+  "keys_generated": "Keys generated",
+  "elapsed_time": "Elapsed",
+  "matches": "Matches",
+  "recent_matches": "Recent Matches"
 }

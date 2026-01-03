@@ -62,6 +62,9 @@ class UpdateService {
   Timer? _periodicCheckTimer;
   static const _periodicCheckInterval = Duration(minutes: 30);
 
+  /// Track pending Linux update (staged but not yet applied)
+  ({String scriptPath, String version, String appDir})? _pendingLinuxUpdate;
+
   /// Initialize update service
   Future<void> initialize() async {
     if (_initialized) return;
@@ -1543,18 +1546,23 @@ class UpdateService {
       // Create backup first (desktop only)
       await createBackup();
 
+      // Linux requires staged update (can't replace running binary)
+      if (Platform.isLinux) {
+        return await _stageLinuxUpdate(updateFilePath, expectedVersion);
+      }
+
       final currentBinary = await _getCurrentBinaryPath();
       if (currentBinary == null) {
         LogService().log('Current binary not found');
         return false;
       }
 
-      // For desktop platforms, replace the binary
+      // For Windows/macOS, replace the binary directly
       LogService().log('Applying update: $updateFilePath -> $currentBinary');
       await File(updateFilePath).copy(currentBinary);
 
       // Make executable on Unix systems
-      if (Platform.isLinux || Platform.isMacOS) {
+      if (Platform.isMacOS) {
         await Process.run('chmod', ['+x', currentBinary]);
       }
 
@@ -1567,5 +1575,204 @@ class UpdateService {
       LogService().log('Error applying update: $e');
       return false;
     }
+  }
+
+  // ============================================================
+  // Linux-specific update methods
+  // ============================================================
+
+  /// Check if there's a pending Linux update ready to apply
+  bool get hasPendingLinuxUpdate => _pendingLinuxUpdate != null;
+
+  /// Get the pending Linux update info
+  ({String scriptPath, String version, String appDir})? get pendingLinuxUpdate =>
+      _pendingLinuxUpdate;
+
+  /// Check if we can write next to the current binary
+  Future<bool> _canWriteNextToBinary() async {
+    try {
+      final binaryPath = Platform.resolvedExecutable;
+      final binaryDir = File(binaryPath).parent.path;
+
+      // Try to create a test file
+      final testFile = File(
+          '$binaryDir/.geogram-write-test-${DateTime.now().millisecondsSinceEpoch}');
+      await testFile.writeAsString('test');
+      await testFile.delete();
+      return true;
+    } catch (e) {
+      LogService().log('Cannot write to binary directory: $e');
+      return false;
+    }
+  }
+
+  /// Stage update for Linux - extracts tar.gz and prepares full bundle replacement
+  Future<bool> _stageLinuxUpdate(String updateFilePath, String? version) async {
+    try {
+      // Get the actual running binary path - works from ANY location
+      final currentBinary = Platform.resolvedExecutable;
+      if (!await File(currentBinary).exists()) {
+        LogService().log('Current binary not found: $currentBinary');
+        return false;
+      }
+
+      // Check write permission first
+      if (!await _canWriteNextToBinary()) {
+        LogService().log('No write permission to app directory');
+        return false;
+      }
+
+      // App directory is where the binary lives (contains binary, data/, lib/)
+      final appDir = File(currentBinary).parent.path;
+      final stagingDir = Directory('$appDir/.geogram-update');
+
+      // Clean up any previous failed update
+      if (await stagingDir.exists()) {
+        await stagingDir.delete(recursive: true);
+      }
+      await stagingDir.create(recursive: true);
+
+      // Extract tar.gz to staging directory
+      LogService().log('Extracting update archive to: ${stagingDir.path}');
+      final extractResult = await Process.run(
+        'tar',
+        ['-xzf', updateFilePath, '-C', stagingDir.path],
+      );
+
+      if (extractResult.exitCode != 0) {
+        LogService().log('Failed to extract: ${extractResult.stderr}');
+        await stagingDir.delete(recursive: true);
+        return false;
+      }
+
+      // Find the extracted bundle (might be in bundle/ subfolder or directly)
+      String extractedPath = stagingDir.path;
+      final bundleDir = Directory('${stagingDir.path}/bundle');
+      if (await bundleDir.exists()) {
+        extractedPath = bundleDir.path;
+      }
+
+      // Verify extracted files exist
+      final extractedBinary = File('$extractedPath/geogram');
+      final extractedData = Directory('$extractedPath/data');
+      final extractedLib = Directory('$extractedPath/lib');
+
+      if (!await extractedBinary.exists()) {
+        LogService().log('Extracted binary not found at: $extractedPath/geogram');
+        await stagingDir.delete(recursive: true);
+        return false;
+      }
+
+      final hasData = await extractedData.exists();
+      final hasLib = await extractedLib.exists();
+      LogService().log(
+          'Extracted: binary=true, data=$hasData, lib=$hasLib');
+
+      // Create updater script with absolute paths
+      final script = '''#!/bin/bash
+# Geogram Update Script - Auto-generated
+# Wait for app to exit, replace entire app bundle, restart
+
+APP_DIR="$appDir"
+EXTRACTED_DIR="$extractedPath"
+STAGING_DIR="${stagingDir.path}"
+
+# Get parent PID (the Flutter app)
+APP_PID=\$PPID
+
+# Wait for the app to exit (max 30 seconds)
+for i in {1..30}; do
+  if ! kill -0 \$APP_PID 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+# Extra wait to ensure file handles released
+sleep 2
+
+# Replace entire bundle
+cd "\$APP_DIR"
+
+# Remove old data and lib directories
+rm -rf data lib
+
+# Copy new files
+cp "\$EXTRACTED_DIR/geogram" ./geogram
+if [ -d "\$EXTRACTED_DIR/data" ]; then
+  cp -r "\$EXTRACTED_DIR/data" ./data
+fi
+if [ -d "\$EXTRACTED_DIR/lib" ]; then
+  cp -r "\$EXTRACTED_DIR/lib" ./lib
+fi
+
+# Make binary executable
+chmod +x ./geogram
+
+# Clean up staging
+rm -rf "\$STAGING_DIR"
+
+# Restart app
+nohup ./geogram > /dev/null 2>&1 &
+''';
+
+      final scriptPath = '${stagingDir.path}/apply-update.sh';
+      await File(scriptPath).writeAsString(script);
+      await Process.run('chmod', ['+x', scriptPath]);
+
+      // Save pending update info
+      _pendingLinuxUpdate = (
+        scriptPath: scriptPath,
+        version: version ?? 'unknown',
+        appDir: appDir,
+      );
+
+      // Clean up the downloaded tar.gz
+      try {
+        await File(updateFilePath).delete();
+      } catch (_) {}
+
+      LogService().log('Linux update staged in: ${stagingDir.path}');
+      LogService().log('Will replace app at: $appDir');
+      return true;
+    } catch (e) {
+      LogService().log('Error staging Linux update: $e');
+      return false;
+    }
+  }
+
+  /// Apply pending Linux update (launches script and exits app)
+  Future<void> applyPendingLinuxUpdate() async {
+    if (_pendingLinuxUpdate == null) return;
+
+    final scriptPath = _pendingLinuxUpdate!.scriptPath;
+    LogService().log('Launching update script: $scriptPath');
+
+    // Launch script in background (detached from this process)
+    await Process.start(
+      'bash',
+      [scriptPath],
+      mode: ProcessStartMode.detached,
+    );
+
+    // Exit app - script will wait, replace binary, and restart
+    exit(0);
+  }
+
+  /// Clear pending Linux update (if user cancels)
+  Future<void> clearPendingLinuxUpdate() async {
+    if (_pendingLinuxUpdate == null) return;
+
+    try {
+      final stagingDir = Directory(
+          File(_pendingLinuxUpdate!.scriptPath).parent.path);
+      if (await stagingDir.exists()) {
+        await stagingDir.delete(recursive: true);
+      }
+    } catch (e) {
+      LogService().log('Error cleaning up staged update: $e');
+    }
+
+    _pendingLinuxUpdate = null;
   }
 }

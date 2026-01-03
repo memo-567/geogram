@@ -10,10 +10,10 @@ import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
-import '../util/nostr_key_generator.dart';
 import '../dialogs/import_export_profiles_dialog.dart';
 import 'profile_page.dart';
 import 'station_dashboard_page.dart';
+import 'new_profile_page.dart';
 
 /// Page for managing multiple profiles
 class ProfileManagementPage extends StatefulWidget {
@@ -99,9 +99,9 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
   }
 
   Future<void> _createNewProfile() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => const _CreateProfileDialog(),
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (context) => const NewProfilePage()),
     );
 
     if (result != null) {
@@ -420,21 +420,22 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
+                            Text(
+                              profile.callsign,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                            ),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
                               children: [
-                                Text(
-                                  profile.callsign,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                ),
-                                const SizedBox(width: 8),
                                 _buildProfileTypeBadge(profile),
-                                if (isActive) ...[
-                                  const SizedBox(width: 8),
+                                if (isActive)
                                   Container(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 8,
@@ -457,7 +458,6 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                                       ),
                                     ),
                                   ),
-                                ],
                               ],
                             ),
                             if (profile.nickname.isNotEmpty) ...[
@@ -720,385 +720,5 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
 
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-  }
-}
-
-/// Dialog for creating a new profile
-class _CreateProfileDialog extends StatefulWidget {
-  const _CreateProfileDialog();
-
-  @override
-  State<_CreateProfileDialog> createState() => _CreateProfileDialogState();
-}
-
-class _CreateProfileDialogState extends State<_CreateProfileDialog> {
-  final I18nService _i18n = I18nService();
-  final ProfileService _profileService = ProfileService();
-  final TextEditingController _nicknameController = TextEditingController();
-  ProfileType _selectedType = ProfileType.client;
-  bool _useExtension = false;
-  bool _extensionAvailable = false;
-  bool _checkingExtension = true;
-  bool _hasExistingStation = false;
-
-  // Pre-generated keys for callsign preview
-  NostrKeys? _generatedKeys;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkExtensionAvailability();
-    _checkExistingStation();
-    _generateNewCallsign();
-  }
-
-  void _checkExistingStation() {
-    // Check if there's already a station profile - only one allowed per machine
-    final profiles = _profileService.getAllProfiles();
-    _hasExistingStation = profiles.any((p) => p.isRelay);
-  }
-
-  void _generateNewCallsign() {
-    final keys = NostrKeyGenerator.generateKeyPair();
-    setState(() {
-      _generatedKeys = keys;
-    });
-  }
-
-  String _getDisplayCallsign() {
-    if (_generatedKeys == null) return '------';
-    if (_selectedType == ProfileType.station) {
-      return NostrKeyGenerator.deriveStationCallsign(_generatedKeys!.npub);
-    }
-    return _generatedKeys!.callsign;
-  }
-
-  Future<void> _checkExtensionAvailability() async {
-    if (kIsWeb) {
-      final available = await _profileService.isExtensionAvailable();
-      if (mounted) {
-        setState(() {
-          _extensionAvailable = available;
-          _checkingExtension = false;
-        });
-      }
-    } else {
-      if (mounted) {
-        setState(() {
-          _extensionAvailable = false;
-          _checkingExtension = false;
-        });
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _nicknameController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(_i18n.t('create_profile')),
-      content: SizedBox(
-        width: 400,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // NIP-07 Extension option (web only)
-            if (kIsWeb) ...[
-              _buildExtensionOption(),
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 16),
-            ],
-            // Profile type selection (only show if not using extension)
-            if (!_useExtension) ...[
-              Text(
-                _i18n.t('profile_type'),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildTypeOption(
-                      type: ProfileType.client,
-                      icon: Icons.person,
-                      title: _i18n.t('client'),
-                      description: _i18n.t('client_description'),
-                      color: Colors.blue,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildTypeOption(
-                      type: ProfileType.station,
-                      icon: Icons.cell_tower,
-                      title: _i18n.t('station'),
-                      description: _i18n.t('station_description'),
-                      color: Colors.orange,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              // Callsign preview with regenerate button
-              Text(
-                _i18n.t('your_callsign'),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _getDisplayCallsign(),
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).colorScheme.primary,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _generateNewCallsign,
-                      icon: const Icon(Icons.refresh),
-                      tooltip: _i18n.t('generate_new'),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            Text(
-              _i18n.t('nickname_optional'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _nicknameController,
-              decoration: InputDecoration(
-                hintText: _i18n.t('enter_nickname'),
-                border: const OutlineInputBorder(),
-              ),
-              maxLength: 50,
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text(_i18n.t('cancel')),
-        ),
-        FilledButton(
-          onPressed: _generatedKeys == null
-              ? null
-              : () {
-                  Navigator.pop(context, {
-                    'type': _selectedType,
-                    'useExtension': _useExtension,
-                    'nickname': _nicknameController.text.trim().isEmpty
-                        ? null
-                        : _nicknameController.text.trim(),
-                    'npub': _generatedKeys!.npub,
-                    'nsec': _generatedKeys!.nsec,
-                    'callsign': _getDisplayCallsign(),
-                  });
-                },
-          child: Text(_i18n.t('create')),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildExtensionOption() {
-    final isSelected = _useExtension;
-
-    return InkWell(
-      onTap: _extensionAvailable
-          ? () => setState(() {
-                _useExtension = !_useExtension;
-              })
-          : null,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: isSelected
-                ? Colors.purple
-                : _extensionAvailable
-                    ? Colors.grey[300]!
-                    : Colors.grey[200]!,
-            width: isSelected ? 2 : 1,
-          ),
-          borderRadius: BorderRadius.circular(12),
-          color: isSelected
-              ? Colors.purple.withOpacity(0.1)
-              : _extensionAvailable
-                  ? null
-                  : Colors.grey[100],
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.extension,
-              size: 40,
-              color: _extensionAvailable
-                  ? (isSelected ? Colors.purple : Colors.grey[600])
-                  : Colors.grey[400],
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        _i18n.t('login_with_extension'),
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: _extensionAvailable
-                              ? (isSelected ? Colors.purple : null)
-                              : Colors.grey[500],
-                        ),
-                      ),
-                      if (_checkingExtension) ...[
-                        const SizedBox(width: 8),
-                        const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ] else if (_extensionAvailable) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            _i18n.t('available'),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Colors.green,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _extensionAvailable
-                        ? _i18n.t('extension_login_description')
-                        : _i18n.t('extension_not_available'),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (_extensionAvailable)
-              Checkbox(
-                value: _useExtension,
-                onChanged: (value) {
-                  setState(() {
-                    _useExtension = value ?? false;
-                  });
-                },
-                activeColor: Colors.purple,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTypeOption({
-    required ProfileType type,
-    required IconData icon,
-    required String title,
-    required String description,
-    required Color color,
-  }) {
-    final isSelected = _selectedType == type && !_useExtension;
-    // Disable station option if one already exists
-    final isDisabled = _useExtension || (type == ProfileType.station && _hasExistingStation);
-
-    return InkWell(
-      onTap: isDisabled
-          ? null
-          : () => setState(() => _selectedType = type),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: isSelected
-                ? color
-                : isDisabled
-                    ? Colors.grey[200]!
-                    : Colors.grey[300]!,
-            width: isSelected ? 2 : 1,
-          ),
-          borderRadius: BorderRadius.circular(12),
-          color: isSelected
-              ? color.withOpacity(0.1)
-              : isDisabled
-                  ? Colors.grey[100]
-                  : null,
-        ),
-        child: Column(
-          children: [
-            Icon(
-              icon,
-              size: 32,
-              color: isDisabled
-                  ? Colors.grey[400]
-                  : (isSelected ? color : Colors.grey[600]),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              title,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: isDisabled ? Colors.grey[400] : (isSelected ? color : null),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              type == ProfileType.station && _hasExistingStation
-                  ? _i18n.t('station_already_exists')
-                  : description,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: isDisabled ? Colors.grey[400] : Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }

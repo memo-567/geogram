@@ -6,8 +6,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/bot_message.dart';
 import '../models/music_track.dart';
@@ -16,6 +14,7 @@ import 'music_generation_service.dart';
 import 'vision_service.dart';
 import '../../services/log_service.dart';
 import '../../services/user_location_service.dart';
+import '../../services/location_service.dart';
 import '../../services/i18n_service.dart';
 import '../../services/debug_controller.dart';
 import '../../util/event_bus.dart';
@@ -32,8 +31,8 @@ class BotService {
   bool _initialized = false;
   bool _isProcessing = false;
 
-  // World cities data
-  List<Map<String, dynamic>>? _cities;
+  // Location service for city data
+  final LocationService _locationService = LocationService();
 
   // Settings
   bool _modelLoaded = false;
@@ -63,7 +62,7 @@ class BotService {
 
     try {
       await _loadConversationHistory();
-      await _loadWorldCities();
+      await _locationService.init();
       await _visionService.initialize();
       await _musicService.initialize();
       _setupEventBusListeners();
@@ -96,58 +95,6 @@ class BotService {
         LogService().log('BotService: Alert received: ${event.type} from ${event.senderCallsign}');
       }),
     );
-  }
-
-  /// Load world cities database
-  Future<void> _loadWorldCities() async {
-    try {
-      final csvData = await rootBundle.loadString('assets/worldcities.csv');
-      final lines = csvData.split('\n');
-
-      if (lines.isEmpty) return;
-
-      // Parse header
-      final header = _parseCsvLine(lines[0]);
-      _cities = [];
-
-      for (var i = 1; i < lines.length; i++) {
-        if (lines[i].trim().isEmpty) continue;
-        final values = _parseCsvLine(lines[i]);
-        if (values.length < header.length) continue;
-
-        final city = <String, dynamic>{};
-        for (var j = 0; j < header.length; j++) {
-          city[header[j]] = values[j];
-        }
-        _cities!.add(city);
-      }
-
-      LogService().log('BotService: Loaded ${_cities!.length} cities');
-    } catch (e) {
-      LogService().log('BotService: Error loading world cities: $e');
-    }
-  }
-
-  /// Parse a CSV line handling quoted fields
-  List<String> _parseCsvLine(String line) {
-    final result = <String>[];
-    var current = '';
-    var inQuotes = false;
-
-    for (var i = 0; i < line.length; i++) {
-      final char = line[i];
-      if (char == '"') {
-        inQuotes = !inQuotes;
-      } else if (char == ',' && !inQuotes) {
-        result.add(current);
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.add(current);
-
-    return result;
   }
 
   /// Send a message and get a response
@@ -604,8 +551,8 @@ class BotService {
       );
     }
 
-    // Find the city
-    final city = _findCity(cityName);
+    // Find the city using LocationService
+    final city = await _locationService.findCityByName(cityName);
     if (city == null) {
       return BotMessage.bot(
         'I couldn\'t find a city named "$cityName" in my database.',
@@ -620,16 +567,16 @@ class BotService {
       );
     }
 
-    // Calculate distance
-    final cityLat = double.tryParse(city['lat'].toString()) ?? 0;
-    final cityLng = double.tryParse(city['lng'].toString()) ?? 0;
-    final distance = _calculateDistance(location.$1, location.$2, cityLat, cityLng);
-
-    final cityNameStr = city['city'] ?? cityName;
-    final country = city['country'] ?? '';
+    // Calculate distance using LocationService
+    final distance = _locationService.calculateDistance(
+      location.$1,
+      location.$2,
+      city.lat,
+      city.lng,
+    );
 
     return BotMessage.bot(
-      '**$cityNameStr** ($country) is approximately **${distance.toStringAsFixed(1)} km** from your current location.',
+      '**${city.city}** (${city.country}) is approximately **${distance.toStringAsFixed(1)} km** from your current location.',
       sources: ['worldcities.csv'],
     );
   }
@@ -642,25 +589,24 @@ class BotService {
       );
     }
 
-    if (_cities == null || _cities!.isEmpty) {
+    if (!_locationService.isLoaded) {
       return BotMessage.bot(
         'City database is not available.',
       );
     }
 
-    // Find nearest cities
-    final citiesWithDistance = <Map<String, dynamic>>[];
-    for (final city in _cities!) {
-      final lat = double.tryParse(city['lat'].toString()) ?? 0;
-      final lng = double.tryParse(city['lng'].toString()) ?? 0;
-      final distance = _calculateDistance(location.$1, location.$2, lat, lng);
-      citiesWithDistance.add({...city, 'distance': distance});
+    // Find nearest cities using LocationService
+    final nearest = await _locationService.findNearestCities(
+      location.$1,
+      location.$2,
+      count: 5,
+    );
+
+    if (nearest.isEmpty) {
+      return BotMessage.bot(
+        'Could not find any cities near your location.',
+      );
     }
-
-    citiesWithDistance.sort((a, b) =>
-      (a['distance'] as double).compareTo(b['distance'] as double));
-
-    final nearest = citiesWithDistance.take(5).toList();
 
     final buffer = StringBuffer();
     buffer.writeln('Based on your current location (${location.$1.toStringAsFixed(4)}, ${location.$2.toStringAsFixed(4)}):');
@@ -669,11 +615,10 @@ class BotService {
 
     for (var i = 0; i < nearest.length; i++) {
       final city = nearest[i];
-      final distance = city['distance'] as double;
-      final distStr = distance < 1
-          ? '${(distance * 1000).round()} m'
-          : '${distance.toStringAsFixed(1)} km';
-      buffer.writeln('${i + 1}. **${city['city']}**, ${city['country']} ($distStr)');
+      final distStr = city.distance < 1
+          ? '${(city.distance * 1000).round()} m'
+          : '${city.distance.toStringAsFixed(1)} km';
+      buffer.writeln('${i + 1}. **${city.city}**, ${city.country} ($distStr)');
     }
 
     return BotMessage.bot(
@@ -690,25 +635,14 @@ class BotService {
       );
     }
 
-    if (_cities == null || _cities!.isEmpty) {
+    if (!_locationService.isLoaded) {
       return BotMessage.bot(
         'Your coordinates: ${location.$1.toStringAsFixed(4)}, ${location.$2.toStringAsFixed(4)}',
       );
     }
 
-    // Find nearest city
-    Map<String, dynamic>? nearestCity;
-    double nearestDistance = double.infinity;
-
-    for (final city in _cities!) {
-      final lat = double.tryParse(city['lat'].toString()) ?? 0;
-      final lng = double.tryParse(city['lng'].toString()) ?? 0;
-      final distance = _calculateDistance(location.$1, location.$2, lat, lng);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestCity = city;
-      }
-    }
+    // Find nearest city using LocationService
+    final nearestCity = await _locationService.findNearestCity(location.$1, location.$2);
 
     if (nearestCity == null) {
       return BotMessage.bot(
@@ -719,12 +653,12 @@ class BotService {
     final buffer = StringBuffer();
     buffer.writeln('Based on your GPS coordinates (${location.$1.toStringAsFixed(4)}, ${location.$2.toStringAsFixed(4)}):');
     buffer.writeln();
-    buffer.writeln('You are near **${nearestCity['city']}**, ${nearestCity['country']}');
-    buffer.writeln('- Distance: ${nearestDistance.toStringAsFixed(1)} km');
-    if (nearestCity['admin_name'] != null && nearestCity['admin_name'].toString().isNotEmpty) {
-      buffer.writeln('- Region: ${nearestCity['admin_name']}');
+    buffer.writeln('You are near **${nearestCity.city}**, ${nearestCity.country}');
+    buffer.writeln('- Distance: ${nearestCity.distance.toStringAsFixed(1)} km');
+    if (nearestCity.adminName.isNotEmpty) {
+      buffer.writeln('- Region: ${nearestCity.adminName}');
     }
-    if (nearestCity['capital'] == 'primary') {
+    if (nearestCity.capital == 'primary') {
       buffer.writeln('- This is the capital city');
     }
 
@@ -742,7 +676,7 @@ class BotService {
       );
     }
 
-    final city = _findCity(cityName);
+    final city = await _locationService.findCityByName(cityName);
     if (city == null) {
       return BotMessage.bot(
         'I couldn\'t find a city named "$cityName" in my database.',
@@ -750,20 +684,20 @@ class BotService {
     }
 
     final buffer = StringBuffer();
-    buffer.writeln('**${city['city']}**');
+    buffer.writeln('**${city.city}**');
     buffer.writeln();
-    buffer.writeln('- Country: ${city['country']} (${city['iso2']})');
-    if (city['admin_name'] != null && city['admin_name'].toString().isNotEmpty) {
-      buffer.writeln('- Region: ${city['admin_name']}');
+    buffer.writeln('- Country: ${city.country} (${city.iso2})');
+    if (city.adminName.isNotEmpty) {
+      buffer.writeln('- Region: ${city.adminName}');
     }
-    final population = int.tryParse(city['population'].toString()) ?? 0;
+    final population = int.tryParse(city.population) ?? 0;
     if (population > 0) {
       buffer.writeln('- Population: ${_formatNumber(population)}');
     }
-    buffer.writeln('- Coordinates: ${city['lat']}, ${city['lng']}');
-    if (city['capital'] == 'primary') {
+    buffer.writeln('- Coordinates: ${city.lat}, ${city.lng}');
+    if (city.capital == 'primary') {
       buffer.writeln('- Capital: Yes (national capital)');
-    } else if (city['capital'] == 'admin') {
+    } else if (city.capital == 'admin') {
       buffer.writeln('- Capital: Regional capital');
     }
 
@@ -795,30 +729,6 @@ class BotService {
     return null;
   }
 
-  Map<String, dynamic>? _findCity(String name) {
-    if (_cities == null) return null;
-
-    final lowerName = name.toLowerCase().trim();
-
-    // Exact match first
-    for (final city in _cities!) {
-      if (city['city_ascii'].toString().toLowerCase() == lowerName ||
-          city['city'].toString().toLowerCase() == lowerName) {
-        return city;
-      }
-    }
-
-    // Partial match
-    for (final city in _cities!) {
-      if (city['city_ascii'].toString().toLowerCase().contains(lowerName) ||
-          city['city'].toString().toLowerCase().contains(lowerName)) {
-        return city;
-      }
-    }
-
-    return null;
-  }
-
   Future<(double, double)?> _getCurrentLocation() async {
     try {
       final location = UserLocationService().currentLocation;
@@ -830,24 +740,6 @@ class BotService {
     }
     return null;
   }
-
-  /// Calculate distance between two coordinates using Haversine formula
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-    const earthRadius = 6371.0; // km
-
-    final dLat = _toRadians(lat2 - lat1);
-    final dLon = _toRadians(lon2 - lon1);
-
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
-        sin(dLon / 2) * sin(dLon / 2);
-
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return earthRadius * c;
-  }
-
-  double _toRadians(double degrees) => degrees * pi / 180;
 
   String _formatNumber(int number) {
     if (number >= 1000000) {

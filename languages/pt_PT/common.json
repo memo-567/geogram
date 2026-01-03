@@ -1424,6 +1424,9 @@
   "tap_to_check_updates": "Toque para verificar atualizações",
   "check_for_updates": "Verificar Atualizações",
   "tap_to_check_new_versions": "Toque para verificar novas versões",
+  "update_ready_restart": "Atualização Pronta",
+  "update_ready_restart_msg": "A atualização foi transferida e preparada. Clique em reiniciar para a aplicar.",
+  "restart_now": "Reiniciar Agora",
   "security": "Segurança",
   "security_and_privacy": "Definições de segurança e privacidade",
   "api_access": "Acesso API",
@@ -1897,5 +1900,14 @@
   "transfer_days": "{0}d",
   "collection_type_transfer": "Transferências",
   "collection_type_desc_transfer": "Centro centralizado de download e upload com rastreamento de progresso, lógica de nova tentativa e métricas.",
-  "collection_type_features_transfer": "Capacidade de retomar|Nova tentativa automática|Modo paciente|Fila prioritária|Lista de bloqueio|Métricas"
+  "collection_type_features_transfer": "Capacidade de retomar|Nova tentativa automática|Modo paciente|Fila prioritária|Lista de bloqueio|Métricas",
+  "vanity_generator": "Gerador Personalizado",
+  "vanity_generator_description": "Procure um padrão personalizado no seu indicativo. Insira até 4 letras ou números para encontrar no indicativo gerado.",
+  "pattern": "Padrão",
+  "start": "Iniciar",
+  "pause": "Pausar",
+  "keys_generated": "Chaves geradas",
+  "elapsed_time": "Decorrido",
+  "matches": "Correspondências",
+  "recent_matches": "Correspondências Recentes"
 }
