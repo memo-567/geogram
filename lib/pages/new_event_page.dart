@@ -267,7 +267,7 @@ class _NewEventPageState extends State<NewEventPage>
       final placeName = place.getName(langCode);
       setState(() {
         _selectedPlace = place;
-        _isOnline = false;
+        _locationType = 'place';
         _locationController.clear();
         _locationNameController.text = placeName;
       });
