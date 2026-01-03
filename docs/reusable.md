@@ -203,6 +203,53 @@ if (position != null) {
 
 ---
 
+### DocumentViewerEditorPage
+
+**File:** `lib/pages/document_viewer_editor_page.dart`
+
+Universal document viewer with auto-detection for text, markdown, and PDF files. Uses continuous vertical scrolling.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filePath` | String | Yes | Path to the document file |
+| `viewerType` | DocumentViewerType | No | Force viewer type (default: auto) |
+| `title` | String? | No | Custom app bar title (default: filename) |
+| `readOnly` | bool | No | Read-only mode (default: true) |
+
+**Viewer Types:**
+- `DocumentViewerType.auto` - Detect from file extension (default)
+- `DocumentViewerType.text` - Plain text (.txt, .log, .json, .xml, etc.)
+- `DocumentViewerType.markdown` - Markdown (.md, .markdown)
+- `DocumentViewerType.pdf` - PDF documents
+- `DocumentViewerType.cbz` - Comic book archives (future)
+
+**Usage:**
+```dart
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => DocumentViewerEditorPage(
+      filePath: '/path/to/document.pdf',
+      // viewerType: DocumentViewerType.auto, // optional
+      // title: 'My Document', // optional
+    ),
+  ),
+);
+```
+
+**Features:**
+- Auto-detection from file extension
+- Continuous vertical scroll (webtoon-style)
+- PDF pages rendered as images for smooth scrolling
+- Markdown with styled headings, code blocks, blockquotes
+- Plain text with monospace font
+- Selectable text
+- Page count display for PDFs
+- Error handling with retry button
+
+---
+
 ### ContractDocumentPage
 
 **File:** `lib/pages/contract_document_page.dart`
@@ -601,6 +648,7 @@ MessageInputWidget(
 | CurrencyPickerWidget | widgets/wallet/ | Picker | Select currencies |
 | TypeSelectorWidget | widgets/inventory/ | Picker | Select inventory types |
 | PhotoViewerPage | pages/ | Viewer | Image gallery |
+| DocumentViewerEditorPage | pages/ | Viewer | PDF, text, markdown |
 | LocationPickerPage | pages/ | Picker | Map location selection |
 | ContractDocumentPage | pages/ | Viewer | Markdown document |
 | VoicePlayerWidget | widgets/ | Player | Voice messages |

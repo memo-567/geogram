@@ -12,7 +12,7 @@ import '../wallet/services/wallet_service.dart';
 import '../services/direct_message_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
-import 'contract_document_page.dart';
+import 'document_viewer_editor_page.dart';
 
 /// Page for viewing and managing debt details
 class DebtDetailPage extends StatefulWidget {
@@ -849,13 +849,15 @@ class _DebtDetailPageState extends State<DebtDetailPage> {
   }
 
   void _viewContract() {
+    if (_ledger?.filePath == null) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ContractDocumentPage(
-          collectionPath: widget.collectionPath,
-          debtId: widget.debtId,
-          i18n: widget.i18n,
+        builder: (_) => DocumentViewerEditorPage(
+          filePath: _ledger!.filePath!,
+          viewerType: DocumentViewerType.text,
+          title: widget.i18n.t('wallet_view_contract'),
         ),
       ),
     ).then((_) => _loadDebt());

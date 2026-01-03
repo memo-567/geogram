@@ -81,10 +81,9 @@ class _NewEventPageState extends State<NewEventPage>
   bool _isMultiDay = false;
   DateTime _eventDate = DateTime.now();
   TimeOfDay? _eventTime;
-  bool _includeTime = false;
   DateTime? _startDate;
   DateTime? _endDate;
-  bool _isOnline = true;
+  String _locationType = 'coordinates'; // 'coordinates', 'place', 'online'
   Place? _selectedPlace;
 
   String _visibility = 'private';
@@ -536,9 +535,9 @@ class _NewEventPageState extends State<NewEventPage>
       return;
     }
 
-    final location = _isOnline
+    final location = _locationType == 'online'
         ? 'online'
-        : _selectedPlace != null
+        : _locationType == 'place' && _selectedPlace != null
             ? 'place'
             : _locationController.text.trim();
 
@@ -549,8 +548,8 @@ class _NewEventPageState extends State<NewEventPage>
             _eventDate.year,
             _eventDate.month,
             _eventDate.day,
-            _includeTime && _eventTime != null ? _eventTime!.hour : 0,
-            _includeTime && _eventTime != null ? _eventTime!.minute : 0,
+            _eventTime != null ? _eventTime!.hour : 0,
+            _eventTime != null ? _eventTime!.minute : 0,
           );
 
     final result = <String, dynamic>{
@@ -594,7 +593,7 @@ class _NewEventPageState extends State<NewEventPage>
             Tab(text: _i18n.t('basic_info')),
             Tab(text: _i18n.t('media')),
             Tab(text: _i18n.t('links')),
-            Tab(text: _i18n.t('updates')),
+            Tab(text: _i18n.t('updates_agenda')),
             Tab(text: _i18n.t('access_control')),
           ],
         ),
@@ -639,6 +638,7 @@ class _NewEventPageState extends State<NewEventPage>
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        // Title
         TextFormField(
           controller: _titleController,
           decoration: InputDecoration(
@@ -657,26 +657,9 @@ class _NewEventPageState extends State<NewEventPage>
           },
           textInputAction: TextInputAction.next,
         ),
-        const SizedBox(height: 16),
-        SwitchListTile(
-          title: Text(_i18n.t('multi_day_event')),
-          value: _isMultiDay,
-          onChanged: (value) {
-            setState(() {
-              _isMultiDay = value;
-              if (!value) {
-                _startDate = null;
-                _endDate = null;
-                for (final controller in _agendaByDate.values) {
-                  controller.dispose();
-                }
-                _agendaByDate.clear();
-              }
-            });
-          },
-          contentPadding: EdgeInsets.zero,
-        ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 24),
+
+        // Date section
         if (_isMultiDay) ...[
           Row(
             children: [
@@ -706,83 +689,110 @@ class _NewEventPageState extends State<NewEventPage>
             ],
           ),
         ] else ...[
-          OutlinedButton.icon(
-            onPressed: _selectEventDate,
-            icon: const Icon(Icons.calendar_today, size: 18),
-            label: Text(
-              '${_i18n.t('event_date')}: ${_formatDate(_eventDate)}',
-            ),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 48),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile(
-            title: Text(_i18n.t('include_time')),
-            value: _includeTime,
-            onChanged: (value) {
-              setState(() {
-                _includeTime = value;
-                if (value && _eventTime == null) {
-                  _eventTime = TimeOfDay.now();
-                }
-              });
-            },
-            contentPadding: EdgeInsets.zero,
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _includeTime ? _selectEventTime : null,
-            icon: const Icon(Icons.schedule, size: 18),
-            label: Text(
-              _includeTime && _eventTime != null
-                  ? _formatTime(_eventTime!)
-                  : _i18n.t('select_time'),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectEventDate,
+                  icon: const Icon(Icons.calendar_today, size: 18),
+                  label: Text(_formatDate(_eventDate)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectEventTime,
+                  icon: const Icon(Icons.schedule, size: 18),
+                  label: Text(
+                    _eventTime != null
+                        ? _formatTime(_eventTime!)
+                        : _i18n.t('select_time'),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         SwitchListTile(
-          title: Text(_i18n.t('online_event')),
-          value: _isOnline,
+          title: Text(_i18n.t('multi_day_event')),
+          value: _isMultiDay,
           onChanged: (value) {
             setState(() {
-              _isOnline = value;
-              if (value) {
-                _locationController.clear();
-                _selectedPlace = null;
+              _isMultiDay = value;
+              if (!value) {
+                _startDate = null;
+                _endDate = null;
+                for (final controller in _agendaByDate.values) {
+                  controller.dispose();
+                }
+                _agendaByDate.clear();
               }
             });
           },
           contentPadding: EdgeInsets.zero,
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _openPlacePicker,
-          icon: const Icon(Icons.place_outlined, size: 18),
-          label: Text(_i18n.t('choose_place')),
-        ),
-        if (_selectedPlace != null) ...[
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.place),
-              title: Text(
-                _selectedPlace!.getName(
-                  _i18n.currentLanguage.split('_').first.toUpperCase(),
-                ),
-              ),
-              subtitle: Text(_selectedPlace!.coordinatesString),
-              trailing: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: _clearSelectedPlace,
-                tooltip: _i18n.t('remove'),
+        const SizedBox(height: 16),
+
+        // Location type dropdown
+        DropdownButtonFormField<String>(
+          value: _locationType,
+          decoration: InputDecoration(
+            labelText: _i18n.t('location_type'),
+            border: const OutlineInputBorder(),
+          ),
+          items: [
+            DropdownMenuItem(
+              value: 'coordinates',
+              child: Row(
+                children: [
+                  const Icon(Icons.my_location, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('coordinates')),
+                ],
               ),
             ),
-          ),
-        ],
-        if (!_isOnline) ...[
-          const SizedBox(height: 12),
+            DropdownMenuItem(
+              value: 'place',
+              child: Row(
+                children: [
+                  const Icon(Icons.place, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('place')),
+                ],
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'online',
+              child: Row(
+                children: [
+                  const Icon(Icons.videocam, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('online')),
+                ],
+              ),
+            ),
+          ],
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                _locationType = value;
+                if (value == 'online') {
+                  _locationController.clear();
+                  _selectedPlace = null;
+                } else if (value == 'coordinates') {
+                  _selectedPlace = null;
+                } else if (value == 'place') {
+                  _locationController.clear();
+                }
+              });
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+
+        // Location input based on type
+        if (_locationType == 'coordinates') ...[
           Row(
             children: [
               Expanded(
@@ -794,16 +804,8 @@ class _NewEventPageState extends State<NewEventPage>
                     border: const OutlineInputBorder(),
                     helperText: _i18n.t('enter_latitude_longitude'),
                   ),
-                  onChanged: (_) {
-                    if (_selectedPlace != null) {
-                      setState(() {
-                        _selectedPlace = null;
-                      });
-                    }
-                  },
                   validator: (value) {
-                    if (!_isOnline &&
-                        _selectedPlace == null &&
+                    if (_locationType == 'coordinates' &&
                         (value == null || value.trim().isEmpty)) {
                       return _i18n.t('location_required');
                     }
@@ -821,7 +823,37 @@ class _NewEventPageState extends State<NewEventPage>
               ),
             ],
           ),
+        ] else if (_locationType == 'place') ...[
+          OutlinedButton.icon(
+            onPressed: _openPlacePicker,
+            icon: const Icon(Icons.place_outlined, size: 18),
+            label: Text(_i18n.t('choose_place')),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+          if (_selectedPlace != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.place),
+                title: Text(
+                  _selectedPlace!.getName(
+                    _i18n.currentLanguage.split('_').first.toUpperCase(),
+                  ),
+                ),
+                subtitle: Text(_selectedPlace!.coordinatesString),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: _clearSelectedPlace,
+                  tooltip: _i18n.t('remove'),
+                ),
+              ),
+            ),
+          ],
         ],
+        // Online type shows nothing extra
+
         const SizedBox(height: 16),
         TextFormField(
           controller: _locationNameController,
@@ -841,53 +873,6 @@ class _NewEventPageState extends State<NewEventPage>
           ),
           maxLines: 8,
         ),
-        const SizedBox(height: 24),
-        Text(
-          _i18n.t('agenda'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_isMultiDay) ...[
-          if (_getAgendaDates().isEmpty)
-            Text(
-              _i18n.t('select_dates_for_agenda'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            )
-          else
-            ..._getAgendaDates().asMap().entries.map((entry) {
-              final index = entry.key;
-              final date = entry.value;
-              final dateStr = _formatDate(date);
-              final controller = _agendaByDate.putIfAbsent(
-                dateStr,
-                () => TextEditingController(),
-              );
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: TextFormField(
-                  controller: controller,
-                  decoration: InputDecoration(
-                    labelText: '${_i18n.t('day')} ${index + 1} - $dateStr',
-                    border: const OutlineInputBorder(),
-                  ),
-                  maxLines: 4,
-                ),
-              );
-            }).toList(),
-        ] else
-          TextFormField(
-            controller: _agendaController,
-            decoration: InputDecoration(
-              hintText: _i18n.t('event_schedule_agenda'),
-              border: const OutlineInputBorder(),
-              alignLabelWithHint: true,
-            ),
-            maxLines: 6,
-          ),
       ],
     );
   }
@@ -1096,77 +1081,118 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Widget _buildUpdatesTab(ThemeData theme) {
-    return Column(
+    return ListView(
+      padding: const EdgeInsets.all(24),
       children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: theme.colorScheme.outlineVariant,
+        // Agenda section
+        Text(
+          _i18n.t('agenda_optional'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_isMultiDay) ...[
+          if (_getAgendaDates().isEmpty)
+            Text(
+              _i18n.t('select_dates_for_agenda'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            ..._getAgendaDates().asMap().entries.map((entry) {
+              final index = entry.key;
+              final date = entry.value;
+              final dateStr = _formatDate(date);
+              final controller = _agendaByDate.putIfAbsent(
+                dateStr,
+                () => TextEditingController(),
+              );
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: TextFormField(
+                  controller: controller,
+                  decoration: InputDecoration(
+                    labelText: '${_i18n.t('day')} ${index + 1} - $dateStr',
+                    border: const OutlineInputBorder(),
+                  ),
+                  maxLines: 4,
+                ),
+              );
+            }),
+        ] else
+          TextFormField(
+            controller: _agendaController,
+            decoration: InputDecoration(
+              hintText: _i18n.t('event_schedule_agenda'),
+              border: const OutlineInputBorder(),
+              alignLabelWithHint: true,
+            ),
+            maxLines: 6,
+          ),
+
+        const SizedBox(height: 32),
+
+        // Updates section
+        Row(
+          children: [
+            Text(
+              _i18n.t('updates'),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
               ),
             ),
-          ),
-          child: Row(
-            children: [
-              Text(
-                _i18n.t('updates'),
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              OutlinedButton.icon(
-                onPressed: _addUpdate,
-                icon: const Icon(Icons.add, size: 18),
-                label: Text(_i18n.t('new_update')),
-              ),
-            ],
-          ),
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _addUpdate,
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(_i18n.t('new_update')),
+            ),
+          ],
         ),
-        Expanded(
-          child: _updates.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.auto_stories,
-                        size: 64,
-                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _i18n.t('no_updates_yet'),
-                        style: theme.textTheme.titleMedium,
-                      ),
-                    ],
+        const SizedBox(height: 12),
+        if (_updates.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.auto_stories,
+                  size: 48,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _i18n.t('no_updates_yet'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _updates.length,
-                  itemBuilder: (context, index) {
-                    final update = _updates[index];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        leading: const Icon(Icons.edit_note),
-                        title: Text(update.title),
-                        subtitle: Text(
-                          update.content,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete),
-                          onPressed: () => _removeUpdate(update),
-                        ),
-                      ),
-                    );
-                  },
                 ),
-        ),
+              ],
+            ),
+          )
+        else
+          ..._updates.map((update) => Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.edit_note),
+                  title: Text(update.title),
+                  subtitle: Text(
+                    update.content,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete),
+                    onPressed: () => _removeUpdate(update),
+                  ),
+                ),
+              )),
       ],
     );
   }

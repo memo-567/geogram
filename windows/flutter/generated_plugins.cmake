@@ -9,6 +9,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_webrtc
   geolocator_windows
   objectbox_flutter_libs
+  pdfx
   permission_handler_windows
   record_windows
   screen_retriever_windows
