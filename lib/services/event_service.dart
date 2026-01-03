@@ -28,23 +28,23 @@ class EventService {
     print('EventService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure events directory exists
-    final eventsDir = Directory('$collectionPath/events');
-    if (!await eventsDir.exists()) {
-      await eventsDir.create(recursive: true);
-      print('EventService: Created events directory');
+    // Ensure collection directory exists
+    final collectionDir = Directory(collectionPath);
+    if (!await collectionDir.exists()) {
+      await collectionDir.create(recursive: true);
+      print('EventService: Created collection directory');
     }
   }
 
-  /// Get available years (folders in events directory)
+  /// Get available years (folders in collection directory)
   Future<List<int>> getYears() async {
     if (_collectionPath == null) return [];
 
-    final eventsDir = Directory('$_collectionPath/events');
-    if (!await eventsDir.exists()) return [];
+    final collectionDir = Directory(_collectionPath!);
+    if (!await collectionDir.exists()) return [];
 
     final years = <int>[];
-    final entities = await eventsDir.list().toList();
+    final entities = await collectionDir.list().toList();
 
     for (var entity in entities) {
       if (entity is Directory) {
@@ -72,7 +72,7 @@ class EventService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearDir = Directory('$_collectionPath/events/$y');
+      final yearDir = Directory('$_collectionPath/$y');
       if (!await yearDir.exists()) continue;
 
       final entities = await yearDir.list().toList();
@@ -108,7 +108,7 @@ class EventService {
 
     // Extract year from eventId (format: YYYY-MM-DD_title)
     final year = eventId.substring(0, 4);
-    final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+    final eventDir = Directory('$_collectionPath/$year/$eventId');
 
     if (!await eventDir.exists()) {
       print('EventService: Event directory not found: ${eventDir.path}');
@@ -233,7 +233,7 @@ class EventService {
     String folderName = baseFolderName;
     int suffix = 1;
 
-    while (await Directory('$_collectionPath/events/$year/$folderName').exists()) {
+    while (await Directory('$_collectionPath/$year/$folderName').exists()) {
       folderName = '$baseFolderName-$suffix';
       suffix++;
     }
@@ -271,13 +271,13 @@ class EventService {
       final folderName = await _ensureUniqueFolderName(baseFolderName, year);
 
       // Ensure year directory exists
-      final yearDir = Directory('$_collectionPath/events/$year');
+      final yearDir = Directory('$_collectionPath/$year');
       if (!await yearDir.exists()) {
         await yearDir.create(recursive: true);
       }
 
       // Create event directory
-      final eventDir = Directory('$_collectionPath/events/$year/$folderName');
+      final eventDir = Directory('$_collectionPath/$year/$folderName');
       await eventDir.create(recursive: true);
 
       // Create .reactions directory
@@ -356,7 +356,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -409,7 +409,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -453,7 +453,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -503,7 +503,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return [];
 
@@ -707,7 +707,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return null;
 
@@ -765,7 +765,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -821,7 +821,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -869,7 +869,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -916,7 +916,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return false;
 
@@ -973,7 +973,7 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/events/$year/$eventId');
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
 
       if (!await eventDir.exists()) return null;
 
@@ -1046,7 +1046,7 @@ class EventService {
           workingYear = newYear;
 
           // Create new year directory if needed
-          final newYearDir = Directory('$_collectionPath/events/$newYear');
+          final newYearDir = Directory('$_collectionPath/$newYear');
           if (!await newYearDir.exists()) {
             await newYearDir.create(recursive: true);
           }
