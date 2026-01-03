@@ -327,11 +327,6 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
               onPressed: _showImportExportDialog,
               tooltip: _i18n.t('import_export_profiles'),
             ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createNewProfile,
-            tooltip: _i18n.t('create_profile'),
-          ),
         ],
       ),
       body: _isLoading

@@ -520,6 +520,167 @@ class MapTileService {
 
     return results;
   }
+
+  // ============================================================
+  // Offline tile pre-download methods
+  // ============================================================
+
+  /// Pre-download tiles for offline use within a radius
+  /// [lat], [lng] - center coordinates
+  /// [radiusKm] - radius in kilometers (default: 100)
+  /// [minZoom], [maxZoom] - zoom levels to download (default: 8-12)
+  /// [layers] - which layers to download (default: both standard and satellite)
+  /// [onProgress] - optional progress callback
+  /// Returns the number of tiles successfully downloaded
+  Future<int> downloadTilesForRadius({
+    required double lat,
+    required double lng,
+    double radiusKm = 100,
+    int minZoom = 8,
+    int maxZoom = 12,
+    List<MapLayerType> layers = const [MapLayerType.standard, MapLayerType.satellite],
+    void Function(int downloaded, int total)? onProgress,
+  }) async {
+    if (!_initialized) await initialize();
+    if (kIsWeb) return 0; // No caching on web
+
+    int downloaded = 0;
+    final tilesToDownload = <({int z, int x, int y, MapLayerType layer})>[];
+
+    // Calculate tiles for each zoom level
+    for (int z = minZoom; z <= maxZoom; z++) {
+      final tiles = _getTilesInRadius(lat, lng, radiusKm, z);
+      for (final tile in tiles) {
+        for (final layer in layers) {
+          tilesToDownload.add((z: z, x: tile.x, y: tile.y, layer: layer));
+        }
+      }
+    }
+
+    final total = tilesToDownload.length;
+    LogService().log('MapTileService: Pre-downloading $total tiles for ${radiusKm}km radius');
+
+    // Download tiles sequentially to avoid overwhelming the network
+    for (final tile in tilesToDownload) {
+      try {
+        final success = await _downloadAndCacheTile(tile.z, tile.x, tile.y, tile.layer);
+        if (success) downloaded++;
+        onProgress?.call(downloaded, total);
+      } catch (e) {
+        // Log but continue - non-critical
+        LogService().log('MapTileService: Failed to cache tile ${tile.z}/${tile.x}/${tile.y}: $e');
+      }
+    }
+
+    LogService().log('MapTileService: Pre-download complete: $downloaded/$total tiles');
+    return downloaded;
+  }
+
+  /// Calculate all tile coordinates within a radius for a given zoom level
+  List<({int x, int y})> _getTilesInRadius(double lat, double lng, double radiusKm, int zoom) {
+    final tiles = <({int x, int y})>[];
+    final n = 1 << zoom; // 2^zoom
+
+    // Calculate center tile using Web Mercator projection
+    final centerX = ((lng + 180.0) / 360.0 * n).floor();
+    final latRad = lat * math.pi / 180.0;
+    final centerY = ((1.0 - (_asinh(math.tan(latRad)) / math.pi)) / 2.0 * n).floor();
+
+    // Calculate tile size in km at this latitude (approximate)
+    // Earth circumference at this latitude / number of tiles
+    final tileSizeKm = 40075.0 * math.cos(latRad) / n;
+
+    // Calculate how many tiles we need in each direction
+    final tilesNeeded = tileSizeKm > 0 ? (radiusKm / tileSizeKm).ceil() + 1 : 1;
+
+    // Generate tile list within bounds
+    for (int dx = -tilesNeeded; dx <= tilesNeeded; dx++) {
+      for (int dy = -tilesNeeded; dy <= tilesNeeded; dy++) {
+        final x = centerX + dx;
+        final y = centerY + dy;
+        // Validate tile coordinates are within valid range
+        if (x >= 0 && x < n && y >= 0 && y < n) {
+          tiles.add((x: x, y: y));
+        }
+      }
+    }
+
+    return tiles;
+  }
+
+  /// Get the file path for a cached tile
+  String _getCachePath(int z, int x, int y, MapLayerType layer) {
+    final layerFolder = layer == MapLayerType.satellite ? 'satellite' : 'standard';
+    return '$_tilesPath/cache/$layerFolder/$z/$x/$y.png';
+  }
+
+  /// Download a single tile and cache it to disk
+  /// Returns true if tile was successfully cached (or already existed)
+  Future<bool> _downloadAndCacheTile(int z, int x, int y, MapLayerType layer) async {
+    if (_tilesPath == null) return false;
+
+    final cachePath = _getCachePath(z, x, y, layer);
+    final file = File(cachePath);
+
+    // Skip if already cached
+    if (await file.exists()) {
+      return true;
+    }
+
+    // Build tile URL based on layer
+    String directUrl;
+    if (layer == MapLayerType.satellite) {
+      // Esri uses z/y/x order
+      directUrl = satelliteTileUrl
+          .replaceAll('{z}', '$z')
+          .replaceAll('{y}', '$y')
+          .replaceAll('{x}', '$x');
+    } else {
+      // OSM uses z/x/y order
+      directUrl = osmTileUrl
+          .replaceAll('{z}', '$z')
+          .replaceAll('{x}', '$x')
+          .replaceAll('{y}', '$y');
+    }
+
+    // Try station first if available
+    final stationUrl = getStationTileUrl(layer);
+    if (stationUrl != null) {
+      try {
+        final url = stationUrl
+            .replaceAll('{z}', '$z')
+            .replaceAll('{x}', '$x')
+            .replaceAll('{y}', '$y');
+        final response = await httpClient
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 5));
+        if (response.statusCode == 200 && response.bodyBytes.length > 100) {
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(response.bodyBytes);
+          return true;
+        }
+      } catch (_) {
+        // Station failed, try direct internet
+      }
+    }
+
+    // Fallback to direct internet
+    try {
+      final response = await httpClient
+          .get(Uri.parse(directUrl), headers: {'User-Agent': 'dev.geogram'})
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200 && response.bodyBytes.length > 100) {
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(response.bodyBytes);
+        return true;
+      }
+    } catch (e) {
+      LogService().log('MapTileService: Direct download failed for $z/$x/$y: $e');
+    }
+
+    return false;
+  }
 }
 
 /// Custom tile provider with fallback logic:

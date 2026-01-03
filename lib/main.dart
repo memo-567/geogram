@@ -34,6 +34,7 @@ import 'services/direct_message_service.dart';
 import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
 import 'services/group_sync_service.dart';
+import 'services/map_tile_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -611,6 +612,8 @@ class _HomePageState extends State<HomePage> {
             } else {
               // Mark first launch as complete for non-Android platforms
               ConfigService().set('firstLaunchComplete', true);
+              // Pre-download offline maps in background
+              _preDownloadOfflineMaps();
               _showWelcomeDialog();
             }
           }
@@ -628,6 +631,8 @@ class _HomePageState extends State<HomePage> {
             // Mark first launch as complete
             ConfigService().set('firstLaunchComplete', true);
             Navigator.of(context).pop();
+            // Pre-download offline maps in background
+            _preDownloadOfflineMaps();
             // Show the welcome dialog after onboarding
             _showWelcomeDialog();
           },
@@ -661,6 +666,50 @@ class _HomePageState extends State<HomePage> {
     }
 
     LogService().log('Default collections creation complete');
+  }
+
+  /// Pre-download offline maps on first launch (100km radius around current position)
+  /// Runs in background, doesn't block UI. Uses station if available, falls back to direct internet.
+  void _preDownloadOfflineMaps() async {
+    // Check if already pre-downloaded
+    final hasPreDownloaded = ConfigService().get('offlineMapPreDownloaded') == true;
+    if (hasPreDownloaded) return;
+
+    final locationService = UserLocationService();
+
+    // Wait for GPS position (up to 30 seconds)
+    for (int i = 0; i < 30; i++) {
+      final location = locationService.currentLocation;
+      if (location != null && location.isValid) break;
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    final location = locationService.currentLocation;
+    if (location == null || !location.isValid) {
+      LogService().log('First-launch map download: No GPS position, skipping');
+      return;
+    }
+
+    final lat = location.latitude;
+    final lng = location.longitude;
+
+    LogService().log('First-launch map download: Starting for ($lat, $lng)');
+
+    try {
+      final downloaded = await MapTileService().downloadTilesForRadius(
+        lat: lat,
+        lng: lng,
+        radiusKm: 100,
+        minZoom: 8,
+        maxZoom: 12,
+      );
+
+      // Mark as done
+      ConfigService().set('offlineMapPreDownloaded', true);
+      LogService().log('First-launch map download: Complete ($downloaded tiles)');
+    } catch (e) {
+      LogService().log('First-launch map download: Error: $e');
+    }
   }
 
   /// Show welcome dialog with generated callsign

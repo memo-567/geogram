@@ -90,8 +90,9 @@ class NewProfilePage extends StatefulWidget {
 class _VanityMatch {
   final NostrKeys keys;
   final DateTime foundAt;
+  bool pinned;
 
-  _VanityMatch({required this.keys, required this.foundAt});
+  _VanityMatch({required this.keys, required this.foundAt, this.pinned = false});
 }
 
 class _NewProfilePageState extends State<NewProfilePage> {
@@ -247,9 +248,15 @@ class _NewProfilePageState extends State<NewProfilePage> {
                 ),
                 foundAt: DateTime.now(),
               ));
-              // Keep only 50 most recent matches
+              // Keep only 50 most recent matches (but preserve pinned)
               if (_vanityMatches.length > 50) {
-                _vanityMatches.removeLast();
+                // Find the last non-pinned match to remove
+                for (int i = _vanityMatches.length - 1; i >= 0; i--) {
+                  if (!_vanityMatches[i].pinned) {
+                    _vanityMatches.removeAt(i);
+                    break;
+                  }
+                }
               }
             }
           });
@@ -290,6 +297,12 @@ class _NewProfilePageState extends State<NewProfilePage> {
   void _selectVanityMatch(_VanityMatch match) {
     setState(() {
       _selectedVanityMatch = match;
+    });
+  }
+
+  void _togglePin(_VanityMatch match) {
+    setState(() {
+      match.pinned = !match.pinned;
     });
   }
 
@@ -608,7 +621,9 @@ class _NewProfilePageState extends State<NewProfilePage> {
                     margin: const EdgeInsets.only(bottom: 8),
                     color: isSelected
                         ? theme.colorScheme.primaryContainer
-                        : null,
+                        : match.pinned
+                            ? theme.colorScheme.tertiaryContainer.withOpacity(0.5)
+                            : null,
                     child: InkWell(
                       onTap: () => _selectVanityMatch(match),
                       borderRadius: BorderRadius.circular(12),
@@ -654,6 +669,18 @@ class _NewProfilePageState extends State<NewProfilePage> {
                                   ),
                                 ],
                               ),
+                            ),
+                            IconButton(
+                              onPressed: () => _togglePin(match),
+                              icon: Icon(
+                                match.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                                size: 20,
+                                color: match.pinned
+                                    ? theme.colorScheme.tertiary
+                                    : theme.colorScheme.outline,
+                              ),
+                              tooltip: match.pinned ? 'Unpin' : 'Pin',
+                              visualDensity: VisualDensity.compact,
                             ),
                           ],
                         ),
