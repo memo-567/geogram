@@ -1053,6 +1053,7 @@
   "flyer": "Flyer",
   "trailer": "Trailer",
   "updates": "Updates",
+  "updates_managed_event_detail": "Updates can be added from the event detail page after the event is created.",
   "updates_agenda": "Updates / Agenda",
   "agenda_optional": "Agenda (optional)",
   "location_type": "Location type",

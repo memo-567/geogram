@@ -966,6 +966,7 @@
   "flyer": "Cartaz",
   "trailer": "Trailer",
   "updates": "Atualizações",
+  "updates_managed_event_detail": "As atualizações podem ser adicionadas a partir da página de detalhes do evento após a sua criação.",
   "updates_agenda": "Atualizações / Agenda",
   "agenda_optional": "Agenda (opcional)",
   "location_type": "Tipo de localização",

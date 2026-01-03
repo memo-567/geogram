@@ -46,10 +46,12 @@ class _EventSettingsPageState extends State<EventSettingsPage>
   late TextEditingController _agendaController;
   late TextEditingController _locationController;
   late TextEditingController _locationNameController;
-  late bool _isOnline;
+  String _locationType = 'coordinates'; // 'coordinates', 'place', 'online'
   Place? _selectedPlace;
   String? _selectedPlacePath;
-  late DateTime _eventDateTime;
+  late DateTime _eventDate;
+  TimeOfDay? _eventTime;
+  bool _isMultiDay = false;
   late TextEditingController _startDateController;
   late TextEditingController _endDateController;
   late DateTime? _startDate;
@@ -85,9 +87,18 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     _contentController = TextEditingController(text: widget.event.content);
     _agendaController = TextEditingController(text: widget.event.agenda ?? '');
     _selectedPlacePath = widget.event.placePath;
-    _isOnline = widget.event.isOnline && (_selectedPlacePath == null || _selectedPlacePath!.isEmpty);
+
+    // Determine location type
+    if (widget.event.isOnline && (_selectedPlacePath == null || _selectedPlacePath!.isEmpty)) {
+      _locationType = 'online';
+    } else if (_selectedPlacePath != null && _selectedPlacePath!.isNotEmpty) {
+      _locationType = 'place';
+    } else {
+      _locationType = 'coordinates';
+    }
+
     _locationController = TextEditingController(
-      text: _isOnline
+      text: _locationType == 'online'
           ? ''
           : widget.event.hasCoordinates
               ? widget.event.location
@@ -98,14 +109,21 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     );
 
     // Initialize dates
-    if (widget.event.isMultiDay) {
+    _isMultiDay = widget.event.isMultiDay;
+    if (_isMultiDay) {
       _startDate = _parseDate(widget.event.startDate ?? '');
       _endDate = _parseDate(widget.event.endDate ?? '');
       _startDateController = TextEditingController(text: widget.event.startDate ?? '');
       _endDateController = TextEditingController(text: widget.event.endDate ?? '');
-      _eventDateTime = DateTime.now();
+      _eventDate = DateTime.now();
+      _eventTime = null;
     } else {
-      _eventDateTime = widget.event.dateTime;
+      _eventDate = DateTime(
+        widget.event.dateTime.year,
+        widget.event.dateTime.month,
+        widget.event.dateTime.day,
+      );
+      _eventTime = TimeOfDay.fromDateTime(widget.event.dateTime);
       _startDateController = TextEditingController();
       _endDateController = TextEditingController();
     }
@@ -159,31 +177,43 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
   }
 
-  Future<void> _selectEventDateTime() async {
-    final pickedDate = await showDatePicker(
+  String _formatDate(DateTime date) {
+    return '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+  }
+
+  String _formatTime(TimeOfDay time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  Future<void> _selectEventDate() async {
+    final picked = await showDatePicker(
       context: context,
-      initialDate: _eventDateTime,
+      initialDate: _eventDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
 
-    if (pickedDate != null && mounted) {
-      final pickedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(_eventDateTime),
-      );
+    if (picked != null) {
+      setState(() {
+        _eventDate = picked;
+      });
+    }
+  }
 
-      if (pickedTime != null && mounted) {
-        setState(() {
-          _eventDateTime = DateTime(
-            pickedDate.year,
-            pickedDate.month,
-            pickedDate.day,
-            pickedTime.hour,
-            pickedTime.minute,
-          );
-        });
-      }
+  Future<void> _selectEventTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _eventTime ?? TimeOfDay.now(),
+    );
+
+    if (picked != null) {
+      setState(() {
+        _eventTime = picked;
+      });
     }
   }
 
@@ -198,8 +228,11 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     if (picked != null) {
       setState(() {
         _startDate = picked;
-        final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-        _startDateController.text = dateStr;
+        _startDateController.text = _formatDate(picked);
+        if (_endDate != null && _endDate!.isBefore(_startDate!)) {
+          _endDate = null;
+          _endDateController.clear();
+        }
       });
     }
   }
@@ -215,8 +248,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     if (picked != null) {
       setState(() {
         _endDate = picked;
-        final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-        _endDateController.text = dateStr;
+        _endDateController.text = _formatDate(picked);
       });
     }
   }
@@ -600,7 +632,7 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       setState(() {
         _selectedPlace = place;
         _selectedPlacePath = place.folderPath;
-        _isOnline = false;
+        _locationType = 'place';
         _locationController.clear();
         _locationNameController.text = placeName;
       });
@@ -651,16 +683,26 @@ class _EventSettingsPageState extends State<EventSettingsPage>
   }
 
   void _save() {
-    final location = _isOnline
+    final location = _locationType == 'online'
         ? 'online'
-        : (_selectedPlacePath != null || _selectedPlace != null)
+        : _locationType == 'place' && (_selectedPlacePath != null || _selectedPlace != null)
             ? 'place'
             : _locationController.text.trim();
 
-    if (!_isOnline && location.isEmpty && (_selectedPlacePath == null || _selectedPlacePath!.isEmpty)) {
+    if (_locationType == 'coordinates' && location.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_i18n.t('location_required')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (_isMultiDay && (_startDate == null || _endDate == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('select_both_dates')),
           backgroundColor: Colors.red,
         ),
       );
@@ -678,6 +720,16 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
 
     final placePath = _buildPlacePathReference();
+    final eventDateTime = _isMultiDay
+        ? null
+        : DateTime(
+            _eventDate.year,
+            _eventDate.month,
+            _eventDate.day,
+            _eventTime != null ? _eventTime!.hour : 0,
+            _eventTime != null ? _eventTime!.minute : 0,
+          );
+
     final result = <String, dynamic>{
       'title': _titleController.text.trim(),
       'location': location,
@@ -697,14 +749,15 @@ class _EventSettingsPageState extends State<EventSettingsPage>
       'links': _links,
       'registrationEnabled': _registrationEnabled,
       'placePath': placePath,
+      'isMultiDay': _isMultiDay,
     };
 
     // Add date information
-    if (widget.event.isMultiDay) {
-      result['startDate'] = _startDateController.text.trim();
-      result['endDate'] = _endDateController.text.trim();
+    if (_isMultiDay) {
+      result['startDate'] = _formatDate(_startDate!);
+      result['endDate'] = _formatDate(_endDate!);
     } else {
-      result['eventDateTime'] = _eventDateTime;
+      result['eventDateTime'] = eventDateTime;
     }
 
     Navigator.pop(context, result);
@@ -738,9 +791,9 @@ class _EventSettingsPageState extends State<EventSettingsPage>
           tabs: [
             Tab(text: _i18n.t('basic_info')),
             Tab(text: _i18n.t('media')),
-            Tab(text: _i18n.t('access_control')),
             Tab(text: _i18n.t('links')),
-            Tab(text: _i18n.t('registration')),
+            Tab(text: _i18n.t('updates_agenda')),
+            Tab(text: _i18n.t('access_control')),
           ],
         ),
         actions: [
@@ -769,9 +822,9 @@ class _EventSettingsPageState extends State<EventSettingsPage>
         children: [
           _buildBasicInfoTab(theme),
           _buildMediaTab(theme),
-          _buildAccessControlTab(theme),
           _buildLinksTab(theme),
-          _buildRegistrationTab(theme),
+          _buildUpdatesTab(theme),
+          _buildAccessControlTab(theme),
         ],
       ),
     );
@@ -786,20 +839,14 @@ class _EventSettingsPageState extends State<EventSettingsPage>
           controller: _titleController,
           decoration: InputDecoration(
             labelText: _i18n.t('event_title'),
+            hintText: _i18n.t('enter_event_title'),
             border: const OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 24),
 
         // Date section
-        Text(
-          _i18n.t('event_dates'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (widget.event.isMultiDay) ...[
+        if (_isMultiDay) ...[
           Row(
             children: [
               Expanded(
@@ -807,8 +854,8 @@ class _EventSettingsPageState extends State<EventSettingsPage>
                   onPressed: _selectStartDate,
                   icon: const Icon(Icons.calendar_today, size: 18),
                   label: Text(
-                    _startDateController.text.isNotEmpty
-                        ? _startDateController.text
+                    _startDate != null
+                        ? _formatDate(_startDate!)
                         : _i18n.t('start_date'),
                   ),
                 ),
@@ -819,8 +866,8 @@ class _EventSettingsPageState extends State<EventSettingsPage>
                   onPressed: _selectEndDate,
                   icon: const Icon(Icons.calendar_today, size: 18),
                   label: Text(
-                    _endDateController.text.isNotEmpty
-                        ? _endDateController.text
+                    _endDate != null
+                        ? _formatDate(_endDate!)
                         : _i18n.t('end_date'),
                   ),
                 ),
@@ -828,67 +875,110 @@ class _EventSettingsPageState extends State<EventSettingsPage>
             ],
           ),
         ] else ...[
-          OutlinedButton.icon(
-            onPressed: _selectEventDateTime,
-            icon: const Icon(Icons.calendar_today, size: 18),
-            label: Text(
-              '${_eventDateTime.year}-${_eventDateTime.month.toString().padLeft(2, '0')}-${_eventDateTime.day.toString().padLeft(2, '0')} '
-              '${_eventDateTime.hour.toString().padLeft(2, '0')}:${_eventDateTime.minute.toString().padLeft(2, '0')}',
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectEventDate,
+                  icon: const Icon(Icons.calendar_today, size: 18),
+                  label: Text(_formatDate(_eventDate)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectEventTime,
+                  icon: const Icon(Icons.schedule, size: 18),
+                  label: Text(
+                    _eventTime != null
+                        ? _formatTime(_eventTime!)
+                        : _i18n.t('select_time'),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
-        const SizedBox(height: 24),
-
-        // Location
-        Text(
-          _i18n.t('location'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         SwitchListTile(
-          title: Text(_i18n.t('online_event')),
-          value: _isOnline,
+          title: Text(_i18n.t('multi_day_event')),
+          value: _isMultiDay,
           onChanged: (value) {
             setState(() {
-              _isOnline = value;
-              if (value) {
-                _locationController.clear();
-                _selectedPlace = null;
-                _selectedPlacePath = null;
+              _isMultiDay = value;
+              if (!value) {
+                _startDate = null;
+                _endDate = null;
+                _startDateController.clear();
+                _endDateController.clear();
               }
             });
           },
           contentPadding: EdgeInsets.zero,
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _openPlacePicker,
-          icon: const Icon(Icons.place_outlined, size: 18),
-          label: Text(_i18n.t('choose_place')),
-        ),
-        if (_selectedPlace != null) ...[
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.place),
-              title: Text(
-                _selectedPlace!.getName(
-                  _i18n.currentLanguage.split('_').first.toUpperCase(),
-                ),
-              ),
-              subtitle: Text(_selectedPlace!.coordinatesString),
-              trailing: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: _clearSelectedPlace,
-                tooltip: _i18n.t('remove'),
+        const SizedBox(height: 16),
+
+        // Location type dropdown
+        DropdownButtonFormField<String>(
+          value: _locationType,
+          decoration: InputDecoration(
+            labelText: _i18n.t('location_type'),
+            border: const OutlineInputBorder(),
+          ),
+          items: [
+            DropdownMenuItem(
+              value: 'coordinates',
+              child: Row(
+                children: [
+                  const Icon(Icons.my_location, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('coordinates')),
+                ],
               ),
             ),
-          ),
-        ],
-        if (!_isOnline) ...[
-          const SizedBox(height: 12),
+            DropdownMenuItem(
+              value: 'place',
+              child: Row(
+                children: [
+                  const Icon(Icons.place, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('place')),
+                ],
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'online',
+              child: Row(
+                children: [
+                  const Icon(Icons.videocam, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('online')),
+                ],
+              ),
+            ),
+          ],
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                _locationType = value;
+                if (value == 'online') {
+                  _locationController.clear();
+                  _selectedPlace = null;
+                  _selectedPlacePath = null;
+                } else if (value == 'coordinates') {
+                  _selectedPlace = null;
+                  _selectedPlacePath = null;
+                } else if (value == 'place') {
+                  _locationController.clear();
+                }
+              });
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+
+        // Location input based on type
+        if (_locationType == 'coordinates') ...[
           Row(
             children: [
               Expanded(
@@ -900,14 +990,6 @@ class _EventSettingsPageState extends State<EventSettingsPage>
                     border: const OutlineInputBorder(),
                     helperText: _i18n.t('enter_latitude_longitude'),
                   ),
-                  onChanged: (_) {
-                    if (_selectedPlace != null) {
-                      setState(() {
-                        _selectedPlace = null;
-                        _selectedPlacePath = null;
-                      });
-                    }
-                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -920,7 +1002,37 @@ class _EventSettingsPageState extends State<EventSettingsPage>
               ),
             ],
           ),
+        ] else if (_locationType == 'place') ...[
+          OutlinedButton.icon(
+            onPressed: _openPlacePicker,
+            icon: const Icon(Icons.place_outlined, size: 18),
+            label: Text(_i18n.t('choose_place')),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+          if (_selectedPlace != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.place),
+                title: Text(
+                  _selectedPlace!.getName(
+                    _i18n.currentLanguage.split('_').first.toUpperCase(),
+                  ),
+                ),
+                subtitle: Text(_selectedPlace!.coordinatesString),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: _clearSelectedPlace,
+                  tooltip: _i18n.t('remove'),
+                ),
+              ),
+            ),
+          ],
         ],
+        // Online type shows nothing extra
+
         const SizedBox(height: 16),
         TextFormField(
           controller: _locationNameController,
@@ -933,42 +1045,215 @@ class _EventSettingsPageState extends State<EventSettingsPage>
         const SizedBox(height: 24),
 
         // Description
-        Text(
-          _i18n.t('description'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
         TextFormField(
           controller: _contentController,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            alignLabelWithHint: true,
-          ),
-          maxLines: 10,
-        ),
-        const SizedBox(height: 24),
-
-        // Agenda
-        Text(
-          _i18n.t('agenda'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _agendaController,
           decoration: InputDecoration(
-            hintText: _i18n.t('event_schedule_agenda'),
+            labelText: _i18n.t('event_description'),
             border: const OutlineInputBorder(),
             alignLabelWithHint: true,
           ),
           maxLines: 8,
         ),
+
+        // Photos section
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Text(
+              _i18n.t('photos'),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _selectFlyer,
+              icon: const Icon(Icons.add_photo_alternate, size: 18),
+              label: Text(_i18n.t('add_photos')),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_flyersList.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.photo_library_outlined,
+                  size: 48,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _i18n.t('no_photos_yet'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: _flyersList.length,
+            itemBuilder: (context, index) {
+              final flyer = _flyersList[index];
+              final isPrimary = index == 0;
+              return _buildPhotoTile(theme, flyer, isPrimary, index);
+            },
+          ),
       ],
     );
+  }
+
+  String _getEventFolderPath() {
+    final year = widget.event.id.substring(0, 4);
+    return '${widget.collectionPath}/$year/${widget.event.id}';
+  }
+
+  Widget _buildPhotoTile(ThemeData theme, String flyerFileName, bool isPrimary, int index) {
+    final eventPath = _getEventFolderPath();
+    final flyerPath = '$eventPath/$flyerFileName';
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.file(
+            File(flyerPath),
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              color: theme.colorScheme.surfaceContainerHighest,
+              child: const Icon(Icons.broken_image),
+            ),
+          ),
+        ),
+        // Primary badge
+        if (isPrimary)
+          Positioned(
+            top: 4,
+            left: 4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                _i18n.t('cover'),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onPrimary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        // Action buttons
+        Positioned(
+          top: 4,
+          right: 4,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!isPrimary)
+                _buildPhotoAction(
+                  theme,
+                  Icons.star_outline,
+                  _i18n.t('set_as_cover'),
+                  () => _setAsPrimaryPhoto(index),
+                ),
+              _buildPhotoAction(
+                theme,
+                Icons.delete,
+                _i18n.t('remove'),
+                () => _removeFlyer(flyerFileName),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPhotoAction(ThemeData theme, IconData icon, String tooltip, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Material(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(4),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Icon(icon, size: 16, color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setAsPrimaryPhoto(int index) async {
+    if (index == 0 || index >= _flyersList.length) return;
+
+    final eventPath = _getEventFolderPath();
+    final flyerToPromote = _flyersList[index];
+    final currentPrimary = _flyersList[0];
+
+    try {
+      // Get file extensions
+      final promoteExt = path.extension(flyerToPromote);
+      final primaryExt = path.extension(currentPrimary);
+
+      // Rename files
+      final tempName = 'flyer-temp$promoteExt';
+      final newPrimaryName = 'flyer$promoteExt';
+      final newAltName = 'flyer-1$primaryExt';
+
+      // Move promoted file to temp
+      final promoteFile = File('$eventPath/$flyerToPromote');
+      if (await promoteFile.exists()) {
+        await promoteFile.rename('$eventPath/$tempName');
+      }
+
+      // Rename current primary to alt
+      final primaryFile = File('$eventPath/$currentPrimary');
+      if (await primaryFile.exists()) {
+        await primaryFile.rename('$eventPath/$newAltName');
+      }
+
+      // Rename temp to primary
+      final tempFile = File('$eventPath/$tempName');
+      if (await tempFile.exists()) {
+        await tempFile.rename('$eventPath/$newPrimaryName');
+      }
+
+      setState(() {
+        _flyersList[0] = newPrimaryName;
+        _flyersList[index] = newAltName;
+        _flyersList.sort();
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_i18n.t('error')}: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildMediaTab(ThemeData theme) {
@@ -1245,6 +1530,18 @@ class _EventSettingsPageState extends State<EventSettingsPage>
           ),
           maxLines: 3,
         ),
+        const SizedBox(height: 24),
+        SwitchListTile(
+          title: Text(_i18n.t('enable_registration')),
+          subtitle: Text(_i18n.t('allow_attendees_register')),
+          value: _registrationEnabled,
+          onChanged: (value) {
+            setState(() {
+              _registrationEnabled = value;
+            });
+          },
+          contentPadding: EdgeInsets.zero,
+        ),
       ],
     );
   }
@@ -1351,35 +1648,60 @@ class _EventSettingsPageState extends State<EventSettingsPage>
     }
   }
 
-  Widget _buildRegistrationTab(ThemeData theme) {
+  Widget _buildUpdatesTab(ThemeData theme) {
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        // Agenda section
         Text(
-          _i18n.t('registration'),
-          style: theme.textTheme.titleLarge?.copyWith(
+          _i18n.t('agenda_optional'),
+          style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _agendaController,
+          decoration: InputDecoration(
+            hintText: _i18n.t('event_schedule_agenda'),
+            border: const OutlineInputBorder(),
+            alignLabelWithHint: true,
+          ),
+          maxLines: 6,
+        ),
+        const SizedBox(height: 32),
+
+        // Updates section (info only for edit mode)
         Text(
-          _i18n.t('registration_help'),
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+          _i18n.t('updates'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 24),
-
-        SwitchListTile(
-          title: Text(_i18n.t('enable_registration')),
-          subtitle: Text(_i18n.t('allow_attendees_register')),
-          value: _registrationEnabled,
-          onChanged: (value) {
-            setState(() {
-              _registrationEnabled = value;
-            });
-          },
-          contentPadding: EdgeInsets.zero,
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _i18n.t('updates_managed_event_detail'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
