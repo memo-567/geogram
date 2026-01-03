@@ -301,42 +301,39 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Widget _buildAppCard(ThemeData theme, DeviceAppInfo app) {
     final appColor = _getAppColor(context, app.type);
 
-    return Card(
-      elevation: 2,
-      child: InkWell(
-        onTap: () => _openApp(app),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircleAvatar(
-                radius: 32,
-                backgroundColor: appColor.withValues(alpha: 0.2),
-                child: Icon(
-                  _getAppIcon(app.type),
-                  size: 32,
-                  color: appColor,
-                ),
+    return InkWell(
+      onTap: () => _openApp(app),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 32,
+              backgroundColor: appColor.withValues(alpha: 0.2),
+              child: Icon(
+                _getAppIcon(app.type),
+                size: 32,
+                color: appColor,
               ),
-              const SizedBox(height: 12),
-              Text(
-                app.displayName,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              app.displayName,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
               ),
-              const SizedBox(height: 4),
-              Text(
-                '${app.itemCount} items',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${app.itemCount} items',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

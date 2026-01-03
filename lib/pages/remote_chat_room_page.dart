@@ -14,6 +14,7 @@ import '../services/profile_service.dart';
 import '../services/signing_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
+import '../util/chat_api.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/reaction_utils.dart';
@@ -162,7 +163,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
-        path: '/api/chat/${widget.room.id}/messages?limit=100',
+        path: '${ChatApi.chatMessagesPath(widget.room.id)}?limit=100',
         headers: headers.isNotEmpty ? headers : null,
       );
 
@@ -289,15 +290,22 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         'file_size': fileSize.toString(),
       };
 
+      // Send message in format expected by server API
       final payload = {
-        'event': signedEvent.toJson(),
+        'callsign': profile.callsign,
+        'content': '', // Empty content for voice messages
+        'npub': profile.npub,
+        'pubkey': signedEvent.pubkey,
+        'event_id': signedEvent.id,
+        'signature': signedEvent.sig,
+        'created_at': signedEvent.createdAt,
         'metadata': metadata,
       };
 
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: '/api/chat/${widget.room.id}/messages',
+        path: ChatApi.chatMessagesPath(widget.room.id),
         body: jsonEncode(payload),
         headers: {'Content-Type': 'application/json'},
       );
@@ -483,7 +491,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'DELETE',
-        path: '/api/chat/${widget.room.id}/messages/${Uri.encodeComponent(message.timestamp)}',
+        path: '${ChatApi.chatMessagesPath(widget.room.id)}/${Uri.encodeComponent(message.timestamp)}',
         headers: {
           'Authorization': 'Nostr $authEvent',
         },
@@ -541,7 +549,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: '/api/chat/${widget.room.id}/messages/${Uri.encodeComponent(message.timestamp)}/reactions',
+        path: ChatApi.chatReactionsPath(widget.room.id, Uri.encodeComponent(message.timestamp)),
         headers: {
           'Authorization': 'Nostr $authEvent',
         },
@@ -652,16 +660,23 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         }
       }
 
-      // Send as NOSTR-signed event per API specification
+      // Send message in format expected by server API
+      // Server expects flattened fields, not nested event object
       final payload = {
-        'event': signedEvent.toJson(),
+        'callsign': profile.callsign,
+        'content': content,
+        'npub': profile.npub,
+        'pubkey': signedEvent.pubkey,
+        'event_id': signedEvent.id,
+        'signature': signedEvent.sig,
+        'created_at': signedEvent.createdAt,
         if (metadata.isNotEmpty) 'metadata': metadata,
       };
 
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: '/api/chat/${widget.room.id}/messages',
+        path: ChatApi.chatMessagesPath(widget.room.id),
         body: jsonEncode(payload),
         headers: {'Content-Type': 'application/json'},
       );
@@ -709,13 +724,6 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadMessages,
-            tooltip: _i18n.t('refresh'),
-          ),
-        ],
       ),
       body: Column(
         children: [

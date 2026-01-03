@@ -39,6 +39,7 @@
   "collection_type_desc_station": "Station configuration for network communication settings. Manage how your node connects to the network.",
   "collection_type_desc_transfer": "Centralized download and upload center with progress tracking, retry logic, and metrics.",
   "collection_type_desc_inventory": "Track and manage your items with folder-based organization. Keep track of quantities, usage, expiry dates, and borrowed items.",
+  "collection_type_desc_wallet": "Track debts and payments between parties with NOSTR-signed receipts. Cryptographically verifiable records of money and time owed.",
   "collection_type_desc_www": "Host a personal website with full HTML, CSS, and JavaScript support. Accessible via your station URL.",
   "collection_type_events": "Events",
   "collection_type_exists_message": "This collection type already exists. Each type can only have one instance.",
@@ -58,6 +59,7 @@
   "collection_type_features_station": "Connection settings|Peer management|Bandwidth controls",
   "collection_type_features_transfer": "Resume capability|Automatic retry|Patient mode|Priority queue|Ban list|Metrics",
   "collection_type_features_inventory": "Folder-based organization|Quantity and usage tracking|Batch/lot management with expiry|Borrowing and lending|200+ item types with templates",
+  "collection_type_features_wallet": "NOSTR-signed receipts|Multi-currency support|Time-based debts|Payment tracking|Witness signatures|Photo evidence",
   "collection_type_features_www": "Full web hosting|Custom HTML/CSS/JS|Accessible at station-url/callsign",
   "collection_type_files": "Files",
   "collection_type_forum": "Forum",
@@ -70,6 +72,7 @@
   "collection_type_postcards": "Postcards",
   "collection_type_station": "Station",
   "collection_type_transfer": "Transfer",
+  "collection_type_wallet": "Wallet",
   "collection_type_www": "Website",
   "collection_updates": "Collection Updates",
   "collection_updates_desc": "Notify when collections are updated or synced"

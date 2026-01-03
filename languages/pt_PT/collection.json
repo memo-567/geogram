@@ -39,6 +39,7 @@
   "collection_type_desc_station": "Configuração da estação para definições de comunicação de rede. Gira como o seu nó se liga à rede.",
   "collection_type_desc_transfer": "Centro centralizado de download e upload com rastreamento de progresso, lógica de nova tentativa e métricas.",
   "collection_type_desc_inventory": "Gira e monitorize os seus itens com organização por pastas. Controle quantidades, uso, datas de validade e itens emprestados.",
+  "collection_type_desc_wallet": "Registe dívidas e pagamentos entre partes com recibos assinados por NOSTR. Registos criptograficamente verificáveis de dinheiro e tempo devido.",
   "collection_type_desc_www": "Aloje um website pessoal com suporte completo para HTML, CSS e JavaScript. Acessível através do URL da sua estação.",
   "collection_type_events": "Eventos",
   "collection_type_exists_message": "Este tipo de coleção já existe. Cada tipo só pode ter uma instância.",
@@ -58,6 +59,7 @@
   "collection_type_features_station": "Definições de ligação|Gestão de pares|Controlos de largura de banda",
   "collection_type_features_transfer": "Capacidade de retomar|Nova tentativa automática|Modo paciente|Fila prioritária|Lista de bloqueio|Métricas",
   "collection_type_features_inventory": "Organização por pastas|Rastreamento de quantidade e uso|Gestão de lotes com validade|Empréstimos|200+ tipos de itens com modelos",
+  "collection_type_features_wallet": "Recibos assinados por NOSTR|Suporte multi-moeda|Dívidas baseadas em tempo|Rastreamento de pagamentos|Assinaturas de testemunhas|Evidência fotográfica",
   "collection_type_features_www": "Alojamento web completo|HTML/CSS/JS personalizados|Acessível em station-url/indicativo",
   "collection_type_files": "Ficheiros",
   "collection_type_forum": "Fórum",
@@ -70,6 +72,7 @@
   "collection_type_postcards": "Postais",
   "collection_type_station": "Estação",
   "collection_type_transfer": "Transferências",
+  "collection_type_wallet": "Carteira",
   "collection_type_www": "Website",
   "collection_updates": "Atualizações de Coleções",
   "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas"

@@ -4,6 +4,9 @@ Quick reference guide to all documentation files. Use this to quickly find which
 
 ## Core Architecture & APIs
 
+### technical.md
+Technical architecture overview of Geogram. Covers the core design principles, module organization, service layers, data flow patterns, and how the different components (stations, devices, apps) interact with each other.
+
 ### API.md
 HTTP API endpoints for the Geogram server. Covers station API, device API, log API, file browsing, status endpoints, and debug API. Essential for understanding how devices communicate with the station and with each other.
 
@@ -34,6 +37,9 @@ Security and privacy settings documentation. Covers HTTP API toggle, debug API t
 ### station-implementation-plan.md
 Comprehensive plan for implementing station functionality (root and node stations). Includes UI specifications, models, services, channel bridging, points/reputation system, and authority management. This is a planning document for future implementation.
 
+### reusable.md
+Catalog of reusable UI components available in the Geogram codebase. Documents picker widgets (UserPicker, CurrencyPicker, TypeSelector), viewer pages (PhotoViewer, LocationPicker, ContractDocument), player widgets (VoicePlayer, MusicPlayer, VoiceRecorder), dialog widgets (NewChannel, NewThread), selector widgets (CallsignSelector, ProfileSwitcher), tree widgets (FolderTree), and message widgets (MessageBubble, MessageInput). Each component includes parameters, usage examples, and feature lists.
+
 ## Tutorials
 
 ### tutorials/publish-new-version.md
@@ -49,6 +55,9 @@ Detailed plan for adding voice message support to 1:1 direct messages. Covers au
 
 ### plan/irc-bridge-implementation.md
 Implementation plan for IRC bridge allowing IRC clients to connect to Geogram chat. Describes server integration, channel mapping, NOSTR identity for guests, bidirectional message flow, and security considerations.
+
+### plan/google-play-release.md
+Google Play Store release plan and preparation checklist. Covers app store requirements, metadata preparation, screenshot guidelines, privacy policy requirements, content rating questionnaire, and the release workflow.
 
 ## Bridge Documentation
 
@@ -101,11 +110,30 @@ Station/relay configuration and metadata. Network information, node registration
 ### apps/service-format-specification.md
 Service provider listings and service metadata. Defines how service providers are registered, discovered, and accessed.
 
+### apps/inventory-format-specification.md
+Inventory tracking system for physical items. Defines folder-based storage structure, item metadata (type, quantity, expiry, location), category taxonomy (16 categories from food to electronics), barcode support, photo attachments, and NOSTR signing for ownership verification.
+
+### apps/wallet-format-specification.md
+Debt tracking and IOU system with NOSTR signatures. Defines debt ledger format, contract document generation, multi-currency support, signature verification for creditor/debtor, entry types (create, confirm, payment, cancel, note), and the complete lifecycle from creation to settlement.
+
 ### apps/transfer-format-specification.md
 Centralized download/upload center with unified progress tracking. Covers bidirectional transfers, automatic retry logic, resume capability, patient mode (30-day offline support), priority queue, ban list, and verification.
 
 ### apps/bot-format-specification.md
 Offline AI assistant for Geogram stations using GGUF models. Covers Q&A assistant, auto-moderation, semantic search, voice input (Whisper), content crawling, and HuggingFace model support.
+
+## Games
+
+Offline-first games for P2P play over Bluetooth with NOSTR-signed results to prevent cheating.
+
+### games/card-games.md
+Classic card games adapted for P2P Bluetooth play. Includes Poker (Texas Hold'em), Blackjack Duel, and Rommé (German Rummy) for 2-4 players. Features cryptographic deck shuffling, NOSTR-signed results, and optional station leaderboards.
+
+### games/math-challenge.md
+Competitive math game with 10 questions across 10 difficulty levels. Supports P2P battles (both players solve identical questions) and station time attacks (solo speed runs per difficulty level). Questions cover arithmetic, algebra, geometry, fractions, and percentages.
+
+### games/offgrid-pet-battle.md
+Geogram Companions - offline-first pet battle game inspired by Pokemon Go. Features 8 radio/tech-themed creatures, turn-based combat over Bluetooth, station rewards, evolution system, and solo activities for low-density areas. All results are NOSTR-signed with stats derived from signed records.
 
 ## How to Use This Summary
 
@@ -116,6 +144,8 @@ Offline AI assistant for Geogram stations using GGUF models. Covers Q&A assistan
 5. **For Releasing Updates**: Follow tutorials/publish-new-version.md
 6. **For Understanding Planned Features**: See files in plan/ directory
 7. **For Bridge Integration**: Check bridges/ directory
+8. **For Reusable UI Components**: Check reusable.md
+9. **For Games**: See files in games/ directory
 
 ## Quick File Finder
 
@@ -128,16 +158,24 @@ Offline AI assistant for Geogram stations using GGUF models. Covers Q&A assistan
 - Chat format? → apps/chat-format-specification.md
 - Alerts format? → apps/alert-format-specification.md
 - Blog format? → apps/blog-format-specification.md
+- Inventory tracking? → apps/inventory-format-specification.md
+- Wallet/debts? → apps/wallet-format-specification.md
 - Station setup? → station-implementation-plan.md
 - IRC bridge? → bridges/IRC.md, plan/irc-bridge-implementation.md
 - Voice messages? → plan/chat-with-voice-messages.md
+- Google Play release? → plan/google-play-release.md
 - Releasing versions? → tutorials/publish-new-version.md
 - CLI options? → command-line-switches.md
 - Events system? → EventBus.md
 - Transfer center? → apps/transfer-format-specification.md
 - AI Bot? → apps/bot-format-specification.md
+- Reusable widgets? → reusable.md
+- Card games (Poker, Blackjack, Rommé)? → games/card-games.md
+- Math challenge game? → games/math-challenge.md
+- Pet battle game? → games/offgrid-pet-battle.md
+- Architecture overview? → technical.md
 
 ---
 
-*Last updated: 2026-01-01*
+*Last updated: 2026-01-03*
 *This summary covers all documentation in the docs/ folder*

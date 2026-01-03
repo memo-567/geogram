@@ -35,21 +35,23 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   Set<String> _existingTypes = {};
 
   // Collection types with their icons (ordered by relevance)
+  // Hidden types (not ready): forum, transfer, bot, postcards, market, backup, www, news
   static const List<_CollectionTypeInfo> _collectionTypes = [
     _CollectionTypeInfo('places', Icons.place),
     _CollectionTypeInfo('blog', Icons.article),
     _CollectionTypeInfo('chat', Icons.chat),
     _CollectionTypeInfo('events', Icons.event),
-    _CollectionTypeInfo('forum', Icons.forum),
+    // _CollectionTypeInfo('forum', Icons.forum),  // Hidden: not ready
     _CollectionTypeInfo('alerts', Icons.campaign),
-    _CollectionTypeInfo('news', Icons.newspaper),
-    _CollectionTypeInfo('www', Icons.language),
+    // _CollectionTypeInfo('news', Icons.newspaper),  // Hidden: not ready
+    // _CollectionTypeInfo('www', Icons.language),  // Hidden: not ready
     _CollectionTypeInfo('inventory', Icons.inventory_2),
-    _CollectionTypeInfo('backup', Icons.backup),
-    _CollectionTypeInfo('transfer', Icons.swap_horiz),
+    _CollectionTypeInfo('wallet', Icons.account_balance_wallet),
+    // _CollectionTypeInfo('backup', Icons.backup),  // Hidden: not ready
+    // _CollectionTypeInfo('transfer', Icons.swap_horiz),  // Hidden: not ready
     _CollectionTypeInfo('files', Icons.folder),
-    _CollectionTypeInfo('postcards', Icons.mail),
-    _CollectionTypeInfo('market', Icons.storefront),
+    // _CollectionTypeInfo('postcards', Icons.mail),  // Hidden: not ready
+    // _CollectionTypeInfo('market', Icons.storefront),  // Hidden: not ready
     _CollectionTypeInfo('groups', Icons.groups),
   ];
 
@@ -59,7 +61,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet'
   };
 
   @override

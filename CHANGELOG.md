@@ -1,5 +1,42 @@
 # Geogram Desktop Changelog
 
+## 2026-01-03 - v1.6.65
+
+### Changes
+- Add Google Play release plan documentation
+- Keep update button blue when download is ready to install
+- Update release script to include F-Droid metadata updates
+- Add screenshots and feature graphic for F-Droid listing
+- Update F-Droid metadata to v1.6.75
+- Add F-Droid fastlane metadata with icon and descriptions
+- Add Apache 2.0 license for F-Droid submission
+- Add signed NOSTR authentication for RESTRICTED chat rooms
+- Fix VC++ Runtime DLL discovery path
+- Bundle VC++ Runtime DLLs with Windows build
+- Fix Podfiles: Use static linkage for onnxruntime compatibility
+- Add Podfiles for iOS/macOS with correct platform versions
+- Fix iOS/macOS builds: Update deployment targets for flutter_onnxruntime
+- Release v1.6.72 - Inventory app, Transfer system, and UI improvements
+- Add horizontal rules between sections for GitHub rendering
+- Improve README formatting: Details prefix, extra spacing between sections
+- Move documentation links to bottom of each app section
+- Replace em-dashes with regular hyphens
+- Add Device Discovery section explaining P2P communication
+- Improve README with warmer tone and new sections
+- Improve documentation with project overview and technical reference
+- Release v1.6.71 - Fix Android build with proguard rules
+- Add proguard rules for Google Play Core classes
+- Fix Android build and refactor TFLite service for cross-platform support
+- Release v1.6.70 - Update system improvements and window state persistence
+- Fix DM image transfers and add debug API for 1:1 testing
+- Fix web build: use stub-compatible header methods
+- Fix DM file transfers - upload files to remote before sending
+- Release v1.6.67
+- Fix scroll hijacking when images load in chat
+- Improve chat UX, fix DM quotes, and enhance privacy
+- Release v1.6.65
+
+
 ## 2025-12-29 - v1.6.64
 
 ### Changes

@@ -285,6 +285,25 @@ class LocationService {
   /// Get total number of cities in database
   int get cityCount => _cities?.length ?? 0;
 
+  /// Get list of all unique countries sorted alphabetically
+  Future<List<String>> getAllCountries() async {
+    if (!_isLoaded) {
+      await init();
+    }
+
+    if (_cities == null || _cities!.isEmpty) {
+      return [];
+    }
+
+    final countries = <String>{};
+    for (final city in _cities!) {
+      countries.add(city.country);
+    }
+
+    final sortedCountries = countries.toList()..sort();
+    return sortedCountries;
+  }
+
   /// Detect location via IP address using ip-api.com (free, no API key required)
   /// Works on desktop, web, and CLI when connected to the internet
   Future<GeoIpResult?> detectLocationViaIP() async {

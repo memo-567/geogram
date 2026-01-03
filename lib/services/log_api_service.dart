@@ -48,6 +48,11 @@ import '../bot/services/music_model_manager.dart';
 import '../bot/services/vision_model_manager.dart';
 import '../models/station.dart';
 import '../util/alert_folder_utils.dart';
+import '../wallet/services/wallet_service.dart';
+import '../wallet/services/wallet_sync_service.dart';
+import '../wallet/models/debt_ledger.dart';
+import '../wallet/models/debt_entry.dart';
+import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 
@@ -292,12 +297,20 @@ class LogApiService {
       }
     }
 
-    // Chat room files
+    // Chat room files listing
     if (urlPath.startsWith('api/chat/') && urlPath.endsWith('/files')) {
       final roomId = _extractRoomIdFromPath(urlPath);
       if (roomId != null && request.method == 'GET') {
         return await _handleChatFilesRequest(request, roomId, headers);
       }
+    }
+
+    // Chat room file download: /api/chat/{roomId}/files/{filename}
+    final chatFileMatch = RegExp(r'^api/chat/(?:rooms/)?([^/]+)/files/(.+)$').firstMatch(urlPath);
+    if (chatFileMatch != null && request.method == 'GET') {
+      final roomId = Uri.decodeComponent(chatFileMatch.group(1)!);
+      final filename = Uri.decodeComponent(chatFileMatch.group(2)!);
+      return await _handleChatFileDownloadRequest(request, roomId, filename, headers);
     }
 
     // Chat message reactions
@@ -426,6 +439,17 @@ class LogApiService {
       return await _handleDevicesRequest(request, headers);
     }
 
+    // Wallet API endpoints
+    if (urlPath == 'api/wallet/debts' || urlPath == 'api/wallet/debts/' || urlPath.startsWith('api/wallet/debts/')) {
+      return await _handleWalletDebtsRequest(request, urlPath, headers);
+    }
+    if (urlPath == 'api/wallet/requests' || urlPath == 'api/wallet/requests/' || urlPath.startsWith('api/wallet/requests/')) {
+      return await _handleWalletRequestsRequest(request, urlPath, headers);
+    }
+    if (urlPath == 'api/wallet/sync' && request.method == 'POST') {
+      return await _handleWalletSyncRequest(request, headers);
+    }
+
     // API root: /api/ or /api
     if ((urlPath == 'api' || urlPath == 'api/') && request.method == 'GET') {
       return _handleApiRootRequest(headers);
@@ -497,6 +521,14 @@ class LogApiService {
           '/api/alerts/{alertId}/files/{path}': 'Get alert file (photo)',
           '/api/devices': 'List discovered devices (requires debug API enabled)',
           '/api/debug': 'Debug API - GET for status, POST to trigger actions (requires debug API enabled)',
+          '/api/wallet/debts': 'GET list debts, POST create debt',
+          '/api/wallet/debts/{id}': 'GET debt details',
+          '/api/wallet/debts/{id}/entries': 'POST add entry to debt',
+          '/api/wallet/debts/{id}/verify': 'GET verify debt signatures',
+          '/api/wallet/requests': 'GET list pending sync requests',
+          '/api/wallet/requests/{id}/approve': 'POST approve sync request',
+          '/api/wallet/requests/{id}/reject': 'POST reject sync request',
+          '/api/wallet/sync': 'POST receive wallet sync data',
         },
       }),
       headers: headers,
@@ -2491,7 +2523,9 @@ class LogApiService {
 
       final chatService = ChatService();
       final channel = chatService.getChannel(roomId);
-      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+      // Geogram callsigns start with 'X' followed by alphanumerics (e.g., X1ABC)
+      // This prevents words like 'GENERAL' from being misinterpreted as callsigns
+      final isCallsignLike = RegExp(r'^X[A-Z0-9]{2,}$').hasMatch(roomId.toUpperCase());
 
       if (channel == null && isCallsignLike) {
         final dmService = DirectMessageService();
@@ -2637,7 +2671,9 @@ class LogApiService {
 
       final chatService = ChatService();
       final channel = chatService.getChannel(roomId);
-      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+      // Geogram callsigns start with 'X' followed by alphanumerics (e.g., X1ABC)
+      // This prevents words like 'GENERAL' from being misinterpreted as callsigns
+      final isCallsignLike = RegExp(r'^X[A-Z0-9]{2,}$').hasMatch(roomId.toUpperCase());
 
       if (channel == null && isCallsignLike) {
         return await _handleDMViaChatAPI(request, roomId.toUpperCase(), headers);
@@ -3111,6 +3147,123 @@ class LogApiService {
     }
   }
 
+  /// Handle GET /api/chat/{roomId}/files/{filename} - Download file from chat room
+  Future<shelf.Response> _handleChatFileDownloadRequest(
+    shelf.Request request,
+    String roomId,
+    String filename,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Security: prevent path traversal
+      if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        return shelf.Response.forbidden(
+          jsonEncode({'error': 'Invalid filename'}),
+          headers: headers,
+        );
+      }
+
+      io.File? targetFile;
+
+      // First try via ChatService if initialized
+      await _initializeChatServiceIfNeeded();
+      final chatService = ChatService();
+
+      if (chatService.collectionPath != null) {
+        final channel = chatService.getChannel(roomId);
+        if (channel != null) {
+          final collectionPath = chatService.collectionPath!;
+          final channelPath = path.join(collectionPath, channel.folder);
+
+          // For main channel, search in year/files/ subfolders
+          if (channel.isMain) {
+            final channelDir = io.Directory(channelPath);
+            if (await channelDir.exists()) {
+              await for (final yearEntity in channelDir.list()) {
+                if (yearEntity is io.Directory) {
+                  final yearName = path.basename(yearEntity.path);
+                  if (RegExp(r'^\d{4}$').hasMatch(yearName)) {
+                    final filePath = path.join(yearEntity.path, 'files', filename);
+                    final file = io.File(filePath);
+                    if (await file.exists()) {
+                      targetFile = file;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // For other channels, files are in channel/files/
+            final filePath = path.join(channelPath, 'files', filename);
+            final file = io.File(filePath);
+            if (await file.exists()) {
+              targetFile = file;
+            }
+          }
+        }
+      }
+
+      // Fallback: check devices/{myCallsign}/chat/{roomId}/files/ path
+      // This handles cases where files are stored directly in the device's chat directory
+      if (targetFile == null) {
+        final myCallsign = ProfileService().getProfile().callsign;
+        final devicesPath = StorageConfig().devicesDir;
+        final fallbackPath = path.join(devicesPath, myCallsign, 'chat', roomId.toLowerCase(), 'files', filename);
+        final fallbackFile = io.File(fallbackPath);
+        if (await fallbackFile.exists()) {
+          targetFile = fallbackFile;
+        }
+      }
+
+      if (targetFile == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'File not found'}),
+          headers: headers,
+        );
+      }
+
+      // Determine MIME type using standard pattern
+      final ext = path.extension(filename).toLowerCase();
+      String contentType = 'application/octet-stream';
+      final mimeTypes = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.mp4': 'video/mp4',
+        '.mov': 'video/quicktime',
+        '.webm': 'video/webm',
+        '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.pdf': 'application/pdf',
+      };
+      if (mimeTypes.containsKey(ext)) {
+        contentType = mimeTypes[ext]!;
+      }
+
+      final fileBytes = await targetFile.readAsBytes();
+      return shelf.Response.ok(
+        fileBytes,
+        headers: {
+          ...headers,
+          'Content-Type': contentType,
+          'Content-Length': fileBytes.length.toString(),
+          'Cache-Control': 'public, max-age=86400',
+        },
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error serving chat file: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
   // ============================================================
   // Restricted Chat Room Member Management API endpoints
   // ============================================================
@@ -3543,7 +3696,9 @@ class LogApiService {
       await _initializeChatServiceIfNeeded();
       final chatService = ChatService();
       final channel = chatService.getChannel(roomId);
-      final isCallsignLike = RegExp(r'^[A-Z0-9]{3,}$').hasMatch(roomId.toUpperCase());
+      // Geogram callsigns start with 'X' followed by alphanumerics (e.g., X1ABC)
+      // This prevents words like 'GENERAL' from being misinterpreted as callsigns
+      final isCallsignLike = RegExp(r'^X[A-Z0-9]{2,}$').hasMatch(roomId.toUpperCase());
 
       if (channel == null && isCallsignLike) {
         final dmService = DirectMessageService();
@@ -10051,5 +10206,688 @@ class LogApiService {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+  }
+
+  // ============ Wallet API Handlers ============
+
+  /// Initialize wallet service by finding or creating wallet collection
+  Future<bool> _initializeWalletService() async {
+    try {
+      final collectionService = CollectionService();
+      final collections = await collectionService.loadCollections();
+      var walletCollection = collections.where((c) => c.type == 'wallet').firstOrNull;
+
+      // Create wallet collection if it doesn't exist
+      if (walletCollection == null || walletCollection.storagePath == null) {
+        LogService().log('Wallet API: No wallet collection found, creating one...');
+
+        // Create wallet collection
+        final newCollection = await collectionService.createCollection(
+          title: 'Wallet',
+          type: 'wallet',
+        );
+
+        if (newCollection.storagePath == null) {
+          LogService().log('Wallet API: Failed to create wallet collection');
+          return false;
+        }
+
+        walletCollection = newCollection;
+        LogService().log('Wallet API: Created wallet collection at ${newCollection.storagePath}');
+      }
+
+      final walletPath = walletCollection!.storagePath!;
+      await WalletService().initializeCollection(walletPath);
+      await WalletSyncService().initialize(walletPath);
+      LogService().log('Wallet API: Initialized wallet from $walletPath');
+      return true;
+    } catch (e) {
+      LogService().log('Wallet API: Error initializing wallet: $e');
+      return false;
+    }
+  }
+
+  /// Handle wallet debts API requests
+  Future<shelf.Response> _handleWalletDebtsRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    final walletService = WalletService();
+
+    // Auto-initialize wallet if not already initialized
+    if (!walletService.isInitialized) {
+      final initResult = await _initializeWalletService();
+      if (!initResult) {
+        return shelf.Response.ok(
+          jsonEncode({'error': 'Wallet not initialized - no wallet collection found', 'code': 'WALLET_NOT_INITIALIZED'}),
+          headers: headers,
+        );
+      }
+    }
+
+    // GET /api/wallet/debts - List all debts
+    if ((urlPath == 'api/wallet/debts' || urlPath == 'api/wallet/debts/') && request.method == 'GET') {
+      try {
+        final debts = await walletService.listAllDebts();
+        return shelf.Response.ok(
+          jsonEncode({
+            'debts': debts.map((d) => _debtSummaryToJson(d)).toList(),
+            'count': debts.length,
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error listing debts: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to list debts', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // POST /api/wallet/debts - Create new debt
+    if ((urlPath == 'api/wallet/debts' || urlPath == 'api/wallet/debts/') && request.method == 'POST') {
+      try {
+        final body = await request.readAsString();
+        final data = jsonDecode(body) as Map<String, dynamic>;
+
+        final profile = ProfileService().getProfile();
+
+        final ledger = await walletService.createDebt(
+          description: data['description'] as String? ?? '',
+          creditor: data['creditor'] as String? ?? profile.callsign,
+          creditorNpub: data['creditor_npub'] as String? ?? profile.npub,
+          creditorName: data['creditor_name'] as String?,
+          debtor: data['debtor'] as String? ?? '',
+          debtorNpub: data['debtor_npub'] as String? ?? '',
+          debtorName: data['debtor_name'] as String?,
+          amount: (data['amount'] as num?)?.toDouble() ?? 0,
+          currency: data['currency'] as String? ?? 'EUR',
+          dueDate: data['due_date'] as String?,
+          terms: data['terms'] as String?,
+          content: data['content'] as String?,
+          additionalTerms: data['additional_terms'] as String?,
+          governingJurisdiction: data['governing_jurisdiction'] as String?,
+          includeTerms: data['include_terms'] as bool? ?? true,
+          annualInterestRate: (data['annual_interest_rate'] as num?)?.toDouble(),
+          numberOfInstallments: data['number_of_installments'] as int? ?? 1,
+          paymentIntervalDays: data['payment_interval_days'] as int? ?? 30,
+          folderPath: data['folder'] as String?,
+          profile: profile,
+        );
+
+        if (ledger == null) {
+          return shelf.Response.internalServerError(
+            body: jsonEncode({'error': 'Failed to create debt'}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'debt_id': ledger.id,
+            'debt': _ledgerToJson(ledger),
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error creating debt: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to create debt', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // Extract debt ID from path: api/wallet/debts/{id}
+    final pathMatch = RegExp(r'^api/wallet/debts/([^/]+)(?:/(.*))?$').firstMatch(urlPath);
+    if (pathMatch == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Invalid wallet path'}),
+        headers: headers,
+      );
+    }
+
+    final debtId = pathMatch.group(1)!;
+    final subPath = pathMatch.group(2);
+
+    // GET /api/wallet/debts/{id} - Get debt details
+    if ((subPath == null || subPath.isEmpty) && request.method == 'GET') {
+      try {
+        final ledger = await walletService.findDebt(debtId);
+        if (ledger == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Debt not found', 'debt_id': debtId}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode(_ledgerToJson(ledger)),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error getting debt $debtId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to get debt', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // DELETE /api/wallet/debts/{id} - Delete debt
+    if ((subPath == null || subPath.isEmpty) && request.method == 'DELETE') {
+      try {
+        final success = await walletService.deleteDebt(debtId);
+        if (!success) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Debt not found or could not be deleted', 'debt_id': debtId}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'debt_id': debtId}),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error deleting debt $debtId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to delete debt', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // GET /api/wallet/debts/{id}/verify - Verify debt signatures
+    if (subPath == 'verify' && request.method == 'GET') {
+      try {
+        final ledger = await walletService.findDebt(debtId);
+        if (ledger == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Debt not found', 'debt_id': debtId}),
+            headers: headers,
+          );
+        }
+
+        final isValid = await walletService.verifyDebt(ledger);
+
+        // Build verification details
+        final entryVerifications = <Map<String, dynamic>>[];
+        for (final entry in ledger.entries) {
+          entryVerifications.add({
+            'index': ledger.entries.indexOf(entry),
+            'type': entry.type.name,
+            'has_signature': entry.signature != null && entry.signature!.isNotEmpty,
+            'signer_npub': entry.npub,
+            'timestamp': entry.timestamp,
+          });
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'debt_id': debtId,
+            'valid': isValid,
+            'entry_count': ledger.entries.length,
+            'entries': entryVerifications,
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error verifying debt $debtId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to verify debt', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // POST /api/wallet/debts/{id}/entries - Add entry to debt
+    if (subPath == 'entries' && request.method == 'POST') {
+      try {
+        final body = await request.readAsString();
+        final data = jsonDecode(body) as Map<String, dynamic>;
+
+        final entryType = data['type'] as String? ?? 'note';
+        final profile = ProfileService().getProfile();
+        bool success = false;
+
+        switch (entryType) {
+          case 'confirm':
+            success = await walletService.confirmDebt(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'reject':
+            success = await walletService.rejectDebt(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              content: data['content'] as String? ?? data['reason'] as String? ?? '',
+            );
+            break;
+          case 'payment':
+            // Get the current debt to calculate new balance
+            final paymentLedger = await walletService.findDebt(debtId);
+            if (paymentLedger == null) {
+              return shelf.Response.notFound(
+                jsonEncode({'error': 'Debt not found'}),
+                headers: headers,
+              );
+            }
+            final paymentAmount = (data['amount'] as num?)?.toDouble() ?? 0;
+            final paymentNewBalance = paymentLedger.currentBalance - paymentAmount;
+            success = await walletService.recordPayment(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              amount: paymentAmount,
+              newBalance: paymentNewBalance,
+              method: data['method'] as String?,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'confirm_payment':
+            success = await walletService.confirmPayment(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'work_session':
+            success = await walletService.recordWorkSession(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              durationMinutes: data['duration_minutes'] as int? ?? 0,
+              description: data['description'] as String?,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'confirm_session':
+            // Get the current debt to calculate new balance
+            final sessionLedger = await walletService.findDebt(debtId);
+            if (sessionLedger == null) {
+              return shelf.Response.notFound(
+                jsonEncode({'error': 'Debt not found'}),
+                headers: headers,
+              );
+            }
+            final confirmedMinutes = data['duration_minutes'] as int? ?? 0;
+            final sessionNewBalance = (sessionLedger.currentBalance - confirmedMinutes).toInt();
+            success = await walletService.confirmWorkSession(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              newBalanceMinutes: sessionNewBalance,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'status_change':
+            final statusStr = data['new_status'] as String? ?? 'open';
+            final newStatus = DebtEntry.parseStatus(statusStr) ?? DebtStatus.open;
+            success = await walletService.changeStatus(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              newStatus: newStatus,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'note':
+            success = await walletService.addNote(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'witness':
+            success = await walletService.addWitness(
+              debtId: debtId,
+              author: profile.callsign,
+              profile: profile,
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'uncollectable':
+            success = await walletService.declareUncollectable(
+              debtId: debtId,
+              profile: profile,
+              reason: data['reason'] as String? ?? 'Declared uncollectable via API',
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          case 'unpayable':
+            success = await walletService.declareUnpayable(
+              debtId: debtId,
+              profile: profile,
+              reason: data['reason'] as String? ?? 'Declared unpayable via API',
+              content: data['content'] as String? ?? '',
+            );
+            break;
+          default:
+            return shelf.Response.badRequest(
+              body: jsonEncode({'error': 'Unknown entry type', 'type': entryType}),
+              headers: headers,
+            );
+        }
+
+        if (!success) {
+          return shelf.Response.internalServerError(
+            body: jsonEncode({'error': 'Failed to add entry', 'type': entryType}),
+            headers: headers,
+          );
+        }
+
+        // Re-fetch the updated debt
+        final updatedLedger = await walletService.findDebt(debtId);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'entry_type': entryType,
+            'debt': updatedLedger != null ? _ledgerToJson(updatedLedger) : null,
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error adding entry to debt $debtId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to add entry', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // POST /api/wallet/debts/{id}/sign - Sign the latest unsigned entry by current user
+    if (subPath == 'sign' && request.method == 'POST') {
+      try {
+        final ledger = await walletService.findDebt(debtId);
+        if (ledger == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Debt not found', 'debt_id': debtId}),
+            headers: headers,
+          );
+        }
+
+        final profile = ProfileService().getProfile();
+
+        // Find entries that should be signed by this user but aren't
+        final unsignedEntries = <int>[];
+        for (int i = 0; i < ledger.entries.length; i++) {
+          final entry = ledger.entries[i];
+          // Check if this entry's author matches our callsign and it's not signed
+          if (entry.author == profile.callsign &&
+              (entry.signature == null || entry.signature!.isEmpty)) {
+            unsignedEntries.add(i);
+          }
+        }
+
+        if (unsignedEntries.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'No entries require signature',
+              'debt_id': debtId,
+            }),
+            headers: headers,
+          );
+        }
+
+        // For now, we can add a confirmation entry which will sign the chain
+        final success = await walletService.confirmDebt(
+          debtId: debtId,
+          author: profile.callsign,
+          profile: profile,
+          content: 'Signed via API',
+        );
+
+        final updatedLedger = await walletService.findDebt(debtId);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': success,
+            'signed_entries': unsignedEntries.length,
+            'debt': updatedLedger != null ? _ledgerToJson(updatedLedger) : null,
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error signing debt $debtId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to sign debt', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Unknown wallet endpoint', 'path': urlPath}),
+      headers: headers,
+    );
+  }
+
+  /// Handle wallet sync requests API
+  Future<shelf.Response> _handleWalletRequestsRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // Auto-initialize wallet if not already initialized
+    if (!WalletService().isInitialized) {
+      final initResult = await _initializeWalletService();
+      if (!initResult) {
+        return shelf.Response.ok(
+          jsonEncode({'error': 'Could not initialize wallet', 'code': 'WALLET_NOT_INITIALIZED'}),
+          headers: headers,
+        );
+      }
+    }
+
+    final syncService = WalletSyncService();
+
+    // GET /api/wallet/requests - List pending requests
+    if ((urlPath == 'api/wallet/requests' || urlPath == 'api/wallet/requests/') && request.method == 'GET') {
+      try {
+        final requests = await syncService.getPendingRequests();
+        return shelf.Response.ok(
+          jsonEncode({
+            'requests': requests.map((r) => r.toJson()).toList(),
+            'count': requests.length,
+          }),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error listing requests: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to list requests', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // Extract request ID from path: api/wallet/requests/{id}/action
+    final pathMatch = RegExp(r'^api/wallet/requests/([^/]+)/(\w+)$').firstMatch(urlPath);
+    if (pathMatch == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Invalid wallet requests path'}),
+        headers: headers,
+      );
+    }
+
+    final requestId = pathMatch.group(1)!;
+    final action = pathMatch.group(2)!;
+
+    // POST /api/wallet/requests/{id}/approve - Approve request
+    if (action == 'approve' && request.method == 'POST') {
+      try {
+        final profile = ProfileService().getProfile();
+        final success = await syncService.approveRequest(requestId, profile);
+
+        if (!success) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Request not found or could not be approved', 'request_id': requestId}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'request_id': requestId, 'action': 'approved'}),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error approving request $requestId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to approve request', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    // POST /api/wallet/requests/{id}/reject - Reject request
+    if (action == 'reject' && request.method == 'POST') {
+      try {
+        final body = await request.readAsString();
+        String? reason;
+        if (body.isNotEmpty) {
+          final data = jsonDecode(body) as Map<String, dynamic>;
+          reason = data['reason'] as String?;
+        }
+
+        final success = await syncService.rejectRequest(requestId, reason: reason);
+
+        if (!success) {
+          return shelf.Response.notFound(
+            jsonEncode({'error': 'Request not found or could not be rejected', 'request_id': requestId}),
+            headers: headers,
+          );
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'request_id': requestId, 'action': 'rejected'}),
+          headers: headers,
+        );
+      } catch (e) {
+        LogService().log('Wallet API: Error rejecting request $requestId: $e');
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Failed to reject request', 'message': e.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Unknown wallet requests action', 'action': action}),
+      headers: headers,
+    );
+  }
+
+  /// Handle wallet sync POST request
+  Future<shelf.Response> _handleWalletSyncRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Auto-initialize wallet if not already initialized
+      if (!WalletService().isInitialized) {
+        final initResult = await _initializeWalletService();
+        if (!initResult) {
+          return shelf.Response.ok(
+            jsonEncode({'error': 'Could not initialize wallet', 'code': 'WALLET_NOT_INITIALIZED'}),
+            headers: headers,
+          );
+        }
+      }
+
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+
+      final syncService = WalletSyncService();
+      final result = await syncService.receiveSyncData(data);
+
+      return shelf.Response.ok(
+        jsonEncode(result),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('Wallet API: Error processing sync: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to process sync', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Convert a DebtLedger to JSON for API response
+  Map<String, dynamic> _ledgerToJson(DebtLedger ledger) {
+    return {
+      'id': ledger.id,
+      'description': ledger.description,
+      'creditor': ledger.creditor,
+      'creditor_npub': ledger.creditorNpub,
+      'creditor_name': ledger.creditorName,
+      'debtor': ledger.debtor,
+      'debtor_npub': ledger.debtorNpub,
+      'debtor_name': ledger.debtorName,
+      'original_amount': ledger.originalAmount,
+      'currency': ledger.currency,
+      'due_date': ledger.dueDate,
+      'status': DebtEntry.statusToString(ledger.status),
+      'created_at': ledger.createdAt?.toIso8601String(),
+      'modified_at': ledger.modifiedAt?.toIso8601String(),
+      'current_balance': ledger.currentBalance,
+      'total_paid': ledger.totalPaid,
+      'entries': ledger.entries.map((e) => _entryToJson(e)).toList(),
+    };
+  }
+
+  /// Convert a DebtEntry to JSON for API response
+  Map<String, dynamic> _entryToJson(DebtEntry entry) {
+    return {
+      'type': entry.type.name,
+      'timestamp': entry.timestamp,
+      'author': entry.author,
+      'author_npub': entry.npub,
+      'content': entry.content,
+      'amount': entry.amount,
+      'currency': entry.currency,
+      'has_signature': entry.signature != null && entry.signature!.isNotEmpty,
+      'signer_npub': entry.npub,
+      'metadata': entry.metadata,
+    };
+  }
+
+  /// Convert a DebtSummary to JSON for API response
+  Map<String, dynamic> _debtSummaryToJson(DebtSummary summary) {
+    return {
+      'id': summary.id,
+      'description': summary.description,
+      'status': summary.status.name,
+      'is_time_based': summary.isTimeBased,
+      'currency': summary.currency,
+      'original_amount': summary.originalAmount,
+      'current_balance': summary.currentBalance,
+      'total_paid': summary.totalPaid,
+      'creditor': summary.creditor,
+      'creditor_npub': summary.creditorNpub,
+      'creditor_name': summary.creditorName,
+      'debtor': summary.debtor,
+      'debtor_npub': summary.debtorNpub,
+      'debtor_name': summary.debtorName,
+      'due_date': summary.dueDate,
+      'created_at': summary.createdAt?.toIso8601String(),
+      'modified_at': summary.modifiedAt?.toIso8601String(),
+      'entry_count': summary.entryCount,
+      'payment_count': summary.paymentCount,
+      'is_established': summary.isEstablished,
+      'all_signatures_valid': summary.allSignaturesValid,
+      'is_overdue': summary.isOverdue,
+      'progress': summary.progress,
+    };
   }
 }

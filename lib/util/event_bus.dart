@@ -511,3 +511,6 @@ class TransferResumedEvent extends AppEvent {
   @override
   String toString() => 'TransferResumedEvent(id: $transferId)';
 }
+
+/// Navigate to home/apps tab
+class NavigateToHomeEvent extends AppEvent {}

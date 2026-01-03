@@ -2224,20 +2224,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               onPressed: _openRoomManagement,
               tooltip: _i18n.t('room_management'),
             ),
-          // Add channel button: always in landscape, only on channel list in portrait
-          if (!widget.isRemoteDevice && (isWideScreen || _selectedChannel == null))
-            IconButton(
-              icon: const Icon(Icons.add),
-              onPressed: _showNewChannelDialog,
-              tooltip: _i18n.t('new_channel'),
-            ),
-          // Only show settings for local chat (not remote devices)
-          if (!widget.isRemoteDevice)
-            IconButton(
-              icon: const Icon(Icons.settings),
-              onPressed: _openSettings,
-              tooltip: _i18n.t('settings'),
-            ),
         ],
       ),
       body: _buildBody(theme),
@@ -2855,6 +2841,25 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ],
               ),
             ),
+            // Add channel and settings buttons - only for local device (user always has permission)
+            if (!widget.isRemoteDevice) ...[
+              IconButton(
+                icon: const Icon(Icons.add),
+                onPressed: _showNewChannelDialog,
+                tooltip: _i18n.t('new_channel'),
+                iconSize: 20,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: _openSettings,
+                tooltip: _i18n.t('settings'),
+                iconSize: 20,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+            ],
           ],
         ),
       ),

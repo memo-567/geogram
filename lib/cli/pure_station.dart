@@ -1920,35 +1920,37 @@ class PureStationServer {
         await _handleDeviceProxy(request);
       } else if (path == '/search') {
         await _handleSearch(request);
-      } else if (ChatApi.isRoomsPath(path)) {
-        // /{callsign}/api/chat/rooms
-        final callsign = ChatApi.extractCallsign(path)!;
+      } else if (ChatApi.isChatRoomsPath(path)) {
+        // /{callsign}/api/chat/rooms OR /api/chat/rooms
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
         await _handleChatRooms(request, callsign);
-      } else if (path == '/api/chat/rooms') {
-        // /api/chat/rooms (station shorthand)
-        await _handleChatRooms(request, _settings.callsign);
-      } else if (ChatApi.isMessagesPath(path)) {
-        // /{callsign}/api/chat/rooms/{roomId}/messages
-        final callsign = ChatApi.extractCallsign(path)!;
+      } else if (ChatApi.isChatMessagesPath(path)) {
+        // Accepts both formats:
+        // - /api/chat/{roomId}/messages (unified)
+        // - /api/chat/rooms/{roomId}/messages (legacy)
+        // - /{callsign}/api/chat/{roomId}/messages (remote unified)
+        // - /{callsign}/api/chat/rooms/{roomId}/messages (remote legacy)
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
         await _handleRoomMessages(request, callsign);
-      } else if (RegExp(r'^/api/chat/rooms/[^/]+/messages$').hasMatch(path)) {
-        // /api/chat/rooms/{roomId}/messages (station shorthand)
-        await _handleRoomMessages(request, _settings.callsign);
       } else if (_isChatReactionPath(path)) {
         final callsign = _parseCallsignFromPath(path) ?? _settings.callsign;
         await _handleRoomMessageReactions(request, callsign);
       } else if (_isChatFilesListPath(path) && method == 'POST') {
-        // POST /api/chat/rooms/{roomId}/files - upload file to chat room
-        await _handleChatFileUpload(request);
+        // POST /{callsign}/api/chat/{roomId}/files - upload file to chat room
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleChatFileUpload(request, callsign);
       } else if (_isChatFilesListPath(path)) {
-        // GET /api/chat/rooms/{roomId}/files - list chat files for caching
-        await _handleChatFilesList(request);
+        // GET /{callsign}/api/chat/{roomId}/files - list chat files for caching
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleChatFilesList(request, callsign);
       } else if (_isChatFileDownloadPath(path)) {
-        // GET /api/chat/rooms/{roomId}/files/{filename} - download chat file
-        await _handleChatFileDownload(request);
+        // GET /{callsign}/api/chat/{roomId}/files/{filename} - download chat file
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleChatFileDownload(request, callsign);
       } else if (_isChatFileContentPath(path)) {
-        // /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
-        await _handleChatFileContent(request);
+        // /{callsign}/api/chat/{roomId}/file/{year}/{filename} - get raw chat file
+        final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
+        await _handleChatFileContent(request, callsign);
       } else if (path == '/api/station/send' && method == 'POST') {
         await _handleRelaySend(request);
       } else if (path == '/api/groups') {
@@ -5748,26 +5750,28 @@ class PureStationServer {
     return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9_-]+$').hasMatch(firstPart);
   }
 
-  /// Check if path is a chat files list request (/api/chat/rooms/{roomId}/files)
+  /// Check if path is a chat files list request
+  /// Accepts both: /api/chat/{roomId}/files and /api/chat/rooms/{roomId}/files
   bool _isChatFilesListPath(String path) {
-    return RegExp(r'^/api/chat/rooms/[^/]+/files$').hasMatch(path);
+    return ChatApi.isChatFilesListPath(path);
   }
 
-  /// Check if path is a chat file download request (/api/chat/rooms/{roomId}/files/{filename})
+  /// Check if path is a chat file download request
+  /// Accepts both: /api/chat/{roomId}/files/{filename} and /api/chat/rooms/{roomId}/files/{filename}
   bool _isChatFileDownloadPath(String path) {
-    return RegExp(r'^/api/chat/rooms/[^/]+/files/.+$').hasMatch(path);
+    return ChatApi.isChatFileDownloadPath(path);
   }
 
+  /// Check if path is a chat reactions request
+  /// Accepts both: /api/chat/{roomId}/messages/{ts}/reactions and /api/chat/rooms/{roomId}/messages/{ts}/reactions
   bool _isChatReactionPath(String path) {
-    if (RegExp(r'^/api/chat/rooms/[^/]+/messages/.+/reactions$').hasMatch(path)) {
-      return true;
-    }
-    return RegExp(r'^/[A-Z0-9]+/api/chat/rooms/[^/]+/messages/.+/reactions$').hasMatch(path);
+    return ChatApi.isChatReactionsPath(path);
   }
 
-  /// Check if path is a chat file content request (/api/chat/rooms/{roomId}/file/{year}/{filename})
+  /// Check if path is a chat file content request
+  /// Accepts both: /api/chat/{roomId}/file/{year}/{filename} and /api/chat/rooms/{roomId}/file/{year}/{filename}
   bool _isChatFileContentPath(String path) {
-    return RegExp(r'^/api/chat/rooms/[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
+    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/file/\d{4}/[^/]+$').hasMatch(path);
   }
 
   /// Check if path is a blog URL (/{identifier}/blog/{filename}.html)
@@ -6221,6 +6225,110 @@ class PureStationServer {
   /// Pending proxy requests waiting for device response
   final Map<String, Completer<Map<String, dynamic>>> _pendingProxyRequests = {};
 
+  /// Proxy an HTTP request to a connected device via WebSocket
+  Future<void> _proxyRequestToDevice(HttpRequest request, String callsign, String apiPath) async {
+    // Find the client by callsign (case-insensitive)
+    PureConnectedClient? foundClient;
+    for (final c in _clients.values) {
+      if (c.callsign?.toUpperCase() == callsign.toUpperCase()) {
+        foundClient = c;
+        break;
+      }
+    }
+
+    if (foundClient == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Device not connected',
+        'callsign': callsign.toUpperCase(),
+        'message': 'The device ${callsign.toUpperCase()} is not currently connected to this station',
+      }));
+      return;
+    }
+
+    final client = foundClient;
+    _log('INFO', 'Device proxy: ${request.method} -> ${client.callsign} $apiPath');
+
+    // Proxy request to device via WebSocket
+    final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+    final proxyRequest = {
+      'type': 'HTTP_REQUEST',
+      'requestId': requestId,
+      'method': request.method,
+      'path': apiPath,
+      'headers': jsonEncode({}),
+      'body': '',
+    };
+
+    // Read request body if present
+    if (request.contentLength > 0) {
+      final body = await utf8.decodeStream(request);
+      proxyRequest['body'] = body;
+    }
+
+    // Send request to device and wait for response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingProxyRequests[requestId] = completer;
+
+    try {
+      client.socket.add(jsonEncode(proxyRequest));
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => {
+          'type': 'HTTP_RESPONSE',
+          'statusCode': 504,
+          'responseHeaders': '{"Content-Type": "application/json"}',
+          'responseBody': jsonEncode({
+            'error': 'Gateway Timeout',
+            'message': 'Device ${callsign.toUpperCase()} did not respond in time',
+          }),
+          'isBase64': false,
+        },
+      );
+
+      request.response.statusCode = response['statusCode'] ?? 500;
+      if (response['responseHeaders'] != null) {
+        try {
+          final headers = jsonDecode(response['responseHeaders'] as String) as Map<String, dynamic>;
+          headers.forEach((key, value) {
+            if (key.toLowerCase() == 'content-type') {
+              final ct = value.toString();
+              if (ct.contains('json')) {
+                request.response.headers.contentType = ContentType.json;
+              } else if (ct.contains('html')) {
+                request.response.headers.contentType = ContentType.html;
+              } else if (ct.contains('text')) {
+                request.response.headers.contentType = ContentType.text;
+              }
+            }
+          });
+        } catch (_) {}
+      }
+
+      final body = response['responseBody'] ?? '';
+      final isBase64 = response['isBase64'] == true;
+      if (isBase64) {
+        request.response.add(base64Decode(body));
+      } else {
+        request.response.write(body);
+      }
+
+      _log('INFO', 'Device proxy response: ${response['statusCode']} for ${client.callsign} $apiPath');
+    } catch (e) {
+      request.response.statusCode = 502;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Bad Gateway',
+        'message': e.toString(),
+      }));
+    } finally {
+      _pendingProxyRequests.remove(requestId);
+    }
+  }
+
   Future<void> _handleRoot(HttpRequest request) async {
     final uptime = _startTime != null
         ? DateTime.now().difference(_startTime!).inSeconds
@@ -6276,6 +6384,12 @@ class PureStationServer {
   }
 
   Future<void> _handleChatRooms(HttpRequest request, String targetCallsign) async {
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, '/api/chat/rooms');
+      return;
+    }
+
     if (request.method == 'GET') {
       final rooms = _chatRooms.values.map((r) => r.toJson()).toList();
       request.response.headers.contentType = ContentType.json;
@@ -6309,6 +6423,12 @@ class PureStationServer {
   Future<void> _handleRoomMessages(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
     final roomId = _extractRoomId(path) ?? 'general';
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatMessagesPath(roomId));
+      return;
+    }
 
     final room = _chatRooms[roomId];
     if (room == null) {
@@ -6467,7 +6587,8 @@ class PureStationServer {
     }
 
     final apiPath = _getApiPathWithoutCallsign(request.uri.path);
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/messages/(.+)/reactions$').firstMatch(apiPath);
+    // Accept both: /api/chat/{roomId}/messages/{ts}/reactions and /api/chat/rooms/{roomId}/messages/{ts}/reactions
+    final match = RegExp(r'^/api/chat/(rooms/)?([^/]+)/messages/(.+)/reactions$').firstMatch(apiPath);
     if (match == null) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
@@ -6475,8 +6596,8 @@ class PureStationServer {
       return;
     }
 
-    final roomId = Uri.decodeComponent(match.group(1)!);
-    final timestampRaw = Uri.decodeComponent(match.group(2)!);
+    final roomId = Uri.decodeComponent(match.group(2)!);
+    final timestampRaw = Uri.decodeComponent(match.group(3)!);
 
     final event = _verifyNostrEventWithTags(request, 'react', roomId);
     if (event == null) {
@@ -6681,26 +6802,33 @@ class PureStationServer {
     );
   }
 
+  /// Extract room ID from path - handles both formats:
+  /// - /api/chat/{roomId}/... (unified)
+  /// - /api/chat/rooms/{roomId}/... (legacy)
   String? _extractRoomId(String path) {
-    final byChatApi = ChatApi.extractRoomId(path);
-    if (byChatApi != null) return byChatApi;
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/messages$').firstMatch(path);
-    return match?.group(1);
+    return ChatApi.extractRoomIdFromPath(path);
   }
 
-  /// Handle GET /api/chat/rooms/{roomId}/files - list chat files for caching
-  Future<void> _handleChatFilesList(HttpRequest request) async {
+  /// Handle GET /api/chat/{roomId}/files - list chat files for caching
+  /// Accepts both formats: /api/chat/{roomId}/files and /api/chat/rooms/{roomId}/files
+  /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files
+  Future<void> _handleChatFilesList(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files$').firstMatch(path);
+    final roomId = ChatApi.extractRoomIdFromPath(path);
 
-    if (match == null) {
+    if (roomId == null) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Invalid path'}));
       return;
     }
 
-    final roomId = match.group(1)!;
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFilesPath(roomId));
+      return;
+    }
+
     final room = _chatRooms[roomId];
 
     if (room == null) {
@@ -6710,8 +6838,8 @@ class PureStationServer {
       return;
     }
 
-    // Get the chat directory for this room
-    final chatDir = Directory('${_getChatDataPath()}/$roomId');
+    // Get the chat directory for this room under the target callsign
+    final chatDir = Directory('${_getChatDataPath(targetCallsign)}/$roomId');
 
     final List<Map<String, dynamic>> files = [];
 
@@ -6755,19 +6883,26 @@ class PureStationServer {
     }));
   }
 
-  /// Handle POST /api/chat/rooms/{roomId}/files - upload file to chat room
-  Future<void> _handleChatFileUpload(HttpRequest request) async {
+  /// Handle POST /api/chat/{roomId}/files - upload file to chat room
+  /// Accepts both formats: /api/chat/{roomId}/files and /api/chat/rooms/{roomId}/files
+  /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files
+  Future<void> _handleChatFileUpload(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files$').firstMatch(path);
+    final roomId = ChatApi.extractRoomIdFromPath(path);
 
-    if (match == null) {
+    if (roomId == null) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Invalid path'}));
       return;
     }
 
-    final roomId = match.group(1)!;
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFilesPath(roomId));
+      return;
+    }
+
     final room = _chatRooms[roomId];
 
     if (room == null) {
@@ -6825,8 +6960,8 @@ class PureStationServer {
       final sha1Hash = sha1.convert(bytes).toString();
       final storedFilename = '${sha1Hash}_$originalFilename';
 
-      // Create files directory for the room
-      final filesDir = Directory('${_getChatDataPath()}/$roomId/files');
+      // Create files directory for the room under the target callsign
+      final filesDir = Directory('${_getChatDataPath(targetCallsign)}/$roomId/files');
       if (!await filesDir.exists()) {
         await filesDir.create(recursive: true);
       }
@@ -6854,26 +6989,32 @@ class PureStationServer {
     }
   }
 
-  /// Handle GET /api/chat/rooms/{roomId}/files/{filename} - download chat file
-  Future<void> _handleChatFileDownload(HttpRequest request) async {
+  /// Handle GET /api/chat/{roomId}/files/{filename} - download chat file
+  /// Accepts both formats: /api/chat/{roomId}/files/{filename} and /api/chat/rooms/{roomId}/files/{filename}
+  /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files/{filename}
+  Future<void> _handleChatFileDownload(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/files/(.+)$').firstMatch(path);
+    final roomId = ChatApi.extractRoomIdFromPath(path);
+    final filename = ChatApi.extractFilename(path);
 
-    if (match == null) {
+    if (roomId == null || filename == null) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Invalid path'}));
       return;
     }
 
-    final roomId = match.group(1)!;
-    final filename = match.group(2)!;
-
     // Validate filename to prevent path traversal
     if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Invalid filename'}));
+      return;
+    }
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFileDownloadPath(roomId, filename));
       return;
     }
 
@@ -6885,7 +7026,8 @@ class PureStationServer {
       return;
     }
 
-    final file = File('${_getChatDataPath()}/$roomId/files/$filename');
+    // Look for file under the target callsign's directory
+    final file = File('${_getChatDataPath(targetCallsign)}/$roomId/files/$filename');
     if (!await file.exists()) {
       request.response.statusCode = 404;
       request.response.headers.contentType = ContentType.json;
@@ -6926,10 +7068,15 @@ class PureStationServer {
     }
   }
 
-  /// Handle GET /api/chat/rooms/{roomId}/file/{year}/{filename} - get raw chat file
-  Future<void> _handleChatFileContent(HttpRequest request) async {
+  /// Handle GET /api/chat/{roomId}/file/{year}/{filename} - get raw chat file
+  /// Accepts both formats: /api/chat/{roomId}/file/... and /api/chat/rooms/{roomId}/file/...
+  /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/file/...
+  Future<void> _handleChatFileContent(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final match = RegExp(r'^/api/chat/rooms/([^/]+)/file/(\d{4})/([^/]+)$').firstMatch(path);
+    // Accept all formats including callsign prefix
+    // Strip callsign prefix if present for extraction
+    final apiPath = _getApiPathWithoutCallsign(path);
+    final match = RegExp(r'^/api/chat/(rooms/)?([^/]+)/file/(\d{4})/([^/]+)$').firstMatch(apiPath);
 
     if (match == null) {
       request.response.statusCode = 400;
@@ -6938,15 +7085,21 @@ class PureStationServer {
       return;
     }
 
-    final roomId = match.group(1)!;
-    final year = match.group(2)!;
-    final filename = match.group(3)!;
+    final roomId = match.group(2)!;
+    final year = match.group(3)!;
+    final filename = match.group(4)!;
 
     // Validate filename format to prevent path traversal
     if (!RegExp(r'^\d{4}-\d{2}-\d{2}_chat\.txt$').hasMatch(filename)) {
       request.response.statusCode = 400;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({'error': 'Invalid filename format'}));
+      return;
+    }
+
+    // If targeting a remote device, proxy the request
+    if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
+      await _proxyRequestToDevice(request, targetCallsign, '/api/chat/$roomId/file/$year/$filename');
       return;
     }
 
@@ -6958,7 +7111,8 @@ class PureStationServer {
       return;
     }
 
-    final chatFile = File('${_getChatDataPath()}/$roomId/$year/$filename');
+    // Look for file under the target callsign's directory
+    final chatFile = File('${_getChatDataPath(targetCallsign)}/$roomId/$year/$filename');
 
     if (!await chatFile.exists()) {
       request.response.statusCode = 404;

@@ -23,6 +23,7 @@ import 'ble_foreground_service.dart';
 import 'ble_message_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
+import '../util/chat_api.dart';
 import 'debug_controller.dart';
 import 'config_service.dart';
 import 'app_args.dart';
@@ -58,6 +59,12 @@ class DevicesService {
   /// Station connection event subscription
   EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
   EventSubscription<ProfileChangedEvent>? _profileChangedSubscription;
+
+  /// Timer for periodic cleanup of inactive discovered devices
+  Timer? _cleanupTimer;
+
+  /// How often to clean up offline discovered devices
+  static const _cleanupInterval = Duration(hours: 2);
 
   /// Cache of known devices with their status
   final Map<String, RemoteDevice> _devices = {};
@@ -107,6 +114,9 @@ class DevicesService {
     _subscribeToProfileChanges();
 
     _isInitialized = true;
+
+    // Start periodic cleanup of inactive discovered devices
+    _startCleanupTimer();
 
     // Trigger initial local network discovery in background after short delay
     // This gives other local instances time to start before we scan
@@ -167,6 +177,28 @@ class DevicesService {
       }
     } catch (e) {
       LogService().log('DevicesService: Failed to refresh BLE identity: $e');
+    }
+  }
+
+  /// Start periodic timer to clean up inactive discovered devices
+  void _startCleanupTimer() {
+    _cleanupTimer?.cancel();
+    _cleanupTimer = Timer.periodic(_cleanupInterval, (_) {
+      _cleanupInactiveDiscoveredDevices();
+    });
+  }
+
+  /// Remove offline devices from the "Discovered" folder
+  Future<void> _cleanupInactiveDiscoveredDevices() async {
+    final offlineDevices = _devices.values.where((d) =>
+      (d.folderId == null || d.folderId == defaultFolderId) && !d.isOnline
+    ).toList();
+
+    if (offlineDevices.isNotEmpty) {
+      LogService().log('DevicesService: Cleaning up ${offlineDevices.length} offline discovered devices');
+      for (final device in offlineDevices) {
+        await removeDevice(device.callsign);
+      }
     }
   }
 
@@ -2029,7 +2061,7 @@ class DevicesService {
         final chatResponse = await makeDeviceApiRequest(
           callsign: device.callsign,
           method: 'GET',
-          path: '/api/chat/rooms',
+          path: ChatApi.chatRoomsPath(),
         );
 
         if (chatResponse != null && chatResponse.statusCode == 200) {
@@ -2290,7 +2322,7 @@ class DevicesService {
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'POST',
-        path: '/api/chat/rooms/$roomId/files',
+        path: ChatApi.chatFilesPath(roomId),
         headers: {
           'Content-Type': 'application/octet-stream',
           'X-Filename': filename,
@@ -2326,7 +2358,7 @@ class DevicesService {
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'GET',
-        path: '/api/chat/rooms/$roomId/files/${Uri.encodeComponent(filename)}',
+        path: ChatApi.chatFileDownloadPath(roomId, Uri.encodeComponent(filename)),
       );
 
       if (response != null && response.statusCode == 200) {
@@ -2348,6 +2380,7 @@ class DevicesService {
 
   /// Dispose resources
   void dispose() {
+    _cleanupTimer?.cancel();
     _bleSubscription?.cancel();
     _bleChatSubscription?.cancel();
     _debugSubscription?.cancel();

@@ -43,6 +43,7 @@ import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
+import 'util/event_bus.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
@@ -59,6 +60,7 @@ import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/inventory_browser_page.dart';
+import 'pages/wallet_browser_page.dart';
 import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
 import 'pages/maps_browser_page.dart';
@@ -427,15 +429,17 @@ class _HomePageState extends State<HomePage> {
   int _unreadDmCount = 0;
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
+  EventSubscription<NavigateToHomeEvent>? _navigateHomeSubscription;
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final DebugController _debugController = DebugController();
 
+  // Hidden pages (not ready): BotPage
   static const List<Widget> _pages = [
     CollectionsPage(),
     MapsBrowserPage(),
     DevicesBrowserPage(),
-    BotPage(),
+    // BotPage(),  // Hidden: not ready
     SettingsPage(),
     LogPage(),
   ];
@@ -455,6 +459,12 @@ class _HomePageState extends State<HomePage> {
     _debugController.toastNotifier.addListener(_onDebugToast);
     // Listen for debug action events (for station chat navigation)
     _debugActionSubscription = _debugController.actionStream.listen(_onDebugAction);
+    // Listen for navigate to home events (e.g., from Settings back button)
+    _navigateHomeSubscription = EventBus().on<NavigateToHomeEvent>((_) {
+      if (mounted && _selectedIndex != 0) {
+        setState(() => _selectedIndex = 0);
+      }
+    });
 
     // Subscribe to DM unread count changes
     _unreadDmCount = DirectMessageService().totalUnreadCount;
@@ -479,6 +489,7 @@ class _HomePageState extends State<HomePage> {
     _debugController.panelNotifier.removeListener(_onDebugNavigate);
     _debugController.toastNotifier.removeListener(_onDebugToast);
     _debugActionSubscription?.cancel();
+    _navigateHomeSubscription?.cancel();
     _unreadSubscription?.cancel();
     super.dispose();
   }
@@ -628,7 +639,8 @@ class _HomePageState extends State<HomePage> {
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory', 'transfer'];
+    // Hidden: transfer (not ready)
+    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory'];
 
     LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
 
@@ -909,11 +921,12 @@ class _HomePageState extends State<HomePage> {
             ),
             label: Text(_i18n.t('devices')),
           ),
-          NavigationDrawerDestination(
-            icon: const Icon(Icons.smart_toy_outlined),
-            selectedIcon: const Icon(Icons.smart_toy),
-            label: Text(_i18n.t('bot')),
-          ),
+          // NavigationDrawerDestination for Bot - Hidden: not ready
+          // NavigationDrawerDestination(
+          //   icon: const Icon(Icons.smart_toy_outlined),
+          //   selectedIcon: const Icon(Icons.smart_toy),
+          //   label: Text(_i18n.t('bot')),
+          // ),
           const Divider(),
           NavigationDrawerDestination(
             icon: const Icon(Icons.settings_outlined),
@@ -929,7 +942,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: _pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex < 4 ? _selectedIndex : 0,
+        selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
         onDestinationSelected: (int index) {
           setState(() {
             _selectedIndex = index;
@@ -959,11 +972,12 @@ class _HomePageState extends State<HomePage> {
             ),
             label: _i18n.t('devices'),
           ),
-          NavigationDestination(
-            icon: const Icon(Icons.smart_toy_outlined),
-            selectedIcon: const Icon(Icons.smart_toy),
-            label: _i18n.t('bot'),
-          ),
+          // NavigationDestination for Bot - Hidden: not ready
+          // NavigationDestination(
+          //   icon: const Icon(Icons.smart_toy_outlined),
+          //   selectedIcon: const Icon(Icons.smart_toy),
+          //   label: _i18n.t('bot'),
+          // ),
         ],
       ),
       ),
@@ -1115,37 +1129,18 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   Future<void> _deleteCollection(Collection collection) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_i18n.t('delete_collection')),
-        content: Text(_i18n.t('delete_collection_confirm_msg', params: [collection.title])),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(_i18n.t('cancel')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(_i18n.t('delete')),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      try {
-        await _collectionService.deleteCollection(collection);
-        LogService().log('Deleted collection: ${collection.title}');
-        _loadCollections();
-      } catch (e) {
-        LogService().log('Error deleting collection: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error deleting collection: $e')),
-          );
-        }
+    // No confirmation needed - data is not deleted from disk and apps can be re-added
+    if (!mounted) return;
+    try {
+      await _collectionService.deleteCollection(collection);
+      LogService().log('Deleted collection: ${collection.title}');
+      _loadCollections();
+    } catch (e) {
+      LogService().log('Error deleting collection: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting collection: $e')),
+        );
       }
     }
   }
@@ -1287,7 +1282,13 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                         ? const StationDashboardPage()
                                                                                         : collection.type == 'transfer'
                                                                                             ? const TransferPage()
-                                                                                            : CollectionBrowserPage(collection: collection);
+                                                                                            : collection.type == 'wallet'
+                                                                                                ? WalletBrowserPage(
+                                                                                                    collectionPath: collection.storagePath ?? '',
+                                                                                                    collectionTitle: collection.title,
+                                                                                                    i18n: _i18n,
+                                                                                                  )
+                                                                                                : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1390,7 +1391,13 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                                   collectionPath: collection.storagePath ?? '',
                                                                                                   collectionTitle: collection.title,
                                                                                                 )
-                                                                                              : CollectionBrowserPage(collection: collection);
+                                                                                              : collection.type == 'wallet'
+                                                                                                  ? WalletBrowserPage(
+                                                                                                      collectionPath: collection.storagePath ?? '',
+                                                                                                      collectionTitle: collection.title,
+                                                                                                      i18n: _i18n,
+                                                                                                    )
+                                                                                                  : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1501,6 +1508,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.cell_tower;
       case 'transfer':
         return Icons.swap_horiz;
+      case 'wallet':
+        return Icons.account_balance_wallet;
       default:
         return Icons.folder_special;
     }
@@ -1621,14 +1630,14 @@ class _CollectionGridCard extends StatelessWidget {
                   ),
                 ),
               ),
-            // Menu button (top-right corner, only on desktop)
+            // Menu button (bottom-right corner, only on desktop)
             if (!isAndroid)
               Positioned(
-                top: 2,
+                bottom: 2,
                 right: 2,
                 child: PopupMenuButton<String>(
                   icon: Icon(
-                    Icons.more_vert,
+                    Icons.more_horiz,
                     size: 18,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -1663,9 +1672,9 @@ class _CollectionGridCard extends StatelessWidget {
                       value: 'delete',
                       child: Row(
                         children: [
-                          const Icon(Icons.delete_outline),
+                          const Icon(Icons.remove_circle_outline),
                           const SizedBox(width: 8),
-                          Text(i18n.t('delete')),
+                          Text(i18n.t('remove')),
                         ],
                       ),
                     ),
@@ -1728,6 +1737,8 @@ class _CollectionCard extends StatelessWidget {
         return Icons.cell_tower;
       case 'transfer':
         return Icons.swap_horiz;
+      case 'wallet':
+        return Icons.account_balance_wallet;
       default:
         return Icons.folder_special;
     }
@@ -2234,9 +2245,20 @@ class _SettingsPageState extends State<SettingsPage> {
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
-          child: Text(
-            _i18n.t('settings'),
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => EventBus().fire(NavigateToHomeEvent()),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _i18n.t('settings'),
+                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+            ],
           ),
         ),
         ListTile(

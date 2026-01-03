@@ -74,27 +74,57 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
           if (widget.quotedMessage != null) _buildQuotePreview(theme),
           // File preview (if file selected)
           if (_selectedFilePath != null) _buildFilePreview(theme),
-          // Input row
+          // Input row - WhatsApp/Telegram style layout
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Attach image button
+                // Attachment button (combines image + file into popup menu)
                 if (widget.allowFiles)
-                  IconButton(
-                    icon: const Icon(Icons.image_outlined),
-                    onPressed: _isSending ? null : _pickImage,
-                    tooltip: _i18n.t('attach_image'),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.add,
+                      color: _isSending ? theme.disabledColor : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    enabled: !_isSending,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    tooltip: _i18n.t('attach'),
+                    onSelected: (value) {
+                      if (value == 'image') {
+                        _pickImage();
+                      } else if (value == 'file') {
+                        _pickFile();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: 'image',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.image_outlined, color: theme.colorScheme.primary),
+                            const SizedBox(width: 12),
+                            Text(_i18n.t('attach_image')),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'file',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.attach_file, color: theme.colorScheme.primary),
+                            const SizedBox(width: 12),
+                            Text(_i18n.t('attach_file')),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                // Attach file button
-                if (widget.allowFiles)
-                  IconButton(
-                    icon: const Icon(Icons.attach_file),
-                    onPressed: _isSending ? null : _pickFile,
-                    tooltip: _i18n.t('attach_file'),
-                  ),
-                // Text input field
+                const SizedBox(width: 4),
+                // Text input field - takes most of the space
                 Expanded(
                   child: KeyboardListener(
                     focusNode: _keyboardListenerFocusNode,
@@ -117,43 +147,63 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                         hintText: _i18n.t('type_a_message'),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 12,
+                          vertical: 10,
                         ),
                         counterText: '',
                         filled: true,
-                        fillColor: theme.colorScheme.surfaceVariant,
+                        fillColor: theme.colorScheme.surfaceContainerHighest,
+                        isDense: true,
                       ),
                       onSubmitted: (_) => _handleSend(),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
                 // Mic button (optional, for voice recording)
                 if (widget.onMicPressed != null)
-                  IconButton(
-                    icon: const Icon(Icons.mic),
-                    onPressed: _isSending ? null : widget.onMicPressed,
-                    tooltip: 'Record voice message',
-                    color: theme.colorScheme.primary,
+                  SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: IconButton(
+                      icon: const Icon(Icons.mic, size: 22),
+                      onPressed: _isSending ? null : widget.onMicPressed,
+                      tooltip: 'Record voice message',
+                      color: theme.colorScheme.primary,
+                      padding: EdgeInsets.zero,
+                    ),
                   ),
-                // Send button
-                IconButton(
-                  icon: _isSending
-                      ? SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: theme.colorScheme.primary,
-                          ),
-                        )
-                      : const Icon(Icons.send),
-                  onPressed: _isSending ? null : _handleSend,
-                  tooltip: _i18n.t('send_message'),
-                  color: theme.colorScheme.primary,
+                // Send button - circular filled button
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Material(
+                    color: theme.colorScheme.primary,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      onTap: _isSending ? null : _handleSend,
+                      customBorder: const CircleBorder(),
+                      child: Center(
+                        child: _isSending
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: theme.colorScheme.onPrimary,
+                                ),
+                              )
+                            : Icon(
+                                Icons.send,
+                                size: 20,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),

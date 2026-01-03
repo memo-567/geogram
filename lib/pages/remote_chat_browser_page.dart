@@ -232,13 +232,6 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text('${widget.device.displayName} - Chat'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadRooms,
-            tooltip: _i18n.t('refresh'),
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())

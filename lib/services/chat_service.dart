@@ -547,9 +547,12 @@ class ChatService {
   }
 
   /// Get channel by ID
+  /// Treats 'general' as an alias for 'main' (the default main channel)
   ChatChannel? getChannel(String channelId) {
     try {
-      return _channels.firstWhere((ch) => ch.id == channelId);
+      // Treat 'general' as an alias for 'main' (common naming convention)
+      final normalizedId = channelId.toLowerCase() == 'general' ? 'main' : channelId;
+      return _channels.firstWhere((ch) => ch.id == normalizedId);
     } catch (e) {
       return null;
     }

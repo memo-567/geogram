@@ -34,6 +34,7 @@ class I18nService {
     'onboarding',
     'settings',
     'inventory',
+    'wallet',
   ];
 
   // Notifier for UI updates when language changes
