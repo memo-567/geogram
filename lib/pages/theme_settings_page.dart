@@ -3,12 +3,11 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../platform/file_image_helper.dart' as file_helper;
 import '../services/app_theme_service.dart';
 import '../services/i18n_service.dart';
 
@@ -319,19 +318,18 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
               child: Stack(
                 children: [
                   if (!kIsWeb)
-                    Image.file(
-                      File(imagePath),
+                    file_helper.buildFileImage(
+                      imagePath,
                       height: 120,
                       width: double.infinity,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stack) => Container(
-                        height: 120,
-                        color: theme.colorScheme.surfaceContainerHighest,
-                        child: Center(
-                          child: Icon(
-                            Icons.broken_image_outlined,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
+                    ) ?? Container(
+                      height: 120,
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Center(
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ),

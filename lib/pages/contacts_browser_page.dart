@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import '../models/contact.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 import '../services/contact_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
@@ -303,7 +304,9 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Widget _buildQuickAccessChip(Contact contact, bool isMobileView) {
-    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
+    final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
+    final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
+    final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
 
     return Padding(
       padding: const EdgeInsets.only(right: 8),
@@ -311,10 +314,8 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         avatar: CircleAvatar(
           radius: 16,
           backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-          backgroundImage: profilePicture != null && profilePicture.existsSync()
-              ? FileImage(profilePicture)
-              : null,
-          child: profilePicture == null || !profilePicture.existsSync()
+          backgroundImage: profileImage,
+          child: profileImage == null
               ? Text(
                   contact.callsign.substring(0, 1),
                   style: const TextStyle(color: Colors.white, fontSize: 12),
@@ -637,19 +638,20 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Widget _buildContactListTile(Contact contact, {bool isMobileView = false}) {
-    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
-    final hasProfilePicture = profilePicture != null && profilePicture.existsSync();
+    final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
+    final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
+    final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
 
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-        backgroundImage: hasProfilePicture ? FileImage(profilePicture) : null,
-        child: hasProfilePicture
-            ? null
-            : Text(
+        backgroundImage: profileImage,
+        child: profileImage == null
+            ? Text(
                 contact.callsign.substring(0, 2),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
+              )
+            : null,
       ),
       title: Row(
         children: [
@@ -690,8 +692,9 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Widget _buildContactDetail(Contact contact) {
-    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
-    final hasProfilePicture = profilePicture != null && profilePicture.existsSync();
+    final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
+    final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
+    final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -704,17 +707,17 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
               CircleAvatar(
                 radius: 40,
                 backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-                backgroundImage: hasProfilePicture ? FileImage(profilePicture) : null,
-                child: hasProfilePicture
-                    ? null
-                    : Text(
+                backgroundImage: profileImage,
+                child: profileImage == null
+                    ? Text(
                         contact.callsign.substring(0, 2),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
                         ),
-                      ),
+                      )
+                    : null,
               ),
               const SizedBox(width: 16),
               Expanded(

@@ -730,8 +730,8 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                             count: stationPlaces.length,
                             isLoading: _isLoadingStationPlaces,
                             onRefresh: isMobilePlatform ? null : _loadStationPlaces,
+                            trailing: _buildRadiusSlider(theme),
                           ),
-                          _buildRadiusSlider(theme),
                           if (stationPlaces.isNotEmpty)
                             ...stationPlaces.map(
                               (entry) => _buildPlaceListTile(
@@ -791,6 +791,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     required int count,
     bool isLoading = false,
     VoidCallback? onRefresh,
+    Widget? trailing,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -799,32 +800,32 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         children: [
           Icon(icon, size: 18, color: theme.colorScheme.primary),
           const SizedBox(width: 8),
-          Row(
-            children: [
-              Text(
-                title,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '$count',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-              ),
-            ],
+          Text(
+            title,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
           ),
-          const Spacer(),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '$count',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 8),
+            Expanded(child: trailing),
+          ] else
+            const Spacer(),
           if (isLoading)
             const SizedBox(
               width: 16,
@@ -843,140 +844,66 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     );
   }
 
-  /// Build the radius slider widget for filtering station places
+  /// Build the compact radius slider widget for filtering station places
   Widget _buildRadiusSlider(ThemeData theme) {
     // Format radius display
     String radiusText;
     if (_radiusKm >= 500) {
       radiusText = _i18n.t('radius_unlimited');
-    } else if (_radiusKm >= 100) {
-      radiusText = '${_radiusKm.round()} km';
     } else if (_radiusKm >= 10) {
       radiusText = '${_radiusKm.round()} km';
     } else {
       radiusText = '${_radiusKm.toStringAsFixed(1)} km';
     }
 
-    // Get location status for indicator
-    final userLocation = _userLocationService.currentLocation;
-    final hasLocation = userLocation?.isValid ?? false;
-    final isUpdating = _userLocationService.isUpdating;
-
-    // Location source icon
-    IconData locationIcon;
-    String locationTooltip;
-    if (isUpdating) {
-      locationIcon = Icons.my_location;
-      locationTooltip = _i18n.t('detecting_location');
-    } else if (!hasLocation) {
-      locationIcon = Icons.location_off;
-      locationTooltip = _i18n.t('location_unavailable');
-    } else {
-      switch (userLocation!.source) {
-        case 'gps':
-          locationIcon = Icons.gps_fixed;
-          locationTooltip = _i18n.t('location_from_gps');
-          break;
-        case 'ip':
-          locationIcon = Icons.wifi;
-          locationTooltip = _i18n.t('location_from_ip');
-          break;
-        case 'browser':
-          locationIcon = Icons.language;
-          locationTooltip = _i18n.t('location_from_browser');
-          break;
-        case 'profile':
-          locationIcon = Icons.person_pin_circle;
-          locationTooltip = _i18n.t('location_from_profile');
-          break;
-        default:
-          locationIcon = Icons.location_on;
-          locationTooltip = _i18n.t('location_detected');
-      }
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Row(
-        children: [
-          // Location indicator
-          Tooltip(
-            message: locationTooltip,
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: isUpdating
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : Icon(
-                      locationIcon,
-                      size: 18,
-                      color: hasLocation
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.error,
-                    ),
+    return Row(
+      children: [
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+            ),
+            child: Slider(
+              value: _radiusKm,
+              min: 1,
+              max: 500,
+              divisions: 49,
+              onChanged: (value) {
+                setState(() {
+                  // Snap to nice values with exponential feel
+                  if (value <= 10) {
+                    _radiusKm = value.roundToDouble();
+                  } else if (value <= 50) {
+                    _radiusKm = (value / 5).round() * 5.0;
+                  } else if (value <= 100) {
+                    _radiusKm = (value / 10).round() * 10.0;
+                  } else {
+                    _radiusKm = (value / 25).round() * 25.0;
+                  }
+                });
+              },
+              onChangeEnd: (value) {
+                // Save and filter with the new radius
+                _saveRadius();
+                _filterPlaces();
+              },
             ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            _i18n.t('radius'),
+        ),
+        SizedBox(
+          width: 55,
+          child: Text(
+            radiusText,
             style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.bold,
+              color: theme.colorScheme.primary,
             ),
+            textAlign: TextAlign.end,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 4,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-              ),
-              child: Slider(
-                value: _radiusKm,
-                min: 1,
-                max: 500,
-                divisions: 49,
-                onChanged: (value) {
-                  setState(() {
-                    // Snap to nice values with exponential feel
-                    if (value <= 10) {
-                      _radiusKm = value.roundToDouble();
-                    } else if (value <= 50) {
-                      _radiusKm = (value / 5).round() * 5.0;
-                    } else if (value <= 100) {
-                      _radiusKm = (value / 10).round() * 10.0;
-                    } else {
-                      _radiusKm = (value / 25).round() * 25.0;
-                    }
-                  });
-                },
-                onChangeEnd: (value) {
-                  // Save and filter with the new radius
-                  _saveRadius();
-                  _filterPlaces();
-                },
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 70,
-            child: Text(
-              radiusText,
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.primary,
-              ),
-              textAlign: TextAlign.end,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

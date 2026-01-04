@@ -5,11 +5,13 @@
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:latlong2/latlong.dart';
 import '../dialogs/place_picker_dialog.dart';
 import '../models/contact.dart';
 import '../models/place.dart';
+import '../platform/file_image_helper.dart' as file_helper;
 import '../services/contact_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
@@ -976,14 +978,12 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
   Widget _buildProfilePictureSection() {
     // Get current profile image
     ImageProvider? currentImage;
-    if (_selectedProfilePicturePath != null) {
-      currentImage = FileImage(File(_selectedProfilePicturePath!));
-    } else if (_existingProfilePicture != null && widget.collectionPath.isNotEmpty) {
-      final file = _contactService.getProfilePictureFile(
-        widget.contact?.callsign ?? '',
-      );
-      if (file != null && file.existsSync()) {
-        currentImage = FileImage(file);
+    if (!kIsWeb && _selectedProfilePicturePath != null) {
+      currentImage = file_helper.getFileImageProvider(_selectedProfilePicturePath!);
+    } else if (!kIsWeb && _existingProfilePicture != null && widget.collectionPath.isNotEmpty) {
+      final path = _contactService.getProfilePicturePath(widget.contact?.callsign ?? '');
+      if (path != null && file_helper.fileExists(path)) {
+        currentImage = file_helper.getFileImageProvider(path);
       }
     }
 

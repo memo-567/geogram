@@ -936,6 +936,12 @@ class ContactService {
     return null;
   }
 
+  /// Get profile picture path for a contact (cross-platform safe)
+  String? getProfilePicturePath(String callsign) {
+    final file = getProfilePictureFile(callsign);
+    return file?.path;
+  }
+
   /// Save profile picture for a contact
   Future<String?> saveProfilePicture(String callsign, File sourceFile) async {
     if (_collectionPath == null) return null;
