@@ -26,6 +26,7 @@ import 'services/ble_permission_service.dart';
 import 'services/storage_config.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'services/web_theme_service.dart';
+import 'services/app_theme_service.dart';
 import 'services/app_args.dart';
 import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
@@ -74,6 +75,7 @@ import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
 import 'pages/security_settings_page.dart';
+import 'pages/theme_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
@@ -217,6 +219,10 @@ void main() async {
     // Initialize web theme service (extracts bundled themes on first run)
     await WebThemeService().init();
     LogService().log('WebThemeService initialized');
+
+    // Initialize app theme service
+    await AppThemeService().initialize();
+    LogService().log('AppThemeService initialized');
 
     // Initialize profile and collection services
     await CollectionService().init();
@@ -380,28 +386,39 @@ void main() async {
   return; // Early return since runApp is already called
 }
 
-class GeogramApp extends StatelessWidget {
+class GeogramApp extends StatefulWidget {
   const GeogramApp({super.key});
+
+  @override
+  State<GeogramApp> createState() => _GeogramAppState();
+}
+
+class _GeogramAppState extends State<GeogramApp> {
+  final AppThemeService _themeService = AppThemeService();
+
+  @override
+  void initState() {
+    super.initState();
+    _themeService.addListener(_onThemeChanged);
+  }
+
+  @override
+  void dispose() {
+    _themeService.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Geogram',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: _themeService.getLightTheme(),
+      darkTheme: _themeService.getDarkTheme(),
       themeMode: ThemeMode.system,
       builder: (context, child) {
         if (child == null) return const SizedBox.shrink();
@@ -1065,12 +1082,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   void _onProfileChanged() {
+    if (!mounted) return;
     // Profile changed, reload collections for the new profile
     LogService().log('Profile changed, reloading collections');
     _loadCollections();
   }
 
   void _onCollectionsChanged() {
+    if (!mounted) return;
     // Collections were created/updated/deleted, reload the list
     LogService().log('CollectionsPage: collectionsNotifier triggered, reloading');
     _loadCollections();
@@ -1079,14 +1098,16 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void _subscribeToUnreadCounts() {
     _unreadCounts = _chatNotificationService.unreadCounts;
     _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
-      setState(() {
-        _unreadCounts = counts;
-      });
+      if (mounted) {
+        setState(() {
+          _unreadCounts = counts;
+        });
+      }
     });
   }
 
   void _onLanguageChanged() {
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override
@@ -1103,6 +1124,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   Future<void> _loadCollections() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
     try {
@@ -1110,6 +1132,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
       final collections = <Collection>[];
 
       await for (final collection in _collectionService.loadCollectionsStream()) {
+        if (!mounted) return;
         collections.add(collection);
 
         // Update UI progressively every few collections for responsiveness
@@ -1119,17 +1142,20 @@ class _CollectionsPageState extends State<CollectionsPage> {
       }
 
       // Final update with all collections
+      if (!mounted) return;
       _updateCollectionsList(collections, isComplete: true);
 
       final types = collections.map((c) => c.type).toList();
       LogService().log('CollectionsPage: Loaded ${collections.length} collections: $types');
     } catch (e) {
       LogService().log('Error loading collections: $e');
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   void _updateCollectionsList(List<Collection> collections, {required bool isComplete}) {
+    if (!mounted) return;
+
     // Separate app and file collections
     final appCollections = collections.where((c) => !_isFileCollectionType(c)).toList();
     final fileCollections = collections.where(_isFileCollectionType).toList();
@@ -2255,6 +2281,63 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _showAppThemeDialog() async {
+    final themeService = AppThemeService();
+    final currentTheme = themeService.currentTheme;
+
+    if (!mounted) return;
+
+    final selectedTheme = await showDialog<AppThemeColor>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(_i18n.t('select_app_theme')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: AppThemeService.availableThemes.map((config) {
+                return RadioListTile<AppThemeColor>(
+                  title: Text(_i18n.t('theme_${config.id.name}')),
+                  subtitle: Text(_i18n.t('theme_${config.id.name}_desc')),
+                  secondary: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: config.seedColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outline,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  value: config.id,
+                  groupValue: currentTheme,
+                  onChanged: (AppThemeColor? value) {
+                    Navigator.pop(context, value);
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_i18n.t('cancel')),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selectedTheme != null && selectedTheme != currentTheme) {
+      await themeService.setTheme(selectedTheme);
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
   Future<void> _showWebThemeDialog() async {
     final themeService = WebThemeService();
     final themes = await themeService.getAvailableThemes();
@@ -2420,8 +2503,21 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: _showLanguageDialog,
         ),
         ListTile(
+          leading: const Icon(Icons.color_lens_outlined),
+          title: Text(_i18n.t('app_theme')),
+          subtitle: Text(_i18n.t('theme_${AppThemeService().currentTheme.name}')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.pop(context); // Close drawer
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
+            );
+          },
+        ),
+        ListTile(
           leading: const Icon(Icons.palette_outlined),
-          title: Text(_i18n.t('web_theme')),
+          title: Text(_i18n.t('theme')),
           subtitle: Text(WebThemeService().getCurrentTheme()[0].toUpperCase() +
             WebThemeService().getCurrentTheme().substring(1)),
           trailing: const Icon(Icons.chevron_right),

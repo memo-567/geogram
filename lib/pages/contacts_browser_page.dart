@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' show Platform;
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
@@ -37,6 +37,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   List<Contact> _allContacts = [];
   List<Contact> _filteredContacts = [];
   List<ContactGroup> _groups = [];
+  List<Contact> _topContacts = [];
   Contact? _selectedContact;
   String? _selectedGroupPath;
   bool _isLoading = true;
@@ -61,6 +62,14 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     await _contactService.initializeCollection(widget.collectionPath);
     await _loadContacts();
     await _loadGroups();
+    await _loadTopContacts();
+  }
+
+  Future<void> _loadTopContacts() async {
+    final topContacts = await _contactService.getTopContacts(10);
+    setState(() {
+      _topContacts = topContacts;
+    });
   }
 
   Future<void> _loadContacts() async {
@@ -107,7 +116,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         filtered = filtered.where((contact) {
           return contact.displayName.toLowerCase().contains(query) ||
                  contact.callsign.toLowerCase().contains(query) ||
-                 contact.npub.toLowerCase().contains(query) ||
+                 (contact.npub?.toLowerCase().contains(query) ?? false) ||
                  contact.notes.toLowerCase().contains(query) ||
                  contact.emails.any((e) => e.toLowerCase().contains(query)) ||
                  contact.phones.any((p) => p.toLowerCase().contains(query));
@@ -122,6 +131,8 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     setState(() {
       _selectedContact = contact;
     });
+    // Record click for quick access feature
+    _contactService.recordContactClick(contact.callsign);
   }
 
   Future<void> _selectContactMobile(Contact contact) async {
@@ -171,6 +182,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => AddEditContactPage(
           collectionPath: widget.collectionPath,
+          groupPath: _viewMode == 'group' ? _selectedGroupPath : null,
         ),
       ),
     );
@@ -181,10 +193,20 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Future<void> _editContact(Contact contact) async {
-    // TODO: Show edit contact dialog
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Edit ${contact.displayName} - TODO')),
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddEditContactPage(
+          collectionPath: widget.collectionPath,
+          contact: contact,
+        ),
+      ),
     );
+
+    if (result == true) {
+      await _loadContacts();
+      await _loadGroups();
+    }
   }
 
   Future<void> _deleteContact(Contact contact) async {
@@ -280,6 +302,122 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     }
   }
 
+  Widget _buildQuickAccessChip(Contact contact, bool isMobileView) {
+    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ActionChip(
+        avatar: CircleAvatar(
+          radius: 16,
+          backgroundColor: contact.revoked ? Colors.red : Colors.blue,
+          backgroundImage: profilePicture != null && profilePicture.existsSync()
+              ? FileImage(profilePicture)
+              : null,
+          child: profilePicture == null || !profilePicture.existsSync()
+              ? Text(
+                  contact.callsign.substring(0, 1),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                )
+              : null,
+        ),
+        label: Text(contact.displayName),
+        onPressed: () => isMobileView
+            ? _selectContactMobile(contact)
+            : _selectContact(contact),
+      ),
+    );
+  }
+
+  Future<void> _renameGroup(ContactGroup group) async {
+    final nameController = TextEditingController(text: group.name);
+
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('rename_folder')),
+        content: TextField(
+          controller: nameController,
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+          ),
+          autofocus: true,
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, nameController.text.trim()),
+            child: Text(_i18n.t('rename')),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != group.name) {
+      final success = await _contactService.renameGroup(group.path, newName);
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('folder_renamed'))),
+        );
+        await _loadGroups();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('folder_rename_failed')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteGroup(ContactGroup group) async {
+    if (group.contactCount > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('folder_not_empty')),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_folder')),
+        content: Text(_i18n.t('delete_folder_confirm', params: [group.name])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await _contactService.deleteGroup(group.path);
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('folder_deleted'))),
+        );
+        await _loadGroups();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -295,14 +433,6 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             icon: const Icon(Icons.create_new_folder),
             onPressed: _createNewGroup,
             tooltip: _i18n.t('new_group'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () async {
-              await _loadContacts();
-              await _loadGroups();
-            },
-            tooltip: _i18n.t('refresh'),
           ),
         ],
       ),
@@ -392,6 +522,33 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
                 const Divider(height: 1),
 
+                // Quick Access (Top 10)
+                if (_topContacts.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.star, size: 16, color: Colors.amber),
+                        const SizedBox(width: 4),
+                        Text(
+                          _i18n.t('quick_access'),
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    height: 60,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      itemCount: _topContacts.length,
+                      itemBuilder: (context, index) => _buildQuickAccessChip(_topContacts[index], isMobileView),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                ],
+
                 // Groups list
                 if (_groups.isNotEmpty) ...[
                   ExpansionTile(
@@ -404,6 +561,35 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                         subtitle: Text('${group.contactCount} ${_i18n.t('contacts').toLowerCase()}'),
                         selected: _selectedGroupPath == group.path,
                         onTap: () => _selectGroup(group.path),
+                        trailing: PopupMenuButton(
+                          icon: const Icon(Icons.more_vert, size: 20),
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'rename',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.edit, size: 20),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('rename')),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.delete, size: 20, color: Colors.red),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('delete'), style: const TextStyle(color: Colors.red)),
+                                ],
+                              ),
+                            ),
+                          ],
+                          onSelected: (value) {
+                            if (value == 'rename') _renameGroup(group);
+                            if (value == 'delete') _deleteGroup(group);
+                          },
+                        ),
                       );
                     }).toList(),
                   ),
@@ -451,13 +637,19 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Widget _buildContactListTile(Contact contact, {bool isMobileView = false}) {
+    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
+    final hasProfilePicture = profilePicture != null && profilePicture.existsSync();
+
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-        child: Text(
-          contact.callsign.substring(0, 2),
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
+        backgroundImage: hasProfilePicture ? FileImage(profilePicture) : null,
+        child: hasProfilePicture
+            ? null
+            : Text(
+                contact.callsign.substring(0, 2),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
       ),
       title: Row(
         children: [
@@ -498,6 +690,9 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Widget _buildContactDetail(Contact contact) {
+    final profilePicture = _contactService.getProfilePictureFile(contact.callsign);
+    final hasProfilePicture = profilePicture != null && profilePicture.existsSync();
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -509,14 +704,17 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
               CircleAvatar(
                 radius: 40,
                 backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-                child: Text(
-                  contact.callsign.substring(0, 2),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                backgroundImage: hasProfilePicture ? FileImage(profilePicture) : null,
+                child: hasProfilePicture
+                    ? null
+                    : Text(
+                        contact.callsign.substring(0, 2),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -621,9 +819,10 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           ],
 
           // NPUB
-          _buildInfoSection(_i18n.t('nostr_identity'), [
-            _buildInfoRow('npub', contact.npub, monospace: true),
-          ]),
+          if (contact.npub != null)
+            _buildInfoSection(_i18n.t('nostr_identity'), [
+              _buildInfoRow('npub', contact.npub!, monospace: true),
+            ]),
 
           // Contact Information
           if (contact.emails.isNotEmpty ||
@@ -671,6 +870,53 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             ),
           ],
 
+          // History Log
+          if (contact.historyEntries.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text(
+                  _i18n.t('history_log'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: _i18n.t('add_history_entry'),
+                  onPressed: () => _addHistoryEntry(contact),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...contact.historyEntries.map((entry) => _buildHistoryEntryCard(contact, entry)),
+          ] else ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text(
+                  _i18n.t('history_log'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: _i18n.t('add_history_entry'),
+                  onPressed: () => _addHistoryEntry(contact),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  _i18n.t('no_history_entries'),
+                  style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                ),
+              ),
+            ),
+          ],
+
           const SizedBox(height: 24),
 
           // Actions
@@ -710,6 +956,303 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       mapUri = Uri.parse('https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude&zoom=15');
       if (await canLaunchUrl(mapUri)) {
         await launchUrl(mapUri);
+      }
+    }
+  }
+
+  Widget _buildHistoryEntryCard(Contact contact, ContactHistoryEntry entry) {
+    final typeIcon = _getHistoryTypeIcon(entry.type);
+    final typeLabel = _getHistoryTypeLabel(entry.type);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(typeIcon, size: 16, color: Colors.blue),
+                const SizedBox(width: 8),
+                Text(
+                  typeLabel,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+                const Spacer(),
+                Text(
+                  entry.timestamp,
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
+                PopupMenuButton<String>(
+                  iconSize: 18,
+                  padding: EdgeInsets.zero,
+                  itemBuilder: (context) => [
+                    PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
+                    PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
+                  ],
+                  onSelected: (value) {
+                    if (value == 'edit') _editHistoryEntry(contact, entry);
+                    if (value == 'delete') _deleteHistoryEntry(contact, entry);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(entry.content),
+            if (entry.author.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                '— ${entry.author}',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12, fontStyle: FontStyle.italic),
+              ),
+            ],
+            if (entry.latitude != null && entry.longitude != null) ...[
+              const SizedBox(height: 4),
+              InkWell(
+                onTap: () => _openInNavigator(entry.latitude!, entry.longitude!),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.location_on, size: 14, color: Colors.grey[600]),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${entry.latitude!.toStringAsFixed(4)}, ${entry.longitude!.toStringAsFixed(4)}',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _getHistoryTypeIcon(ContactHistoryEntryType type) {
+    switch (type) {
+      case ContactHistoryEntryType.note:
+        return Icons.note;
+      case ContactHistoryEntryType.meeting:
+        return Icons.people;
+      case ContactHistoryEntryType.call:
+        return Icons.phone;
+      case ContactHistoryEntryType.message:
+        return Icons.message;
+      case ContactHistoryEntryType.location:
+        return Icons.location_on;
+      case ContactHistoryEntryType.event:
+        return Icons.event;
+      case ContactHistoryEntryType.system:
+        return Icons.info;
+    }
+  }
+
+  String _getHistoryTypeLabel(ContactHistoryEntryType type) {
+    switch (type) {
+      case ContactHistoryEntryType.note:
+        return _i18n.t('note');
+      case ContactHistoryEntryType.meeting:
+        return _i18n.t('meeting');
+      case ContactHistoryEntryType.call:
+        return _i18n.t('call');
+      case ContactHistoryEntryType.message:
+        return _i18n.t('message');
+      case ContactHistoryEntryType.location:
+        return _i18n.t('location');
+      case ContactHistoryEntryType.event:
+        return _i18n.t('event');
+      case ContactHistoryEntryType.system:
+        return _i18n.t('system');
+    }
+  }
+
+  Future<void> _addHistoryEntry(Contact contact) async {
+    final profile = _profileService.getProfile();
+    final author = profile?.callsign ?? 'Unknown';
+
+    final contentController = TextEditingController();
+    ContactHistoryEntryType selectedType = ContactHistoryEntryType.note;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(_i18n.t('add_history_entry')),
+              content: SizedBox(
+                width: 400,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<ContactHistoryEntryType>(
+                      value: selectedType,
+                      decoration: InputDecoration(labelText: _i18n.t('entry_type')),
+                      items: ContactHistoryEntryType.values.map((type) {
+                        return DropdownMenuItem(
+                          value: type,
+                          child: Row(
+                            children: [
+                              Icon(_getHistoryTypeIcon(type), size: 18),
+                              const SizedBox(width: 8),
+                              Text(_getHistoryTypeLabel(type)),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedType = value ?? ContactHistoryEntryType.note;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: contentController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('content'),
+                        border: const OutlineInputBorder(),
+                      ),
+                      maxLines: 3,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(_i18n.t('cancel')),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(_i18n.t('add')),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result == true && contentController.text.trim().isNotEmpty) {
+      final entry = ContactHistoryEntry.now(
+        author: author,
+        content: contentController.text.trim(),
+        type: selectedType,
+      );
+
+      final error = await _contactService.addHistoryEntry(contact.callsign, entry);
+      if (error != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(error), backgroundColor: Colors.red),
+          );
+        }
+      } else {
+        await _loadContacts();
+        // Re-select the contact to refresh the detail view
+        final updatedContact = _allContacts.firstWhere(
+          (c) => c.callsign == contact.callsign,
+          orElse: () => contact,
+        );
+        setState(() => _selectedContact = updatedContact);
+      }
+    }
+  }
+
+  Future<void> _editHistoryEntry(Contact contact, ContactHistoryEntry entry) async {
+    final contentController = TextEditingController(text: entry.content);
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(_i18n.t('edit_history_entry')),
+          content: SizedBox(
+            width: 400,
+            child: TextField(
+              controller: contentController,
+              decoration: InputDecoration(
+                labelText: _i18n.t('content'),
+                border: const OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(_i18n.t('save')),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == true && contentController.text.trim().isNotEmpty) {
+      final error = await _contactService.editHistoryEntry(
+        contact.callsign,
+        entry.timestamp,
+        contentController.text.trim(),
+      );
+      if (error != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(error), backgroundColor: Colors.red),
+          );
+        }
+      } else {
+        await _loadContacts();
+        final updatedContact = _allContacts.firstWhere(
+          (c) => c.callsign == contact.callsign,
+          orElse: () => contact,
+        );
+        setState(() => _selectedContact = updatedContact);
+      }
+    }
+  }
+
+  Future<void> _deleteHistoryEntry(Contact contact, ContactHistoryEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_history_entry')),
+        content: Text(_i18n.t('delete_history_entry_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final error = await _contactService.deleteHistoryEntry(contact.callsign, entry.timestamp);
+      if (error != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(error), backgroundColor: Colors.red),
+          );
+        }
+      } else {
+        await _loadContacts();
+        final updatedContact = _allContacts.firstWhere(
+          (c) => c.callsign == contact.callsign,
+          orElse: () => contact,
+        );
+        setState(() => _selectedContact = updatedContact);
       }
     }
   }
@@ -925,7 +1468,8 @@ class _ContactDetailPage extends StatelessWidget {
           const SizedBox(height: 16),
 
           // Details
-          _buildDetailRow(i18n.t('npub'), contact.npub, monospace: true),
+          if (contact.npub != null)
+            _buildDetailRow(i18n.t('npub'), contact.npub!, monospace: true),
           _buildDetailRow(i18n.t('callsign'), contact.callsign),
 
           // Contact Information

@@ -40,6 +40,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('places', Icons.place),
     _CollectionTypeInfo('blog', Icons.article),
     _CollectionTypeInfo('chat', Icons.chat),
+    _CollectionTypeInfo('contacts', Icons.contacts),
     _CollectionTypeInfo('events', Icons.event),
     // _CollectionTypeInfo('forum', Icons.forum),  // Hidden: not ready
     _CollectionTypeInfo('alerts', Icons.campaign),

@@ -40,7 +40,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
     if (mounted) setState(() {});
   }
 
-  Widget _buildProfileAvatar(Profile profile, {double size = 32}) {
+  Widget? _buildProfileAvatar(Profile profile, {double size = 32}) {
     // Check if profile has a custom image (file-based images not supported on web)
     if (!kIsWeb && profile.profileImagePath != null && profile.profileImagePath!.isNotEmpty) {
       final imageProvider = file_helper.getFileImageProvider(profile.profileImagePath!);
@@ -63,26 +63,8 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
       }
     }
 
-    // Use default geogram icon when no profile image is set
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: Colors.white.withOpacity(0.5),
-          width: 2,
-        ),
-      ),
-      child: ClipOval(
-        child: Image.asset(
-          'assets/default_profile.png',
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-        ),
-      ),
-    );
+    // No profile image set - return null to hide the avatar
+    return null;
   }
 
   void _showProfileMenu(BuildContext context) {
@@ -111,8 +93,8 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
             value: profile.id,
             child: Row(
               children: [
-                _buildProfileAvatar(profile, size: 28),
-                const SizedBox(width: 12),
+                if (_buildProfileAvatar(profile, size: 28) case final avatar?)
+                  ...[avatar, const SizedBox(width: 12)],
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,8 +203,8 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildProfileAvatar(profile),
-            const SizedBox(width: 8),
+            if (_buildProfileAvatar(profile) case final avatar?)
+              ...[avatar, const SizedBox(width: 8)],
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,

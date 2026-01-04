@@ -48,7 +48,7 @@
   "collection_type_features_backup": "End-to-end encryption|Multiple providers|Automatic scheduling|Full restore support",
   "collection_type_features_blog": "Rich text editor|Image embedding|Draft saving|Post scheduling",
   "collection_type_features_chat": "Multiple channels|Text, image, and file sharing|Message history|Participant management",
-  "collection_type_features_contacts": "Contact details|Organization info|Search|Export",
+  "collection_type_features_contacts": "Profile pictures|Tags & folders|History log|Quick access|Search",
   "collection_type_features_events": "Date/time scheduling|Location mapping|Registration|Reminders",
   "collection_type_features_files": "Organize files by folders|Share with specific users|Set visibility permissions|Multiple collections allowed",
   "collection_type_features_forum": "Threaded discussions|Categories and topics|User moderation|Pinned topics",

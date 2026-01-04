@@ -1668,7 +1668,11 @@ class UpdateService {
       LogService().log(
           'Extracted: binary=true, data=$hasData, lib=$hasLib');
 
-      // Create updater script with absolute paths
+      // Get current process PID to pass to the script
+      // (can't use $PPID in detached mode - it becomes PID 1)
+      final currentPid = pid;
+
+      // Create updater script with absolute paths and explicit PID
       final script = '''#!/bin/bash
 # Geogram Update Script - Auto-generated
 # Wait for app to exit, replace entire app bundle, restart
@@ -1677,8 +1681,8 @@ APP_DIR="$appDir"
 EXTRACTED_DIR="$extractedPath"
 STAGING_DIR="${stagingDir.path}"
 
-# Get parent PID (the Flutter app)
-APP_PID=\$PPID
+# App PID passed from Dart (can't use \$PPID in detached mode)
+APP_PID=$currentPid
 
 # Wait for the app to exit (max 30 seconds)
 for i in {1..30}; do
@@ -1712,8 +1716,8 @@ chmod +x ./geogram
 # Clean up staging
 rm -rf "\$STAGING_DIR"
 
-# Restart app
-nohup ./geogram > /dev/null 2>&1 &
+# Restart app (use absolute path)
+nohup "\$APP_DIR/geogram" > /dev/null 2>&1 &
 ''';
 
       final scriptPath = '${stagingDir.path}/apply-update.sh';

@@ -27,11 +27,11 @@ class ContactService {
       LogService().log('ContactService: Created contacts directory');
     }
 
-    // Ensure profile-pictures directory exists
-    final profilePicturesDir = Directory('$collectionPath/contacts/profile-pictures');
-    if (!await profilePicturesDir.exists()) {
-      await profilePicturesDir.create(recursive: true);
-      LogService().log('ContactService: Created profile-pictures directory');
+    // Ensure media directory exists (for profile pictures)
+    final mediaDir = Directory('$collectionPath/media');
+    if (!await mediaDir.exists()) {
+      await mediaDir.create(recursive: true);
+      LogService().log('ContactService: Created media directory');
     }
   }
 
@@ -172,6 +172,12 @@ class ContactService {
     final locations = <ContactLocation>[];
     String? profilePicture;
 
+    // New fields
+    final tags = <String>[];
+    final socialHandles = <String, String>{};
+    bool isTemporaryIdentity = false;
+    String? temporaryNsec;
+
     bool revoked = false;
     String? revocationReason;
     String? successor;
@@ -179,12 +185,15 @@ class ContactService {
     String? previousIdentity;
     String? previousIdentitySince;
 
+    final historyEntries = <ContactHistoryEntry>[];
     final notesLines = <String>[];
     String? metadataNpub;
     String? signature;
 
     bool inNotes = false;
     bool inMetadata = false;
+    bool inHistoryLog = false;
+    final historyBuffer = StringBuffer();
 
     for (var line in lines) {
       final trimmed = line.trim();
@@ -195,7 +204,29 @@ class ContactService {
         continue;
       }
 
-      // Parse metadata section
+      // Check for history log markers
+      if (trimmed == '## HISTORY LOG') {
+        inHistoryLog = true;
+        inNotes = false;
+        continue;
+      }
+
+      if (trimmed == '## END HISTORY') {
+        // Parse the accumulated history buffer
+        if (historyBuffer.isNotEmpty) {
+          _parseHistoryEntries(historyBuffer.toString(), historyEntries);
+        }
+        inHistoryLog = false;
+        continue;
+      }
+
+      // If in history log, accumulate lines
+      if (inHistoryLog) {
+        historyBuffer.writeln(line);
+        continue;
+      }
+
+      // Parse metadata section (at end of file)
       if (trimmed.startsWith('--> npub:')) {
         inNotes = false;
         inMetadata = true;
@@ -238,6 +269,24 @@ class ContactService {
         locations.addAll(_parseLocations(locationsStr));
       } else if (trimmed.startsWith('PROFILE_PICTURE:')) {
         profilePicture = trimmed.substring('PROFILE_PICTURE:'.length).trim();
+      } else if (trimmed.startsWith('TAGS:')) {
+        final tagsStr = trimmed.substring('TAGS:'.length).trim();
+        tags.addAll(tagsStr.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty));
+      } else if (trimmed.startsWith('SOCIAL_')) {
+        // Parse SOCIAL_NETWORK: handle format
+        final colonIndex = trimmed.indexOf(':');
+        if (colonIndex > 7) { // 'SOCIAL_' is 7 chars
+          final networkId = trimmed.substring(7, colonIndex).toLowerCase();
+          final handle = trimmed.substring(colonIndex + 1).trim();
+          if (handle.isNotEmpty) {
+            socialHandles[networkId] = handle;
+          }
+        }
+      } else if (trimmed.startsWith('TEMPORARY_IDENTITY:')) {
+        final value = trimmed.substring('TEMPORARY_IDENTITY:'.length).trim().toLowerCase();
+        isTemporaryIdentity = value == 'true';
+      } else if (trimmed.startsWith('TEMPORARY_NSEC:')) {
+        temporaryNsec = trimmed.substring('TEMPORARY_NSEC:'.length).trim();
       } else if (trimmed.startsWith('REVOKED:')) {
         final value = trimmed.substring('REVOKED:'.length).trim().toLowerCase();
         revoked = value == 'true';
@@ -251,15 +300,15 @@ class ContactService {
         previousIdentity = trimmed.substring('PREVIOUS_IDENTITY:'.length).trim();
       } else if (trimmed.startsWith('PREVIOUS_IDENTITY_SINCE:')) {
         previousIdentitySince = trimmed.substring('PREVIOUS_IDENTITY_SINCE:'.length).trim();
-      } else if (!inMetadata && !trimmed.startsWith('#')) {
-        // This is notes content
+      } else if (!inMetadata && !trimmed.startsWith('#') && !trimmed.startsWith('##')) {
+        // This is notes content (legacy format without history log)
         inNotes = true;
         notesLines.add(line); // Preserve original formatting
       }
     }
 
-    // Validate required fields
-    if (displayName == null || callsign == null || npub == null || created == null || firstSeen == null) {
+    // Validate required fields (npub is now optional)
+    if (displayName == null || callsign == null || created == null || firstSeen == null) {
       LogService().log('ContactService: Missing required fields in contact file');
       return null;
     }
@@ -290,13 +339,18 @@ class ContactService {
       addresses: addresses,
       websites: websites,
       locations: locations,
+      socialHandles: socialHandles,
       profilePicture: profilePicture,
+      tags: tags,
+      isTemporaryIdentity: isTemporaryIdentity,
+      temporaryNsec: temporaryNsec,
       revoked: revoked,
       revocationReason: revocationReason,
       successor: successor,
       successorSince: successorSince,
       previousIdentity: previousIdentity,
       previousIdentitySince: previousIdentitySince,
+      historyEntries: historyEntries,
       notes: notesLines.join('\n').trim(),
       metadataNpub: metadataNpub,
       signature: signature,
@@ -305,31 +359,99 @@ class ContactService {
     );
   }
 
-  /// Parse locations string (format: "Name (lat,lon), Name2, Name3 (lat,lon)")
+  /// Parse history entries from accumulated text
+  void _parseHistoryEntries(String historyText, List<ContactHistoryEntry> entries) {
+    final blocks = historyText.split(RegExp(r'\n(?=>)'));
+
+    for (var block in blocks) {
+      block = block.trim();
+      if (block.isEmpty) continue;
+
+      final entry = ContactHistoryEntry.parseFromText(block);
+      if (entry != null) {
+        entries.add(entry);
+      }
+    }
+
+    // Sort by timestamp descending (newest first)
+    entries.sort();
+  }
+
+  /// Parse locations string
+  /// Format: "Name (lat,lon)", "Name (online)", "Name (place:/path/to/place)"
   List<ContactLocation> _parseLocations(String locationsStr) {
     final locations = <ContactLocation>[];
-    final parts = locationsStr.split(',');
+    // Split by | to support multiple locations
+    final parts = locationsStr.split('|');
 
     for (var part in parts) {
       part = part.trim();
       if (part.isEmpty) continue;
 
+      // Check if it's online type: Name (online)
+      final onlineMatch = RegExp(r'(.+?)\s*\(online\)$', caseSensitive: false).firstMatch(part);
+      if (onlineMatch != null) {
+        final name = onlineMatch.group(1)!.trim();
+        locations.add(ContactLocation(
+          name: name,
+          type: ContactLocationType.online,
+        ));
+        continue;
+      }
+
+      // Check if it's place type: Name (place:/path/to/place)
+      final placeMatch = RegExp(r'(.+?)\s*\(place:(.+)\)$').firstMatch(part);
+      if (placeMatch != null) {
+        final name = placeMatch.group(1)!.trim();
+        final placePath = placeMatch.group(2)!.trim();
+        locations.add(ContactLocation(
+          name: name,
+          type: ContactLocationType.place,
+          placePath: placePath,
+        ));
+        continue;
+      }
+
       // Check if it has coordinates: Name (lat,lon)
-      final coordsMatch = RegExp(r'(.+?)\s*\((-?\d+\.?\d*),(-?\d+\.?\d*)\)').firstMatch(part);
+      final coordsMatch = RegExp(r'(.+?)\s*\((-?\d+\.?\d*),(-?\d+\.?\d*)\)$').firstMatch(part);
       if (coordsMatch != null) {
         final name = coordsMatch.group(1)!.trim();
         final lat = double.tryParse(coordsMatch.group(2)!);
         final lon = double.tryParse(coordsMatch.group(3)!);
         if (lat != null && lon != null) {
-          locations.add(ContactLocation(name: name, latitude: lat, longitude: lon));
+          locations.add(ContactLocation(
+            name: name,
+            type: ContactLocationType.coordinates,
+            latitude: lat,
+            longitude: lon,
+          ));
+          continue;
         }
-      } else {
-        // Just a name without coordinates
-        locations.add(ContactLocation(name: part));
       }
+
+      // Legacy: Just a name without type/coordinates (default to coordinates)
+      locations.add(ContactLocation(name: part, type: ContactLocationType.coordinates));
     }
 
     return locations;
+  }
+
+  /// Format location to string for storage
+  String _formatLocation(ContactLocation loc) {
+    switch (loc.type) {
+      case ContactLocationType.online:
+        return '${loc.name} (online)';
+      case ContactLocationType.place:
+        if (loc.placePath != null) {
+          return '${loc.name} (place:${loc.placePath})';
+        }
+        return loc.name;
+      case ContactLocationType.coordinates:
+        if (loc.latitude != null && loc.longitude != null) {
+          return '${loc.name} (${loc.latitude},${loc.longitude})';
+        }
+        return loc.name;
+    }
   }
 
   /// Format contact to file content
@@ -342,9 +464,19 @@ class ContactService {
 
     // Required fields
     buffer.writeln('CALLSIGN: ${contact.callsign}');
-    buffer.writeln('NPUB: ${contact.npub}');
+    if (contact.npub != null && contact.npub!.isNotEmpty) {
+      buffer.writeln('NPUB: ${contact.npub}');
+    }
     buffer.writeln('CREATED: ${contact.created}');
     buffer.writeln('FIRST_SEEN: ${contact.firstSeen}');
+
+    // Temporary identity
+    if (contact.isTemporaryIdentity) {
+      buffer.writeln('TEMPORARY_IDENTITY: true');
+      if (contact.temporaryNsec != null) {
+        buffer.writeln('TEMPORARY_NSEC: ${contact.temporaryNsec}');
+      }
+    }
     buffer.writeln();
 
     // Optional contact information
@@ -363,16 +495,27 @@ class ContactService {
 
     if (contact.locations.isNotEmpty) {
       buffer.write('LOCATIONS: ');
-      buffer.writeln(contact.locations.map((l) => l.displayString).join(', '));
+      buffer.writeln(contact.locations.map(_formatLocation).join(' | '));
     }
 
     if (contact.profilePicture != null) {
       buffer.writeln('PROFILE_PICTURE: ${contact.profilePicture}');
     }
 
+    // Tags
+    if (contact.tags.isNotEmpty) {
+      buffer.writeln('TAGS: ${contact.tags.join(', ')}');
+    }
+
+    // Social handles
+    for (var entry in contact.socialHandles.entries) {
+      buffer.writeln('SOCIAL_${entry.key.toUpperCase()}: ${entry.value}');
+    }
+
     if (contact.emails.isNotEmpty || contact.phones.isNotEmpty ||
         contact.addresses.isNotEmpty || contact.websites.isNotEmpty ||
-        contact.locations.isNotEmpty || contact.profilePicture != null) {
+        contact.locations.isNotEmpty || contact.profilePicture != null ||
+        contact.tags.isNotEmpty || contact.socialHandles.isNotEmpty) {
       buffer.writeln();
     }
 
@@ -398,8 +541,18 @@ class ContactService {
       buffer.writeln();
     }
 
-    // Notes
-    if (contact.notes.isNotEmpty) {
+    // History log
+    if (contact.historyEntries.isNotEmpty) {
+      buffer.writeln('## HISTORY LOG');
+      buffer.writeln();
+      for (var entry in contact.historyEntries) {
+        buffer.writeln(entry.exportAsText());
+        buffer.writeln();
+      }
+      buffer.writeln('## END HISTORY');
+      buffer.writeln();
+    } else if (contact.notes.isNotEmpty) {
+      // Legacy notes (if no history entries but notes exist)
       buffer.writeln(contact.notes);
       buffer.writeln();
     }
@@ -457,7 +610,7 @@ class ContactService {
   /// Returns error message if duplicate found, null if no duplicates
   Future<String?> _checkDuplicates(
     String callsign,
-    String npub, {
+    String? npub, {
     String? excludeFilePath,
   }) async {
     final allContacts = await loadAllContactsRecursively();
@@ -474,8 +627,8 @@ class ContactService {
         return 'Contact with callsign "$callsign" already exists in $location';
       }
 
-      // Check npub duplicate
-      if (contact.npub == npub) {
+      // Check npub duplicate (only if both have npub)
+      if (npub != null && npub.isNotEmpty && contact.npub != null && contact.npub == npub) {
         final location = (contact.groupPath == null || contact.groupPath!.isEmpty) ? 'root' : contact.groupPath;
         return 'Contact with this NPUB already exists: ${contact.displayName} in $location';
       }
@@ -513,13 +666,13 @@ class ContactService {
   Future<void> _deleteProfilePicture(String callsign) async {
     if (_collectionPath == null) return;
 
-    final pictureDir = Directory('$_collectionPath/contacts/profile-pictures');
-    if (!await pictureDir.exists()) return;
+    final mediaDir = Directory('$_collectionPath/media');
+    if (!await mediaDir.exists()) return;
 
     // Check for common image extensions
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
-      final file = File('${pictureDir.path}/$callsign.$ext');
+      final file = File('${mediaDir.path}/$callsign.$ext');
       if (await file.exists()) {
         await file.delete();
         LogService().log('ContactService: Deleted profile picture for $callsign');
@@ -775,7 +928,7 @@ class ContactService {
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
-      final file = File('$_collectionPath/contacts/profile-pictures/$callsign.$ext');
+      final file = File('$_collectionPath/media/$callsign.$ext');
       if (file.existsSync()) {
         return file;
       }
@@ -787,14 +940,14 @@ class ContactService {
   Future<String?> saveProfilePicture(String callsign, File sourceFile) async {
     if (_collectionPath == null) return null;
 
-    final pictureDir = Directory('$_collectionPath/contacts/profile-pictures');
-    if (!await pictureDir.exists()) {
-      await pictureDir.create(recursive: true);
+    final mediaDir = Directory('$_collectionPath/media');
+    if (!await mediaDir.exists()) {
+      await mediaDir.create(recursive: true);
     }
 
     // Get file extension
     final extension = sourceFile.path.split('.').last.toLowerCase();
-    final targetFile = File('${pictureDir.path}/$callsign.$extension');
+    final targetFile = File('${mediaDir.path}/$callsign.$extension');
 
     try {
       await sourceFile.copy(targetFile.path);
@@ -804,5 +957,204 @@ class ContactService {
       LogService().log('ContactService: Error saving profile picture: $e');
       return null;
     }
+  }
+
+  // ============ Click Tracking ============
+
+  /// Get click stats file path
+  String get _clickStatsPath => '$_collectionPath/contacts/.click_stats.txt';
+
+  /// Load click statistics
+  Future<Map<String, int>> loadClickStats() async {
+    if (_collectionPath == null) return {};
+
+    final file = File(_clickStatsPath);
+    if (!await file.exists()) return {};
+
+    final stats = <String, int>{};
+
+    try {
+      final content = await file.readAsString();
+      final lines = content.split('\n');
+
+      for (var line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+
+        final parts = trimmed.split('|');
+        if (parts.length >= 2) {
+          final callsign = parts[0];
+          final count = int.tryParse(parts[1]) ?? 0;
+          stats[callsign] = count;
+        }
+      }
+    } catch (e) {
+      LogService().log('ContactService: Error loading click stats: $e');
+    }
+
+    return stats;
+  }
+
+  /// Record a contact click
+  Future<void> recordContactClick(String callsign) async {
+    if (_collectionPath == null) return;
+
+    final stats = await loadClickStats();
+    stats[callsign] = (stats[callsign] ?? 0) + 1;
+
+    await _saveClickStats(stats);
+  }
+
+  /// Save click statistics
+  Future<void> _saveClickStats(Map<String, int> stats) async {
+    if (_collectionPath == null) return;
+
+    final buffer = StringBuffer();
+    buffer.writeln('# CONTACT CLICK STATISTICS');
+    buffer.writeln('# Format: CALLSIGN|count|last_clicked');
+
+    final now = DateTime.now();
+    final timestamp = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}_'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    // Sort by count descending
+    final sortedEntries = stats.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    for (var entry in sortedEntries) {
+      buffer.writeln('${entry.key}|${entry.value}|$timestamp');
+    }
+
+    try {
+      final file = File(_clickStatsPath);
+      await file.writeAsString(buffer.toString());
+    } catch (e) {
+      LogService().log('ContactService: Error saving click stats: $e');
+    }
+  }
+
+  /// Get top N most clicked contacts
+  Future<List<Contact>> getTopContacts(int limit) async {
+    if (_collectionPath == null) return [];
+
+    final stats = await loadClickStats();
+    if (stats.isEmpty) return [];
+
+    // Sort by count descending
+    final sortedCallsigns = stats.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final topCallsigns = sortedCallsigns.take(limit).map((e) => e.key).toList();
+
+    // Load the contacts
+    final allContacts = await loadAllContactsRecursively();
+    final topContacts = <Contact>[];
+
+    for (var callsign in topCallsigns) {
+      final contact = allContacts.where((c) => c.callsign == callsign).firstOrNull;
+      if (contact != null) {
+        topContacts.add(contact);
+      }
+    }
+
+    return topContacts;
+  }
+
+  // ============ Folder Management ============
+
+  /// Rename a group/folder
+  Future<bool> renameGroup(String oldPath, String newName) async {
+    if (_collectionPath == null) return false;
+
+    final oldDir = Directory('$_collectionPath/contacts/$oldPath');
+    if (!await oldDir.exists()) return false;
+
+    // Build new path (same parent, new name)
+    final pathParts = oldPath.split('/');
+    pathParts[pathParts.length - 1] = newName;
+    final newPath = pathParts.join('/');
+
+    final newDir = Directory('$_collectionPath/contacts/$newPath');
+    if (await newDir.exists()) {
+      LogService().log('ContactService: Cannot rename - destination already exists: $newPath');
+      return false;
+    }
+
+    try {
+      await oldDir.rename(newDir.path);
+      LogService().log('ContactService: Renamed group $oldPath to $newPath');
+      return true;
+    } catch (e) {
+      LogService().log('ContactService: Error renaming group: $e');
+      return false;
+    }
+  }
+
+  // ============ History Entries ============
+
+  /// Add a history entry to a contact
+  Future<String?> addHistoryEntry(
+    String callsign,
+    ContactHistoryEntry entry, {
+    String? groupPath,
+  }) async {
+    final contact = await loadContact(callsign, groupPath: groupPath);
+    if (contact == null) return 'Contact not found';
+
+    final updatedEntries = [...contact.historyEntries, entry];
+    updatedEntries.sort(); // Sort by timestamp descending
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+    return await saveContact(updatedContact, groupPath: groupPath);
+  }
+
+  /// Edit a history entry
+  Future<String?> editHistoryEntry(
+    String callsign,
+    String entryTimestamp,
+    String newContent, {
+    String? groupPath,
+    ContactHistoryEntryType? newType,
+    Map<String, String>? newMetadata,
+  }) async {
+    final contact = await loadContact(callsign, groupPath: groupPath);
+    if (contact == null) return 'Contact not found';
+
+    final updatedEntries = contact.historyEntries.map((e) {
+      if (e.timestamp == entryTimestamp) {
+        return ContactHistoryEntry(
+          author: e.author,
+          timestamp: e.timestamp,
+          content: newContent,
+          type: newType ?? e.type,
+          metadata: newMetadata ?? e.metadata,
+        );
+      }
+      return e;
+    }).toList();
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+    return await saveContact(updatedContact, groupPath: groupPath);
+  }
+
+  /// Delete a history entry
+  Future<String?> deleteHistoryEntry(
+    String callsign,
+    String entryTimestamp, {
+    String? groupPath,
+  }) async {
+    final contact = await loadContact(callsign, groupPath: groupPath);
+    if (contact == null) return 'Contact not found';
+
+    final updatedEntries = contact.historyEntries
+        .where((e) => e.timestamp != entryTimestamp)
+        .toList();
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+    return await saveContact(updatedContact, groupPath: groupPath);
   }
 }
