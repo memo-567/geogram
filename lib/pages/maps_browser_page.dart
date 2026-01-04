@@ -20,7 +20,7 @@ import '../models/report.dart';
 import '../models/place.dart';
 import '../services/maps_service.dart';
 import '../services/profile_service.dart';
-import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
+import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
@@ -1351,76 +1351,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
               ),
             ],
           ),
-        ),
-
-        // Tile loading status indicator
-        ValueListenableBuilder<TileLoadingStatus>(
-          valueListenable: _mapTileService.statusNotifier,
-          builder: (context, status, child) {
-            if (!status.isLoading && !status.hasFailures) {
-              return const SizedBox.shrink();
-            }
-            return Positioned(
-              bottom: 16,
-              left: 16,
-              right: 80, // Leave space for zoom controls
-              child: AnimatedOpacity(
-                opacity: (status.isLoading || status.hasFailures) ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: status.hasFailures
-                        ? Colors.orange.shade800.withValues(alpha: 0.9)
-                        : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.2),
-                        blurRadius: 4,
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (status.isLoading) ...[
-                        SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _i18n.t('loading_tiles', params: [status.loadingCount.toString()]),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ] else if (status.hasFailures) ...[
-                        const Icon(
-                          Icons.cloud_off,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            _i18n.t('tiles_failed', params: [status.failedCount.toString()]),
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.white,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
         ),
 
       ],

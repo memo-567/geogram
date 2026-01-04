@@ -1223,6 +1223,7 @@
   "unlock_rotation": "Desbloquear rotação",
   "cached": "Em cache",
   "offline": "Offline",
+  "no_internet_connection": "Sem ligação à internet",
   "unreachable": "Inacessível",
   "select_device_to_browse": "Selecione um dispositivo para navegar nas suas aplicações",
   "no_devices_found": "Nenhum dispositivo encontrado",

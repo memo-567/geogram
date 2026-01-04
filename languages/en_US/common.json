@@ -1314,6 +1314,7 @@
   "unlock_rotation": "Unlock rotation",
   "cached": "Cached",
   "offline": "Offline",
+  "no_internet_connection": "No internet connection",
   "unreachable": "Unreachable",
   "select_device_to_browse": "Select a device to browse its apps",
   "no_devices_found": "No devices found",

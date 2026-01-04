@@ -11,7 +11,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
 import '../services/place_service.dart';
-import '../services/place_sharing_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -324,10 +323,22 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       );
 
       if (result != null && result.files.isNotEmpty) {
+        final newPaths = result.files
+            .where((f) => f.path != null)
+            .map((file) => file.path!)
+            .toList();
+
         setState(() {
-          _imageFilePaths.addAll(
-            result.files.where((f) => f.path != null).map((file) => file.path!).toList(),
-          );
+          _imageFilePaths.addAll(newPaths);
+
+          // Auto-select first image as profile picture if none selected yet
+          if (_profileImageSelection == null && !_profileImageCleared) {
+            if (_existingImages.isNotEmpty) {
+              _profileImageSelection = _existingImages.first;
+            } else if (_imageFilePaths.isNotEmpty) {
+              _profileImageSelection = _imageFilePaths.first;
+            }
+          }
         });
       }
     } catch (e) {
@@ -523,11 +534,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
           placeFolderPath: placeFolderPath,
         );
 
-        // Upload place to preferred station (place.txt + photos)
-        if (!kIsWeb) {
-          final sharingService = PlaceSharingService();
-          await sharingService.uploadPlaceToStations(place, widget.collectionPath);
-        }
+        // Don't upload automatically - user can publish later via "Publish" button
+        // This allows saving places offline and publishing when back on wifi
 
         if (mounted) {
           Navigator.pop(context, true);
@@ -629,6 +637,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
           border: const OutlineInputBorder(),
           hintText: 'Historic Café Landmark',
         ),
+        textCapitalization: TextCapitalization.words,
         validator: (value) {
           if (value == null || value.trim().isEmpty) {
             return _i18n.t('field_required');
@@ -844,7 +853,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
             ),
             const SizedBox(height: 16),
 
-            // Description (required) with language selector
+            // Description (optional) with language selector
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -852,17 +861,12 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                   child: TextFormField(
                     controller: _descriptionController,
                     decoration: InputDecoration(
-                      labelText: '${_i18n.t('description')} *',
+                      labelText: _i18n.t('description'),
                       border: const OutlineInputBorder(),
                       helperText: _i18n.t('place_description_help'),
                     ),
                     maxLines: 4,
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return _i18n.t('field_required');
-                      }
-                      return null;
-                    },
+                    textCapitalization: TextCapitalization.sentences,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1090,6 +1094,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 hintText: '123 Main Street, Lisbon, Portugal',
               ),
               maxLines: 2,
+              textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 16),
 
@@ -1101,6 +1106,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 border: const OutlineInputBorder(),
                 hintText: '1782, 12th century, circa 1500, Roman era',
               ),
+              textCapitalization: TextCapitalization.sentences,
             ),
             const SizedBox(height: 16),
 
@@ -1113,6 +1119,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 hintText: 'Mon-Fri 9:00-17:00, Sat-Sun 10:00-16:00',
               ),
               maxLines: 2,
+              textCapitalization: TextCapitalization.sentences,
             ),
             const SizedBox(height: 16),
 
@@ -1129,6 +1136,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                       helperText: _i18n.t('place_history_help'),
                     ),
                     maxLines: 6,
+                    textCapitalization: TextCapitalization.sentences,
                   ),
                 ),
                 const SizedBox(width: 8),

@@ -32,6 +32,10 @@
   "location_settings": "Definições de Localização",
   "location_unknown": "Localização desconhecida - toque para detectar",
   "place_deleted": "{0} eliminado",
+  "place_published": "{0} publicado na estação",
+  "publish": "Publicar",
+  "publish_failed": "Falha ao publicar local",
+  "publishing_place": "A publicar local...",
   "place_description_help": "Descreva este local em texto simples",
   "place_history_help": "Informação histórica sobre este local",
   "place_name": "Nome do Local",
@@ -61,5 +65,7 @@
   "place_type_store": "Loja",
   "place_type_theater": "Teatro",
   "place_type_veterinary": "Veterinário",
-  "place_type_viewpoint": "Miradouro"
+  "place_type_viewpoint": "Miradouro",
+  "see_in_map": "Ver no mapa",
+  "fit_to_view": "Ajustar ambas localizações"
 }

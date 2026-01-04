@@ -32,6 +32,10 @@
   "location_settings": "Location Settings",
   "location_unknown": "Location unknown - tap to detect",
   "place_deleted": "Deleted {0}",
+  "place_published": "{0} published to station",
+  "publish": "Publish",
+  "publish_failed": "Failed to publish place",
+  "publishing_place": "Publishing place...",
   "place_description_help": "Describe this place in plain text",
   "place_history_help": "Historical information about this place",
   "place_name": "Place Name",
@@ -61,5 +65,7 @@
   "place_type_store": "Store",
   "place_type_theater": "Theater",
   "place_type_veterinary": "Veterinary",
-  "place_type_viewpoint": "Viewpoint"
+  "place_type_viewpoint": "Viewpoint",
+  "see_in_map": "See in map",
+  "fit_to_view": "Fit both locations"
 }

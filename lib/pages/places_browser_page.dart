@@ -16,6 +16,7 @@ import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/place_sharing_service.dart';
+import '../services/network_monitor_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_place_service.dart';
 import '../services/user_location_service.dart';
@@ -23,6 +24,7 @@ import '../platform/file_image_helper.dart' as file_helper;
 import '../widgets/place_feedback_section.dart';
 import 'add_edit_place_page.dart';
 import 'photo_viewer_page.dart';
+import 'place_map_view_page.dart';
 
 /// Places browser page
 class PlacesBrowserPage extends StatefulWidget {
@@ -100,7 +102,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     await _loadCachedStationPlaces();
     // Then lazy refresh from server in background (no UI feedback)
     _refreshStationPlacesFromServer();
-    _syncLocalPlacesToStation();
   }
 
   Future<void> _loadCachedStationPlaces() async {
@@ -506,6 +507,119 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         await _loadPlaces();
       }
     }
+  }
+
+  Future<void> _publishPlace(Place place) async {
+    if (kIsWeb) return;
+
+    // Check network connectivity
+    final networkMonitor = NetworkMonitorService();
+    final sharingService = PlaceSharingService();
+    final relayUrls = sharingService.getRelayUrls();
+    final hasLocalRelay = relayUrls.any(_isLikelyLocalStationUrl);
+
+    if (!networkMonitor.hasInternet && !hasLocalRelay) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('no_internet_connection')),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Show publishing indicator
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Text(_i18n.t('publishing_place')),
+            ],
+          ),
+          duration: const Duration(seconds: 30),
+        ),
+      );
+    }
+
+    try {
+      final uploadedCount = await sharingService.uploadPlaceToStations(
+        place,
+        widget.collectionPath,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (uploadedCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('place_published', params: [place.name])),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('publish_failed')),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      LogService().log('PlacesBrowserPage: Error publishing place: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('publish_failed')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  bool _isLikelyLocalStationUrl(String url) {
+    final parsed = Uri.tryParse(url);
+    final host = parsed?.host ?? '';
+    if (host.isEmpty) return false;
+
+    final lowerHost = host.toLowerCase();
+    if (lowerHost == 'localhost' || lowerHost == '::1') return true;
+    if (lowerHost.endsWith('.local') ||
+        lowerHost.endsWith('.lan') ||
+        lowerHost.endsWith('.localdomain')) {
+      return true;
+    }
+    if (!host.contains('.')) return true;
+    if (lowerHost.startsWith('fc') || lowerHost.startsWith('fd') || lowerHost.startsWith('fe80:')) {
+      return true;
+    }
+
+    final parts = host.split('.');
+    if (parts.length != 4) return false;
+    final octets = <int>[];
+    for (final part in parts) {
+      final value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) return false;
+      octets.add(value);
+    }
+
+    if (octets[0] == 10) return true;
+    if (octets[0] == 127) return true;
+    if (octets[0] == 169 && octets[1] == 254) return true;
+    if (octets[0] == 192 && octets[1] == 168) return true;
+    if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+    return false;
   }
 
   Future<void> _loadPlacePhotos(Place place) async {
@@ -950,9 +1064,30 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       if (subtitleSuffix != null && subtitleSuffix.isNotEmpty) subtitleSuffix,
     ];
 
+    // Calculate distance to place if user location is available
+    String? distanceText;
+    final userLocation = _userLocationService.currentLocation;
+    if (userLocation != null && userLocation.isValid) {
+      final distance = _calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        place.latitude,
+        place.longitude,
+      );
+      if (distance < 1) {
+        distanceText = '${(distance * 1000).round()} m';
+      } else if (distance < 10) {
+        distanceText = '${distance.toStringAsFixed(1)} km';
+      } else {
+        distanceText = '${distance.round()} km';
+      }
+    }
+
     return ListTile(
       leading: _buildPlaceAvatar(place),
-      title: Text(place.name),
+      title: Text(
+        distanceText != null ? '${place.name} ($distanceText)' : place.name,
+      ),
       subtitle: Text(
         subtitleParts.join(' • '),
         maxLines: 1,
@@ -1065,12 +1200,8 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      description.isNotEmpty ? description : place.name,
-                      style: description.isNotEmpty
-                          ? Theme.of(context).textTheme.bodyLarge
-                          : Theme.of(context).textTheme.headlineSmall,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                      place.name,
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     if (place.type != null)
                       Text(
@@ -1078,6 +1209,14 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Theme.of(context).colorScheme.secondary,
                             ),
+                      ),
+                    if (description.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          description,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       ),
                   ],
                 ),
@@ -1164,6 +1303,11 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
               runSpacing: 8,
               children: [
                 FilledButton.icon(
+                  icon: const Icon(Icons.cloud_upload),
+                  label: Text(_i18n.t('publish')),
+                  onPressed: () => _publishPlace(place),
+                ),
+                FilledButton.tonalIcon(
                   icon: const Icon(Icons.edit),
                   label: Text(_i18n.t('edit')),
                   onPressed: () => _editPlace(place),
@@ -1260,6 +1404,12 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             visualDensity: VisualDensity.compact,
           ),
           IconButton(
+            icon: const Icon(Icons.map, size: 18),
+            onPressed: () => _showPlaceOnMap(place),
+            tooltip: _i18n.t('see_in_map'),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
             icon: const Icon(Icons.navigation, size: 18),
             onPressed: () => _openInNavigator(place),
             tooltip: _i18n.t('open_in_navigator'),
@@ -1305,6 +1455,17 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       }
     }
   }
+
+  void _showPlaceOnMap(Place place) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PlaceMapViewPage(
+          place: place,
+          userLocation: _userLocationService.currentLocation,
+        ),
+      ),
+    );
+  }
 }
 
 /// Full-screen place detail page for mobile view
@@ -1327,6 +1488,7 @@ class _PlaceDetailPage extends StatefulWidget {
 }
 
 class _PlaceDetailPageState extends State<_PlaceDetailPage> {
+  final UserLocationService _userLocationService = UserLocationService();
   bool _hasChanges = false;
   List<String> _photos = [];
 
@@ -1553,12 +1715,29 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
             visualDensity: VisualDensity.compact,
           ),
           IconButton(
+            icon: const Icon(Icons.map, size: 18),
+            onPressed: _showPlaceOnMap,
+            tooltip: widget.i18n.t('see_in_map'),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
             icon: const Icon(Icons.navigation, size: 18),
             onPressed: _openInNavigator,
             tooltip: widget.i18n.t('open_in_navigator'),
             visualDensity: VisualDensity.compact,
           ),
         ],
+      ),
+    );
+  }
+
+  void _showPlaceOnMap() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PlaceMapViewPage(
+          place: widget.place,
+          userLocation: _userLocationService.currentLocation,
+        ),
       ),
     );
   }
@@ -1640,12 +1819,8 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          description.isNotEmpty ? description : widget.place.name,
-                          style: description.isNotEmpty
-                              ? Theme.of(context).textTheme.bodyLarge
-                              : Theme.of(context).textTheme.headlineSmall,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                          widget.place.name,
+                          style: Theme.of(context).textTheme.headlineSmall,
                         ),
                         if (widget.place.type != null)
                           Text(
@@ -1653,6 +1828,14 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.secondary,
                                 ),
+                          ),
+                        if (description.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              description,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           ),
                       ],
                     ),

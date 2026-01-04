@@ -2224,6 +2224,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
+  final AppThemeService _themeService = AppThemeService();
 
   @override
   void initState() {
@@ -2231,12 +2232,14 @@ class _SettingsPageState extends State<SettingsPage> {
     // Listen to language changes to rebuild the UI
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _profileService.profileNotifier.addListener(_onProfileChanged);
+    _themeService.addListener(_onThemeChanged);
   }
 
   @override
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.profileNotifier.removeListener(_onProfileChanged);
+    _themeService.removeListener(_onThemeChanged);
     super.dispose();
   }
 
@@ -2245,6 +2248,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _onProfileChanged() {
+    setState(() {});
+  }
+
+  void _onThemeChanged() {
     setState(() {});
   }
 
@@ -2506,10 +2513,9 @@ class _SettingsPageState extends State<SettingsPage> {
         ListTile(
           leading: const Icon(Icons.color_lens_outlined),
           title: Text(_i18n.t('app_theme')),
-          subtitle: Text(_i18n.t('theme_${AppThemeService().currentTheme.name}')),
+          subtitle: Text(_i18n.t('theme_${_themeService.currentTheme.name}')),
           trailing: const Icon(Icons.chevron_right),
           onTap: () {
-            Navigator.pop(context); // Close drawer
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),

@@ -3,13 +3,16 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/config_service.dart';
-import '../services/map_tile_service.dart' show MapTileService, TileLoadingStatus, MapLayerType;
+import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 import '../util/geolocation_utils.dart';
 
 /// Full-page reusable location picker/viewer
@@ -70,13 +73,26 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
   /// Automatically detect location when the picker opens
   /// Uses GeolocationUtils for unified location detection
+  /// On mobile, explicitly requests GPS permission for accurate location
   Future<void> _autoDetectLocationOnStart() async {
     setState(() {
       _isDetectingLocation = true;
     });
 
     try {
-      final result = await GeolocationUtils.getCurrentLocation(useProfile: true);
+      GeolocationResult? result;
+
+      // On mobile, try GPS with permission request first for best accuracy
+      final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      if (isMobile) {
+        result = await GeolocationUtils.detectViaGPS(
+          requestPermission: true,
+          timeout: const Duration(seconds: 15),
+        );
+      }
+
+      // Fallback to general location detection if GPS failed
+      result ??= await GeolocationUtils.getCurrentLocation(useProfile: true);
 
       if (result != null && result.isValid && mounted) {
         _setLocation(result.latitude, result.longitude);
@@ -321,59 +337,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                             ],
                           ),
                         ],
-                      ),
-                      // Tile loading status indicator
-                      ValueListenableBuilder<TileLoadingStatus>(
-                        valueListenable: _mapTileService.statusNotifier,
-                        builder: (context, status, child) {
-                          if (!status.isLoading && !status.hasFailures) {
-                            return const SizedBox.shrink();
-                          }
-                          return Positioned(
-                            bottom: 16,
-                            left: 16,
-                            right: 16,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: status.hasFailures
-                                    ? Colors.orange.shade800.withValues(alpha: 0.9)
-                                    : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (status.isLoading) ...[
-                                    SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      _i18n.t('loading_tiles', params: [status.loadingCount.toString()]),
-                                      style: theme.textTheme.bodySmall,
-                                    ),
-                                  ] else if (status.hasFailures) ...[
-                                    const Icon(Icons.cloud_off, size: 16, color: Colors.white),
-                                    const SizedBox(width: 8),
-                                    Flexible(
-                                      child: Text(
-                                        _i18n.t('tiles_failed', params: [status.failedCount.toString()]),
-                                        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          );
-                        },
                       ),
                       // Map controls (same layout as main map)
                       Positioned(
