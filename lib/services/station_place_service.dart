@@ -53,7 +53,72 @@ class StationPlaceService {
   final PlaceService _placeService = PlaceService();
   int _lastFetchTimestamp = 0;
 
+  // Cached places in memory
+  List<StationPlaceEntry> _cachedPlaces = [];
+
   int get lastFetchTimestamp => _lastFetchTimestamp;
+
+  /// Get cached places (loaded from local storage)
+  List<StationPlaceEntry> get cachedPlaces => _cachedPlaces;
+
+  /// Load places from local device cache (no network)
+  Future<List<StationPlaceEntry>> loadCachedPlaces() async {
+    if (kIsWeb) return [];
+
+    try {
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) return [];
+
+      final devicesDir = Directory(storageConfig.devicesDir);
+      if (!await devicesDir.exists()) return [];
+
+      final entries = <StationPlaceEntry>[];
+
+      // Scan all device folders for cached places
+      await for (final deviceEntity in devicesDir.list()) {
+        if (deviceEntity is! Directory) continue;
+
+        final callsign = path.basename(deviceEntity.path).toUpperCase();
+        final placesDir = Directory(path.join(deviceEntity.path, 'places'));
+
+        if (!await placesDir.exists()) continue;
+
+        // Recursively find all place.txt files
+        await for (final entity in placesDir.list(recursive: true)) {
+          if (entity is! File) continue;
+          if (path.basename(entity.path) != 'place.txt') continue;
+
+          try {
+            final content = await entity.readAsString();
+            final folderPath = path.dirname(entity.path);
+            final place = _placeService.parsePlaceContent(
+              content: content,
+              filePath: entity.path,
+              folderPath: folderPath,
+            );
+
+            if (place != null) {
+              // Calculate relative path from places folder
+              final relativePath = path.relative(folderPath, from: placesDir.path);
+              entries.add(StationPlaceEntry(
+                place: place,
+                callsign: callsign,
+                relativePath: relativePath,
+              ));
+            }
+          } catch (e) {
+            LogService().log('StationPlaceService: Error loading cached place: $e');
+          }
+        }
+      }
+
+      _cachedPlaces = entries;
+      return entries;
+    } catch (e) {
+      LogService().log('StationPlaceService: Error loading cached places: $e');
+      return [];
+    }
+  }
 
   Future<StationPlaceFetchResult> fetchPlaces({
     double? lat,

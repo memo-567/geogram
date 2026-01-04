@@ -409,7 +409,7 @@ class _GeogramAppState extends State<GeogramApp> {
   }
 
   void _onThemeChanged() {
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override
@@ -488,7 +488,7 @@ class _HomePageState extends State<HomePage> {
     _unreadDmCount = DirectMessageService().totalUnreadCount;
     _unreadSubscription = DirectMessageService().unreadCountsStream.listen((counts) {
       final total = counts.values.fold(0, (sum, count) => sum + count);
-      if (total != _unreadDmCount) {
+      if (total != _unreadDmCount && mounted) {
         setState(() {
           _unreadDmCount = total;
         });
@@ -514,6 +514,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Handle debug API navigation requests
   void _onDebugNavigate() {
+    if (!mounted) return;
     final panelIndex = _debugController.panelNotifier.value;
     if (panelIndex != null && panelIndex >= 0 && panelIndex < _pages.length) {
       setState(() {
@@ -811,11 +812,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onLanguageChanged() {
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   void _onProfileChanged() {
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   /// Called when UpdateService detects an available update
@@ -2514,14 +2515,6 @@ class _SettingsPageState extends State<SettingsPage> {
               MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
             );
           },
-        ),
-        ListTile(
-          leading: const Icon(Icons.palette_outlined),
-          title: Text(_i18n.t('theme')),
-          subtitle: Text(WebThemeService().getCurrentTheme()[0].toUpperCase() +
-            WebThemeService().getCurrentTheme().substring(1)),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _showWebThemeDialog,
         ),
         ListTile(
           leading: const Icon(Icons.system_update),

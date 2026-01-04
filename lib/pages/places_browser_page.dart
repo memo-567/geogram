@@ -56,10 +56,9 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   String? _selectedType;
   Set<String> _types = {};
   bool _isLoading = true;
-  bool _isLoadingStationPlaces = false;
   bool _selectedPlaceIsStation = false;
   bool _didSyncLocalPlaces = false;
-  double _radiusKm = 100.0; // Default 100km radius
+  double _radiusKm = 20.0; // Default 20km radius (from steps: 1, 5, 10, 20, 40, 80, 160, 320, 500)
 
   static const String _radiusConfigKey = 'settings.placesRadiusKm';
 
@@ -97,9 +96,28 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
   Future<void> _initialize() async {
     await _loadPlaces();
-    // Load station places asynchronously (don't block UI)
-    _loadStationPlaces();
+    // Load cached station places first (fast, from local storage)
+    await _loadCachedStationPlaces();
+    // Then lazy refresh from server in background (no UI feedback)
+    _refreshStationPlacesFromServer();
     _syncLocalPlacesToStation();
+  }
+
+  Future<void> _loadCachedStationPlaces() async {
+    final cached = await _stationPlaceService.loadCachedPlaces();
+    if (!mounted || cached.isEmpty) return;
+
+    final localKeys = _buildLocalPlaceKeys();
+    final entries = cached
+        .where((entry) => !_isDuplicateStationPlace(entry, localKeys))
+        .toList();
+    entries.sort((a, b) => a.place.name.compareTo(b.place.name));
+
+    setState(() {
+      _stationPlaces = entries;
+      _types = _computeTypes();
+    });
+    _filterStationPlacesByDistance();
   }
 
   Future<void> _loadPlaces() async {
@@ -146,19 +164,13 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     }
   }
 
-  Future<void> _loadStationPlaces() async {
-    setState(() => _isLoadingStationPlaces = true);
-
+  /// Refresh station places from server silently (no loading indicator)
+  Future<void> _refreshStationPlacesFromServer() async {
     final result = await _stationPlaceService.fetchPlaces();
     if (!mounted) return;
 
     if (!result.success) {
-      setState(() => _isLoadingStationPlaces = false);
-      if (result.error != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading station places: ${result.error}')),
-        );
-      }
+      // Silent failure - don't show error, we have cached data
       return;
     }
 
@@ -191,7 +203,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       _selectedPlace = selectedPlace;
       _selectedPlaceIsStation = selectedIsStation;
       _types = _computeTypes();
-      _isLoadingStationPlaces = false;
       if (selectedPlace == null) {
         _selectedPlacePhotos = [];
       }
@@ -355,12 +366,22 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
   void _filterPlaces() {
     final query = _searchController.text;
-    var filteredLocal = _allPlaces;
+    var filteredLocal = List<Place>.from(_allPlaces);
     var filteredStation = List<StationPlaceEntry>.from(_stationPlaces);
 
-    // Apply distance filter to station places
+    // Apply distance filter to both local and station places
     final userLocation = _userLocationService.currentLocation;
     if (userLocation != null && userLocation.isValid && _radiusKm < 500) {
+      filteredLocal = filteredLocal.where((place) {
+        final distance = _calculateDistance(
+          userLocation.latitude,
+          userLocation.longitude,
+          place.latitude,
+          place.longitude,
+        );
+        return distance <= _radiusKm;
+      }).toList();
+
       filteredStation = filteredStation.where((entry) {
         final distance = _calculateDistance(
           userLocation.latitude,
@@ -429,7 +450,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   Future<void> _refreshAllPlaces() async {
     await Future.wait([
       _loadPlaces(),
-      _loadStationPlaces(),
+      _refreshStationPlacesFromServer(),
     ]);
   }
 
@@ -686,9 +707,9 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
         // Show ListView if there are any places OR if there are unfiltered station places
         // (so user can adjust radius even when filtered results are empty)
         Expanded(
-          child: _isLoading && myPlaces.isEmpty && stationPlaces.isEmpty && _isLoadingStationPlaces
+          child: _isLoading && myPlaces.isEmpty && stationPlaces.isEmpty
               ? const Center(child: CircularProgressIndicator())
-              : (myPlaces.isEmpty && stationPlaces.isEmpty && _stationPlaces.isEmpty && !_isLoading && !_isLoadingStationPlaces)
+              : (myPlaces.isEmpty && stationPlaces.isEmpty && _stationPlaces.isEmpty && !_isLoading)
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -715,6 +736,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                               icon: Icons.person,
                               title: _i18n.t('my_places'),
                               count: myPlaces.length,
+                              trailing: _buildRadiusSlider(theme),
                             ),
                             ...myPlaces.map(
                               (place) => _buildPlaceListTile(
@@ -728,9 +750,8 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                             icon: Icons.cloud,
                             title: _i18n.t('station_places'),
                             count: stationPlaces.length,
-                            isLoading: _isLoadingStationPlaces,
-                            onRefresh: isMobilePlatform ? null : _loadStationPlaces,
-                            trailing: _buildRadiusSlider(theme),
+                            // Only show slider here if My Places section is empty
+                            trailing: myPlaces.isEmpty ? _buildRadiusSlider(theme) : null,
                           ),
                           if (stationPlaces.isNotEmpty)
                             ...stationPlaces.map(
@@ -744,7 +765,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
                                     : _selectStationPlace(entry),
                               ),
                             )
-                          else if (!_isLoadingStationPlaces)
+                          else
                             Padding(
                               padding: const EdgeInsets.all(16),
                               child: Center(
@@ -844,17 +865,30 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     );
   }
 
+  // Progressive radius scale: 1, 5, 10, 20, 40, 80, 160, 320, 500 (unlimited)
+  static const List<double> _radiusSteps = [1, 5, 10, 20, 40, 80, 160, 320, 500];
+
+  /// Convert slider position (0 to steps-1) to radius value
+  double _sliderToRadius(double sliderValue) {
+    final index = sliderValue.round().clamp(0, _radiusSteps.length - 1);
+    return _radiusSteps[index];
+  }
+
+  /// Convert radius value to slider position
+  double _radiusToSlider(double radius) {
+    // Find closest step
+    for (int i = 0; i < _radiusSteps.length; i++) {
+      if (radius <= _radiusSteps[i]) {
+        return i.toDouble();
+      }
+    }
+    return (_radiusSteps.length - 1).toDouble();
+  }
+
   /// Build the compact radius slider widget for filtering station places
   Widget _buildRadiusSlider(ThemeData theme) {
-    // Format radius display
-    String radiusText;
-    if (_radiusKm >= 500) {
-      radiusText = _i18n.t('radius_unlimited');
-    } else if (_radiusKm >= 10) {
-      radiusText = '${_radiusKm.round()} km';
-    } else {
-      radiusText = '${_radiusKm.toStringAsFixed(1)} km';
-    }
+    // Format radius display (use ∞ symbol for unlimited to save space)
+    final radiusText = _radiusKm >= 500 ? '∞' : '${_radiusKm.round()} km';
 
     return Row(
       children: [
@@ -866,27 +900,22 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
             ),
             child: Slider(
-              value: _radiusKm,
-              min: 1,
-              max: 500,
-              divisions: 49,
+              value: _radiusToSlider(_radiusKm),
+              min: 0,
+              max: (_radiusSteps.length - 1).toDouble(),
+              divisions: _radiusSteps.length - 1,
               onChanged: (value) {
                 setState(() {
-                  // Snap to nice values with exponential feel
-                  if (value <= 10) {
-                    _radiusKm = value.roundToDouble();
-                  } else if (value <= 50) {
-                    _radiusKm = (value / 5).round() * 5.0;
-                  } else if (value <= 100) {
-                    _radiusKm = (value / 10).round() * 10.0;
-                  } else {
-                    _radiusKm = (value / 25).round() * 25.0;
-                  }
+                  _radiusKm = _sliderToRadius(value);
                 });
               },
-              onChangeEnd: (value) {
+              onChangeEnd: (value) async {
                 // Save and filter with the new radius
                 _saveRadius();
+                // On mobile, refresh location to ensure accurate filtering
+                if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+                  await _userLocationService.refresh();
+                }
                 _filterPlaces();
               },
             ),
@@ -899,6 +928,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.bold,
               color: theme.colorScheme.primary,
+              fontSize: _radiusKm >= 500 ? 24 : null,
             ),
             textAlign: TextAlign.end,
           ),

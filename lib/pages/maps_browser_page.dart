@@ -198,6 +198,15 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
 
     await _loadItems();
+    _ensureOfflineTiles();
+  }
+
+  void _ensureOfflineTiles() {
+    if (_centerPosition == null || _awaitingProfileLocation) return;
+    unawaited(_mapTileService.ensureOfflineTiles(
+      lat: _centerPosition!.latitude,
+      lng: _centerPosition!.longitude,
+    ));
   }
 
   /// Save current map state to config (debounced in ConfigService)
@@ -728,6 +737,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     // Save and reload
     _saveMapState();
     _loadItems();
+    _ensureOfflineTiles();
 
     // No success notification needed - the map moving to new location is enough feedback
     LogService().log('Location detected: $lat, $lon (${_i18n.t(successMessageKey)})');
@@ -1413,44 +1423,6 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
           },
         ),
 
-        // Loading overlay with progress indicator
-        if (!_mapReady || _isLoading)
-          Positioned.fill(
-            child: Container(
-              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
-              child: Center(
-                child: Card(
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(
-                          width: 48,
-                          height: 48,
-                          child: CircularProgressIndicator(strokeWidth: 3),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _i18n.t('loading_map'),
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _i18n.t('loading_map_hint'),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
