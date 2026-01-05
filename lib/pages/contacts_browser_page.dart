@@ -6,13 +6,34 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../dialogs/place_picker_dialog.dart';
 import '../models/contact.dart';
+// Re-export history entry types
+export '../models/contact.dart' show ContactHistoryEntry, ContactHistoryEntryType;
 import '../platform/file_image_helper.dart' as file_helper;
 import '../services/contact_service.dart';
+// Re-export metrics classes from contact_service
+export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics;
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import 'add_edit_contact_page.dart';
+import 'contact_import_page.dart';
+import 'location_picker_page.dart';
+
+/// Get initials from display name (e.g., "John Smith" -> "JS")
+String _getContactInitials(String displayName) {
+  final words = displayName.trim().split(RegExp(r'\s+'));
+  if (words.isEmpty || words[0].isEmpty) return '?';
+  if (words.length == 1) {
+    // Single word: use first two characters
+    return words[0].substring(0, words[0].length >= 2 ? 2 : 1).toUpperCase();
+  }
+  // Multiple words: use first character of first two words
+  return '${words[0][0]}${words[1][0]}'.toUpperCase();
+}
 
 /// Contacts browser page with 2-panel layout
 class ContactsBrowserPage extends StatefulWidget {
@@ -74,22 +95,35 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Future<void> _loadContacts() async {
-    setState(() => _isLoading = true);
-
-    final contacts = await _contactService.loadAllContactsRecursively();
-
     setState(() {
-      _allContacts = contacts;
-      _filteredContacts = contacts;
-      _isLoading = false;
+      _isLoading = true;
+      _allContacts = [];
+      _filteredContacts = [];
     });
 
-    _filterContacts();
+    // Use streaming loader for incremental display
+    // Contacts are yielded in popularity order (most used first)
+    await for (final contact in _contactService.loadAllContactsStream()) {
+      if (!mounted) return;
 
-    // Auto-select first contact
-    if (_allContacts.isNotEmpty && _selectedContact == null) {
-      setState(() => _selectedContact = _allContacts.first);
+      setState(() {
+        _allContacts.add(contact);
+      });
+
+      // Auto-select first contact as soon as it arrives
+      if (_allContacts.length == 1 && _selectedContact == null) {
+        setState(() => _selectedContact = contact);
+      }
+
+      // Update filtered list periodically (every 10 contacts or when small)
+      if (_allContacts.length <= 10 || _allContacts.length % 10 == 0) {
+        _filterContacts();
+      }
     }
+
+    // Final filter pass after all contacts loaded
+    setState(() => _isLoading = false);
+    _filterContacts();
   }
 
   Future<void> _loadGroups() async {
@@ -102,38 +136,48 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   void _filterContacts() {
     final query = _searchController.text.toLowerCase();
 
-    setState(() {
-      var filtered = _allContacts;
+    var filtered = _allContacts;
 
-      // Apply view mode filter
-      if (_viewMode == 'group' && _selectedGroupPath != null) {
-        filtered = filtered.where((c) => c.groupPath == _selectedGroupPath).toList();
-      } else if (_viewMode == 'revoked') {
-        filtered = filtered.where((c) => c.revoked).toList();
-      }
+    // Apply view mode filter
+    if (_viewMode == 'group' && _selectedGroupPath != null) {
+      filtered = filtered.where((c) => c.groupPath == _selectedGroupPath).toList();
+    } else if (_viewMode == 'revoked') {
+      filtered = filtered.where((c) => c.revoked).toList();
+    }
 
-      // Apply search filter
-      if (query.isNotEmpty) {
-        filtered = filtered.where((contact) {
-          return contact.displayName.toLowerCase().contains(query) ||
-                 contact.callsign.toLowerCase().contains(query) ||
-                 (contact.npub?.toLowerCase().contains(query) ?? false) ||
-                 contact.notes.toLowerCase().contains(query) ||
-                 contact.emails.any((e) => e.toLowerCase().contains(query)) ||
-                 contact.phones.any((p) => p.toLowerCase().contains(query));
-        }).toList();
-      }
+    // Apply search filter
+    if (query.isNotEmpty) {
+      filtered = filtered.where((contact) {
+        return contact.displayName.toLowerCase().contains(query) ||
+               contact.callsign.toLowerCase().contains(query) ||
+               (contact.npub?.toLowerCase().contains(query) ?? false) ||
+               contact.notes.toLowerCase().contains(query) ||
+               contact.emails.any((e) => e.toLowerCase().contains(query)) ||
+               contact.phones.any((p) => p.toLowerCase().contains(query));
+      }).toList();
+    }
 
-      _filteredContacts = filtered;
-    });
+    // Sort by popularity (async, will update state when done)
+    _sortAndSetFilteredContacts(filtered);
+  }
+
+  Future<void> _sortAndSetFilteredContacts(List<Contact> contacts) async {
+    // Sort by popularity
+    final sorted = await _contactService.sortContactsByPopularity(contacts);
+
+    if (mounted) {
+      setState(() {
+        _filteredContacts = sorted;
+      });
+    }
   }
 
   void _selectContact(Contact contact) {
     setState(() {
       _selectedContact = contact;
     });
-    // Record click for quick access feature
-    _contactService.recordContactClick(contact.callsign);
+    // Record contact view for metrics
+    _contactService.recordContactView(contact.callsign);
   }
 
   Future<void> _selectContactMobile(Contact contact) async {
@@ -303,6 +347,23 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     }
   }
 
+  Future<void> _importFromDevice() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactImportPage(
+          collectionPath: widget.collectionPath,
+          groupPath: _viewMode == 'group' ? _selectedGroupPath : null,
+        ),
+      ),
+    );
+
+    if (result == true) {
+      await _loadContacts();
+      await _loadGroups();
+    }
+  }
+
   Widget _buildQuickAccessChip(Contact contact, bool isMobileView) {
     final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
     final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
@@ -317,8 +378,8 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           backgroundImage: profileImage,
           child: profileImage == null
               ? Text(
-                  contact.callsign.substring(0, 1),
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  _getContactInitials(contact.displayName),
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
                 )
               : null,
         ),
@@ -379,15 +440,77 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
   Future<void> _deleteGroup(ContactGroup group) async {
     if (group.contactCount > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_i18n.t('folder_not_empty')),
-          backgroundColor: Colors.orange,
+      // Group has contacts - show confirmation to delete with contacts
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.warning, color: Colors.orange),
+              const SizedBox(width: 12),
+              Expanded(child: Text(_i18n.t('delete_folder_with_contacts'))),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_i18n.t('delete_folder_with_contacts_confirm', params: [
+                group.name,
+                group.contactCount.toString(),
+              ])),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withAlpha(20),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.withAlpha(50)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.delete_forever, color: Colors.red, size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        '${group.contactCount} ${_i18n.t('contacts').toLowerCase()}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: Text(_i18n.t('delete')),
+            ),
+          ],
         ),
       );
+
+      if (confirmed == true) {
+        final success = await _contactService.deleteGroupWithContacts(group.path);
+
+        if (success && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('folder_with_contacts_deleted'))),
+          );
+          await _loadContacts();
+          await _loadGroups();
+        }
+      }
       return;
     }
 
+    // Empty group - simple confirmation
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -410,12 +533,160 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     if (confirmed == true) {
       final success = await _contactService.deleteGroup(group.path);
 
-      if (success) {
+      if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(_i18n.t('folder_deleted'))),
         );
         await _loadGroups();
       }
+    }
+  }
+
+  Future<void> _deleteAllContactsAndGroups() async {
+    // Get counts for the warning message
+    final contactCount = await _contactService.getTotalContactCount();
+    final groupCount = await _contactService.getTotalGroupCount();
+
+    if (contactCount == 0 && groupCount == 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('no_contacts'))),
+        );
+      }
+      return;
+    }
+
+    // First confirmation with warning
+    final firstConfirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning, color: Colors.red),
+            const SizedBox(width: 12),
+            Expanded(child: Text(_i18n.t('delete_all_contacts_title'))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_i18n.t('delete_all_contacts_warning', params: [
+              contactCount.toString(),
+              groupCount.toString(),
+            ])),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withAlpha(20),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red.withAlpha(50)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.person, color: Colors.red, size: 20),
+                      const SizedBox(width: 12),
+                      Text('$contactCount ${_i18n.t('contacts').toLowerCase()}'),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.folder, color: Colors.red, size: 20),
+                      const SizedBox(width: 12),
+                      Text('$groupCount ${_i18n.t('groups').toLowerCase()}'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(_i18n.t('continue')),
+          ),
+        ],
+      ),
+    );
+
+    if (firstConfirm != true || !mounted) return;
+
+    // Second confirmation - require typing DELETE
+    final confirmController = TextEditingController();
+    final secondConfirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.delete_forever, color: Colors.red),
+              const SizedBox(width: 12),
+              Expanded(child: Text(_i18n.t('delete_all_contacts_title'))),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_i18n.t('delete_all_contacts_confirm')),
+              const SizedBox(height: 16),
+              TextField(
+                controller: confirmController,
+                autofocus: true,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  hintText: 'DELETE',
+                  hintStyle: TextStyle(color: Colors.grey.withAlpha(100)),
+                ),
+                onChanged: (_) => setDialogState(() {}),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
+            ),
+            TextButton(
+              onPressed: confirmController.text.toUpperCase() == 'DELETE'
+                  ? () => Navigator.pop(context, true)
+                  : null,
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: Text(_i18n.t('delete')),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (secondConfirm != true || !mounted) return;
+
+    // Perform the deletion
+    final success = await _contactService.deleteAllContactsAndGroups();
+
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('delete_all_contacts_success')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      setState(() {
+        _allContacts = [];
+        _filteredContacts = [];
+        _selectedContact = null;
+      });
+      await _loadGroups();
     }
   }
 
@@ -444,10 +715,39 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                   ],
                 ),
               ),
+              if (!kIsWeb && Platform.isAndroid)
+                PopupMenuItem(
+                  value: 'import_contacts',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.contact_phone),
+                      const SizedBox(width: 12),
+                      Text(_i18n.t('import_from_device')),
+                    ],
+                  ),
+                ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'delete_all',
+                child: Row(
+                  children: [
+                    const Icon(Icons.delete_forever, color: Colors.red),
+                    const SizedBox(width: 12),
+                    Text(
+                      _i18n.t('delete_all_contacts'),
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ],
+                ),
+              ),
             ],
             onSelected: (value) {
               if (value == 'create_group') {
                 _createNewGroup();
+              } else if (value == 'import_contacts') {
+                _importFromDevice();
+              } else if (value == 'delete_all') {
+                _deleteAllContactsAndGroups();
               }
             },
           ),
@@ -664,7 +964,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         backgroundImage: profileImage,
         child: profileImage == null
             ? Text(
-                contact.callsign.substring(0, 2),
+                _getContactInitials(contact.displayName),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               )
             : null,
@@ -726,10 +1026,10 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 backgroundImage: profileImage,
                 child: profileImage == null
                     ? Text(
-                        contact.callsign.substring(0, 2),
+                        _getContactInitials(contact.displayName),
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 32,
+                          fontSize: 28,
                           fontWeight: FontWeight.bold,
                         ),
                       )
@@ -1358,7 +1658,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 }
 
 /// Full-screen contact detail page for mobile view
-class _ContactDetailPage extends StatelessWidget {
+class _ContactDetailPage extends StatefulWidget {
   final Contact contact;
   final ContactService contactService;
   final ProfileService profileService;
@@ -1373,6 +1673,56 @@ class _ContactDetailPage extends StatelessWidget {
     required this.i18n,
     required this.collectionPath,
   }) : super(key: key);
+
+  @override
+  State<_ContactDetailPage> createState() => _ContactDetailPageState();
+}
+
+class _ContactDetailPageState extends State<_ContactDetailPage> {
+  ContactCallsignMetrics? _metrics;
+  List<_PhoneWithMetrics>? _sortedPhones;
+
+  @override
+  void initState() {
+    super.initState();
+    _recordViewAndLoadMetrics();
+  }
+
+  Future<void> _recordViewAndLoadMetrics() async {
+    // Record contact view
+    await widget.contactService.recordContactView(widget.contact.callsign);
+
+    // Load metrics for displaying interaction counts
+    final metrics = await widget.contactService.getContactMetrics(widget.contact.callsign);
+
+    if (mounted) {
+      setState(() {
+        _metrics = metrics;
+        _sortedPhones = _buildSortedPhones();
+      });
+    }
+  }
+
+  List<_PhoneWithMetrics> _buildSortedPhones() {
+    final phones = <_PhoneWithMetrics>[];
+
+    for (var i = 0; i < widget.contact.phones.length; i++) {
+      final phone = widget.contact.phones[i];
+      final count = _metrics?.getInteractionCount('phone', i, value: phone) ?? 0;
+      phones.add(_PhoneWithMetrics(phone: phone, index: i, interactionCount: count));
+    }
+
+    // Sort by interaction count descending
+    phones.sort((a, b) => b.interactionCount.compareTo(a.interactionCount));
+
+    return phones;
+  }
+
+  Contact get contact => widget.contact;
+  ContactService get contactService => widget.contactService;
+  ProfileService get profileService => widget.profileService;
+  I18nService get i18n => widget.i18n;
+  String get collectionPath => widget.collectionPath;
 
   @override
   Widget build(BuildContext context) {
@@ -1399,7 +1749,399 @@ class _ContactDetailPage extends StatelessWidget {
         ],
       ),
       body: _buildContactDetail(context),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddInteractionMenu,
+        icon: const Icon(Icons.add),
+        label: Text(i18n.t('add_interaction')),
+      ),
     );
+  }
+
+  void _showAddInteractionMenu() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                i18n.t('add_interaction'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.note_add),
+              title: Text(i18n.t('interaction_note')),
+              onTap: () {
+                Navigator.pop(context);
+                _addHistoryEntry(ContactHistoryEntryType.note);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.phone),
+              title: Text(i18n.t('interaction_call')),
+              onTap: () {
+                Navigator.pop(context);
+                _addHistoryEntry(ContactHistoryEntryType.call);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.handshake),
+              title: Text(i18n.t('interaction_meeting')),
+              onTap: () {
+                Navigator.pop(context);
+                _addHistoryEntry(ContactHistoryEntryType.meeting);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.location_on),
+              title: Text(i18n.t('interaction_location')),
+              subtitle: Text(i18n.t('select_location_on_map')),
+              onTap: () {
+                Navigator.pop(context);
+                _addLocationFromMap();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.place_outlined),
+              title: Text(i18n.t('interaction_place')),
+              subtitle: Text(i18n.t('choose_saved_place')),
+              onTap: () {
+                Navigator.pop(context);
+                _addPlaceEntry();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addHistoryEntry(ContactHistoryEntryType type) async {
+    final noteController = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_getEntryTypeLabel(type)),
+        content: TextField(
+          controller: noteController,
+          decoration: InputDecoration(
+            labelText: i18n.t('content'),
+            hintText: i18n.t('note_placeholder'),
+            border: const OutlineInputBorder(),
+          ),
+          maxLines: 4,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(i18n.t('add')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || noteController.text.isEmpty) return;
+
+    await _saveHistoryEntry(type, noteController.text);
+  }
+
+  /// Add a location entry by selecting coordinates on the map
+  Future<void> _addLocationFromMap() async {
+    // Open the map selector to pick a location
+    final LatLng? selectedLocation = await Navigator.of(context).push<LatLng>(
+      MaterialPageRoute(
+        builder: (context) => const LocationPickerPage(),
+      ),
+    );
+
+    if (selectedLocation == null || !mounted) return;
+
+    // Ask for an optional note about this location
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(i18n.t('add_location_note')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Show selected coordinates
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${selectedLocation.latitude.toStringAsFixed(5)}, ${selectedLocation.longitude.toStringAsFixed(5)}',
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: noteController,
+              decoration: InputDecoration(
+                labelText: i18n.t('note_optional'),
+                hintText: i18n.t('note_placeholder'),
+                border: const OutlineInputBorder(),
+              ),
+              maxLines: 3,
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(i18n.t('add')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Save with coordinates
+    await _saveHistoryEntryWithLocation(
+      ContactHistoryEntryType.location,
+      noteController.text.isEmpty ? i18n.t('location_recorded') : noteController.text,
+      selectedLocation.latitude,
+      selectedLocation.longitude,
+    );
+  }
+
+  /// Add a place entry by selecting from saved places
+  Future<void> _addPlaceEntry() async {
+    // Open the place picker dialog
+    final PlaceSelection? selection = await showDialog<PlaceSelection>(
+      context: context,
+      builder: (context) => PlacePickerDialog(i18n: i18n),
+    );
+
+    if (selection == null || !mounted) return;
+
+    final place = selection.place;
+    final langCode = i18n.currentLanguage.split('_').first.toUpperCase();
+    final placeName = place.getName(langCode);
+
+    // Ask for an optional note about this place interaction
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(i18n.t('add_place_note')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Show selected place
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.place_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          placeName,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        if (place.address?.isNotEmpty == true)
+                          Text(
+                            place.address!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: noteController,
+              decoration: InputDecoration(
+                labelText: i18n.t('note_optional'),
+                hintText: i18n.t('note_placeholder'),
+                border: const OutlineInputBorder(),
+              ),
+              maxLines: 3,
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(i18n.t('add')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Build content with place info
+    final content = noteController.text.isEmpty
+        ? '${i18n.t('visited')}: $placeName'
+        : '${noteController.text}\n${i18n.t('place')}: $placeName';
+
+    // Save with place coordinates
+    await _saveHistoryEntryWithLocation(
+      ContactHistoryEntryType.location,
+      content,
+      place.latitude,
+      place.longitude,
+      metadata: {'place_path': place.folderPath ?? ''},
+    );
+  }
+
+  Future<void> _saveHistoryEntry(ContactHistoryEntryType type, String content) async {
+    final profile = ProfileService().getProfile();
+
+    final entry = ContactHistoryEntry.now(
+      author: profile.callsign,
+      content: content,
+      type: type,
+    );
+
+    // Update the contact with the new history entry
+    final updatedEntries = List<ContactHistoryEntry>.from(contact.historyEntries)
+      ..add(entry);
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+
+    // Save the contact
+    final error = await contactService.saveContact(
+      updatedContact,
+      groupPath: contact.groupPath,
+    );
+
+    if (error == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(i18n.t('interaction_added')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      // Return to browser with refresh signal
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<void> _saveHistoryEntryWithLocation(
+    ContactHistoryEntryType type,
+    String content,
+    double latitude,
+    double longitude, {
+    Map<String, String>? metadata,
+  }) async {
+    final profile = ProfileService().getProfile();
+
+    final entry = ContactHistoryEntry.now(
+      author: profile.callsign,
+      content: content,
+      type: type,
+      latitude: latitude,
+      longitude: longitude,
+      metadata: metadata,
+    );
+
+    // Update the contact with the new history entry
+    final updatedEntries = List<ContactHistoryEntry>.from(contact.historyEntries)
+      ..add(entry);
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+
+    // Save the contact
+    final error = await contactService.saveContact(
+      updatedContact,
+      groupPath: contact.groupPath,
+    );
+
+    if (error == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(i18n.t('interaction_added')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      // Return to browser with refresh signal
+      Navigator.pop(context, true);
+    }
+  }
+
+  String _getEntryTypeLabel(ContactHistoryEntryType type) {
+    switch (type) {
+      case ContactHistoryEntryType.note:
+        return i18n.t('interaction_note');
+      case ContactHistoryEntryType.call:
+        return i18n.t('interaction_call');
+      case ContactHistoryEntryType.meeting:
+        return i18n.t('interaction_meeting');
+      case ContactHistoryEntryType.location:
+        return i18n.t('interaction_location');
+      case ContactHistoryEntryType.message:
+        return i18n.t('message');
+      case ContactHistoryEntryType.event:
+        return i18n.t('event');
+      case ContactHistoryEntryType.system:
+        return i18n.t('system');
+    }
+  }
+
+  IconData _getEntryTypeIcon(ContactHistoryEntryType type) {
+    switch (type) {
+      case ContactHistoryEntryType.note:
+        return Icons.note;
+      case ContactHistoryEntryType.call:
+        return Icons.phone;
+      case ContactHistoryEntryType.meeting:
+        return Icons.handshake;
+      case ContactHistoryEntryType.location:
+        return Icons.location_on;
+      case ContactHistoryEntryType.message:
+        return Icons.message;
+      case ContactHistoryEntryType.event:
+        return Icons.event;
+      case ContactHistoryEntryType.system:
+        return Icons.settings;
+    }
   }
 
   Widget _buildContactDetail(BuildContext context) {
@@ -1415,10 +2157,10 @@ class _ContactDetailPage extends StatelessWidget {
                 radius: 40,
                 backgroundColor: contact.revoked ? Colors.red : Colors.blue,
                 child: Text(
-                  contact.callsign.substring(0, 2),
+                  _getContactInitials(contact.displayName),
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 32,
+                    fontSize: 28,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -1488,20 +2230,14 @@ class _ContactDetailPage extends StatelessWidget {
 
           // Details
           if (contact.npub != null)
-            _buildDetailRow(i18n.t('npub'), contact.npub!, monospace: true),
-          _buildDetailRow(i18n.t('callsign'), contact.callsign),
+            _buildDetailRow('NPUB', contact.npub!, monospace: true),
+          _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
 
           // Contact Information
           if (contact.emails.isNotEmpty) ...[
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
-            Text(
-              i18n.t('emails'),
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
             ...contact.emails.map((e) => _buildDetailRow(i18n.t('email'), e)),
           ],
 
@@ -1509,30 +2245,27 @@ class _ContactDetailPage extends StatelessWidget {
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
-            Text(
-              i18n.t('phones'),
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            ...contact.phones.map((p) => _buildDetailRow(i18n.t('phone'), p)),
+            // Use sorted phones if available, otherwise use original order
+            if (_sortedPhones != null)
+              ..._sortedPhones!.map((p) => _buildPhoneRowWithMetrics(p))
+            else
+              ...contact.phones.asMap().entries.map((e) =>
+                  _buildPhoneRowWithMetrics(_PhoneWithMetrics(
+                    phone: e.value,
+                    index: e.key,
+                    interactionCount: 0,
+                  ))),
           ],
 
           if (contact.websites.isNotEmpty) ...[
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
-            Text(
-              i18n.t('websites'),
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
             ...contact.websites.map((w) => _buildDetailRow(i18n.t('website'), w)),
           ],
 
-          // Notes
-          if (contact.notes.isNotEmpty) ...[
+          // Notes (static notes, not history)
+          if (contact.notes.isNotEmpty && contact.historyEntries.isEmpty) ...[
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
@@ -1545,6 +2278,158 @@ class _ContactDetailPage extends StatelessWidget {
             const SizedBox(height: 8),
             Text(contact.notes),
           ],
+
+          // Interaction History Timeline
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                i18n.t('interaction_history'),
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              if (contact.historyEntries.isNotEmpty)
+                Text(
+                  '${contact.historyEntries.length} ${i18n.t('entries').toLowerCase()}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (contact.historyEntries.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.history,
+                      size: 48,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      i18n.t('no_interactions_yet'),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            // Timeline display (most recent first)
+            ...contact.historyEntries.reversed.toList().asMap().entries.map(
+              (mapEntry) => _buildHistoryEntryItem(context, mapEntry.value, mapEntry.key == 0),
+            ),
+
+          // Extra space for FAB
+          const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryEntryItem(BuildContext context, ContactHistoryEntry entry, bool isLast) {
+    final theme = Theme.of(context);
+    final timestamp = entry.timestamp.substring(0, 16).replaceAll('_', ':');
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Timeline dot and line
+          Column(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  _getEntryTypeIcon(entry.type),
+                  size: 16,
+                  color: theme.colorScheme.onPrimaryContainer,
+                ),
+              ),
+              if (!isLast)
+                Container(
+                  width: 2,
+                  height: 40,
+                  color: theme.colorScheme.outlineVariant,
+                ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          // Entry content
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _getEntryTypeLabel(entry.type),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      timestamp,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${i18n.t('by')}: ${entry.author}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (entry.content.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    entry.content,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ],
+                if (entry.hasLocation) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.location_on,
+                        size: 14,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${entry.latitude?.toStringAsFixed(4)}, ${entry.longitude?.toStringAsFixed(4)}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1575,4 +2460,135 @@ class _ContactDetailPage extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildCopyableRow(BuildContext context, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(value),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            tooltip: I18nService().t('copy'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: value));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(I18nService().t('copied_to_clipboard')),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
+            },
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhoneRowWithMetrics(_PhoneWithMetrics phoneData) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              i18n.t('phone'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(phoneData.phone),
+                if (phoneData.interactionCount > 0)
+                  Text(
+                    i18n.t('times_called', params: [phoneData.interactionCount.toString()]),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[600],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Show "most used" badge for the first one if it has interactions
+          if (phoneData.interactionCount > 0 && _sortedPhones?.first == phoneData)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Chip(
+                label: Text(
+                  i18n.t('most_used'),
+                  style: const TextStyle(fontSize: 10),
+                ),
+                padding: EdgeInsets.zero,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                backgroundColor: Colors.green.withAlpha(30),
+              ),
+            ),
+          if (!kIsWeb && Platform.isAndroid)
+            IconButton(
+              icon: const Icon(Icons.phone, size: 20),
+              tooltip: i18n.t('call'),
+              onPressed: () => _launchPhoneCall(phoneData.phone, phoneData.index),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _launchPhoneCall(String phoneNumber, int index) async {
+    // Record the interaction
+    await contactService.recordMethodInteraction(
+      contact.callsign,
+      'phone',
+      index,
+      value: phoneNumber,
+    );
+
+    // Refresh metrics display
+    final metrics = await contactService.getContactMetrics(contact.callsign);
+    if (mounted) {
+      setState(() {
+        _metrics = metrics;
+        _sortedPhones = _buildSortedPhones();
+      });
+    }
+
+    // Launch the phone call
+    final uri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
+  }
+}
+
+/// Helper class for phone numbers with interaction metrics
+class _PhoneWithMetrics {
+  final String phone;
+  final int index;
+  final int interactionCount;
+
+  _PhoneWithMetrics({
+    required this.phone,
+    required this.index,
+    required this.interactionCount,
+  });
 }

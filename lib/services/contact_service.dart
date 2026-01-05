@@ -4,6 +4,7 @@
  */
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 import '../models/contact.dart';
 import 'log_service.dart';
 
@@ -87,6 +88,82 @@ class ContactService {
     contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
 
     return contacts;
+  }
+
+  /// Stream contacts incrementally, prioritizing popular contacts first.
+  /// This provides a better UX by showing contacts as they load.
+  Stream<Contact> loadAllContactsStream() async* {
+    if (_collectionPath == null) return;
+
+    final contactsDir = Directory('$_collectionPath/contacts');
+    if (!await contactsDir.exists()) return;
+
+    // First, load metrics to identify popular contacts
+    final metrics = await loadMetrics();
+
+    // Get all contact file paths first (fast directory scan)
+    final allFilePaths = <String>[];
+    await _collectContactFilePaths(contactsDir, allFilePaths);
+
+    if (allFilePaths.isEmpty) return;
+
+    // Sort file paths by popularity score (popular contacts first)
+    final sortedPaths = _sortPathsByPopularity(allFilePaths, metrics);
+
+    // Yield contacts as we load them
+    for (final filePath in sortedPaths) {
+      try {
+        final contact = await loadContactFromFile(filePath);
+        if (contact != null) {
+          yield contact;
+        }
+      } catch (e) {
+        LogService().log('ContactService: Error loading contact $filePath: $e');
+      }
+    }
+  }
+
+  /// Collect all contact file paths without loading contacts (fast scan)
+  Future<void> _collectContactFilePaths(Directory dir, List<String> paths) async {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
+      if (entity is File && entity.path.endsWith('.txt')) {
+        final filename = entity.path.split('/').last;
+        if (filename == 'group.txt' || filename.startsWith('.')) continue;
+        if (entity.path.contains('/profile-pictures/')) continue;
+        paths.add(entity.path);
+      } else if (entity is Directory) {
+        final dirname = entity.path.split('/').last;
+        if (dirname == 'profile-pictures' || dirname.startsWith('.')) continue;
+        await _collectContactFilePaths(entity, paths);
+      }
+    }
+  }
+
+  /// Sort file paths by popularity score, with popular contacts first
+  List<String> _sortPathsByPopularity(List<String> paths, ContactMetrics metrics) {
+    // Extract callsign from file path (filename without .txt)
+    String getCallsign(String path) {
+      final filename = path.split('/').last;
+      return filename.replaceAll('.txt', '');
+    }
+
+    // Sort by score (descending) then alphabetically
+    paths.sort((a, b) {
+      final callsignA = getCallsign(a);
+      final callsignB = getCallsign(b);
+
+      final scoreA = metrics.contacts[callsignA]?.totalScore ?? 0;
+      final scoreB = metrics.contacts[callsignB]?.totalScore ?? 0;
+
+      if (scoreA != scoreB) {
+        return scoreB.compareTo(scoreA); // Higher score first
+      }
+      return callsignA.compareTo(callsignB); // Alphabetical fallback
+    });
+
+    return paths;
   }
 
   /// Recursively load contacts from directory
@@ -314,17 +391,17 @@ class ContactService {
     }
 
     // Determine group path from file path
+    // Use LAST occurrence of /contacts/ to handle cases where collection folder is named "contacts"
     String? groupPath;
-    if (filePath.contains('/contacts/')) {
-      final pathParts = filePath.split('/contacts/');
-      if (pathParts.length > 1) {
-        final afterContacts = pathParts[1];
-        final parts = afterContacts.split('/');
-        if (parts.length > 1) {
-          // Remove filename and join remaining parts
-          parts.removeLast();
-          groupPath = parts.join('/');
-        }
+    final contactsMarker = '/contacts/';
+    final lastContactsIndex = filePath.lastIndexOf(contactsMarker);
+    if (lastContactsIndex != -1) {
+      final afterContacts = filePath.substring(lastContactsIndex + contactsMarker.length);
+      final parts = afterContacts.split('/');
+      if (parts.length > 1) {
+        // Remove filename and join remaining parts
+        parts.removeLast();
+        groupPath = parts.join('/');
       }
     }
 
@@ -599,6 +676,16 @@ class ContactService {
     try {
       await file.writeAsString(fileContent);
       LogService().log('ContactService: Saved contact ${contact.callsign} to ${file.path}');
+
+      // Delete old file if it exists at a different location (contact was moved)
+      if (contact.filePath != null && contact.filePath != file.path) {
+        final oldFile = File(contact.filePath!);
+        if (await oldFile.exists()) {
+          await oldFile.delete();
+          LogService().log('ContactService: Deleted old file at ${contact.filePath}');
+        }
+      }
+
       return null; // Success
     } catch (e) {
       LogService().log('ContactService: Error saving contact: $e');
@@ -922,6 +1009,106 @@ class ContactService {
     }
   }
 
+  /// Delete group with all contacts inside (force delete)
+  Future<bool> deleteGroupWithContacts(String groupPath) async {
+    if (_collectionPath == null) return false;
+
+    final dir = Directory('$_collectionPath/contacts/$groupPath');
+    if (!await dir.exists()) return false;
+
+    try {
+      // First, delete profile pictures for all contacts in this group
+      await _deleteGroupContactMedia(dir);
+
+      // Then delete the entire group directory
+      await dir.delete(recursive: true);
+      LogService().log('ContactService: Deleted group with contacts: $groupPath');
+      return true;
+    } catch (e) {
+      LogService().log('ContactService: Error deleting group with contacts: $e');
+      return false;
+    }
+  }
+
+  /// Helper to delete profile pictures for contacts in a directory
+  Future<void> _deleteGroupContactMedia(Directory dir) async {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
+      if (entity is File && entity.path.endsWith('.txt')) {
+        final filename = entity.path.split('/').last;
+        if (filename != 'group.txt' && !filename.startsWith('.')) {
+          // Extract callsign and delete profile picture
+          final callsign = filename.replaceAll('.txt', '');
+          await _deleteContactMedia(callsign);
+        }
+      } else if (entity is Directory && !entity.path.split('/').last.startsWith('.')) {
+        // Recurse into subdirectories
+        await _deleteGroupContactMedia(entity);
+      }
+    }
+  }
+
+  /// Helper to delete media files for a contact
+  Future<void> _deleteContactMedia(String callsign) async {
+    if (_collectionPath == null) return;
+
+    final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    for (var ext in extensions) {
+      final file = File('$_collectionPath/media/$callsign.$ext');
+      if (await file.exists()) {
+        await file.delete();
+        LogService().log('ContactService: Deleted media for $callsign');
+      }
+    }
+  }
+
+  /// Delete ALL contacts and groups (destructive operation)
+  Future<bool> deleteAllContactsAndGroups() async {
+    if (_collectionPath == null) return false;
+
+    final contactsDir = Directory('$_collectionPath/contacts');
+    if (!await contactsDir.exists()) return false;
+
+    try {
+      // Delete all profile pictures in media folder
+      final mediaDir = Directory('$_collectionPath/media');
+      if (await mediaDir.exists()) {
+        await mediaDir.delete(recursive: true);
+        await mediaDir.create(recursive: true);
+        LogService().log('ContactService: Cleared media folder');
+      }
+
+      // Delete all contacts and groups but keep the contacts folder
+      final entities = await contactsDir.list().toList();
+      for (var entity in entities) {
+        final name = entity.path.split('/').last;
+        // Keep hidden files/folders like .contact_metrics.txt
+        if (!name.startsWith('.')) {
+          await entity.delete(recursive: true);
+        }
+      }
+
+      LogService().log('ContactService: Deleted all contacts and groups');
+      return true;
+    } catch (e) {
+      LogService().log('ContactService: Error deleting all contacts: $e');
+      return false;
+    }
+  }
+
+  /// Get count of all contacts (for confirmation dialog)
+  Future<int> getTotalContactCount() async {
+    final allContacts = await loadAllContactsRecursively();
+    return allContacts.length;
+  }
+
+  /// Get count of all groups
+  Future<int> getTotalGroupCount() async {
+    final groups = await loadGroups();
+    return groups.length;
+  }
+
   /// Get profile picture file for a contact
   File? getProfilePictureFile(String callsign) {
     if (_collectionPath == null) return null;
@@ -961,6 +1148,27 @@ class ContactService {
       return '$callsign.$extension'; // Return filename for PROFILE_PICTURE field
     } catch (e) {
       LogService().log('ContactService: Error saving profile picture: $e');
+      return null;
+    }
+  }
+
+  /// Save profile picture from bytes (for imported contacts)
+  Future<String?> saveProfilePictureFromBytes(String callsign, Uint8List bytes, String extension) async {
+    if (_collectionPath == null) return null;
+
+    final mediaDir = Directory('$_collectionPath/media');
+    if (!await mediaDir.exists()) {
+      await mediaDir.create(recursive: true);
+    }
+
+    final targetFile = File('${mediaDir.path}/$callsign.$extension');
+
+    try {
+      await targetFile.writeAsBytes(bytes);
+      LogService().log('ContactService: Saved profile picture for $callsign from bytes');
+      return '$callsign.$extension'; // Return filename for PROFILE_PICTURE field
+    } catch (e) {
+      LogService().log('ContactService: Error saving profile picture from bytes: $e');
       return null;
     }
   }
@@ -1070,6 +1278,135 @@ class ContactService {
     return topContacts;
   }
 
+  // ============ Contact Metrics ============
+
+  /// Get metrics file path
+  String get _metricsPath => '$_collectionPath/contacts/.contact_metrics.txt';
+
+  /// Model for contact metrics
+  ContactMetrics? _metricsCache;
+  DateTime? _metricsCacheTime;
+  static const _metricsCacheDuration = Duration(seconds: 5);
+
+  /// Load contact metrics
+  Future<ContactMetrics> loadMetrics() async {
+    if (_collectionPath == null) return ContactMetrics();
+
+    // Use cache if still valid
+    final now = DateTime.now();
+    if (_metricsCache != null &&
+        _metricsCacheTime != null &&
+        now.difference(_metricsCacheTime!) < _metricsCacheDuration) {
+      return _metricsCache!;
+    }
+
+    final file = File(_metricsPath);
+    if (!await file.exists()) {
+      _metricsCache = ContactMetrics();
+      _metricsCacheTime = now;
+      return _metricsCache!;
+    }
+
+    try {
+      final content = await file.readAsString();
+      final metrics = ContactMetrics.parse(content);
+      _metricsCache = metrics;
+      _metricsCacheTime = now;
+      return metrics;
+    } catch (e) {
+      LogService().log('ContactService: Error loading metrics: $e');
+      _metricsCache = ContactMetrics();
+      _metricsCacheTime = now;
+      return _metricsCache!;
+    }
+  }
+
+  /// Save contact metrics
+  Future<void> _saveMetrics(ContactMetrics metrics) async {
+    if (_collectionPath == null) return;
+
+    _metricsCache = metrics;
+    _metricsCacheTime = DateTime.now();
+
+    try {
+      final file = File(_metricsPath);
+      await file.writeAsString(metrics.serialize());
+    } catch (e) {
+      LogService().log('ContactService: Error saving metrics: $e');
+    }
+  }
+
+  /// Record a contact view (when viewing contact details)
+  Future<void> recordContactView(String callsign) async {
+    if (_collectionPath == null) return;
+
+    final metrics = await loadMetrics();
+    metrics.recordView(callsign);
+    await _saveMetrics(metrics);
+  }
+
+  /// Record a contact method interaction (phone call, email click, etc.)
+  /// [type] is one of: phone, email, website, address, social
+  /// [index] is the index of the value in the contact's list (e.g., first phone = 0)
+  /// [value] is the actual value (e.g., phone number) for more accurate tracking
+  Future<void> recordMethodInteraction(
+    String callsign,
+    String type,
+    int index, {
+    String? value,
+  }) async {
+    if (_collectionPath == null) return;
+
+    final metrics = await loadMetrics();
+    metrics.recordInteraction(callsign, type, index, value: value);
+    await _saveMetrics(metrics);
+  }
+
+  /// Get metrics for a specific contact
+  Future<ContactCallsignMetrics?> getContactMetrics(String callsign) async {
+    final metrics = await loadMetrics();
+    return metrics.contacts[callsign];
+  }
+
+  /// Get interaction count for a specific method value
+  Future<int> getMethodInteractionCount(
+    String callsign,
+    String type,
+    int index, {
+    String? value,
+  }) async {
+    final metrics = await loadMetrics();
+    final contactMetrics = metrics.contacts[callsign];
+    if (contactMetrics == null) return 0;
+    return contactMetrics.getInteractionCount(type, index, value: value);
+  }
+
+  /// Sort contacts by popularity (views + interactions)
+  Future<List<Contact>> sortContactsByPopularity(List<Contact> contacts) async {
+    final metrics = await loadMetrics();
+
+    // Create a copy to sort
+    final sorted = List<Contact>.from(contacts);
+
+    sorted.sort((a, b) {
+      final aMetrics = metrics.contacts[a.callsign];
+      final bMetrics = metrics.contacts[b.callsign];
+
+      final aScore = aMetrics?.totalScore ?? 0;
+      final bScore = bMetrics?.totalScore ?? 0;
+
+      // Sort descending (most popular first)
+      if (bScore != aScore) {
+        return bScore.compareTo(aScore);
+      }
+
+      // If same score, sort alphabetically
+      return a.displayName.compareTo(b.displayName);
+    });
+
+    return sorted;
+  }
+
   // ============ Folder Management ============
 
   /// Rename a group/folder
@@ -1162,5 +1499,167 @@ class ContactService {
 
     final updatedContact = contact.copyWith(historyEntries: updatedEntries);
     return await saveContact(updatedContact, groupPath: groupPath);
+  }
+}
+
+/// Metrics for a single contact
+class ContactCallsignMetrics {
+  int views = 0;
+  int totalInteractions = 0;
+  String? lastAccessed;
+
+  /// Method interactions: key is "type:index" or "type:value", value is count
+  /// e.g., "phone:0" -> 5, "phone:+1234567890" -> 5
+  final Map<String, int> methodInteractions = {};
+
+  ContactCallsignMetrics();
+
+  /// Get total popularity score (views + interactions weighted)
+  int get totalScore => views + (totalInteractions * 2);
+
+  /// Record a view
+  void recordView() {
+    views++;
+    _updateLastAccessed();
+  }
+
+  /// Record an interaction with a specific method
+  void recordInteraction(String type, int index, {String? value}) {
+    totalInteractions++;
+    _updateLastAccessed();
+
+    // Track by index
+    final indexKey = '$type:$index';
+    methodInteractions[indexKey] = (methodInteractions[indexKey] ?? 0) + 1;
+
+    // Also track by value if provided (for more accurate matching)
+    if (value != null && value.isNotEmpty) {
+      final valueKey = '$type:$value';
+      methodInteractions[valueKey] = (methodInteractions[valueKey] ?? 0) + 1;
+    }
+  }
+
+  /// Get interaction count for a specific method
+  int getInteractionCount(String type, int index, {String? value}) {
+    // Try to get by value first (more accurate)
+    if (value != null && value.isNotEmpty) {
+      final valueKey = '$type:$value';
+      final byValue = methodInteractions[valueKey];
+      if (byValue != null) return byValue;
+    }
+
+    // Fall back to index
+    final indexKey = '$type:$index';
+    return methodInteractions[indexKey] ?? 0;
+  }
+
+  /// Get all interaction counts for a type (e.g., all phone interactions)
+  Map<String, int> getTypeInteractions(String type) {
+    final result = <String, int>{};
+    for (var entry in methodInteractions.entries) {
+      if (entry.key.startsWith('$type:')) {
+        result[entry.key] = entry.value;
+      }
+    }
+    return result;
+  }
+
+  void _updateLastAccessed() {
+    final now = DateTime.now();
+    lastAccessed = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}_'
+        '${now.second.toString().padLeft(2, '0')}';
+  }
+
+  /// Serialize to string format
+  String serialize() {
+    final methodsStr = methodInteractions.entries
+        .map((e) => '${e.key}=${e.value}')
+        .join(',');
+    return '$views|$totalInteractions|${lastAccessed ?? ''}|$methodsStr';
+  }
+
+  /// Parse from string format
+  static ContactCallsignMetrics parse(String data) {
+    final metrics = ContactCallsignMetrics();
+    final parts = data.split('|');
+
+    if (parts.isNotEmpty) metrics.views = int.tryParse(parts[0]) ?? 0;
+    if (parts.length > 1) metrics.totalInteractions = int.tryParse(parts[1]) ?? 0;
+    if (parts.length > 2 && parts[2].isNotEmpty) metrics.lastAccessed = parts[2];
+
+    if (parts.length > 3 && parts[3].isNotEmpty) {
+      final methodParts = parts[3].split(',');
+      for (var method in methodParts) {
+        final kv = method.split('=');
+        if (kv.length == 2) {
+          metrics.methodInteractions[kv[0]] = int.tryParse(kv[1]) ?? 0;
+        }
+      }
+    }
+
+    return metrics;
+  }
+}
+
+/// Collection of all contact metrics
+class ContactMetrics {
+  final Map<String, ContactCallsignMetrics> contacts = {};
+
+  ContactMetrics();
+
+  /// Record a view for a contact
+  void recordView(String callsign) {
+    contacts.putIfAbsent(callsign, () => ContactCallsignMetrics());
+    contacts[callsign]!.recordView();
+  }
+
+  /// Record an interaction for a contact
+  void recordInteraction(String callsign, String type, int index, {String? value}) {
+    contacts.putIfAbsent(callsign, () => ContactCallsignMetrics());
+    contacts[callsign]!.recordInteraction(type, index, value: value);
+  }
+
+  /// Serialize to file content
+  String serialize() {
+    final buffer = StringBuffer();
+    buffer.writeln('# CONTACT METRICS');
+    buffer.writeln('# Format: CALLSIGN|views|total_interactions|last_accessed|method_interactions');
+    buffer.writeln('# method_interactions: type:index=count,type:value=count,...');
+    buffer.writeln();
+
+    // Sort by total score descending
+    final sortedEntries = contacts.entries.toList()
+      ..sort((a, b) => b.value.totalScore.compareTo(a.value.totalScore));
+
+    for (var entry in sortedEntries) {
+      buffer.writeln('${entry.key}|${entry.value.serialize()}');
+    }
+
+    return buffer.toString();
+  }
+
+  /// Parse from file content
+  static ContactMetrics parse(String content) {
+    final metrics = ContactMetrics();
+    final lines = content.split('\n');
+
+    for (var line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+
+      final pipeIndex = trimmed.indexOf('|');
+      if (pipeIndex == -1) continue;
+
+      final callsign = trimmed.substring(0, pipeIndex);
+      final data = trimmed.substring(pipeIndex + 1);
+
+      metrics.contacts[callsign] = ContactCallsignMetrics.parse(data);
+    }
+
+    return metrics;
   }
 }
