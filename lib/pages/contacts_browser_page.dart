@@ -225,6 +225,22 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     });
   }
 
+  /// Get translated group name if a translation key exists for the group path.
+  /// For example, "imported_contacts" becomes "Imported Contacts" in English.
+  String _getTranslatedGroupName(ContactGroup group) {
+    // Try to translate the group path as a key (e.g., "imported_contacts")
+    return _i18n.tOrDefault(group.path, group.name);
+  }
+
+  /// Get translated group name from path string
+  String _getTranslatedGroupNameFromPath(String path) {
+    final group = _groups.firstWhere(
+      (g) => g.path == path,
+      orElse: () => ContactGroup(name: path, path: path, contactCount: 0),
+    );
+    return _getTranslatedGroupName(group);
+  }
+
   Future<void> _createNewContact() async {
     final result = await Navigator.push(
       context,
@@ -460,7 +476,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(_i18n.t('delete_folder_with_contacts_confirm', params: [
-                group.name,
+                _getTranslatedGroupName(group),
                 group.contactCount.toString(),
               ])),
               const SizedBox(height: 16),
@@ -519,7 +535,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('delete_folder')),
-        content: Text(_i18n.t('delete_folder_confirm', params: [group.name])),
+        content: Text(_i18n.t('delete_folder_confirm', params: [_getTranslatedGroupName(group)])),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -846,10 +862,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                               Expanded(
                                 child: Text(
                                   _viewMode == 'group' && _selectedGroupPath != null
-                                      ? _groups.firstWhere(
-                                          (g) => g.path == _selectedGroupPath,
-                                          orElse: () => ContactGroup(name: _selectedGroupPath!, path: _selectedGroupPath!, contactCount: 0),
-                                        ).name
+                                      ? _getTranslatedGroupNameFromPath(_selectedGroupPath!)
                                       : _viewMode == 'revoked'
                                           ? _i18n.t('revoked')
                                           : _i18n.t('contacts'),
@@ -915,7 +928,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
                   for (final group in _groups) ListTile(
                     leading: const Icon(Icons.folder, color: Colors.amber),
-                    title: Text(group.name),
+                    title: Text(_getTranslatedGroupName(group)),
                     subtitle: Text('${group.contactCount} ${_i18n.t('contacts').toLowerCase()}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,

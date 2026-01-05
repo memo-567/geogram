@@ -179,6 +179,19 @@ class I18nService {
     return translate(key, params: params);
   }
 
+  /// Check if a translation key exists
+  bool hasKey(String key) {
+    return _translations.containsKey(key);
+  }
+
+  /// Translate if key exists, otherwise return the fallback value
+  String tOrDefault(String key, String fallback, {List<String>? params}) {
+    if (hasKey(key)) {
+      return translate(key, params: params);
+    }
+    return fallback;
+  }
+
   /// Get the current language code
   String get currentLanguage => _currentLanguage;
 
