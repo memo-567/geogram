@@ -27,6 +27,7 @@ class _UpdatePageState extends State<UpdatePage> {
   String? _statusMessage;
   String? _completedDownloadPath; // Track completed download ready to install
   VoidCallback? _completedDownloadListener;
+  VoidCallback? _updateAvailableListener;
   bool _showLinuxRestartDialog = false; // Linux: Show restart dialog after staging
 
   @override
@@ -40,6 +41,14 @@ class _UpdatePageState extends State<UpdatePage> {
       });
     };
     _updateService.completedDownloadPathNotifier.addListener(_completedDownloadListener!);
+    // Listen to updateAvailable to rebuild UI when background check completes
+    _updateAvailableListener = () {
+      _setStateIfMounted(() {
+        // Also refresh the latest release info when update availability changes
+        _latestRelease = _updateService.getLatestRelease();
+      });
+    };
+    _updateService.updateAvailable.addListener(_updateAvailableListener!);
     _loadData();
   }
 
@@ -49,6 +58,9 @@ class _UpdatePageState extends State<UpdatePage> {
     _updateService.isUpdatePageVisible = false;
     if (_completedDownloadListener != null) {
       _updateService.completedDownloadPathNotifier.removeListener(_completedDownloadListener!);
+    }
+    if (_updateAvailableListener != null) {
+      _updateService.updateAvailable.removeListener(_updateAvailableListener!);
     }
     super.dispose();
   }
