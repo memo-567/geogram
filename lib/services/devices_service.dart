@@ -57,7 +57,8 @@ class DevicesService {
   StreamSubscription<DebugActionEvent>? _debugSubscription;
 
   /// Station connection event subscription
-  EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
+  EventSubscription<ConnectionStateChangedEvent>?
+  _stationConnectionSubscription;
   EventSubscription<ProfileChangedEvent>? _profileChangedSubscription;
 
   /// Timer for periodic cleanup of inactive discovered devices
@@ -103,7 +104,9 @@ class DevicesService {
     // Skip BLE in internet-only mode
     final internetOnly = AppArgs().internetOnly;
     if (internetOnly) {
-      LogService().log('DevicesService: Internet-only mode - skipping BLE initialization');
+      LogService().log(
+        'DevicesService: Internet-only mode - skipping BLE initialization',
+      );
     } else if (!skipBLE) {
       await _initializeBLE();
     } else {
@@ -123,7 +126,9 @@ class DevicesService {
     final localhostScanEnabled = AppArgs().scanLocalhostEnabled;
     if (localhostScanEnabled && !internetOnly) {
       Future.delayed(const Duration(seconds: 5), () {
-        LogService().log('DevicesService: Running initial local network scan...');
+        LogService().log(
+          'DevicesService: Running initial local network scan...',
+        );
         _discoverLocalDevices(force: true);
       });
     }
@@ -132,27 +137,36 @@ class DevicesService {
   /// Subscribe to station connection events to auto-update station device
   void _subscribeToStationConnection() {
     _stationConnectionSubscription?.cancel();
-    _stationConnectionSubscription = EventBus().on<ConnectionStateChangedEvent>((event) {
-      if (event.connectionType == ConnectionType.station && event.isConnected) {
-        _updateConnectedStation(
-          eventCallsign: event.stationCallsign,
-          eventUrl: event.stationUrl,
-        );
-      }
-    });
+    _stationConnectionSubscription = EventBus().on<ConnectionStateChangedEvent>(
+      (event) {
+        if (event.connectionType == ConnectionType.station &&
+            event.isConnected) {
+          _updateConnectedStation(
+            eventCallsign: event.stationCallsign,
+            eventUrl: event.stationUrl,
+          );
+        }
+      },
+    );
   }
 
   /// Subscribe to profile identity changes so BLE uses the latest callsign/keys
   void _subscribeToProfileChanges() {
     _profileChangedSubscription?.cancel();
-    _profileChangedSubscription = EventBus().on<ProfileChangedEvent>(_handleProfileChanged);
+    _profileChangedSubscription = EventBus().on<ProfileChangedEvent>(
+      _handleProfileChanged,
+    );
   }
 
   Future<void> _handleProfileChanged(ProfileChangedEvent event) async {
-    LogService().log('DevicesService: Profile changed to ${event.callsign}, refreshing BLE identity');
+    LogService().log(
+      'DevicesService: Profile changed to ${event.callsign}, refreshing BLE identity',
+    );
 
     if (AppArgs().internetOnly) {
-      LogService().log('DevicesService: Internet-only mode - skipping BLE refresh');
+      LogService().log(
+        'DevicesService: Internet-only mode - skipping BLE refresh',
+      );
       return;
     }
 
@@ -190,12 +204,18 @@ class DevicesService {
 
   /// Remove offline devices from the "Discovered" folder
   Future<void> _cleanupInactiveDiscoveredDevices() async {
-    final offlineDevices = _devices.values.where((d) =>
-      (d.folderId == null || d.folderId == defaultFolderId) && !d.isOnline
-    ).toList();
+    final offlineDevices = _devices.values
+        .where(
+          (d) =>
+              (d.folderId == null || d.folderId == defaultFolderId) &&
+              !d.isOnline,
+        )
+        .toList();
 
     if (offlineDevices.isNotEmpty) {
-      LogService().log('DevicesService: Cleaning up ${offlineDevices.length} offline discovered devices');
+      LogService().log(
+        'DevicesService: Cleaning up ${offlineDevices.length} offline discovered devices',
+      );
       for (final device in offlineDevices) {
         await removeDevice(device.callsign);
       }
@@ -206,7 +226,9 @@ class DevicesService {
   Future<void> initializeBLEAfterOnboarding() async {
     // Don't initialize BLE in internet-only mode
     if (AppArgs().internetOnly) {
-      LogService().log('DevicesService: Internet-only mode - BLE not available');
+      LogService().log(
+        'DevicesService: Internet-only mode - BLE not available',
+      );
       return;
     }
 
@@ -254,12 +276,16 @@ class DevicesService {
 
       case DebugAction.connectStation:
         // Station connection is handled by StationService
-        LogService().log('DevicesService: Station connection handled by StationService');
+        LogService().log(
+          'DevicesService: Station connection handled by StationService',
+        );
         break;
 
       case DebugAction.disconnectStation:
         // Station disconnection is handled by StationService
-        LogService().log('DevicesService: Station disconnection handled by StationService');
+        LogService().log(
+          'DevicesService: Station disconnection handled by StationService',
+        );
         break;
 
       case DebugAction.navigateToPanel:
@@ -346,12 +372,19 @@ class DevicesService {
       case DebugAction.refreshChat:
         // Chat refresh is handled by DebugController.triggerChatRefresh()
         break;
+      case DebugAction.openConsole:
+        // Console automation is handled by CollectionsPage
+        break;
     }
   }
 
   /// Send data to a specific BLE device for testing
   /// Uses the parcel protocol for reliable transmission of larger payloads
-  Future<bool> _sendBLEDataToDevice(String? deviceId, String? data, int? size) async {
+  Future<bool> _sendBLEDataToDevice(
+    String? deviceId,
+    String? data,
+    int? size,
+  ) async {
     if (_bleService == null || _bleMessageService == null) {
       LogService().log('DevicesService: BLE not available for data send');
       return false;
@@ -385,10 +418,14 @@ class DevicesService {
         List.generate(size, (i) => 65 + random.nextInt(26)), // A-Z
       );
     } else {
-      testData = Uint8List.fromList(utf8.encode('TEST_DATA_${DateTime.now().millisecondsSinceEpoch}'));
+      testData = Uint8List.fromList(
+        utf8.encode('TEST_DATA_${DateTime.now().millisecondsSinceEpoch}'),
+      );
     }
 
-    LogService().log('DevicesService: Sending ${testData.length} bytes to ${targetDevice.callsign ?? targetDevice.deviceId} via parcel protocol');
+    LogService().log(
+      'DevicesService: Sending ${testData.length} bytes to ${targetDevice.callsign ?? targetDevice.deviceId} via parcel protocol',
+    );
 
     try {
       // Use parcel-based transfer for reliable delivery
@@ -399,7 +436,9 @@ class DevicesService {
       );
 
       if (success) {
-        LogService().log('DevicesService: Data sent successfully (${testData.length} bytes)');
+        LogService().log(
+          'DevicesService: Data sent successfully (${testData.length} bytes)',
+        );
       } else {
         LogService().log('DevicesService: Data send failed');
       }
@@ -440,21 +479,29 @@ class DevicesService {
       }
       // Fallback to first device if no match
       if (targetDevice == null) {
-        LogService().log('DevicesService: No device found matching "$deviceId", using first discovered');
+        LogService().log(
+          'DevicesService: No device found matching "$deviceId", using first discovered',
+        );
         targetDevice = devices.first;
       }
     } else {
       targetDevice = devices.first;
     }
 
-    LogService().log('DevicesService: Sending HELLO to ${targetDevice.deviceId} (${targetDevice.callsign ?? "unknown"})');
+    LogService().log(
+      'DevicesService: Sending HELLO to ${targetDevice.deviceId} (${targetDevice.callsign ?? "unknown"})',
+    );
 
     try {
       final success = await sendBLEHello(targetDevice);
       if (success) {
-        LogService().log('DevicesService: HELLO handshake successful with ${targetDevice.deviceId}');
+        LogService().log(
+          'DevicesService: HELLO handshake successful with ${targetDevice.deviceId}',
+        );
       } else {
-        LogService().log('DevicesService: HELLO handshake failed with ${targetDevice.deviceId}');
+        LogService().log(
+          'DevicesService: HELLO handshake failed with ${targetDevice.deviceId}',
+        );
       }
     } catch (e) {
       LogService().log('DevicesService: Error during HELLO handshake: $e');
@@ -476,9 +523,13 @@ class DevicesService {
     try {
       await _bleService!.startAdvertising(effectiveCallsign);
       if (_bleService!.isAdvertising) {
-        LogService().log('DevicesService: BLE advertising started as $effectiveCallsign');
+        LogService().log(
+          'DevicesService: BLE advertising started as $effectiveCallsign',
+        );
       } else {
-        LogService().log('DevicesService: BLE advertising not started (permission denied or unavailable)');
+        LogService().log(
+          'DevicesService: BLE advertising not started (permission denied or unavailable)',
+        );
       }
     } catch (e) {
       LogService().log('DevicesService: BLE advertising failed: $e');
@@ -511,7 +562,9 @@ class DevicesService {
       // Initialize BLE messaging service
       await _initializeBLEMessaging();
     } catch (e, stackTrace) {
-      LogService().log('DevicesService: Failed to initialize BLE: $e\n$stackTrace');
+      LogService().log(
+        'DevicesService: Failed to initialize BLE: $e\n$stackTrace',
+      );
       _bleService = null;
     }
   }
@@ -519,11 +572,15 @@ class DevicesService {
   /// Initialize BLE messaging service for chat/data exchange
   Future<void> _initializeBLEMessaging() async {
     try {
-      LogService().log('DevicesService: Starting BLE messaging initialization (canBeServer: ${BLEMessageService.canBeServer})');
+      LogService().log(
+        'DevicesService: Starting BLE messaging initialization (canBeServer: ${BLEMessageService.canBeServer})',
+      );
 
       final profile = ProfileService().getProfile();
       if (profile.callsign.isEmpty) {
-        LogService().log('DevicesService: No callsign set, skipping BLE messaging init');
+        LogService().log(
+          'DevicesService: No callsign set, skipping BLE messaging init',
+        );
         return;
       }
 
@@ -540,17 +597,25 @@ class DevicesService {
       );
 
       // Subscribe to incoming BLE chat messages
-      _bleChatSubscription = _bleMessageService!.incomingChats.listen((message) {
-        LogService().log('DevicesService: BLE chat from ${message.author}: ${message.content}');
+      _bleChatSubscription = _bleMessageService!.incomingChats.listen((
+        message,
+      ) {
+        LogService().log(
+          'DevicesService: BLE chat from ${message.author}: ${message.content}',
+        );
         _bleChatController.add(message);
       });
 
-      LogService().log('DevicesService: BLE messaging initialized successfully (isInitialized: ${_bleMessageService!.isInitialized})');
+      LogService().log(
+        'DevicesService: BLE messaging initialized successfully (isInitialized: ${_bleMessageService!.isInitialized})',
+      );
 
       // Start BLE foreground service on Android to keep BLE alive in background
       await BLEForegroundService().start();
     } catch (e, stackTrace) {
-      LogService().log('DevicesService: Failed to initialize BLE messaging: $e');
+      LogService().log(
+        'DevicesService: Failed to initialize BLE messaging: $e',
+      );
       LogService().log('DevicesService: Stack trace: $stackTrace');
     }
   }
@@ -602,7 +667,9 @@ class DevicesService {
     // On Android/iOS, the GATT server handles advertising (BLEMessageService)
     // Don't start basic advertising here as it would conflict
     if (BLEMessageService.canBeServer) {
-      LogService().log('DevicesService: Skipping basic advertising - GATT server will handle it');
+      LogService().log(
+        'DevicesService: Skipping basic advertising - GATT server will handle it',
+      );
       return;
     }
 
@@ -630,7 +697,8 @@ class DevicesService {
     // First pass: Update devices that ARE in the BLE scan
     for (final bleDevice in bleDevices) {
       // Use callsign if available, otherwise use BLE device ID
-      final callsign = bleDevice.callsign?.toUpperCase() ?? 'BLE-${bleDevice.deviceId}';
+      final callsign =
+          bleDevice.callsign?.toUpperCase() ?? 'BLE-${bleDevice.deviceId}';
 
       // Track this device as visible via BLE
       bleCallsigns.add(callsign);
@@ -646,7 +714,10 @@ class DevicesService {
         }
         // Add bluetooth_plus if device is BLE+ paired
         if (isBLEPlus && !device.connectionMethods.contains('bluetooth_plus')) {
-          device.connectionMethods = [...device.connectionMethods, 'bluetooth_plus'];
+          device.connectionMethods = [
+            ...device.connectionMethods,
+            'bluetooth_plus',
+          ];
         }
         // Remove bluetooth_plus if no longer paired
         if (!isBLEPlus && device.connectionMethods.contains('bluetooth_plus')) {
@@ -685,7 +756,9 @@ class DevicesService {
           bleRssi: bleDevice.rssi,
         );
         final plusLabel = isBLEPlus ? ' [BLE+]' : '';
-        LogService().log('DevicesService: Added BLE device: $callsign (${bleDevice.proximity})$plusLabel');
+        LogService().log(
+          'DevicesService: Added BLE device: $callsign (${bleDevice.proximity})$plusLabel',
+        );
       }
     }
 
@@ -715,7 +788,9 @@ class DevicesService {
       device.bleRssi = null;
 
       if (hadBLE || hadBLEPlus) {
-        LogService().log('DevicesService: Removed BLE tags from ${device.callsign} (not in current scan)');
+        LogService().log(
+          'DevicesService: Removed BLE tags from ${device.callsign} (not in current scan)',
+        );
       }
     }
 
@@ -752,7 +827,10 @@ class DevicesService {
 
         _devices[callsign] = RemoteDevice(
           callsign: callsign,
-          name: statusCache?['nickname'] as String? ?? matchingRelay?.name ?? callsign,
+          name:
+              statusCache?['nickname'] as String? ??
+              matchingRelay?.name ??
+              callsign,
           nickname: statusCache?['nickname'] as String?,
           description: statusCache?['description'] as String?,
           url: statusCache?['url'] as String? ?? deviceUrl,
@@ -764,16 +842,23 @@ class DevicesService {
               : null,
           hasCachedData: true,
           collections: [],
-          latitude: statusCache?['latitude'] as double? ?? matchingRelay?.latitude,
-          longitude: statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
+          latitude:
+              statusCache?['latitude'] as double? ?? matchingRelay?.latitude,
+          longitude:
+              statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
           preferredColor: statusCache?['color'] as String?,
           platform: statusCache?['platform'] as String?,
           // When loading from cache, device is offline - exclude 'internet' and BLE tags
           // BLE tags are session-based and should only come from active discovery
           connectionMethods: statusCache?['connectionMethods'] != null
               ? List<String>.from(statusCache!['connectionMethods'] as List)
-                  .where((m) => m != 'internet' && m != 'bluetooth' && m != 'bluetooth_plus')
-                  .toList()
+                    .where(
+                      (m) =>
+                          m != 'internet' &&
+                          m != 'bluetooth' &&
+                          m != 'bluetooth_plus',
+                    )
+                    .toList()
               : [],
           bleProximity: statusCache?['bleProximity'] as String?,
           bleRssi: statusCache?['bleRssi'] as int?,
@@ -783,7 +868,8 @@ class DevicesService {
       // Also add known stations that might not have cache
       try {
         for (final station in _stationService.getAllStations()) {
-          if (station.callsign != null && !_devices.containsKey(station.callsign!.toUpperCase())) {
+          if (station.callsign != null &&
+              !_devices.containsKey(station.callsign!.toUpperCase())) {
             _devices[station.callsign!.toUpperCase()] = RemoteDevice(
               callsign: station.callsign!,
               name: station.name,
@@ -824,8 +910,10 @@ class DevicesService {
     }
 
     return _devices.values
-      .where((d) => d.callsign.toUpperCase() != ownCallsign) // Exclude own device
-      .toList()
+        .where(
+          (d) => d.callsign.toUpperCase() != ownCallsign,
+        ) // Exclude own device
+        .toList()
       ..sort((a, b) {
         // Pinned devices first
         if (a.isPinned != b.isPinned) {
@@ -903,13 +991,24 @@ class DevicesService {
   /// Get all folders
   List<DeviceFolder> getFolders() {
     final config = ConfigService();
-    final foldersJson = config.get('deviceFolders', <dynamic>[]) as List<dynamic>;
-    final folders = foldersJson.map((json) => DeviceFolder.fromJson(json as Map<String, dynamic>)).toList();
+    final foldersJson =
+        config.get('deviceFolders', <dynamic>[]) as List<dynamic>;
+    final folders = foldersJson
+        .map((json) => DeviceFolder.fromJson(json as Map<String, dynamic>))
+        .toList();
     final expandedStates = _getFolderExpandedStates();
 
     // Ensure default folder exists
     if (!folders.any((f) => f.id == defaultFolderId)) {
-      folders.insert(0, DeviceFolder(id: defaultFolderId, name: 'Discovered', isDefault: true, order: -1000));
+      folders.insert(
+        0,
+        DeviceFolder(
+          id: defaultFolderId,
+          name: 'Discovered',
+          isDefault: true,
+          order: -1000,
+        ),
+      );
     }
 
     // Apply saved expanded states
@@ -936,7 +1035,9 @@ class DevicesService {
   /// Get folder expanded states from config
   Map<String, bool> _getFolderExpandedStates() {
     final config = ConfigService();
-    final states = config.get('folderExpandedStates', <String, dynamic>{}) as Map<String, dynamic>;
+    final states =
+        config.get('folderExpandedStates', <String, dynamic>{})
+            as Map<String, dynamic>;
     return states.map((k, v) => MapEntry(k, v as bool));
   }
 
@@ -960,7 +1061,9 @@ class DevicesService {
     if (index != -1) {
       folders[index].chatEnabled = enabled;
       _saveFolders(folders);
-      LogService().log('DevicesService: Set chat ${enabled ? "enabled" : "disabled"} for folder $folderId');
+      LogService().log(
+        'DevicesService: Set chat ${enabled ? "enabled" : "disabled"} for folder $folderId',
+      );
     }
   }
 
@@ -986,7 +1089,9 @@ class DevicesService {
     }
 
     _saveFolders(folders);
-    LogService().log('DevicesService: Reordered folders, moved ${folder.name} from $oldIndex to $newIndex');
+    LogService().log(
+      'DevicesService: Reordered folders, moved ${folder.name} from $oldIndex to $newIndex',
+    );
   }
 
   /// Create a new folder
@@ -994,8 +1099,15 @@ class DevicesService {
     final folders = getFolders();
     final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
     // New folders get order at the end
-    final maxOrder = folders.isEmpty ? 0 : folders.map((f) => f.order).reduce((a, b) => a > b ? a : b);
-    final folder = DeviceFolder(id: id, name: name, order: maxOrder + 1, chatEnabled: true);
+    final maxOrder = folders.isEmpty
+        ? 0
+        : folders.map((f) => f.order).reduce((a, b) => a > b ? a : b);
+    final folder = DeviceFolder(
+      id: id,
+      name: name,
+      order: maxOrder + 1,
+      chatEnabled: true,
+    );
     folders.add(folder);
     _saveFolders(folders);
     LogService().log('DevicesService: Created folder "$name" with id $id');
@@ -1040,11 +1152,16 @@ class DevicesService {
   void renameFolder(String folderId, String newName) {
     if (folderId == defaultFolderId) return; // Can't rename default folder
     final folders = getFolders();
-    final folder = folders.firstWhere((f) => f.id == folderId, orElse: () => DeviceFolder(id: '', name: ''));
+    final folder = folders.firstWhere(
+      (f) => f.id == folderId,
+      orElse: () => DeviceFolder(id: '', name: ''),
+    );
     if (folder.id.isNotEmpty) {
       folder.name = newName;
       _saveFolders(folders);
-      LogService().log('DevicesService: Renamed folder $folderId to "$newName"');
+      LogService().log(
+        'DevicesService: Renamed folder $folderId to "$newName"',
+      );
     }
   }
 
@@ -1053,7 +1170,9 @@ class DevicesService {
     if (folderId == defaultFolderId) return; // Can't delete default folder
 
     // Remove all devices in this folder
-    final devicesToRemove = _devices.values.where((d) => d.folderId == folderId).toList();
+    final devicesToRemove = _devices.values
+        .where((d) => d.folderId == folderId)
+        .toList();
     for (final device in devicesToRemove) {
       await removeDevice(device.callsign);
     }
@@ -1062,18 +1181,24 @@ class DevicesService {
     final folders = getFolders();
     folders.removeWhere((f) => f.id == folderId);
     _saveFolders(folders);
-    LogService().log('DevicesService: Deleted folder $folderId with ${devicesToRemove.length} devices');
+    LogService().log(
+      'DevicesService: Deleted folder $folderId with ${devicesToRemove.length} devices',
+    );
   }
 
   /// Empty a folder (move all devices to default folder)
   void emptyFolder(String folderId) {
     if (folderId == defaultFolderId) return; // Can't empty default folder
 
-    final devicesInFolder = _devices.values.where((d) => d.folderId == folderId).toList();
+    final devicesInFolder = _devices.values
+        .where((d) => d.folderId == folderId)
+        .toList();
     for (final device in devicesInFolder) {
       moveDeviceToFolder(device.callsign, null); // null = default folder
     }
-    LogService().log('DevicesService: Emptied folder $folderId, moved ${devicesInFolder.length} devices to Discovered');
+    LogService().log(
+      'DevicesService: Emptied folder $folderId, moved ${devicesInFolder.length} devices to Discovered',
+    );
   }
 
   /// Move a device to a folder
@@ -1084,7 +1209,9 @@ class DevicesService {
       device.folderId = folderId;
       _saveDeviceFolderAssignment(normalized, folderId);
       _devicesController.add(getAllDevices());
-      LogService().log('DevicesService: Moved device $normalized to folder ${folderId ?? defaultFolderId}');
+      LogService().log(
+        'DevicesService: Moved device $normalized to folder ${folderId ?? defaultFolderId}',
+      );
     }
   }
 
@@ -1098,7 +1225,9 @@ class DevicesService {
   /// Get folder assignment map from config
   Map<String, String?> _getDeviceFolderAssignments() {
     final config = ConfigService();
-    final assignments = config.get('deviceFolderAssignments', <String, dynamic>{}) as Map<String, dynamic>;
+    final assignments =
+        config.get('deviceFolderAssignments', <String, dynamic>{})
+            as Map<String, dynamic>;
     return assignments.map((k, v) => MapEntry(k, v as String?));
   }
 
@@ -1123,7 +1252,8 @@ class DevicesService {
     final targetFolderId = folderId ?? defaultFolderId;
     return getAllDevices().where((d) {
       final deviceFolder = d.folderId ?? defaultFolderId;
-      return deviceFolder == targetFolderId || (targetFolderId == defaultFolderId && d.folderId == null);
+      return deviceFolder == targetFolderId ||
+          (targetFolderId == defaultFolderId && d.folderId == null);
     }).toList();
   }
 
@@ -1166,15 +1296,19 @@ class DevicesService {
     );
 
     if (result.success) {
-      LogService().log('DevicesService: Request to $normalizedCallsign succeeded via ${result.transportUsed} '
-          '(${result.latency?.inMilliseconds ?? "?"}ms)');
+      LogService().log(
+        'DevicesService: Request to $normalizedCallsign succeeded via ${result.transportUsed} '
+        '(${result.latency?.inMilliseconds ?? "?"}ms)',
+      );
       // Convert TransportResult to http.Response for backward compatibility
       return http.Response(
         result.responseData?.toString() ?? '',
         result.statusCode ?? 200,
       );
     } else {
-      LogService().log('DevicesService: Request to $normalizedCallsign failed: ${result.error}');
+      LogService().log(
+        'DevicesService: Request to $normalizedCallsign failed: ${result.error}',
+      );
       return null;
     }
   }
@@ -1196,29 +1330,41 @@ class DevicesService {
     if (!internetOnly && device?.url != null && device!.isOnline) {
       try {
         final uri = Uri.parse('${device.url}$path');
-        LogService().log('DevicesService: Direct request to $normalizedCallsign: $method $path');
+        LogService().log(
+          'DevicesService: Direct request to $normalizedCallsign: $method $path',
+        );
         final response = await _makeHttpRequest(method, uri, headers, body);
         if (response.statusCode < 500) {
           return response; // Success or client error - don't retry via station
         }
       } catch (e) {
-        LogService().log('DevicesService: Direct request to $normalizedCallsign failed: $e');
+        LogService().log(
+          'DevicesService: Direct request to $normalizedCallsign failed: $e',
+        );
       }
     }
 
     // Fall back to station proxy (or go directly to station proxy in internet-only mode)
     final station = _stationService.getConnectedRelay();
     if (station == null) {
-      LogService().log('DevicesService: No station connected for proxy to $normalizedCallsign');
+      LogService().log(
+        'DevicesService: No station connected for proxy to $normalizedCallsign',
+      );
       return null;
     }
 
     try {
       // Use station proxy: {stationHttpUrl}/device/{callsign}/{path}
-      final stationHttpUrl = station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
-      final proxyUri = Uri.parse('$stationHttpUrl/device/$normalizedCallsign$path');
+      final stationHttpUrl = station.url
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://');
+      final proxyUri = Uri.parse(
+        '$stationHttpUrl/device/$normalizedCallsign$path',
+      );
 
-      LogService().log('DevicesService: Proxying via station to $normalizedCallsign: $method $path');
+      LogService().log(
+        'DevicesService: Proxying via station to $normalizedCallsign: $method $path',
+      );
       return await _makeHttpRequest(method, proxyUri, headers, body);
     } catch (e) {
       LogService().log('DevicesService: Station proxy request failed: $e');
@@ -1236,7 +1382,8 @@ class DevicesService {
 
     // Register device URL with LAN transport if available
     if (device.url != null) {
-      final lanTransport = connectionManager.getTransport('lan') as LanTransport?;
+      final lanTransport =
+          connectionManager.getTransport('lan') as LanTransport?;
       if (lanTransport != null) {
         lanTransport.registerLocalDevice(callsign, device.url!);
       }
@@ -1255,15 +1402,25 @@ class DevicesService {
     final h = headers ?? {'Content-Type': 'application/json'};
     switch (method.toUpperCase()) {
       case 'GET':
-        return await http.get(uri, headers: h).timeout(const Duration(seconds: 30));
+        return await http
+            .get(uri, headers: h)
+            .timeout(const Duration(seconds: 30));
       case 'POST':
-        return await http.post(uri, headers: h, body: body).timeout(const Duration(seconds: 30));
+        return await http
+            .post(uri, headers: h, body: body)
+            .timeout(const Duration(seconds: 30));
       case 'PUT':
-        return await http.put(uri, headers: h, body: body).timeout(const Duration(seconds: 30));
+        return await http
+            .put(uri, headers: h, body: body)
+            .timeout(const Duration(seconds: 30));
       case 'DELETE':
-        return await http.delete(uri, headers: h).timeout(const Duration(seconds: 30));
+        return await http
+            .delete(uri, headers: h)
+            .timeout(const Duration(seconds: 30));
       default:
-        return await http.get(uri, headers: h).timeout(const Duration(seconds: 30));
+        return await http
+            .get(uri, headers: h)
+            .timeout(const Duration(seconds: 30));
     }
   }
 
@@ -1282,7 +1439,8 @@ class DevicesService {
     // Check if this device IS the connected station
     // For the connected station, WebSocket state is the source of truth
     final connectedStation = _stationService.getConnectedRelay();
-    final isConnectedStation = connectedStation != null &&
+    final isConnectedStation =
+        connectedStation != null &&
         connectedStation.callsign != null &&
         connectedStation.callsign!.toUpperCase() == callsign.toUpperCase();
 
@@ -1306,8 +1464,9 @@ class DevicesService {
 
     // Device is online if ANY connection method works (including BLE)
     // BLE connection is indicated by 'bluetooth' or 'bluetooth_plus' in connectionMethods
-    final hasBLEConnection = device.connectionMethods.contains('bluetooth') ||
-                             device.connectionMethods.contains('bluetooth_plus');
+    final hasBLEConnection =
+        device.connectionMethods.contains('bluetooth') ||
+        device.connectionMethods.contains('bluetooth_plus');
     final isNowOnline = directOk || proxyOk || hasBLEConnection;
     device.isOnline = isNowOnline;
     _notifyListeners();
@@ -1324,27 +1483,41 @@ class DevicesService {
   /// Trigger DM queue flush and sync with a device that just came online
   /// deviceUrl can be null if using station proxy exclusively
   void _triggerDMSync(String callsign, String? deviceUrl) {
-    LogService().log('DevicesService: Device $callsign came online, triggering DM queue flush and sync');
+    LogService().log(
+      'DevicesService: Device $callsign came online, triggering DM queue flush and sync',
+    );
 
     final dmService = DirectMessageService();
 
     // First, flush any queued messages for this device
-    dmService.flushQueue(callsign).then((delivered) {
-      if (delivered > 0) {
-        LogService().log('DevicesService: Delivered $delivered queued messages to $callsign');
-      }
+    dmService
+        .flushQueue(callsign)
+        .then((delivered) {
+          if (delivered > 0) {
+            LogService().log(
+              'DevicesService: Delivered $delivered queued messages to $callsign',
+            );
+          }
 
-      // Then sync to get any messages from them
-      return dmService.syncWithDevice(callsign, deviceUrl: deviceUrl);
-    }).then((result) {
-      if (result.success) {
-        LogService().log('DevicesService: DM sync with $callsign completed - received: ${result.messagesReceived}, sent: ${result.messagesSent}');
-      } else {
-        LogService().log('DevicesService: DM sync with $callsign failed: ${result.error}');
-      }
-    }).catchError((e) {
-      LogService().log('DevicesService: DM operations with $callsign error: $e');
-    });
+          // Then sync to get any messages from them
+          return dmService.syncWithDevice(callsign, deviceUrl: deviceUrl);
+        })
+        .then((result) {
+          if (result.success) {
+            LogService().log(
+              'DevicesService: DM sync with $callsign completed - received: ${result.messagesReceived}, sent: ${result.messagesSent}',
+            );
+          } else {
+            LogService().log(
+              'DevicesService: DM sync with $callsign failed: ${result.error}',
+            );
+          }
+        })
+        .catchError((e) {
+          LogService().log(
+            'DevicesService: DM operations with $callsign error: $e',
+          );
+        });
   }
 
   /// Check device via station proxy
@@ -1360,10 +1533,12 @@ class DevicesService {
     }
 
     try {
-      final baseUrl = station.url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-      final response = await http.get(
-        Uri.parse('$baseUrl/device/${device.callsign}'),
-      ).timeout(const Duration(seconds: 5));
+      final baseUrl = station.url
+          .replaceFirst('ws://', 'http://')
+          .replaceFirst('wss://', 'https://');
+      final response = await http
+          .get(Uri.parse('$baseUrl/device/${device.callsign}'))
+          .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -1375,7 +1550,10 @@ class DevicesService {
         // Update connectionMethods based on result
         if (isConnected) {
           if (!device.connectionMethods.contains('internet')) {
-            device.connectionMethods = [...device.connectionMethods, 'internet'];
+            device.connectionMethods = [
+              ...device.connectionMethods,
+              'internet',
+            ];
           }
         } else {
           // Device not connected via station - remove 'internet' tag
@@ -1388,7 +1566,9 @@ class DevicesService {
         return isConnected;
       }
     } catch (e) {
-      LogService().log('DevicesService: Error checking device ${device.callsign}: $e');
+      LogService().log(
+        'DevicesService: Error checking device ${device.callsign}: $e',
+      );
     }
 
     // On HTTP failure/timeout, don't remove 'internet' tag
@@ -1435,15 +1615,17 @@ class DevicesService {
     if (device.url == null) return false;
 
     try {
-      final baseUrl = device.url!.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+      final baseUrl = device.url!
+          .replaceFirst('ws://', 'http://')
+          .replaceFirst('wss://', 'https://');
       final uri = Uri.parse(baseUrl);
       final isLocalIP = _isPrivateIP(uri.host);
 
       final stopwatch = Stopwatch()..start();
 
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/status'),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/status'))
+          .timeout(const Duration(seconds: 5));
 
       stopwatch.stop();
 
@@ -1461,8 +1643,10 @@ class DevicesService {
           if (location != null) {
             final lat = location['latitude'];
             final lon = location['longitude'];
-            if (lat != null) device.latitude = (lat is int) ? lat.toDouble() : lat as double?;
-            if (lon != null) device.longitude = (lon is int) ? lon.toDouble() : lon as double?;
+            if (lat != null)
+              device.latitude = (lat is int) ? lat.toDouble() : lat as double?;
+            if (lon != null)
+              device.longitude = (lon is int) ? lon.toDouble() : lon as double?;
           }
 
           // Also check top-level latitude/longitude (some APIs return it this way)
@@ -1510,12 +1694,18 @@ class DevicesService {
         if (isLocalIP) {
           if (!device.connectionMethods.contains('wifi_local') &&
               !device.connectionMethods.contains('lan')) {
-            device.connectionMethods = [...device.connectionMethods, 'wifi_local'];
+            device.connectionMethods = [
+              ...device.connectionMethods,
+              'wifi_local',
+            ];
           }
         } else {
           // Public IP - this is an internet connection
           if (!device.connectionMethods.contains('internet')) {
-            device.connectionMethods = [...device.connectionMethods, 'internet'];
+            device.connectionMethods = [
+              ...device.connectionMethods,
+              'internet',
+            ];
           }
         }
 
@@ -1526,7 +1716,9 @@ class DevicesService {
         return true;
       }
     } catch (e) {
-      LogService().log('DevicesService: Direct connection to ${device.callsign} failed: $e');
+      LogService().log(
+        'DevicesService: Direct connection to ${device.callsign} failed: $e',
+      );
     }
 
     // Direct connection failed - remove local connection methods
@@ -1547,7 +1739,9 @@ class DevicesService {
     if (!force && _lastFullRefreshTime != null) {
       final elapsed = DateTime.now().difference(_lastFullRefreshTime!);
       if (elapsed < _fullRefreshCooldown) {
-        LogService().log('DevicesService: Using cached devices (${elapsed.inSeconds}s since last refresh)');
+        LogService().log(
+          'DevicesService: Using cached devices (${elapsed.inSeconds}s since last refresh)',
+        );
         // Still notify listeners with current data so UI updates
         _notifyListeners();
         return false;
@@ -1556,7 +1750,9 @@ class DevicesService {
 
     final internetOnly = AppArgs().internetOnly;
     if (internetOnly) {
-      LogService().log('DevicesService: Performing internet-only device refresh (no LAN/BLE)');
+      LogService().log(
+        'DevicesService: Performing internet-only device refresh (no LAN/BLE)',
+      );
     } else {
       LogService().log('DevicesService: Performing full device refresh');
     }
@@ -1610,7 +1806,8 @@ class DevicesService {
   bool get isBLEScanning => _bleService?.isScanning ?? false;
 
   /// Check if BLE messaging is available
-  bool get isBLEMessagingAvailable => _bleMessageService?.isInitialized ?? false;
+  bool get isBLEMessagingAvailable =>
+      _bleMessageService?.isInitialized ?? false;
 
   /// Send chat message to a device via BLE
   /// Returns true if message was delivered successfully
@@ -1659,10 +1856,7 @@ class DevicesService {
       return;
     }
 
-    await _bleMessageService!.broadcastChat(
-      content: content,
-      channel: channel,
-    );
+    await _bleMessageService!.broadcastChat(content: content, channel: channel);
   }
 
   /// Send HELLO handshake to a BLE device
@@ -1683,7 +1877,10 @@ class DevicesService {
   /// Update the connected station as a device with 'internet' connection
   /// [eventCallsign] and [eventUrl] come from the ConnectionStateChangedEvent
   /// and allow us to fetch station info even before station object is fully populated
-  Future<void> _updateConnectedStation({String? eventCallsign, String? eventUrl}) async {
+  Future<void> _updateConnectedStation({
+    String? eventCallsign,
+    String? eventUrl,
+  }) async {
     try {
       final station = _stationService.getConnectedRelay();
 
@@ -1692,7 +1889,9 @@ class DevicesService {
       final url = station?.url ?? eventUrl;
 
       if (callsign == null || url == null) {
-        LogService().log('DevicesService: _updateConnectedStation - no callsign or url available');
+        LogService().log(
+          'DevicesService: _updateConnectedStation - no callsign or url available',
+        );
         return;
       }
 
@@ -1705,9 +1904,15 @@ class DevicesService {
       // If station doesn't have lat/lon yet, fetch from API directly
       if (latitude == null || longitude == null) {
         try {
-          final httpUrl = url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
-          final statusUrl = httpUrl.endsWith('/') ? '${httpUrl}api/status' : '$httpUrl/api/status';
-          final response = await http.get(Uri.parse(statusUrl)).timeout(const Duration(seconds: 10));
+          final httpUrl = url
+              .replaceFirst('ws://', 'http://')
+              .replaceFirst('wss://', 'https://');
+          final statusUrl = httpUrl.endsWith('/')
+              ? '${httpUrl}api/status'
+              : '$httpUrl/api/status';
+          final response = await http
+              .get(Uri.parse(statusUrl))
+              .timeout(const Duration(seconds: 10));
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             latitude = (data['latitude'] as num?)?.toDouble();
@@ -1733,7 +1938,9 @@ class DevicesService {
           device.connectionMethods = [...device.connectionMethods, 'internet'];
         }
         device.source = DeviceSourceType.station;
-        LogService().log('DevicesService: Updated station device: $normalizedCallsign');
+        LogService().log(
+          'DevicesService: Updated station device: $normalizedCallsign',
+        );
       } else {
         // Add new device for the station
         _devices[normalizedCallsign] = RemoteDevice(
@@ -1749,7 +1956,9 @@ class DevicesService {
           source: DeviceSourceType.station,
           lastSeen: DateTime.now(),
         );
-        LogService().log('DevicesService: Added station as device: $normalizedCallsign');
+        LogService().log(
+          'DevicesService: Added station as device: $normalizedCallsign',
+        );
       }
 
       _notifyListeners();
@@ -1762,18 +1971,23 @@ class DevicesService {
   Future<void> _discoverLocalDevices({bool force = false}) async {
     try {
       final now = DateTime.now();
-      final shouldFullScan = force ||
+      final shouldFullScan =
+          force ||
           _lastLocalScanTime == null ||
           now.difference(_lastLocalScanTime!) > _localScanInterval;
 
       if (shouldFullScan) {
         // Full network scan
-        LogService().log('DevicesService: Full local network scan (last: $_lastLocalScanTime)');
+        LogService().log(
+          'DevicesService: Full local network scan (last: $_lastLocalScanTime)',
+        );
         _lastLocalScanTime = now;
         await _performFullLocalScan();
       } else {
         // Just check reachability of known local devices (fast)
-        LogService().log('DevicesService: Quick reachability check for known local devices');
+        LogService().log(
+          'DevicesService: Quick reachability check for known local devices',
+        );
         await _checkLocalDevicesReachability();
       }
     } catch (e) {
@@ -1791,11 +2005,11 @@ class DevicesService {
     LogService().log('DevicesService: Scanning local network for devices...');
 
     // Use quick scan (500ms timeout) for faster discovery
-    final results = await _discoveryService.scanWithProgress(
-      timeoutMs: 500,
-    );
+    final results = await _discoveryService.scanWithProgress(timeoutMs: 500);
 
-    LogService().log('DevicesService: Found ${results.length} devices on local network');
+    LogService().log(
+      'DevicesService: Found ${results.length} devices on local network',
+    );
 
     for (final result in results) {
       // Skip if no callsign
@@ -1815,7 +2029,10 @@ class DevicesService {
 
         // Add connection type if not already present
         if (!device.connectionMethods.contains(connectionType)) {
-          device.connectionMethods = [...device.connectionMethods, connectionType];
+          device.connectionMethods = [
+            ...device.connectionMethods,
+            connectionType,
+          ];
         }
 
         // Store local URL for direct connection (prefer local over internet)
@@ -1823,7 +2040,9 @@ class DevicesService {
         device.isOnline = true;
         device.lastSeen = DateTime.now();
 
-        LogService().log('DevicesService: Updated ${result.type} $normalizedCallsign with local network ($localUrl)');
+        LogService().log(
+          'DevicesService: Updated ${result.type} $normalizedCallsign with local network ($localUrl)',
+        );
       } else {
         // Create new device discovered on local network
         _devices[normalizedCallsign] = RemoteDevice(
@@ -1840,7 +2059,9 @@ class DevicesService {
           source: DeviceSourceType.local,
           lastSeen: DateTime.now(),
         );
-        LogService().log('DevicesService: Added new ${result.type} from local network: $normalizedCallsign at $localUrl');
+        LogService().log(
+          'DevicesService: Added new ${result.type} from local network: $normalizedCallsign at $localUrl',
+        );
       }
     }
 
@@ -1849,11 +2070,17 @@ class DevicesService {
 
   /// Check reachability of previously discovered local devices (fast)
   Future<void> _checkLocalDevicesReachability() async {
-    final localDevices = _devices.values.where((d) =>
-        d.connectionMethods.contains('wifi_local') ||
-        d.connectionMethods.contains('lan')).toList();
+    final localDevices = _devices.values
+        .where(
+          (d) =>
+              d.connectionMethods.contains('wifi_local') ||
+              d.connectionMethods.contains('lan'),
+        )
+        .toList();
 
-    LogService().log('DevicesService: Checking ${localDevices.length} known local devices');
+    LogService().log(
+      'DevicesService: Checking ${localDevices.length} known local devices',
+    );
 
     for (final device in localDevices) {
       if (device.url != null) {
@@ -1874,10 +2101,14 @@ class DevicesService {
         // This allows showing station devices even before WebSocket connects
         station = _stationService.getPreferredStation();
         if (station == null) {
-          LogService().log('DevicesService: No station available to fetch devices from');
+          LogService().log(
+            'DevicesService: No station available to fetch devices from',
+          );
           return;
         }
-        LogService().log('DevicesService: Using preferred station for device list (not yet connected)');
+        LogService().log(
+          'DevicesService: Using preferred station for device list (not yet connected)',
+        );
       }
 
       // Convert WebSocket URL to HTTP and extract base (remove path like /ws)
@@ -1887,7 +2118,8 @@ class DevicesService {
 
       // Remove any path component (e.g., /ws) to get the base URL
       final uri = Uri.parse(baseUrl);
-      baseUrl = '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
+      baseUrl =
+          '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
 
       final url = '$baseUrl/api/devices';
       LogService().log('DevicesService: Fetching devices from: $url');
@@ -1895,7 +2127,9 @@ class DevicesService {
       List<dynamic>? devices;
 
       try {
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+        final response = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
@@ -1906,11 +2140,15 @@ class DevicesService {
       }
 
       if (devices == null) {
-        LogService().log('DevicesService: No devices endpoint available on station');
+        LogService().log(
+          'DevicesService: No devices endpoint available on station',
+        );
         return;
       }
 
-      LogService().log('DevicesService: Received ${devices.length} devices from /api/devices');
+      LogService().log(
+        'DevicesService: Received ${devices.length} devices from /api/devices',
+      );
 
       for (final deviceData in devices) {
         final callsign = deviceData['callsign'] as String?;
@@ -1951,7 +2189,10 @@ class DevicesService {
           if (isOnlineViaStation) {
             for (final method in connectionTypes) {
               if (!device.connectionMethods.contains(method)) {
-                device.connectionMethods = [...device.connectionMethods, method];
+                device.connectionMethods = [
+                  ...device.connectionMethods,
+                  method,
+                ];
               }
             }
           } else {
@@ -1964,7 +2205,9 @@ class DevicesService {
           device.lastSeen = DateTime.now();
           // Cache device status to disk
           await _saveDeviceStatusCache(device);
-          LogService().log('DevicesService: Updated device: $normalizedCallsign (online: $isOnlineViaStation)');
+          LogService().log(
+            'DevicesService: Updated device: $normalizedCallsign (online: $isOnlineViaStation)',
+          );
         } else {
           // Create new device from station
           final device = RemoteDevice(
@@ -1987,12 +2230,16 @@ class DevicesService {
           _devices[normalizedCallsign] = device;
           // Cache device status to disk
           await _saveDeviceStatusCache(device);
-          LogService().log('DevicesService: Added new device from station: $normalizedCallsign (online: $isOnlineViaStation)');
+          LogService().log(
+            'DevicesService: Added new device from station: $normalizedCallsign (online: $isOnlineViaStation)',
+          );
         }
       }
 
       _notifyListeners();
-      LogService().log('DevicesService: Fetched ${devices.length} devices from station ${station.name}');
+      LogService().log(
+        'DevicesService: Fetched ${devices.length} devices from station ${station.name}',
+      );
     } catch (e) {
       LogService().log('DevicesService: Error fetching station clients: $e');
     }
@@ -2014,7 +2261,9 @@ class DevicesService {
   }
 
   /// Fetch collections from online device using ConnectionManager
-  Future<List<RemoteCollection>> _fetchCollectionsOnline(RemoteDevice device) async {
+  Future<List<RemoteCollection>> _fetchCollectionsOnline(
+    RemoteDevice device,
+  ) async {
     final collections = <RemoteCollection>[];
 
     // Sync device to ConnectionManager first
@@ -2040,12 +2289,14 @@ class DevicesService {
 
               // Only include known collection types (same as local collections)
               if (_isKnownCollectionType(lowerName)) {
-                collections.add(RemoteCollection(
-                  name: name,
-                  deviceCallsign: device.callsign,
-                  type: lowerName,
-                  fileCount: entry['size'] is int ? entry['size'] : null,
-                ));
+                collections.add(
+                  RemoteCollection(
+                    name: name,
+                    deviceCallsign: device.callsign,
+                    type: lowerName,
+                    fileCount: entry['size'] is int ? entry['size'] : null,
+                  ),
+                );
               }
             }
           }
@@ -2068,13 +2319,15 @@ class DevicesService {
           final data = json.decode(chatResponse.body);
           if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
             // This station has chat rooms, add a chat collection
-            collections.add(RemoteCollection(
-              name: 'Chat',
-              deviceCallsign: device.callsign,
-              type: 'chat',
-              description: '${(data['rooms'] as List).length} rooms',
-              fileCount: (data['rooms'] as List).length,
-            ));
+            collections.add(
+              RemoteCollection(
+                name: 'Chat',
+                deviceCallsign: device.callsign,
+                type: 'chat',
+                description: '${(data['rooms'] as List).length} rooms',
+                fileCount: (data['rooms'] as List).length,
+              ),
+            );
           }
         }
       } catch (e) {
@@ -2093,7 +2346,10 @@ class DevicesService {
   }
 
   /// Update device with fetched collections and cache them
-  Future<void> _updateDeviceCollections(RemoteDevice device, List<RemoteCollection> collections) async {
+  Future<void> _updateDeviceCollections(
+    RemoteDevice device,
+    List<RemoteCollection> collections,
+  ) async {
     device.collections = collections;
     device.lastFetched = DateTime.now();
 
@@ -2108,9 +2364,18 @@ class DevicesService {
   /// Check if folder name is a known collection type
   bool _isKnownCollectionType(String name) {
     const knownTypes = {
-      'chat', 'forum', 'blog', 'events', 'news',
-      'www', 'postcards', 'contacts', 'places',
-      'market', 'alerts', 'groups',
+      'chat',
+      'forum',
+      'blog',
+      'events',
+      'news',
+      'www',
+      'postcards',
+      'contacts',
+      'places',
+      'market',
+      'alerts',
+      'groups',
     };
     return knownTypes.contains(name.toLowerCase());
   }
@@ -2127,7 +2392,9 @@ class DevicesService {
         final content = await collectionsFile.readAsString();
         final data = json.decode(content) as List;
 
-        return data.map((item) => RemoteCollection.fromJson(item, callsign)).toList();
+        return data
+            .map((item) => RemoteCollection.fromJson(item, callsign))
+            .toList();
       }
     } catch (e) {
       LogService().log('DevicesService: Error loading cached collections: $e');
@@ -2137,7 +2404,10 @@ class DevicesService {
   }
 
   /// Cache collections for offline access
-  Future<void> _cacheCollections(String callsign, List<RemoteCollection> collections) async {
+  Future<void> _cacheCollections(
+    String callsign,
+    List<RemoteCollection> collections,
+  ) async {
     try {
       final cacheDir = await _cacheService.getDeviceCacheDir(callsign);
       if (cacheDir == null) return;
@@ -2199,7 +2469,12 @@ class DevicesService {
   }
 
   /// Add a device from discovery or manual entry
-  Future<void> addDevice(String callsign, {String? name, String? url, bool isOnline = false}) async {
+  Future<void> addDevice(
+    String callsign, {
+    String? name,
+    String? url,
+    bool isOnline = false,
+  }) async {
     final normalizedCallsign = callsign.toUpperCase();
 
     if (!_devices.containsKey(normalizedCallsign)) {
@@ -2261,7 +2536,9 @@ class DevicesService {
       await dmService.sendFileMessage(callsign, filePath, null);
       LogService().log('DevicesService: DM file sent to $callsign: $filePath');
     } catch (e) {
-      LogService().log('DevicesService: Error sending DM file to $callsign: $e');
+      LogService().log(
+        'DevicesService: Error sending DM file to $callsign: $e',
+      );
     }
   }
 
@@ -2285,9 +2562,13 @@ class DevicesService {
       final result = await dmService.syncWithDevice(callsign, deviceUrl: url);
 
       if (result.success) {
-        LogService().log('DevicesService: DM sync with $callsign - received: ${result.messagesReceived}, sent: ${result.messagesSent}');
+        LogService().log(
+          'DevicesService: DM sync with $callsign - received: ${result.messagesReceived}, sent: ${result.messagesSent}',
+        );
       } else {
-        LogService().log('DevicesService: DM sync with $callsign failed: ${result.error}');
+        LogService().log(
+          'DevicesService: DM sync with $callsign failed: ${result.error}',
+        );
       }
     } catch (e) {
       LogService().log('DevicesService: Error syncing DMs with $callsign: $e');
@@ -2304,7 +2585,9 @@ class DevicesService {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
-        LogService().log('DevicesService: Upload failed - file not found: $filePath');
+        LogService().log(
+          'DevicesService: Upload failed - file not found: $filePath',
+        );
         return null;
       }
 
@@ -2313,11 +2596,15 @@ class DevicesService {
 
       // Check 10 MB limit
       if (bytes.length > 10 * 1024 * 1024) {
-        LogService().log('DevicesService: Upload failed - file too large: ${bytes.length} bytes');
+        LogService().log(
+          'DevicesService: Upload failed - file too large: ${bytes.length} bytes',
+        );
         return null;
       }
 
-      LogService().log('DevicesService: Uploading chat file to $callsign/$roomId: $filename (${bytes.length} bytes)');
+      LogService().log(
+        'DevicesService: Uploading chat file to $callsign/$roomId: $filename (${bytes.length} bytes)',
+      );
 
       final response = await makeDeviceApiRequest(
         callsign: callsign,
@@ -2336,7 +2623,9 @@ class DevicesService {
         LogService().log('DevicesService: Upload successful: $storedFilename');
         return storedFilename;
       } else {
-        LogService().log('DevicesService: Upload failed: ${response?.statusCode} - ${response?.body}');
+        LogService().log(
+          'DevicesService: Upload failed: ${response?.statusCode} - ${response?.body}',
+        );
         return null;
       }
     } catch (e) {
@@ -2353,23 +2642,39 @@ class DevicesService {
     required String filename,
   }) async {
     try {
-      LogService().log('DevicesService: Downloading chat file from $callsign/$roomId: $filename');
+      LogService().log(
+        'DevicesService: Downloading chat file from $callsign/$roomId: $filename',
+      );
 
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'GET',
-        path: ChatApi.chatFileDownloadPath(roomId, Uri.encodeComponent(filename)),
+        path: ChatApi.chatFileDownloadPath(
+          roomId,
+          Uri.encodeComponent(filename),
+        ),
       );
 
       if (response != null && response.statusCode == 200) {
         // Save to cache directory
         final cacheService = StationCacheService();
-        await cacheService.saveChatFile(callsign, roomId, filename, response.bodyBytes);
-        final localPath = await cacheService.getChatFilePath(callsign, roomId, filename);
+        await cacheService.saveChatFile(
+          callsign,
+          roomId,
+          filename,
+          response.bodyBytes,
+        );
+        final localPath = await cacheService.getChatFilePath(
+          callsign,
+          roomId,
+          filename,
+        );
         LogService().log('DevicesService: Download successful: $localPath');
         return localPath;
       } else {
-        LogService().log('DevicesService: Download failed: ${response?.statusCode}');
+        LogService().log(
+          'DevicesService: Download failed: ${response?.statusCode}',
+        );
         return null;
       }
     } catch (e) {
@@ -2412,11 +2717,12 @@ class RemoteDevice {
   List<String> connectionMethods;
   DeviceSourceType source;
   bool isPinned;
-  String? folderId;  // Folder this device belongs to (null = default "Discovered" folder)
+  String?
+  folderId; // Folder this device belongs to (null = default "Discovered" folder)
 
   /// BLE-specific fields
-  String? bleProximity;  // "Very close", "Nearby", "In range", "Far"
-  int? bleRssi;          // Signal strength in dBm
+  String? bleProximity; // "Very close", "Nearby", "In range", "Far"
+  int? bleRssi; // Signal strength in dBm
 
   /// User's preferred color from profile
   String? preferredColor;
@@ -2516,7 +2822,10 @@ class RemoteDevice {
   /// Calculate distance from given coordinates using Haversine formula
   /// Returns distance in kilometers, or null if location is unavailable
   double? calculateDistance(double? userLat, double? userLon) {
-    if (latitude == null || longitude == null || userLat == null || userLon == null) {
+    if (latitude == null ||
+        longitude == null ||
+        userLat == null ||
+        userLon == null) {
       return null;
     }
 
@@ -2528,8 +2837,9 @@ class RemoteDevice {
     final lat1 = _degreesToRadians(latitude!);
     final lat2 = _degreesToRadians(userLat);
 
-    final a = (sin(dLat / 2) * sin(dLat / 2)) +
-              (sin(dLon / 2) * sin(dLon / 2)) * cos(lat1) * cos(lat2);
+    final a =
+        (sin(dLat / 2) * sin(dLat / 2)) +
+        (sin(dLon / 2) * sin(dLon / 2)) * cos(lat1) * cos(lat2);
 
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
@@ -2571,7 +2881,10 @@ class RemoteCollection {
     this.visibility,
   });
 
-  factory RemoteCollection.fromJson(Map<String, dynamic> json, String deviceCallsign) {
+  factory RemoteCollection.fromJson(
+    Map<String, dynamic> json,
+    String deviceCallsign,
+  ) {
     return RemoteCollection(
       name: json['name'] ?? json['id'] ?? 'Unknown',
       deviceCallsign: deviceCallsign,
@@ -2595,17 +2908,28 @@ class RemoteCollection {
   /// Get icon for collection type
   String get iconName {
     switch (type) {
-      case 'chat': return 'chat';
-      case 'blog': return 'article';
-      case 'forum': return 'forum';
-      case 'contacts': return 'contacts';
-      case 'events': return 'event';
-      case 'places': return 'place';
-      case 'news': return 'newspaper';
-      case 'www': return 'language';
-      case 'documents': return 'description';
-      case 'photos': return 'photo_library';
-      default: return 'folder';
+      case 'chat':
+        return 'chat';
+      case 'blog':
+        return 'article';
+      case 'forum':
+        return 'forum';
+      case 'contacts':
+        return 'contacts';
+      case 'events':
+        return 'event';
+      case 'places':
+        return 'place';
+      case 'news':
+        return 'newspaper';
+      case 'www':
+        return 'language';
+      case 'documents':
+        return 'description';
+      case 'photos':
+        return 'photo_library';
+      default:
+        return 'folder';
     }
   }
 }
@@ -2616,8 +2940,8 @@ class DeviceFolder {
   String name;
   final bool isDefault;
   bool isExpanded;
-  int order;  // Lower number = higher in list
-  bool chatEnabled;  // Whether chat room is enabled for this folder
+  int order; // Lower number = higher in list
+  bool chatEnabled; // Whether chat room is enabled for this folder
 
   DeviceFolder({
     required this.id,

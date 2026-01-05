@@ -140,6 +140,46 @@ class CollectionService {
     callsignNotifier.value++;
   }
 
+  /// Default app types that should be created for every profile
+  /// These are the core apps that users expect to be available
+  static const List<String> _defaultAppTypes = [
+    'chat',
+    'contacts',
+    'places',
+    'events',
+    'groups',
+  ];
+
+  /// Ensure default collections exist for the current profile
+  /// This should be called after setActiveCallsign to create any missing default apps
+  Future<void> ensureDefaultCollections() async {
+    if (_currentCallsign == null) {
+      stderr.writeln('ensureDefaultCollections: No active callsign set');
+      return;
+    }
+
+    // Load existing collections
+    final existingCollections = await loadCollections();
+    final existingTypes = existingCollections.map((c) => c.type).toSet();
+
+    // Create any missing default collections
+    for (final type in _defaultAppTypes) {
+      if (!existingTypes.contains(type)) {
+        try {
+          stderr.writeln('Creating default collection: $type');
+          await createCollection(
+            title: type[0].toUpperCase() + type.substring(1), // Capitalize
+            description: '',
+            type: type,
+          );
+          stderr.writeln('Created default collection: $type');
+        } catch (e) {
+          stderr.writeln('Error creating default collection $type: $e');
+        }
+      }
+    }
+  }
+
   /// Sanitize callsign for use as folder name
   String _sanitizeCallsign(String callsign) {
     // Keep only alphanumeric, underscore, and dash characters

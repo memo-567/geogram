@@ -82,7 +82,8 @@ class ConsoleService {
         if (await mountsFile.exists()) {
           final mountsContent = await mountsFile.readAsString();
           final mountsJson = jsonDecode(mountsContent) as Map<String, dynamic>;
-          final mounts = (mountsJson['mounts'] as List<dynamic>?)
+          final mounts =
+              (mountsJson['mounts'] as List<dynamic>?)
                   ?.map((m) => ConsoleMount.fromJson(m as Map<String, dynamic>))
                   .toList() ??
               [];
@@ -153,19 +154,26 @@ class ConsoleService {
           continue;
         }
         if (trimmed.startsWith('MEMORY:')) {
-          memory = int.tryParse(trimmed.substring('MEMORY:'.length).trim()) ?? 128;
+          memory =
+              int.tryParse(trimmed.substring('MEMORY:'.length).trim()) ?? 128;
           continue;
         }
         if (trimmed.startsWith('NETWORK:')) {
-          networkEnabled = trimmed.substring('NETWORK:'.length).trim().toLowerCase() == 'enabled';
+          networkEnabled =
+              trimmed.substring('NETWORK:'.length).trim().toLowerCase() ==
+              'enabled';
           continue;
         }
         if (trimmed.startsWith('KEEP_RUNNING:')) {
-          keepRunning = trimmed.substring('KEEP_RUNNING:'.length).trim().toLowerCase() == 'true';
+          keepRunning =
+              trimmed.substring('KEEP_RUNNING:'.length).trim().toLowerCase() ==
+              'true';
           continue;
         }
         if (trimmed.startsWith('STATUS:')) {
-          state = ConsoleSession.parseState(trimmed.substring('STATUS:'.length).trim());
+          state = ConsoleSession.parseState(
+            trimmed.substring('STATUS:'.length).trim(),
+          );
           continue;
         }
 
@@ -219,7 +227,7 @@ class ConsoleService {
     required String name,
     String vmType = 'alpine-x86',
     int memory = 128,
-    bool networkEnabled = true,
+    bool networkEnabled = false,
     bool keepRunning = false,
     String? description,
     List<ConsoleMount> mounts = const [],
@@ -325,7 +333,10 @@ class ConsoleService {
   }
 
   /// Update session state
-  Future<void> updateSessionState(String sessionId, ConsoleSessionState state) async {
+  Future<void> updateSessionState(
+    String sessionId,
+    ConsoleSessionState state,
+  ) async {
     final session = getSession(sessionId);
     if (session == null) return;
 

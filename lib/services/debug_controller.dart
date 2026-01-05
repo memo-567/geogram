@@ -4,9 +4,15 @@
  */
 
 import 'dart:async';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import '../models/collection.dart';
 import 'chat_service.dart';
+import 'collection_service.dart';
+import 'console_vm_manager.dart';
 import 'devices_service.dart';
+import 'log_service.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -111,6 +117,9 @@ enum DebugAction {
 
   /// Open DM conversation with a specific device
   openDM,
+
+  /// Open Console collection and auto-launch first session (debug API)
+  openConsole,
 }
 
 /// Toast message to be displayed
@@ -131,10 +140,8 @@ class DebugActionEvent {
   final Map<String, dynamic> params;
   final DateTime timestamp;
 
-  DebugActionEvent({
-    required this.action,
-    this.params = const {},
-  }) : timestamp = DateTime.now();
+  DebugActionEvent({required this.action, this.params = const {}})
+    : timestamp = DateTime.now();
 
   @override
   String toString() => 'DebugActionEvent($action, $params)';
@@ -209,7 +216,8 @@ class DebugController {
   final ValueNotifier<int?> panelNotifier = ValueNotifier<int?>(null);
 
   /// Notifier for toast messages (listened by HomePage)
-  final ValueNotifier<ToastMessage?> toastNotifier = ValueNotifier<ToastMessage?>(null);
+  final ValueNotifier<ToastMessage?> toastNotifier =
+      ValueNotifier<ToastMessage?>(null);
 
   /// History of executed actions (for debugging)
   final List<DebugActionEvent> _actionHistory = [];
@@ -217,10 +225,7 @@ class DebugController {
 
   /// Trigger a debug action
   void triggerAction(DebugAction action, {Map<String, dynamic>? params}) {
-    final event = DebugActionEvent(
-      action: action,
-      params: params ?? {},
-    );
+    final event = DebugActionEvent(action: action, params: params ?? {});
     _actionHistory.add(event);
 
     // Keep only last 100 actions
@@ -269,29 +274,19 @@ class DebugController {
 
   /// Trigger BLE advertising
   void triggerBLEAdvertise({String? callsign}) {
-    triggerAction(
-      DebugAction.bleAdvertise,
-      params: {'callsign': callsign},
-    );
+    triggerAction(DebugAction.bleAdvertise, params: {'callsign': callsign});
   }
 
   /// Trigger BLE HELLO handshake with a device
   void triggerBLEHello({String? deviceId}) {
-    triggerAction(
-      DebugAction.bleHello,
-      params: {'device_id': deviceId},
-    );
+    triggerAction(DebugAction.bleHello, params: {'device_id': deviceId});
   }
 
   /// Trigger BLE data send to a device
   void triggerBLESend({String? deviceId, String? data, int? size}) {
     triggerAction(
       DebugAction.bleSend,
-      params: {
-        'device_id': deviceId,
-        'data': data,
-        'size': size,
-      },
+      params: {'device_id': deviceId, 'data': data, 'size': size},
     );
   }
 
@@ -316,10 +311,7 @@ class DebugController {
 
   /// Trigger station connection
   void triggerConnectStation({String? stationUrl}) {
-    triggerAction(
-      DebugAction.connectStation,
-      params: {'url': stationUrl},
-    );
+    triggerAction(DebugAction.connectStation, params: {'url': stationUrl});
   }
 
   /// Trigger station disconnection
@@ -353,10 +345,7 @@ class DebugController {
 
   /// Trigger voice recording start
   void triggerVoiceRecord({String? outputDir}) {
-    triggerAction(
-      DebugAction.voiceRecord,
-      params: {'output_dir': outputDir},
-    );
+    triggerAction(DebugAction.voiceRecord, params: {'output_dir': outputDir});
   }
 
   /// Trigger voice recording stop
@@ -381,10 +370,10 @@ class DebugController {
 
   /// Trigger sending a chat message with optional image
   void triggerSendChatMessage({String? content, String? imagePath}) {
-    triggerAction(DebugAction.sendChatMessage, params: {
-      'content': content ?? '',
-      'image_path': imagePath,
-    });
+    triggerAction(
+      DebugAction.sendChatMessage,
+      params: {'content': content ?? '', 'image_path': imagePath},
+    );
   }
 
   /// Trigger sending a file in a direct message
@@ -397,10 +386,12 @@ class DebugController {
 
   /// Trigger opening DM conversation with a device
   void triggerOpenDM({required String callsign}) {
-    triggerAction(
-      DebugAction.openDM,
-      params: {'callsign': callsign},
-    );
+    triggerAction(DebugAction.openDM, params: {'callsign': callsign});
+  }
+
+  /// Trigger opening the Console collection (for debug API automation)
+  void triggerOpenConsole({String? sessionId}) {
+    triggerAction(DebugAction.openConsole, params: {'session_id': sessionId});
   }
 
   /// Get available actions for API response
@@ -429,15 +420,14 @@ class DebugController {
       {
         'action': 'ble_advertise',
         'description': 'Start BLE advertising',
-        'params': {
-          'callsign': '(optional) Callsign to advertise',
-        },
+        'params': {'callsign': '(optional) Callsign to advertise'},
       },
       {
         'action': 'ble_hello',
         'description': 'Send HELLO handshake to a BLE device',
         'params': {
-          'device_id': '(optional) BLE device ID to connect to, or first discovered device',
+          'device_id':
+              '(optional) BLE device ID to connect to, or first discovered device',
         },
       },
       {
@@ -467,9 +457,7 @@ class DebugController {
       {
         'action': 'connect_station',
         'description': 'Connect to a station',
-        'params': {
-          'url': '(optional) Station WebSocket URL',
-        },
+        'params': {'url': '(optional) Station WebSocket URL'},
       },
       {
         'action': 'disconnect_station',
@@ -514,7 +502,8 @@ class DebugController {
         'action': 'voice_record',
         'description': 'Start voice recording (for testing)',
         'params': {
-          'duration': '(optional) Max recording duration in seconds (default: 5)',
+          'duration':
+              '(optional) Max recording duration in seconds (default: 5)',
         },
       },
       {
@@ -533,7 +522,8 @@ class DebugController {
         'params': {
           'enabled': '(optional) true/false (default: true)',
           'max_storage_gb': '(optional) Max total storage in GB (default: 10)',
-          'max_client_storage_gb': '(optional) Max per-client storage in GB (default: 1)',
+          'max_client_storage_gb':
+              '(optional) Max per-client storage in GB (default: 1)',
           'max_snapshots': '(optional) Max snapshots per client (default: 10)',
         },
       },
@@ -566,9 +556,7 @@ class DebugController {
       {
         'action': 'backup_start',
         'description': 'Start backup to a provider',
-        'params': {
-          'provider_callsign': 'Provider callsign (required)',
-        },
+        'params': {'provider_callsign': 'Provider callsign (required)'},
       },
       {
         'action': 'backup_status',
@@ -586,9 +574,7 @@ class DebugController {
       {
         'action': 'backup_list_snapshots',
         'description': 'List available snapshots from a provider',
-        'params': {
-          'provider_callsign': 'Provider callsign (required)',
-        },
+        'params': {'provider_callsign': 'Provider callsign (required)'},
       },
       {
         'action': 'place_like',
@@ -596,7 +582,8 @@ class DebugController {
         'params': {
           'place_id': 'Place folder name (required)',
           'callsign': '(optional) Place owner callsign for local cache update',
-          'place_path': '(optional) Absolute path to place folder for local cache update',
+          'place_path':
+              '(optional) Absolute path to place folder for local cache update',
         },
       },
       {
@@ -608,24 +595,26 @@ class DebugController {
           'author': '(optional) Comment author callsign',
           'npub': '(optional) Comment author npub',
           'callsign': '(optional) Place owner callsign for local cache update',
-          'place_path': '(optional) Absolute path to place folder for local cache update',
+          'place_path':
+              '(optional) Absolute path to place folder for local cache update',
         },
       },
       {
         'action': 'open_station_chat',
-        'description': 'Open chat app and first chat room of the connected station',
+        'description':
+            'Open chat app and first chat room of the connected station',
         'params': {},
       },
       {
         'action': 'select_chat_room',
-        'description': 'Select a chat room by ID in the currently open chat browser',
-        'params': {
-          'room_id': 'Room ID to select (e.g., "general")',
-        },
+        'description':
+            'Select a chat room by ID in the currently open chat browser',
+        'params': {'room_id': 'Room ID to select (e.g., "general")'},
       },
       {
         'action': 'send_chat_message',
-        'description': 'Send a message with optional image to the selected chat room',
+        'description':
+            'Send a message with optional image to the selected chat room',
         'params': {
           'content': '(optional) Message text',
           'image_path': '(optional) Path to image file to attach',
@@ -642,16 +631,31 @@ class DebugController {
       {
         'action': 'open_dm',
         'description': 'Open direct message conversation with a device',
+        'params': {'callsign': 'Target device callsign (required)'},
+      },
+      {
+        'action': 'open_console',
+        'description':
+            'Open the Console collection and auto-launch the first session',
         'params': {
-          'callsign': 'Target device callsign (required)',
+          'session_id':
+              '(optional) Session ID to focus (default: first session)',
         },
+      },
+      {
+        'action': 'console_status',
+        'description': 'Get Console VM status (files present, log tail)',
+        'params': {},
       },
     ];
   }
 
   /// Parse and execute action from API request
   /// Returns result map with success status and message
-  Future<Map<String, dynamic>> executeAction(String action, Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> executeAction(
+    String action,
+    Map<String, dynamic> params,
+  ) async {
     switch (action.toLowerCase()) {
       case 'navigate':
         final panel = params['panel'] as String?;
@@ -782,16 +786,10 @@ class DebugController {
       case 'select_chat_room':
         final roomId = params['room_id'] as String?;
         if (roomId == null || roomId.isEmpty) {
-          return {
-            'success': false,
-            'error': 'Missing room_id parameter',
-          };
+          return {'success': false, 'error': 'Missing room_id parameter'};
         }
         triggerSelectChatRoom(roomId);
-        return {
-          'success': true,
-          'message': 'Selecting chat room: $roomId',
-        };
+        return {'success': true, 'message': 'Selecting chat room: $roomId'};
 
       case 'send_chat_message':
         final content = params['content'] as String? ?? '';
@@ -805,7 +803,8 @@ class DebugController {
         triggerSendChatMessage(content: content, imagePath: imagePath);
         return {
           'success': true,
-          'message': 'Sending chat message${imagePath != null ? " with image" : ""}',
+          'message':
+              'Sending chat message${imagePath != null ? " with image" : ""}',
         };
 
       case 'send_dm_file':
@@ -837,11 +836,68 @@ class DebugController {
           'callsign': callsign,
         };
 
+      case 'open_console':
+        // Navigate to Collections panel and broadcast console open
+        navigateToPanel(PanelIndex.collections);
+        triggerOpenConsole(sessionId: params['session_id'] as String?);
+        return {'success': true, 'message': 'Console open triggered'};
+
+      case 'console_status':
+        final vmManager = ConsoleVmManager();
+        await vmManager.initialize();
+        final vmPath = await vmManager.vmPath;
+        final Map<String, bool> files = {};
+        for (final f in ConsoleVmManager.requiredFiles) {
+          files[f] = await File(vmManager.getVmFilePath(f)).exists();
+        }
+        files['alpine-x86-rootfs.cpio.gz'] = await File(
+          vmManager.getVmFilePath('alpine-x86-rootfs.cpio.gz'),
+        ).exists();
+
+        final rootfsExtracted = await File(
+          p.join(vmPath, '.rootfs_extracted'),
+        ).exists();
+
+        // Tail console-related logs (last 50 containing "Console")
+        final logs = LogService().messages
+            .where((m) => m.contains('Console'))
+            .toList();
+        final logTail = logs.length > 50
+            ? logs.sublist(logs.length - 50)
+            : logs;
+
+        // Find console collection if available
+        Collection? consoleCollection;
+        try {
+          final collections = await CollectionService().loadCollections();
+          consoleCollection = collections.firstWhere(
+            (c) => c.type == 'console',
+            orElse: () => throw StateError('missing'),
+          );
+        } catch (_) {}
+
+        return {
+          'success': true,
+          'vm_path': vmPath,
+          'files': files,
+          'rootfs_extracted': rootfsExtracted,
+          'console_collection': consoleCollection != null
+              ? {
+                  'id': consoleCollection.id,
+                  'title': consoleCollection.title,
+                  'path': consoleCollection.storagePath,
+                }
+              : null,
+          'log_tail': logTail,
+        };
+
       default:
         return {
           'success': false,
           'error': 'Unknown action: $action',
-          'available_actions': getAvailableActions().map((a) => a['action']).toList(),
+          'available_actions': getAvailableActions()
+              .map((a) => a['action'])
+              .toList(),
         };
     }
   }

@@ -164,6 +164,34 @@ else()
   message(STATUS "TinyEMU not found for ${TINYEMU_ARCH} at ${TINYEMU_BIN} - Console VM will require system QEMU")
 endif()
 
+# Bundle ONNX Runtime versioned libraries
+# The flutter_onnxruntime plugin only bundles the symlink, but we need the actual versioned .so files
+set(ONNXRUNTIME_VERSION "1.22.0")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(ONNXRUNTIME_ARCH "aarch64")
+else()
+  set(ONNXRUNTIME_ARCH "x64")
+endif()
+
+set(ONNXRUNTIME_LIB_DIR "${PROJECT_BINARY_DIR}/plugins/flutter_onnxruntime/onnxruntime/onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}/lib")
+set(ONNXRUNTIME_VERSIONED_LIB "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.${ONNXRUNTIME_VERSION}")
+
+if(EXISTS ${ONNXRUNTIME_VERSIONED_LIB})
+  # Install the actual versioned library
+  install(FILES "${ONNXRUNTIME_VERSIONED_LIB}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  # Create the .so.1 symlink that the runtime expects
+  install(CODE "
+    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+      libonnxruntime.so.${ONNXRUNTIME_VERSION}
+      \${CMAKE_INSTALL_PREFIX}/lib/libonnxruntime.so.1)
+  " COMPONENT Runtime)
+  message(STATUS "Bundling ONNX Runtime ${ONNXRUNTIME_VERSION} for ${ONNXRUNTIME_ARCH}")
+else()
+  message(STATUS "ONNX Runtime versioned library not found at ${ONNXRUNTIME_VERSIONED_LIB}")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

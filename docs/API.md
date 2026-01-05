@@ -1897,8 +1897,54 @@ Triggers a debug action.
 | `station_connect` | Connect to preferred station | `url` (optional): Station WebSocket URL |
 | `station_status` | Get station connection status | None |
 | `station_send_chat` | Send a message to a station room (bypasses UI) | `room` (optional): Room ID (default: "general"), `content` (optional): Message text, `image_path` (optional): Absolute path to image file |
+| `open_console` | Open the Console collection and auto-launch the first session | `session_id` (optional): Session ID to focus (default: first session) |
+| `console_status` | Report Console VM status (files present, rootfs extraction marker, recent logs) | None |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
+
+**Console automation examples:**
+
+- Launch the console UI (navigates to Collections, opens Console, auto-starts first session):
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"open_console"}'
+```
+
+- Poll console status (checks VM files, rootfs marker, and recent console logs):
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"console_status"}'
+```
+
+Sample `console_status` response:
+```json
+{
+  "success": true,
+  "vm_path": "/home/user/.geogram/console/vm",
+  "files": {
+    "jslinux.js": true,
+    "term.js": true,
+    "x86emu-wasm.js": true,
+    "x86emu-wasm.wasm": true,
+    "kernel-x86.bin": true,
+    "alpine-x86.cfg": true,
+    "alpine-x86-rootfs.tar.gz": true,
+    "alpine-x86-rootfs.cpio.gz": false
+  },
+  "rootfs_extracted": false,
+  "console_collection": {
+    "id": "console",
+    "title": "Console",
+    "path": "/home/user/.geogram/collections/console"
+  },
+  "log_tail": [
+    "Console: Initialized",
+    "ConsoleVmManager: Rootfs extracted to /home/user/.geogram/console/vm/rootfs"
+  ]
+}
+```
 
 **Response - Success (200 OK):**
 ```json

@@ -430,10 +430,26 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             onPressed: _createNewContact,
             tooltip: _i18n.t('new_contact'),
           ),
-          IconButton(
-            icon: const Icon(Icons.create_new_folder),
-            onPressed: _createNewGroup,
-            tooltip: _i18n.t('new_group'),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            tooltip: _i18n.t('menu'),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'create_group',
+                child: Row(
+                  children: [
+                    const Icon(Icons.create_new_folder),
+                    const SizedBox(width: 12),
+                    Text(_i18n.t('create_group')),
+                  ],
+                ),
+              ),
+            ],
+            onSelected: (value) {
+              if (value == 'create_group') {
+                _createNewGroup();
+              }
+            },
           ),
         ],
       ),

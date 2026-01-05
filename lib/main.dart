@@ -5,7 +5,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:window_manager/window_manager.dart' if (dart.library.html) 'platform/window_manager_stub.dart';
+import 'package:window_manager/window_manager.dart'
+    if (dart.library.html) 'platform/window_manager_stub.dart';
 import 'services/log_service.dart';
 import 'services/log_api_service.dart';
 import 'version.dart';
@@ -91,7 +92,11 @@ void main() async {
     List<String> allArgs = [];
     try {
       final cmdline = File('/proc/self/cmdline').readAsStringSync();
-      allArgs = cmdline.split('\x00').where((s) => s.isNotEmpty).skip(1).toList();
+      allArgs = cmdline
+          .split('\x00')
+          .where((s) => s.isNotEmpty)
+          .skip(1)
+          .toList();
     } catch (e) {
       // Fallback to executableArguments (may be empty for desktop)
       allArgs = Platform.executableArguments;
@@ -147,7 +152,9 @@ void main() async {
 
   // Log command line configuration
   if (!kIsWeb && AppArgs().isInitialized) {
-    LogService().log('CLI args: port=${AppArgs().port}, dataDir=${AppArgs().dataDir ?? "default"}');
+    LogService().log(
+      'CLI args: port=${AppArgs().port}, dataDir=${AppArgs().dataDir ?? "default"}',
+    );
   }
 
   try {
@@ -166,8 +173,12 @@ void main() async {
 
     // Initialize config and i18n in parallel (both are independent)
     await Future.wait([
-      ConfigService().init().then((_) => LogService().log('ConfigService initialized')),
-      I18nService().init().then((_) => LogService().log('I18nService initialized')),
+      ConfigService().init().then(
+        (_) => LogService().log('ConfigService initialized'),
+      ),
+      I18nService().init().then(
+        (_) => LogService().log('I18nService initialized'),
+      ),
     ]);
 
     // Restore window position and size on desktop platforms
@@ -175,7 +186,9 @@ void main() async {
       try {
         final windowStateService = WindowStateService();
         final savedState = await windowStateService.getSavedState();
-        final validatedState = await windowStateService.validateState(savedState);
+        final validatedState = await windowStateService.validateState(
+          savedState,
+        );
 
         final windowOptions = WindowOptions(
           size: validatedState.size,
@@ -208,21 +221,23 @@ void main() async {
           // Start listening for window changes to persist state
           await windowStateService.startListening();
         });
-        LogService().log('Window state restored: ${validatedState.size.width}x${validatedState.size.height}, maximized=${validatedState.isMaximized}');
+        LogService().log(
+          'Window state restored: ${validatedState.size.width}x${validatedState.size.height}, maximized=${validatedState.isMaximized}',
+        );
       } catch (e) {
         // Fallback: show window with defaults if restoration fails
         LogService().log('Window state restoration failed: $e');
         try {
-          await windowManager.waitUntilReadyToShow(const WindowOptions(
-            size: Size(1200, 800),
-            center: true,
-          ), () async {
-            // Set size constraints even in fallback mode
-            await windowManager.setMinimumSize(const Size(800, 600));
-            await windowManager.setMaximumSize(const Size(3840, 2160));
-            await windowManager.show();
-            await windowManager.focus();
-          });
+          await windowManager.waitUntilReadyToShow(
+            const WindowOptions(size: Size(1200, 800), center: true),
+            () async {
+              // Set size constraints even in fallback mode
+              await windowManager.setMinimumSize(const Size(800, 600));
+              await windowManager.setMaximumSize(const Size(3840, 2160));
+              await windowManager.show();
+              await windowManager.focus();
+            },
+          );
         } catch (_) {}
       }
     }
@@ -247,6 +262,10 @@ void main() async {
     await CollectionService().setActiveCallsign(profile.callsign);
     LogService().log('CollectionService callsign set: ${profile.callsign}');
 
+    // Ensure default collections exist for this profile
+    await CollectionService().ensureDefaultCollections();
+    LogService().log('Default collections ensured');
+
     // Initialize notification service (needed for UI badges)
     await NotificationService().initialize();
     LogService().log('NotificationService initialized');
@@ -259,18 +278,28 @@ void main() async {
     // Skip permission request on first launch - onboarding will handle it
     bool firstLaunch = false;
     if (!kIsWeb && Platform.isAndroid) {
-      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
+      final firstLaunchComplete = ConfigService().getNestedValue(
+        'firstLaunchComplete',
+        false,
+      );
       firstLaunch = firstLaunchComplete != true;
     }
-    await DMNotificationService().initialize(skipPermissionRequest: firstLaunch);
-    LogService().log('DMNotificationService initialized (skipPermission: $firstLaunch)');
+    await DMNotificationService().initialize(
+      skipPermissionRequest: firstLaunch,
+    );
+    LogService().log(
+      'DMNotificationService initialized (skipPermission: $firstLaunch)',
+    );
 
-    await BackupNotificationService().initialize(skipPermissionRequest: firstLaunch);
-    LogService().log('BackupNotificationService initialized (skipPermission: $firstLaunch)');
+    await BackupNotificationService().initialize(
+      skipPermissionRequest: firstLaunch,
+    );
+    LogService().log(
+      'BackupNotificationService initialized (skipPermission: $firstLaunch)',
+    );
 
     await MessageAttentionService().initialize();
     LogService().log('MessageAttentionService initialized');
-
   } catch (e, stackTrace) {
     LogService().log('ERROR during critical initialization: $e');
     LogService().log('Stack trace: $stackTrace');
@@ -305,7 +334,9 @@ void main() async {
       connectionManager.registerTransport(BluetoothClassicTransport());
       connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
-      LogService().log('ConnectionManager initialized with LAN + WebRTC + Station + BT Classic + BLE transports (deferred)');
+      LogService().log(
+        'ConnectionManager initialized with LAN + WebRTC + Station + BT Classic + BLE transports (deferred)',
+      );
 
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();
@@ -329,43 +360,62 @@ void main() async {
       // Only start if HTTP API is enabled in security settings or via CLI
       if (SecurityService().httpApiEnabled) {
         await LogApiService().start();
-        LogService().log('Peer discovery API started on port ${LogApiService().port} (deferred)');
+        LogService().log(
+          'Peer discovery API started on port ${LogApiService().port} (deferred)',
+        );
       } else {
         LogService().log('Peer discovery API disabled by security settings');
       }
 
       // Check if first launch is complete (user has seen onboarding screen)
-      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
+      final firstLaunchComplete =
+          ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
 
       // For first-time users on Android, skip BLE initialization here
       // The onboarding screen will request permissions and then reinitialize BLE
       if (!kIsWeb && Platform.isAndroid && !firstLaunchComplete) {
-        LogService().log('DevicesService: Skipping BLE init for first launch - onboarding will handle permissions');
+        LogService().log(
+          'DevicesService: Skipping BLE init for first launch - onboarding will handle permissions',
+        );
         // Initialize DevicesService but skip BLE on first launch
         await DevicesService().initialize(skipBLE: true);
-        LogService().log('DevicesService initialized (deferred, BLE skipped for onboarding)');
+        LogService().log(
+          'DevicesService initialized (deferred, BLE skipped for onboarding)',
+        );
       } else {
         // For returning users on Android, check permissions without requesting
         // Skip BLE permissions in internet-only mode
-        if (!kIsWeb && Platform.isAndroid && firstLaunchComplete && !AppArgs().internetOnly) {
-          LogService().log('Checking BLE permissions on Android (returning user)...');
+        if (!kIsWeb &&
+            Platform.isAndroid &&
+            firstLaunchComplete &&
+            !AppArgs().internetOnly) {
+          LogService().log(
+            'Checking BLE permissions on Android (returning user)...',
+          );
 
           // Check permissions using permission_handler directly (doesn't trigger Bluetooth initialization)
           final scanStatus = await Permission.bluetoothScan.status;
           final connectStatus = await Permission.bluetoothConnect.status;
           final advertiseStatus = await Permission.bluetoothAdvertise.status;
 
-          final hasAllPermissions = scanStatus.isGranted &&
-                                   connectStatus.isGranted &&
-                                   advertiseStatus.isGranted;
+          final hasAllPermissions =
+              scanStatus.isGranted &&
+              connectStatus.isGranted &&
+              advertiseStatus.isGranted;
 
-          LogService().log('BLE permissions check: hasAllPermissions=$hasAllPermissions');
+          LogService().log(
+            'BLE permissions check: hasAllPermissions=$hasAllPermissions',
+          );
 
           if (!hasAllPermissions) {
-            LogService().log('BLE permissions not granted - skipping BLE initialization (user can enable in settings)');
+            LogService().log(
+              'BLE permissions not granted - skipping BLE initialization (user can enable in settings)',
+            );
             // Initialize DevicesService but skip BLE
             await DevicesService().initialize(skipBLE: true);
-            LogService().log('DevicesService initialized (deferred, BLE skipped - permissions not granted)');
+            LogService().log(
+              'DevicesService initialized (deferred, BLE skipped - permissions not granted)',
+            );
           } else {
             // Initialize DevicesService with BLE for returning users with permissions
             await DevicesService().initialize();
@@ -387,11 +437,16 @@ void main() async {
       LogService().log('BackupService initialized');
 
       // Ensure chat rooms exist for all device folders with chat enabled
-      GroupSyncService().ensureFolderChatRooms().then((_) {
-        LogService().log('GroupSyncService: Folder chat rooms verified');
-      }).catchError((e) {
-        LogService().log('GroupSyncService: Error verifying chat rooms: $e');
-      });
+      GroupSyncService()
+          .ensureFolderChatRooms()
+          .then((_) {
+            LogService().log('GroupSyncService: Folder chat rooms verified');
+          })
+          .catchError((e) {
+            LogService().log(
+              'GroupSyncService: Error verifying chat rooms: $e',
+            );
+          });
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
@@ -490,7 +545,9 @@ class _HomePageState extends State<HomePage> {
     // Listen for debug toast requests
     _debugController.toastNotifier.addListener(_onDebugToast);
     // Listen for debug action events (for station chat navigation)
-    _debugActionSubscription = _debugController.actionStream.listen(_onDebugAction);
+    _debugActionSubscription = _debugController.actionStream.listen(
+      _onDebugAction,
+    );
     // Listen for navigate to home events (e.g., from Settings back button)
     _navigateHomeSubscription = EventBus().on<NavigateToHomeEvent>((_) {
       if (mounted && _selectedIndex != 0) {
@@ -500,7 +557,9 @@ class _HomePageState extends State<HomePage> {
 
     // Subscribe to DM unread count changes
     _unreadDmCount = DirectMessageService().totalUnreadCount;
-    _unreadSubscription = DirectMessageService().unreadCountsStream.listen((counts) {
+    _unreadSubscription = DirectMessageService().unreadCountsStream.listen((
+      counts,
+    ) {
       final total = counts.values.fold(0, (sum, count) => sum + count);
       if (total != _unreadDmCount && mounted) {
         setState(() {
@@ -677,18 +736,24 @@ class _HomePageState extends State<HomePage> {
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
     // Hidden: transfer (not ready)
-    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory', 'backup'];
+    final defaultTypes = [
+      'chat',
+      'blog',
+      'alerts',
+      'places',
+      'inventory',
+      'backup',
+    ];
 
-    LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
+    LogService().log(
+      'Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}',
+    );
 
     for (final type in defaultTypes) {
       try {
         final title = _i18n.t('collection_type_$type');
         LogService().log('Creating default collection: $type (title: $title)');
-        await collectionService.createCollection(
-          title: title,
-          type: type,
-        );
+        await collectionService.createCollection(title: title, type: type);
         LogService().log('Created default collection: $type');
       } catch (e, stackTrace) {
         // Collection might already exist, skip
@@ -704,7 +769,8 @@ class _HomePageState extends State<HomePage> {
   /// Runs in background, doesn't block UI. Uses station if available, falls back to direct internet.
   void _preDownloadOfflineMaps() async {
     // Check if already pre-downloaded
-    final hasPreDownloaded = ConfigService().get('offlineMapPreDownloaded') == true;
+    final hasPreDownloaded =
+        ConfigService().get('offlineMapPreDownloaded') == true;
     if (hasPreDownloaded) return;
 
     final locationService = UserLocationService();
@@ -738,7 +804,9 @@ class _HomePageState extends State<HomePage> {
 
       // Mark as done
       ConfigService().set('offlineMapPreDownloaded', true);
-      LogService().log('First-launch map download: Complete ($downloaded tiles)');
+      LogService().log(
+        'First-launch map download: Complete ($downloaded tiles)',
+      );
     } catch (e) {
       LogService().log('First-launch map download: Error: $e');
     }
@@ -786,10 +854,13 @@ class _HomePageState extends State<HomePage> {
                             ),
                             Text(
                               profile.callsign,
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
                             ),
                           ],
                         ),
@@ -849,7 +920,8 @@ class _HomePageState extends State<HomePage> {
     }
 
     // Don't show banner during onboarding - let user complete initial setup first
-    final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
+    final firstLaunchComplete =
+        ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
     if (!firstLaunchComplete) {
       return;
     }
@@ -871,7 +943,10 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 4),
             Text(
-              _i18n.t('update_available_version', params: [latestRelease.version]),
+              _i18n.t(
+                'update_available_version',
+                params: [latestRelease.version],
+              ),
             ),
           ],
         ),
@@ -933,134 +1008,147 @@ class _HomePageState extends State<HomePage> {
       },
       child: Scaffold(
         // Show AppBar only on Apps panel (index 0) for full-screen Map/Devices
-        appBar: _selectedIndex == 0 ? AppBar(
-          automaticallyImplyLeading: false,
-          title: const ProfileSwitcher(),
-          actions: [
-            // Show station indicator if current profile is a station
-            if (_profileService.getProfile().isRelay)
-              IconButton(
-                icon: const Icon(Icons.cell_tower),
-                tooltip: _i18n.t('station_dashboard'),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const StationDashboardPage(),
+        appBar: _selectedIndex == 0
+            ? AppBar(
+                automaticallyImplyLeading: false,
+                title: const ProfileSwitcher(),
+                actions: [
+                  // Show station indicator if current profile is a station
+                  if (_profileService.getProfile().isRelay)
+                    IconButton(
+                      icon: const Icon(Icons.cell_tower),
+                      tooltip: _i18n.t('station_dashboard'),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const StationDashboardPage(),
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
+                  // Settings icon
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: _i18n.t('settings'),
+                    onPressed: () {
+                      setState(() {
+                        _selectedIndex = 3; // Navigate to Settings
+                      });
+                    },
+                  ),
+                ],
+              )
+            : null,
+        drawer: NavigationDrawer(
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: (int index) {
+            setState(() {
+              _selectedIndex = index;
+            });
+            Navigator.pop(context);
+          },
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              child: Text(
+                _i18n.t('navigation'),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            // Settings icon
-            IconButton(
+            ),
+            NavigationDrawerDestination(
+              icon: const Icon(Icons.apps_outlined),
+              selectedIcon: const Icon(Icons.apps),
+              label: Text(_i18n.t('apps')),
+            ),
+            NavigationDrawerDestination(
+              icon: const Icon(Icons.map_outlined),
+              selectedIcon: const Icon(Icons.map),
+              label: Text(_i18n.t('map')),
+            ),
+            NavigationDrawerDestination(
+              icon: Badge(
+                isLabelVisible: _unreadDmCount > 0,
+                label: Text(
+                  _unreadDmCount > 99 ? '99+' : _unreadDmCount.toString(),
+                ),
+                child: const Icon(Icons.devices_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _unreadDmCount > 0,
+                label: Text(
+                  _unreadDmCount > 99 ? '99+' : _unreadDmCount.toString(),
+                ),
+                child: const Icon(Icons.devices),
+              ),
+              label: Text(_i18n.t('devices')),
+            ),
+            // NavigationDrawerDestination for Bot - Hidden: not ready
+            // NavigationDrawerDestination(
+            //   icon: const Icon(Icons.smart_toy_outlined),
+            //   selectedIcon: const Icon(Icons.smart_toy),
+            //   label: Text(_i18n.t('bot')),
+            // ),
+            const Divider(),
+            NavigationDrawerDestination(
               icon: const Icon(Icons.settings_outlined),
-              tooltip: _i18n.t('settings'),
-              onPressed: () {
-                setState(() {
-                  _selectedIndex = 3; // Navigate to Settings
-                });
-              },
+              selectedIcon: const Icon(Icons.settings),
+              label: Text(_i18n.t('settings')),
+            ),
+            NavigationDrawerDestination(
+              icon: const Icon(Icons.article_outlined),
+              selectedIcon: const Icon(Icons.article),
+              label: Text(_i18n.t('log')),
             ),
           ],
-        ) : null,
-      drawer: NavigationDrawer(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (int index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-          Navigator.pop(context);
-        },
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            child: Text(
-              _i18n.t('navigation'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        body: _pages[_selectedIndex],
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
+          onDestinationSelected: (int index) {
+            setState(() {
+              _selectedIndex = index;
+            });
+          },
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.apps_outlined),
+              selectedIcon: const Icon(Icons.apps),
+              label: _i18n.t('apps'),
             ),
-          ),
-          NavigationDrawerDestination(
-            icon: const Icon(Icons.apps_outlined),
-            selectedIcon: const Icon(Icons.apps),
-            label: Text(_i18n.t('apps')),
-          ),
-          NavigationDrawerDestination(
-            icon: const Icon(Icons.map_outlined),
-            selectedIcon: const Icon(Icons.map),
-            label: Text(_i18n.t('map')),
-          ),
-          NavigationDrawerDestination(
-            icon: Badge(
-              isLabelVisible: _unreadDmCount > 0,
-              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
-              child: const Icon(Icons.devices_outlined),
+            NavigationDestination(
+              icon: const Icon(Icons.map_outlined),
+              selectedIcon: const Icon(Icons.map),
+              label: _i18n.t('map'),
             ),
-            selectedIcon: Badge(
-              isLabelVisible: _unreadDmCount > 0,
-              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
-              child: const Icon(Icons.devices),
+            NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _unreadDmCount > 0,
+                label: Text(
+                  _unreadDmCount > 99 ? '99+' : _unreadDmCount.toString(),
+                ),
+                child: const Icon(Icons.devices_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _unreadDmCount > 0,
+                label: Text(
+                  _unreadDmCount > 99 ? '99+' : _unreadDmCount.toString(),
+                ),
+                child: const Icon(Icons.devices),
+              ),
+              label: _i18n.t('devices'),
             ),
-            label: Text(_i18n.t('devices')),
-          ),
-          // NavigationDrawerDestination for Bot - Hidden: not ready
-          // NavigationDrawerDestination(
-          //   icon: const Icon(Icons.smart_toy_outlined),
-          //   selectedIcon: const Icon(Icons.smart_toy),
-          //   label: Text(_i18n.t('bot')),
-          // ),
-          const Divider(),
-          NavigationDrawerDestination(
-            icon: const Icon(Icons.settings_outlined),
-            selectedIcon: const Icon(Icons.settings),
-            label: Text(_i18n.t('settings')),
-          ),
-          NavigationDrawerDestination(
-            icon: const Icon(Icons.article_outlined),
-            selectedIcon: const Icon(Icons.article),
-            label: Text(_i18n.t('log')),
-          ),
-        ],
-      ),
-      body: _pages[_selectedIndex],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex < 3 ? _selectedIndex : 0,
-        onDestinationSelected: (int index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.apps_outlined),
-            selectedIcon: const Icon(Icons.apps),
-            label: _i18n.t('apps'),
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.map_outlined),
-            selectedIcon: const Icon(Icons.map),
-            label: _i18n.t('map'),
-          ),
-          NavigationDestination(
-            icon: Badge(
-              isLabelVisible: _unreadDmCount > 0,
-              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
-              child: const Icon(Icons.devices_outlined),
-            ),
-            selectedIcon: Badge(
-              isLabelVisible: _unreadDmCount > 0,
-              label: Text(_unreadDmCount > 99 ? '99+' : _unreadDmCount.toString()),
-              child: const Icon(Icons.devices),
-            ),
-            label: _i18n.t('devices'),
-          ),
-          // NavigationDestination for Bot - Hidden: not ready
-          // NavigationDestination(
-          //   icon: const Icon(Icons.smart_toy_outlined),
-          //   selectedIcon: const Icon(Icons.smart_toy),
-          //   label: _i18n.t('bot'),
-          // ),
-        ],
-      ),
+            // NavigationDestination for Bot - Hidden: not ready
+            // NavigationDestination(
+            //   icon: const Icon(Icons.smart_toy_outlined),
+            //   selectedIcon: const Icon(Icons.smart_toy),
+            //   label: _i18n.t('bot'),
+            // ),
+          ],
+        ),
       ),
     );
   }
@@ -1074,16 +1162,41 @@ class CollectionsPage extends StatefulWidget {
   State<CollectionsPage> createState() => _CollectionsPageState();
 }
 
+class _DefaultAppType {
+  final String type;
+  final IconData icon;
+  const _DefaultAppType(this.type, this.icon);
+}
+
 class _CollectionsPageState extends State<CollectionsPage> {
   final CollectionService _collectionService = CollectionService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
-  final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  final ChatNotificationService _chatNotificationService =
+      ChatNotificationService();
   StreamSubscription<Map<String, int>>? _unreadSubscription;
+  StreamSubscription<DebugActionEvent>? _debugActionSubscription;
   Map<String, int> _unreadCounts = {};
 
   List<Collection> _allCollections = [];
   bool _isLoading = true;
+
+  // Default single-instance app types that should always appear
+  // These match the types in CreateCollectionPage
+  static const List<_DefaultAppType> _defaultAppTypes = [
+    _DefaultAppType('places', Icons.place),
+    _DefaultAppType('blog', Icons.article),
+    _DefaultAppType('chat', Icons.chat),
+    _DefaultAppType('contacts', Icons.contacts),
+    _DefaultAppType('events', Icons.event),
+    _DefaultAppType('alerts', Icons.campaign),
+    _DefaultAppType('inventory', Icons.inventory_2),
+    _DefaultAppType('wallet', Icons.account_balance_wallet),
+    _DefaultAppType('log', Icons.article_outlined),
+    _DefaultAppType('backup', Icons.backup),
+    _DefaultAppType('groups', Icons.groups),
+    _DefaultAppType('console', Icons.terminal),
+  ];
 
   @override
   void initState() {
@@ -1091,6 +1204,9 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.addListener(_onProfileChanged);
     _collectionService.collectionsNotifier.addListener(_onCollectionsChanged);
+    _debugActionSubscription = DebugController().actionStream.listen(
+      _handleDebugAction,
+    );
     LogService().log('CollectionsPage: initState - setting up listeners');
     _loadCollections();
     _subscribeToUnreadCounts();
@@ -1106,13 +1222,17 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void _onCollectionsChanged() {
     if (!mounted) return;
     // Collections were created/updated/deleted, reload the list
-    LogService().log('CollectionsPage: collectionsNotifier triggered, reloading');
+    LogService().log(
+      'CollectionsPage: collectionsNotifier triggered, reloading',
+    );
     _loadCollections();
   }
 
   void _subscribeToUnreadCounts() {
     _unreadCounts = _chatNotificationService.unreadCounts;
-    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((
+      counts,
+    ) {
       if (mounted) {
         setState(() {
           _unreadCounts = counts;
@@ -1129,8 +1249,11 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
-    _collectionService.collectionsNotifier.removeListener(_onCollectionsChanged);
+    _collectionService.collectionsNotifier.removeListener(
+      _onCollectionsChanged,
+    );
     _unreadSubscription?.cancel();
+    _debugActionSubscription?.cancel();
     super.dispose();
   }
 
@@ -1146,7 +1269,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
       // Use progressive loading for faster perceived performance
       final collections = <Collection>[];
 
-      await for (final collection in _collectionService.loadCollectionsStream()) {
+      await for (final collection
+          in _collectionService.loadCollectionsStream()) {
         if (!mounted) return;
         collections.add(collection);
 
@@ -1161,18 +1285,25 @@ class _CollectionsPageState extends State<CollectionsPage> {
       _updateCollectionsList(collections, isComplete: true);
 
       final types = collections.map((c) => c.type).toList();
-      LogService().log('CollectionsPage: Loaded ${collections.length} collections: $types');
+      LogService().log(
+        'CollectionsPage: Loaded ${collections.length} collections: $types',
+      );
     } catch (e) {
       LogService().log('Error loading collections: $e');
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _updateCollectionsList(List<Collection> collections, {required bool isComplete}) {
+  void _updateCollectionsList(
+    List<Collection> collections, {
+    required bool isComplete,
+  }) {
     if (!mounted) return;
 
     // Separate app and file collections
-    final appCollections = collections.where((c) => !_isFileCollectionType(c)).toList();
+    final appCollections = collections
+        .where((c) => !_isFileCollectionType(c))
+        .toList();
     final fileCollections = collections.where(_isFileCollectionType).toList();
 
     // Sort each group: favorites first, then by usage count, then alphabetically
@@ -1184,8 +1315,10 @@ class _CollectionsPageState extends State<CollectionsPage> {
           return a.isFavorite ? -1 : 1;
         }
         // 2. By usage count (most used first)
-        final aUsage = config.getNestedValue('collections.usage.${a.type}', 0) as int;
-        final bUsage = config.getNestedValue('collections.usage.${b.type}', 0) as int;
+        final aUsage =
+            config.getNestedValue('collections.usage.${a.type}', 0) as int;
+        final bUsage =
+            config.getNestedValue('collections.usage.${b.type}', 0) as int;
         if (aUsage != bUsage) {
           return bUsage.compareTo(aUsage);
         }
@@ -1206,13 +1339,10 @@ class _CollectionsPageState extends State<CollectionsPage> {
     });
   }
 
-
   Future<void> _createNewCollection() async {
     final result = await Navigator.push<Collection>(
       context,
-      MaterialPageRoute(
-        builder: (context) => const CreateCollectionPage(),
-      ),
+      MaterialPageRoute(builder: (context) => const CreateCollectionPage()),
     );
 
     if (result != null) {
@@ -1225,6 +1355,16 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _collectionService.toggleFavorite(collection);
     setState(() {});
     LogService().log('Toggled favorite for ${collection.title}');
+  }
+
+  void _handleDebugAction(DebugActionEvent event) {
+    if (event.action == DebugAction.openConsole) {
+      unawaited(
+        _openConsoleCollection(
+          sessionId: event.params['session_id'] as String?,
+        ),
+      );
+    }
   }
 
   Future<void> _deleteCollection(Collection collection) async {
@@ -1252,6 +1392,115 @@ class _CollectionsPageState extends State<CollectionsPage> {
     config.setNestedValue(key, currentCount + 1);
   }
 
+  /// Check if a collection is a placeholder (not yet created on disk)
+  bool _isPlaceholder(Collection collection) {
+    return collection.id.startsWith('__placeholder_');
+  }
+
+  /// Create a collection from a placeholder when triggered via debug API
+  Future<Collection?> _createCollectionFromPlaceholder(
+    Collection placeholder,
+  ) async {
+    try {
+      final created = await _collectionService.createCollection(
+        title: placeholder.title,
+        type: placeholder.type,
+      );
+      await _loadCollections();
+      return created;
+    } catch (e) {
+      LogService().log(
+        'CollectionsPage: Failed to create placeholder ${placeholder.type}: $e',
+      );
+      return null;
+    }
+  }
+
+  Future<Collection?> _findConsoleCollection() async {
+    try {
+      final collections = await _collectionService.loadCollections();
+      if (mounted) {
+        _updateCollectionsList(collections, isComplete: true);
+      }
+      for (final collection in collections) {
+        if (collection.type == 'console') {
+          return collection;
+        }
+      }
+    } catch (e) {
+      LogService().log(
+        'CollectionsPage: Error loading collections for debug action: $e',
+      );
+    }
+    return null;
+  }
+
+  Future<void> _openConsoleCollection({String? sessionId}) async {
+    Collection? consoleCollection;
+    try {
+      consoleCollection = _allCollections.firstWhere(
+        (c) => c.type == 'console' && !_isPlaceholder(c),
+      );
+    } catch (_) {}
+
+    if (consoleCollection == null) {
+      try {
+        final placeholder = _allCollections.firstWhere(
+          (c) => c.type == 'console',
+        );
+        consoleCollection = await _createCollectionFromPlaceholder(placeholder);
+      } catch (_) {}
+    }
+
+    if (consoleCollection != null && _isPlaceholder(consoleCollection)) {
+      consoleCollection = await _createCollectionFromPlaceholder(
+        consoleCollection,
+      );
+    }
+
+    consoleCollection ??= await _findConsoleCollection();
+    if (!mounted || consoleCollection == null) {
+      try {
+        final title = _i18n.t('collection_type_console');
+        consoleCollection = await _collectionService.createCollection(
+          title: title,
+          type: 'console',
+        );
+        await _loadCollections();
+        LogService().log(
+          'CollectionsPage: Created console collection for debug open_console',
+        );
+      } catch (e) {
+        LogService().log(
+          'CollectionsPage: Console collection not found and create failed: $e',
+        );
+        return;
+      }
+    }
+
+    final collectionPath = consoleCollection.storagePath ?? '';
+    final collectionTitle = consoleCollection.title;
+
+    _recordAppUsage(consoleCollection.type);
+    LogService().log(
+      'CollectionsPage: Opening console via debug action (session: ${sessionId ?? "first"})',
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ConsoleBrowserPage(
+          collectionPath: collectionPath,
+          collectionTitle: collectionTitle,
+        ),
+      ),
+    );
+
+    if (mounted) {
+      _loadCollections();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1262,288 +1511,413 @@ class _CollectionsPageState extends State<CollectionsPage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _allCollections.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.folder_special_outlined,
-                              size: 64,
-                              color: Theme.of(context).colorScheme.secondary,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _allCollections.isEmpty
-                                  ? _i18n.t('no_collections_yet')
-                                  : _i18n.t('no_apps_found'),
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _allCollections.isEmpty
-                                  ? _i18n.t('create_your_first_collection')
-                                  : _i18n.t('try_a_different_search'),
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  ),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.folder_special_outlined,
+                          size: 64,
+                          color: Theme.of(context).colorScheme.secondary,
                         ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _loadCollections,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            // Calculate number of columns based on screen width
-                            final screenWidth = constraints.maxWidth;
-                            final crossAxisCount = screenWidth < 600
-                                ? 2 // Mobile/Small: 2 columns
-                                : screenWidth < 900
-                                    ? 4 // Tablet: 4 columns
-                                    : screenWidth < 1400
-                                        ? 6 // Desktop: 6 columns
-                                        : screenWidth < 1800
-                                            ? 7 // Large desktop: 7 columns
-                                            : 8; // Extra large: 8 columns
+                        const SizedBox(height: 16),
+                        Text(
+                          _allCollections.isEmpty
+                              ? _i18n.t('no_collections_yet')
+                              : _i18n.t('no_apps_found'),
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _allCollections.isEmpty
+                              ? _i18n.t('create_your_first_collection')
+                              : _i18n.t('try_a_different_search'),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadCollections,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // Calculate number of columns based on screen width
+                        final screenWidth = constraints.maxWidth;
+                        final crossAxisCount = screenWidth < 600
+                            ? 2 // Mobile/Small: 2 columns
+                            : screenWidth < 900
+                            ? 4 // Tablet: 4 columns
+                            : screenWidth < 1400
+                            ? 6 // Desktop: 6 columns
+                            : screenWidth < 1800
+                            ? 7 // Large desktop: 7 columns
+                            : 8; // Extra large: 8 columns
 
-                            // Separate app collections from file collections
-                            final appCollections = _allCollections.where((c) => !_isFileCollectionType(c)).toList();
-                            final fileCollections = _allCollections.where(_isFileCollectionType).toList();
+                        // Separate app collections from file collections
+                        final appCollections = _allCollections
+                            .where((c) => !_isFileCollectionType(c))
+                            .toList();
+                        final fileCollections = _allCollections
+                            .where(_isFileCollectionType)
+                            .toList();
 
-                            return CustomScrollView(
-                              slivers: [
-                                // App collections grid
-                                if (appCollections.isNotEmpty)
-                                  SliverPadding(
-                                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                                    sliver: SliverGrid(
-                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        return CustomScrollView(
+                          slivers: [
+                            // App collections grid
+                            if (appCollections.isNotEmpty)
+                              SliverPadding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  8,
+                                ),
+                                sliver: SliverGrid(
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
                                         crossAxisCount: crossAxisCount,
                                         crossAxisSpacing: 8,
                                         mainAxisSpacing: 8,
                                         childAspectRatio: 1.9,
                                       ),
-                                      delegate: SliverChildBuilderDelegate(
-                                        (context, index) {
-                                          final collection = appCollections[index];
-                                          return _CollectionGridCard(
-                                  collection: collection,
-                                  onTap: () {
-                                    _recordAppUsage(collection.type);
-                                    LogService().log('Opened collection: ${collection.title}');
-                                    // Route to appropriate page based on collection type
-                                    final Widget targetPage = collection.type == 'chat'
-                                        ? ChatBrowserPage(collection: collection)
-                                        : collection.type == 'forum'
-                                            ? ForumBrowserPage(collection: collection)
+                                  delegate: SliverChildBuilderDelegate((
+                                    context,
+                                    index,
+                                  ) {
+                                    final collection = appCollections[index];
+                                    return _CollectionGridCard(
+                                      collection: collection,
+                                      onTap: () {
+                                        _recordAppUsage(collection.type);
+                                        LogService().log(
+                                          'Opened collection: ${collection.title}',
+                                        );
+                                        // Route to appropriate page based on collection type
+                                        final Widget targetPage =
+                                            collection.type == 'chat'
+                                            ? ChatBrowserPage(
+                                                collection: collection,
+                                              )
+                                            : collection.type == 'forum'
+                                            ? ForumBrowserPage(
+                                                collection: collection,
+                                              )
                                             : collection.type == 'blog'
-                                                ? BlogBrowserPage(
-                                                    collectionPath: collection.storagePath ?? '',
-                                                    collectionTitle: collection.title,
-                                                  )
-                                                : collection.type == 'news'
-                                                    ? NewsBrowserPage(collection: collection)
-                                                    : collection.type == 'events'
-                                                        ? EventsBrowserPage(
-                                                            collectionPath: collection.storagePath ?? '',
-                                                            collectionTitle: collection.title,
-                                                          )
-                                                        : collection.type == 'postcards'
-                                                            ? PostcardsBrowserPage(
-                                                                collectionPath: collection.storagePath ?? '',
-                                                                collectionTitle: collection.title,
-                                                              )
-                                                            : collection.type == 'contacts'
-                                                                ? ContactsBrowserPage(
-                                                                    collectionPath: collection.storagePath ?? '',
-                                                                    collectionTitle: collection.title,
-                                                                  )
-                                                                : collection.type == 'places'
-                                                                    ? PlacesBrowserPage(
-                                                                        collectionPath: collection.storagePath ?? '',
-                                                                        collectionTitle: collection.title,
-                                                                      )
-                                                                    : collection.type == 'market'
-                                                                        ? MarketBrowserPage(
-                                                                            collectionPath: collection.storagePath ?? '',
-                                                                            collectionTitle: collection.title,
-                                                                          )
-                                                                        : collection.type == 'inventory'
-                                                                            ? InventoryBrowserPage(
-                                                                                collectionPath: collection.storagePath ?? '',
-                                                                                collectionTitle: collection.title,
-                                                                                i18n: _i18n,
-                                                                              )
-                                                                            : collection.type == 'alerts'
-                                                                            ? ReportBrowserPage(
-                                                                                collectionPath: collection.storagePath ?? '',
-                                                                                collectionTitle: collection.title,
-                                                                              )
-                                                                            : collection.type == 'groups'
-                                                                                ? GroupsBrowserPage(
-                                                                                    collectionPath: collection.storagePath ?? '',
-                                                                                    collectionTitle: collection.title,
-                                                                                  )
-                                                                                : collection.type == 'backup'
-                                                                                    ? const BackupBrowserPage()
-                                                                                    : collection.type == 'station'
-                                                                                        ? const StationDashboardPage()
-                                                                                        : collection.type == 'transfer'
-                                                                                            ? const TransferPage()
-                                                                                            : collection.type == 'wallet'
-                                                                                                ? WalletBrowserPage(
-                                                                                                    collectionPath: collection.storagePath ?? '',
-                                                                                                    collectionTitle: collection.title,
-                                                                                                    i18n: _i18n,
-                                                                                                  )
-                                                                                                : collection.type == 'console'
-                                                                                                    ? ConsoleBrowserPage(
-                                                                                                        collectionPath: collection.storagePath ?? '',
-                                                                                                        collectionTitle: collection.title,
-                                                                                                      )
-                                                                                                    : collection.type == 'log'
-                                                                                                        ? const LogPage()
-                                                                                                        : CollectionBrowserPage(collection: collection);
+                                            ? BlogBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'news'
+                                            ? NewsBrowserPage(
+                                                collection: collection,
+                                              )
+                                            : collection.type == 'events'
+                                            ? EventsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'postcards'
+                                            ? PostcardsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'contacts'
+                                            ? ContactsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'places'
+                                            ? PlacesBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'market'
+                                            ? MarketBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'inventory'
+                                            ? InventoryBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'alerts'
+                                            ? ReportBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'groups'
+                                            ? GroupsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'backup'
+                                            ? const BackupBrowserPage()
+                                            : collection.type == 'station'
+                                            ? const StationDashboardPage()
+                                            : collection.type == 'transfer'
+                                            ? const TransferPage()
+                                            : collection.type == 'wallet'
+                                            ? WalletBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'console'
+                                            ? ConsoleBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'log'
+                                            ? const LogPage()
+                                            : CollectionBrowserPage(
+                                                collection: collection,
+                                              );
 
-                                              LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => targetPage,
-                                                ),
-                                              ).then((_) => _loadCollections());
-                                            },
-                                            onFavoriteToggle: () => _toggleFavorite(collection),
-                                            onDelete: () => _deleteCollection(collection),
-                                            unreadCount: collection.type == 'chat' ? _chatNotificationService.totalUnreadCount : 0,
-                                          );
-                                        },
-                                        childCount: appCollections.length,
-                                      ),
-                                    ),
+                                        LogService().log(
+                                          'Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}',
+                                        );
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => targetPage,
+                                          ),
+                                        ).then((_) => _loadCollections());
+                                      },
+                                      onFavoriteToggle: () =>
+                                          _toggleFavorite(collection),
+                                      onDelete: () =>
+                                          _deleteCollection(collection),
+                                      unreadCount: collection.type == 'chat'
+                                          ? _chatNotificationService
+                                                .totalUnreadCount
+                                          : 0,
+                                    );
+                                  }, childCount: appCollections.length),
+                                ),
+                              ),
+
+                            // Separator between fixed and file collections
+                            if (appCollections.isNotEmpty &&
+                                fileCollections.isNotEmpty)
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
                                   ),
-
-                                // Separator between fixed and file collections
-                                if (appCollections.isNotEmpty && fileCollections.isNotEmpty)
-                                  SliverToBoxAdapter(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                      child: Divider(
-                                        thickness: 1,
-                                        color: Theme.of(context).colorScheme.outlineVariant,
-                                      ),
-                                    ),
+                                  child: Divider(
+                                    thickness: 1,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.outlineVariant,
                                   ),
+                                ),
+                              ),
 
-                                // File collections grid
-                                if (fileCollections.isNotEmpty)
-                                  SliverPadding(
-                                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                                    sliver: SliverGrid(
-                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            // File collections grid
+                            if (fileCollections.isNotEmpty)
+                              SliverPadding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  16,
+                                  16,
+                                ),
+                                sliver: SliverGrid(
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
                                         crossAxisCount: crossAxisCount,
                                         crossAxisSpacing: 8,
                                         mainAxisSpacing: 8,
                                         childAspectRatio: 1.9,
                                       ),
-                                      delegate: SliverChildBuilderDelegate(
-                                        (context, index) {
-                                          final collection = fileCollections[index];
-                                          return _CollectionGridCard(
-                                            collection: collection,
-                                            onTap: () {
-                                              _recordAppUsage(collection.type);
-                                              LogService().log('Opened collection: ${collection.title}');
-                                              // Route to appropriate page based on collection type
-                                              final Widget targetPage = collection.type == 'chat'
-                                                  ? ChatBrowserPage(collection: collection)
-                                                  : collection.type == 'forum'
-                                                      ? ForumBrowserPage(collection: collection)
-                                                      : collection.type == 'blog'
-                                                          ? BlogBrowserPage(
-                                                              collectionPath: collection.storagePath ?? '',
-                                                              collectionTitle: collection.title,
-                                                            )
-                                                          : collection.type == 'news'
-                                                              ? NewsBrowserPage(collection: collection)
-                                                              : collection.type == 'events'
-                                                                  ? EventsBrowserPage(
-                                                                      collectionPath: collection.storagePath ?? '',
-                                                                      collectionTitle: collection.title,
-                                                                    )
-                                                                  : collection.type == 'postcards'
-                                                                      ? PostcardsBrowserPage(
-                                                                          collectionPath: collection.storagePath ?? '',
-                                                                          collectionTitle: collection.title,
-                                                                        )
-                                                                      : collection.type == 'contacts'
-                                                                          ? ContactsBrowserPage(
-                                                                              collectionPath: collection.storagePath ?? '',
-                                                                              collectionTitle: collection.title,
-                                                                            )
-                                                                          : collection.type == 'places'
-                                                                              ? PlacesBrowserPage(
-                                                                                  collectionPath: collection.storagePath ?? '',
-                                                                                  collectionTitle: collection.title,
-                                                                                )
-                                                                              : collection.type == 'market'
-                                                                                  ? MarketBrowserPage(
-                                                                                      collectionPath: collection.storagePath ?? '',
-                                                                                      collectionTitle: collection.title,
-                                                                                    )
-                                                                                  : collection.type == 'inventory'
-                                                                                      ? InventoryBrowserPage(
-                                                                                          collectionPath: collection.storagePath ?? '',
-                                                                                          collectionTitle: collection.title,
-                                                                                          i18n: _i18n,
-                                                                                        )
-                                                                                      : collection.type == 'alerts'
-                                                                                          ? ReportBrowserPage(
-                                                                                              collectionPath: collection.storagePath ?? '',
-                                                                                              collectionTitle: collection.title,
-                                                                                            )
-                                                                                          : collection.type == 'groups'
-                                                                                              ? GroupsBrowserPage(
-                                                                                                  collectionPath: collection.storagePath ?? '',
-                                                                                                  collectionTitle: collection.title,
-                                                                                                )
-                                                                                              : collection.type == 'wallet'
-                                                                                                  ? WalletBrowserPage(
-                                                                                                      collectionPath: collection.storagePath ?? '',
-                                                                                                      collectionTitle: collection.title,
-                                                                                                      i18n: _i18n,
-                                                                                                    )
-                                                                                                  : collection.type == 'console'
-                                                                                                      ? ConsoleBrowserPage(
-                                                                                                          collectionPath: collection.storagePath ?? '',
-                                                                                                          collectionTitle: collection.title,
-                                                                                                        )
-                                                                                                      : collection.type == 'log'
-                                                                                                          ? const LogPage()
-                                                                                                          : CollectionBrowserPage(collection: collection);
+                                  delegate: SliverChildBuilderDelegate((
+                                    context,
+                                    index,
+                                  ) {
+                                    final collection = fileCollections[index];
+                                    return _CollectionGridCard(
+                                      collection: collection,
+                                      onTap: () {
+                                        _recordAppUsage(collection.type);
+                                        LogService().log(
+                                          'Opened collection: ${collection.title}',
+                                        );
+                                        // Route to appropriate page based on collection type
+                                        final Widget targetPage =
+                                            collection.type == 'chat'
+                                            ? ChatBrowserPage(
+                                                collection: collection,
+                                              )
+                                            : collection.type == 'forum'
+                                            ? ForumBrowserPage(
+                                                collection: collection,
+                                              )
+                                            : collection.type == 'blog'
+                                            ? BlogBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'news'
+                                            ? NewsBrowserPage(
+                                                collection: collection,
+                                              )
+                                            : collection.type == 'events'
+                                            ? EventsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'postcards'
+                                            ? PostcardsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'contacts'
+                                            ? ContactsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'places'
+                                            ? PlacesBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'market'
+                                            ? MarketBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'inventory'
+                                            ? InventoryBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'alerts'
+                                            ? ReportBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'groups'
+                                            ? GroupsBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'wallet'
+                                            ? WalletBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'console'
+                                            ? ConsoleBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
+                                            : collection.type == 'log'
+                                            ? const LogPage()
+                                            : CollectionBrowserPage(
+                                                collection: collection,
+                                              );
 
-                                              LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => targetPage,
-                                                ),
-                                              ).then((_) => _loadCollections());
-                                            },
-                                            onFavoriteToggle: () => _toggleFavorite(collection),
-                                            onDelete: () => _deleteCollection(collection),
-                                            unreadCount: 0, // File collections don't track unread
-                                          );
-                                        },
-                                        childCount: fileCollections.length,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
+                                        LogService().log(
+                                          'Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}',
+                                        );
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => targetPage,
+                                          ),
+                                        ).then((_) => _loadCollections());
+                                      },
+                                      onFavoriteToggle: () =>
+                                          _toggleFavorite(collection),
+                                      onDelete: () =>
+                                          _deleteCollection(collection),
+                                      unreadCount:
+                                          0, // File collections don't track unread
+                                    );
+                                  }, childCount: fileCollections.length),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -1818,7 +2192,8 @@ class _CollectionGridCard extends StatelessWidget {
 
   void _showContextMenu(BuildContext context, Offset position) {
     final i18n = I18nService();
-    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
 
     showMenu<String>(
       context: context,
@@ -1871,9 +2246,7 @@ class _CollectionGridCard extends StatelessWidget {
     return Card(
       elevation: 0,
       color: theme.colorScheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: InkWell(
         onTap: onTap,
         onLongPress: isAndroid
@@ -1904,7 +2277,9 @@ class _CollectionGridCard extends StatelessWidget {
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: gradient.colors.first.withValues(alpha: 0.25),
+                              color: gradient.colors.first.withValues(
+                                alpha: 0.25,
+                              ),
                               blurRadius: 6,
                               offset: const Offset(0, 2),
                             ),
@@ -1946,11 +2321,7 @@ class _CollectionGridCard extends StatelessWidget {
                     color: Colors.amber.withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(
-                    Icons.star,
-                    size: 10,
-                    color: Colors.white,
-                  ),
+                  child: const Icon(Icons.star, size: 10, color: Colors.white),
                 ),
               ),
             // Menu button (bottom-right corner, only on desktop)
@@ -1983,7 +2354,9 @@ class _CollectionGridCard extends StatelessWidget {
                       child: Row(
                         children: [
                           Icon(
-                            collection.isFavorite ? Icons.star : Icons.star_border,
+                            collection.isFavorite
+                                ? Icons.star
+                                : Icons.star_border,
                             color: collection.isFavorite ? Colors.amber : null,
                           ),
                           const SizedBox(width: 8),
@@ -2295,9 +2668,9 @@ class _CollectionCard extends StatelessWidget {
                               child: Text(
                                 collection.title,
                                 style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: -0.2,
-                                    ),
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.2,
+                                ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -2336,8 +2709,8 @@ class _CollectionCard extends StatelessWidget {
                             child: Text(
                               collection.description,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -2369,10 +2742,7 @@ class _InfoChip extends StatelessWidget {
   final IconData icon;
   final String label;
 
-  const _InfoChip({
-    required this.icon,
-    required this.label,
-  });
+  const _InfoChip({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -2387,10 +2757,7 @@ class _InfoChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
     );
@@ -2422,8 +2789,8 @@ class GeoChatPage extends StatelessWidget {
           Text(
             i18n.t('your_conversations_will_appear_here'),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -2497,7 +2864,9 @@ class _LogPageState extends State<LogPage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(_isPaused ? _i18n.t('log_paused') : _i18n.t('log_resumed')),
+        content: Text(
+          _isPaused ? _i18n.t('log_paused') : _i18n.t('log_resumed'),
+        ),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -2564,7 +2933,10 @@ class _LogPageState extends State<LogPage> {
                 const SizedBox(width: 8),
                 Text(
                   _i18n.t('collection_type_log'),
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
@@ -2597,9 +2969,14 @@ class _LogPageState extends State<LogPage> {
                       decoration: InputDecoration(
                         hintText: _i18n.t('filter_logs'),
                         hintStyle: const TextStyle(color: Colors.grey),
-                        prefixIcon: const Icon(Icons.search, color: Colors.white),
+                        prefixIcon: const Icon(
+                          Icons.search,
+                          color: Colors.white,
+                        ),
                         border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                        ),
                       ),
                       onChanged: (value) {
                         setState(() {
@@ -2807,10 +3184,14 @@ class _SettingsPageState extends State<SettingsPage> {
               mainAxisSize: MainAxisSize.min,
               children: themes.map((themeName) {
                 return RadioListTile<String>(
-                  title: Text(themeName[0].toUpperCase() + themeName.substring(1)),
-                  subtitle: Text(themeName == 'default'
-                    ? _i18n.t('web_theme_default_desc')
-                    : _i18n.t('web_theme_custom_desc')),
+                  title: Text(
+                    themeName[0].toUpperCase() + themeName.substring(1),
+                  ),
+                  subtitle: Text(
+                    themeName == 'default'
+                        ? _i18n.t('web_theme_default_desc')
+                        : _i18n.t('web_theme_custom_desc'),
+                  ),
                   value: themeName,
                   groupValue: currentTheme,
                   onChanged: (String? value) {
@@ -2866,7 +3247,10 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(width: 8),
               Text(
                 _i18n.t('settings'),
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
@@ -2903,7 +3287,9 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const SecuritySettingsPage()),
+              MaterialPageRoute(
+                builder: (context) => const SecuritySettingsPage(),
+              ),
             );
           },
         ),
@@ -2929,7 +3315,9 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const StationDashboardPage()),
+                MaterialPageRoute(
+                  builder: (context) => const StationDashboardPage(),
+                ),
               );
             },
           ),
@@ -2962,7 +3350,9 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
+              MaterialPageRoute(
+                builder: (context) => const ThemeSettingsPage(),
+              ),
             );
           },
         ),
@@ -3075,14 +3465,18 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
         if (nameMatches || matchingChildren.isNotEmpty) {
           // Include this folder if it matches or has matching children
-          results.add(FileNode(
-            path: node.path,
-            name: node.name,
-            size: node.size,
-            isDirectory: true,
-            children: matchingChildren.isEmpty ? node.children : matchingChildren,
-            fileCount: node.fileCount,
-          ));
+          results.add(
+            FileNode(
+              path: node.path,
+              name: node.name,
+              size: node.size,
+              isDirectory: true,
+              children: matchingChildren.isEmpty
+                  ? node.children
+                  : matchingChildren,
+              fileCount: node.fileCount,
+            ),
+          );
           // Auto-expand folders with matching content
           _expandedFolders.add(node.path);
         }
@@ -3111,7 +3505,11 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('added_files', params: [paths.length.toString()]))),
+            SnackBar(
+              content: Text(
+                _i18n.t('added_files', params: [paths.length.toString()]),
+              ),
+            ),
           );
         }
 
@@ -3121,7 +3519,11 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       LogService().log('Error adding files: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('error_adding_files', params: [e.toString()]))),
+          SnackBar(
+            content: Text(
+              _i18n.t('error_adding_files', params: [e.toString()]),
+            ),
+          ),
         );
       }
     }
@@ -3151,7 +3553,11 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       LogService().log('Error adding folder: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('error_adding_folder', params: [e.toString()]))),
+          SnackBar(
+            content: Text(
+              _i18n.t('error_adding_folder', params: [e.toString()]),
+            ),
+          ),
         );
       }
     }
@@ -3202,9 +3608,9 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
         LogService().log('Folder created successfully');
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('folder_created'))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(_i18n.t('folder_created'))));
         }
 
         _loadFiles();
@@ -3212,7 +3618,11 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
         LogService().log('Error creating folder: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('error_creating_folder', params: [e.toString()]))),
+            SnackBar(
+              content: Text(
+                _i18n.t('error_creating_folder', params: [e.toString()]),
+              ),
+            ),
           );
         }
       }
@@ -3222,9 +3632,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   Future<void> _editSettings() async {
     final updated = await showDialog<bool>(
       context: context,
-      builder: (context) => EditCollectionDialog(
-        collection: widget.collection,
-      ),
+      builder: (context) => EditCollectionDialog(collection: widget.collection),
     );
 
     if (updated == true) {
@@ -3239,7 +3647,10 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       );
 
       // Force regeneration of all collection files
-      await _collectionService.ensureCollectionFilesUpdated(widget.collection, force: true);
+      await _collectionService.ensureCollectionFilesUpdated(
+        widget.collection,
+        force: true,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3250,7 +3661,11 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       LogService().log('Error refreshing collection files: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('error_regenerating_files', params: [e.toString()]))),
+          SnackBar(
+            content: Text(
+              _i18n.t('error_regenerating_files', params: [e.toString()]),
+            ),
+          ),
         );
       }
     }
@@ -3292,21 +3707,33 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Icon(Icons.folder_outlined, size: 16, color: Theme.of(context).colorScheme.secondary),
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       '${widget.collection.filesCount} ${widget.collection.filesCount == 1 ? _i18n.t('file') : _i18n.t('files')}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(width: 16),
-                    Icon(Icons.storage_outlined, size: 16, color: Theme.of(context).colorScheme.secondary),
+                    Icon(
+                      Icons.storage_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       widget.collection.formattedSize,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(width: 16),
-                    Icon(Icons.lock_outline, size: 16, color: Theme.of(context).colorScheme.secondary),
+                    Icon(
+                      Icons.lock_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       _i18n.t(widget.collection.visibility),
@@ -3382,56 +3809,61 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _filteredFiles.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.folder_open,
-                              size: 64,
-                              color: Theme.of(context).colorScheme.secondary,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _searchController.text.isEmpty ? _i18n.t('no_files_yet') : _i18n.t('no_matching_files'),
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _searchController.text.isEmpty
-                                  ? _i18n.t('add_files_to_get_started')
-                                  : _i18n.t('try_a_different_search'),
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  ),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.folder_open,
+                          size: 64,
+                          color: Theme.of(context).colorScheme.secondary,
                         ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _loadFiles,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: _filteredFiles.length,
-                          itemBuilder: (context, index) {
-                            final file = _filteredFiles[index];
-                            return _FileNodeTile(
-                              fileNode: file,
-                              expandedFolders: _expandedFolders,
-                              collectionPath: widget.collection.storagePath ?? '',
-                              onToggleExpand: (path) {
-                                setState(() {
-                                  if (_expandedFolders.contains(path)) {
-                                    _expandedFolders.remove(path);
-                                  } else {
-                                    _expandedFolders.add(path);
-                                  }
-                                });
-                              },
-                            );
+                        const SizedBox(height: 16),
+                        Text(
+                          _searchController.text.isEmpty
+                              ? _i18n.t('no_files_yet')
+                              : _i18n.t('no_matching_files'),
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _searchController.text.isEmpty
+                              ? _i18n.t('add_files_to_get_started')
+                              : _i18n.t('try_a_different_search'),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadFiles,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _filteredFiles.length,
+                      itemBuilder: (context, index) {
+                        final file = _filteredFiles[index];
+                        return _FileNodeTile(
+                          fileNode: file,
+                          expandedFolders: _expandedFolders,
+                          collectionPath: widget.collection.storagePath ?? '',
+                          onToggleExpand: (path) {
+                            setState(() {
+                              if (_expandedFolders.contains(path)) {
+                                _expandedFolders.remove(path);
+                              } else {
+                                _expandedFolders.add(path);
+                              }
+                            });
                           },
-                        ),
-                      ),
+                        );
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -3460,19 +3892,21 @@ class _FileNodeTile extends StatefulWidget {
 }
 
 class _FileNodeTileState extends State<_FileNodeTile> {
-  dynamic _thumbnailFile;  // File on native, null on web
+  dynamic _thumbnailFile; // File on native, null on web
 
   @override
   void initState() {
     super.initState();
     // Only load thumbnails on native platforms (not web)
-    if (!kIsWeb && !widget.fileNode.isDirectory && FileIconHelper.isImage(widget.fileNode.name)) {
+    if (!kIsWeb &&
+        !widget.fileNode.isDirectory &&
+        FileIconHelper.isImage(widget.fileNode.name)) {
       _loadThumbnail();
     }
   }
 
   Future<void> _loadThumbnail() async {
-    if (kIsWeb) return;  // No local file access on web
+    if (kIsWeb) return; // No local file access on web
 
     try {
       final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
@@ -3534,9 +3968,9 @@ class _FileNodeTileState extends State<_FileNodeTile> {
 
       if (!await file.exists()) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(i18n.t('file_not_found'))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(i18n.t('file_not_found'))));
         }
         return;
       }
@@ -3558,7 +3992,9 @@ class _FileNodeTileState extends State<_FileNodeTile> {
       LogService().log('Error opening file: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(i18n.t('error_opening_file', params: [e.toString()]))),
+          SnackBar(
+            content: Text(i18n.t('error_opening_file', params: [e.toString()])),
+          ),
         );
       }
     }
@@ -3585,7 +4021,10 @@ class _FileNodeTileState extends State<_FileNodeTile> {
             return Icon(
               FileIconHelper.getIconForFile(widget.fileNode.name),
               size: 40,
-              color: FileIconHelper.getColorForFile(widget.fileNode.name, context),
+              color: FileIconHelper.getColorForFile(
+                widget.fileNode.name,
+                context,
+              ),
             );
           },
         ),
@@ -3603,12 +4042,17 @@ class _FileNodeTileState extends State<_FileNodeTile> {
   @override
   Widget build(BuildContext context) {
     final isExpanded = widget.expandedFolders.contains(widget.fileNode.path);
-    final hasChildren = widget.fileNode.isDirectory && widget.fileNode.children != null && widget.fileNode.children!.isNotEmpty;
+    final hasChildren =
+        widget.fileNode.isDirectory &&
+        widget.fileNode.children != null &&
+        widget.fileNode.children!.isNotEmpty;
 
     return Column(
       children: [
         ListTile(
-          contentPadding: EdgeInsets.only(left: 16.0 + (widget.indentLevel * 24.0)),
+          contentPadding: EdgeInsets.only(
+            left: 16.0 + (widget.indentLevel * 24.0),
+          ),
           leading: _buildLeading(context),
           title: Text(widget.fileNode.name),
           subtitle: Text(_formatSubtitle()),
@@ -3623,18 +4067,20 @@ class _FileNodeTileState extends State<_FileNodeTile> {
                   widget.onToggleExpand(widget.fileNode.path);
                 }
               : widget.fileNode.isDirectory
-                  ? null
-                  : _openFile,
+              ? null
+              : _openFile,
         ),
         // Show children only if directory is expanded
         if (widget.fileNode.isDirectory && hasChildren && isExpanded)
-          ...widget.fileNode.children!.map((child) => _FileNodeTile(
-                fileNode: child,
-                expandedFolders: widget.expandedFolders,
-                onToggleExpand: widget.onToggleExpand,
-                collectionPath: widget.collectionPath,
-                indentLevel: widget.indentLevel + 1,
-              )),
+          ...widget.fileNode.children!.map(
+            (child) => _FileNodeTile(
+              fileNode: child,
+              expandedFolders: widget.expandedFolders,
+              onToggleExpand: widget.onToggleExpand,
+              collectionPath: widget.collectionPath,
+              indentLevel: widget.indentLevel + 1,
+            ),
+          ),
       ],
     );
   }
@@ -3666,7 +4112,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.collection.title);
-    _descriptionController = TextEditingController(text: widget.collection.description);
+    _descriptionController = TextEditingController(
+      text: widget.collection.description,
+    );
     _visibility = widget.collection.visibility;
     _encryption = widget.collection.encryption;
   }
@@ -3682,9 +4130,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
     final title = _titleController.text.trim();
 
     if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('please_enter_a_title'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_i18n.t('please_enter_a_title'))));
       return;
     }
 
@@ -3706,7 +4154,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
         oldTitle: oldTitle,
       );
 
-      LogService().log('Updated collection settings: ${widget.collection.title}');
+      LogService().log(
+        'Updated collection settings: ${widget.collection.title}',
+      );
 
       if (mounted) {
         Navigator.pop(context, true);
@@ -3716,7 +4166,11 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
       LogService().log('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('error_updating_collection', params: [e.toString()]))),
+          SnackBar(
+            content: Text(
+              _i18n.t('error_updating_collection', params: [e.toString()]),
+            ),
+          ),
         );
       }
     } finally {
@@ -3752,9 +4206,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
                 ),
                 child: SelectableText(
                   widget.collection.id,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontFamily: 'Courier New',
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(fontFamily: 'Courier New'),
                 ),
               ),
               const SizedBox(height: 16),
@@ -3800,9 +4254,18 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
                   border: const OutlineInputBorder(),
                 ),
                 items: [
-                  DropdownMenuItem(value: 'public', child: Text(_i18n.t('public'))),
-                  DropdownMenuItem(value: 'private', child: Text(_i18n.t('private'))),
-                  DropdownMenuItem(value: 'restricted', child: Text(_i18n.t('restricted'))),
+                  DropdownMenuItem(
+                    value: 'public',
+                    child: Text(_i18n.t('public')),
+                  ),
+                  DropdownMenuItem(
+                    value: 'private',
+                    child: Text(_i18n.t('private')),
+                  ),
+                  DropdownMenuItem(
+                    value: 'restricted',
+                    child: Text(_i18n.t('restricted')),
+                  ),
                 ],
                 onChanged: _isSaving
                     ? null
@@ -3822,8 +4285,14 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
                   border: const OutlineInputBorder(),
                 ),
                 items: [
-                  DropdownMenuItem(value: 'none', child: Text(_i18n.t('encryption_none'))),
-                  DropdownMenuItem(value: 'aes256', child: Text(_i18n.t('encryption_aes256'))),
+                  DropdownMenuItem(
+                    value: 'none',
+                    child: Text(_i18n.t('encryption_none')),
+                  ),
+                  DropdownMenuItem(
+                    value: 'aes256',
+                    child: Text(_i18n.t('encryption_aes256')),
+                  ),
                 ],
                 onChanged: _isSaving
                     ? null

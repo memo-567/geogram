@@ -38,3 +38,24 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Bundle Visual C++ Runtime DLLs for distribution without requiring VC++ Redistributable
+set(VCRT_DLL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../dlls")
+if(EXISTS "${VCRT_DLL_DIR}")
+  set(VCRT_DLLS
+    "msvcp140.dll"
+    "msvcp140_1.dll"
+    "vcruntime140.dll"
+    "vcruntime140_1.dll"
+  )
+  foreach(DLL ${VCRT_DLLS})
+    if(EXISTS "${VCRT_DLL_DIR}/${DLL}")
+      add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${VCRT_DLL_DIR}/${DLL}"
+          "$<TARGET_FILE_DIR:${BINARY_NAME}>/${DLL}"
+        COMMENT "Bundling ${DLL}"
+      )
+    endif()
+  endforeach()
+endif()

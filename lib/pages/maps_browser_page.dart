@@ -167,7 +167,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
 
     if (savedLat != null && savedLon != null) {
-      // Restore saved position
+      // Restore saved position as initial view
       setState(() {
         _centerPosition = LatLng(savedLat, savedLon);
         _currentZoom = savedZoom ?? _getZoomForRadius(_radiusKm);
@@ -175,6 +175,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       });
       _awaitingProfileLocation = false;
       LogService().log('MapsBrowserPage: Restored saved map state');
+
+      // On mobile, always fetch fresh GPS location to update to current position
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        _autoDetectLocationSilently();
+      }
     } else {
       // Get user's saved location from profile
       final userLocation = _mapsService.getUserLocation();

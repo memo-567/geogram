@@ -288,6 +288,9 @@ class ProfileService {
     final newProfile = getProfile();
     await CollectionService().setActiveCallsign(newProfile.callsign);
 
+    // Ensure default collections exist for this profile
+    await CollectionService().ensureDefaultCollections();
+
     // Notify listeners AFTER callsign is updated so they load correct collections
     activeProfileNotifier.value = profileId;
 
@@ -516,6 +519,7 @@ class ProfileService {
   Future<void> _applyActiveIdentityChanges(Profile profile) async {
     try {
       await CollectionService().setActiveCallsign(profile.callsign);
+      await CollectionService().ensureDefaultCollections();
     } catch (e) {
       LogService().log('ProfileService: Failed to update callsign path: $e');
     }

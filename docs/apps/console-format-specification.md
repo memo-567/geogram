@@ -1178,6 +1178,13 @@ The VM runs in a sandboxed WebView/WASM environment:
 - Encrypt states if containing secrets (future)
 - Secure delete when removing sessions
 
+## Operational Notes: Android Native TinyEMU (2026-01-05)
+
+- Goal: retire WebView/JSLinux on Android and run TinyEMU natively. The Flutter widget now selects the native path on Android, instantiates an xterm terminal, and copies a bundled emulator binary into `app_flutter/geogram/console/emu/temu` (or uses `libtemu.so` packaged in `jniLibs/arm64-v8a` when present). The VM config is rewritten locally (`local-alpine-x86.cfg`) to use the downloaded Alpine rootfs via 9p and to disable networking when the session requests it.
+- Observed on device `C61000000004616` (Android 15): TinyEMU launches via `/system/bin/sh <temu> <cfg>` but exits immediately with code `126`. Direct CLI run with `run-as dev.geogram` shows `x86 emulator is not supported` coming from `third_party/tinyemu-2019-12-21/x86_cpu.c`, which is a stub in this release.
+- Permissions were verified: the copied binary is mode `0755` and executable under the app UID. The failure is not a chmod issue; the shipped TinyEMU build simply lacks x86 support.
+- Next action required: either (1) switch the Android console VM to a RISC-V image that TinyEMU supports, or (2) bundle a different emulator that implements x86 on Android (e.g., a cross-compiled `qemu-system-x86_64` or an x86-capable TinyEMU fork). Until then, Android native console cannot boot the current Alpine x86 VM.
+
 ## Related Documentation
 
 - [Downloads Specification](../downloads.md)
@@ -1187,6 +1194,12 @@ The VM runs in a sandboxed WebView/WASM environment:
 - [9P Protocol](http://9p.io/documentation/91/)
 
 ## Change Log
+
+### Version 1.1 (2026-01-05)
+
+- Documented Android native TinyEMU migration attempt and the x86 stub limitation on device (exit code 126).
+- Noted packaging of TinyEMU as `jniLibs/arm64-v8a/libtemu.so` and asset fallback.
+- Added next-step options for enabling a working Android console VM.
 
 ### Version 1.0 (2026-01-04)
 

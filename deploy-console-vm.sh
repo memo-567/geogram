@@ -45,6 +45,8 @@ cd "$TEMP_DIR"
 declare -A FILES
 FILES["jslinux.js"]="$JSLINUX_BASE/jslinux.js"
 FILES["term.js"]="$JSLINUX_BASE/term.js"
+FILES["x86emu-wasm.js"]="$JSLINUX_BASE/x86emu-wasm.js"
+FILES["x86emu-wasm.wasm"]="$JSLINUX_BASE/x86emu-wasm.wasm"
 FILES["kernel-x86.bin"]="$JSLINUX_BASE/kernel-x86.bin"
 FILES["alpine-x86.cfg"]="$JSLINUX_BASE/alpine-x86.cfg"
 FILES["alpine-x86-rootfs.tar.gz"]="https://dl-cdn.alpinelinux.org/alpine/v3.12/releases/x86/alpine-minirootfs-3.12.0-x86.tar.gz"
@@ -84,7 +86,7 @@ cat > manifest.json << EOF
 EOF
 
 first=true
-for file in jslinux.js term.js kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
+for file in jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
     if [ -f "$file" ]; then
         size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0")
         sha=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1 || echo "")
@@ -112,7 +114,7 @@ echo ""
 
 # Upload files to server
 echo -e "${YELLOW}[4/4] Uploading files to server...${NC}"
-for file in manifest.json jslinux.js term.js kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
+for file in manifest.json jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
     if [ -f "$file" ]; then
         size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "?")
         echo "  Uploading $file ($size bytes)..."
