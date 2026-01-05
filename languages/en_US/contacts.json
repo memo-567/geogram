@@ -85,5 +85,14 @@
   "visited": "Visited",
   "interaction_added": "Interaction added",
   "interaction_history": "Interaction History",
-  "no_interactions_yet": "No interactions recorded yet"
+  "no_interactions_yet": "No interactions recorded yet",
+  "interaction_event": "Event",
+  "associate_with_event": "Associate with an event",
+  "add_event_note": "Add Event Note",
+  "event_note_placeholder": "Note about meeting this contact at the event...",
+  "spotted_at_event": "Spotted at event",
+  "event": "Event",
+  "select_event": "Select Event",
+  "search_events": "Search events...",
+  "no_events_found": "No events found"
 }

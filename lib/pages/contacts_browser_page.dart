@@ -17,8 +17,10 @@ import '../platform/file_image_helper.dart' as file_helper;
 import '../services/contact_service.dart';
 // Re-export metrics classes from contact_service
 export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics;
+import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../models/event.dart';
 import 'add_edit_contact_page.dart';
 import 'contact_import_page.dart';
 import 'location_picker_page.dart';
@@ -138,6 +140,22 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
     var filtered = _allContacts;
 
+    // Check for special search syntax: "event:EVENTID"
+    if (query.startsWith('event:')) {
+      final eventId = query.substring(6).trim();
+      if (eventId.isNotEmpty) {
+        // Filter contacts that have history entries with this event reference
+        // Search across ALL contacts (ignore folder navigation for event search)
+        filtered = _allContacts.where((contact) {
+          return contact.historyEntries.any((entry) =>
+              entry.eventReference?.toLowerCase() == eventId ||
+              entry.eventReference?.toLowerCase().contains(eventId) == true);
+        }).toList();
+        _sortAndSetFilteredContacts(filtered);
+        return;
+      }
+    }
+
     // Apply view mode filter - folder-style navigation
     if (_viewMode == 'group' && _selectedGroupPath != null) {
       // Inside a specific group folder - show only contacts in this group
@@ -188,7 +206,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     if (!mounted) return;
 
     // Navigate to full-screen detail view
-    final result = await Navigator.of(context).push<bool>(
+    final result = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(
         builder: (context) => _ContactDetailPage(
           contact: contact,
@@ -196,12 +214,21 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           profileService: _profileService,
           i18n: _i18n,
           collectionPath: widget.collectionPath,
+          onEventSearch: (eventId) {
+            // Pop back and set the search query
+            Navigator.pop(context, {'eventSearch': eventId});
+          },
         ),
       ),
     );
 
-    // Reload contacts if changes were made
-    if (result == true && mounted) {
+    // Handle result - could be bool for refresh or map for event search
+    if (result is Map && result['eventSearch'] != null) {
+      // Set the search query to filter by event
+      _searchController.text = 'event:${result['eventSearch']}';
+      _filterContacts();
+    } else if (result == true && mounted) {
+      // Reload contacts if changes were made
       await _loadContacts();
       await _loadGroups();
     }
@@ -1729,6 +1756,7 @@ class _ContactDetailPage extends StatefulWidget {
   final ProfileService profileService;
   final I18nService i18n;
   final String collectionPath;
+  final void Function(String eventId)? onEventSearch;
 
   const _ContactDetailPage({
     Key? key,
@@ -1737,6 +1765,7 @@ class _ContactDetailPage extends StatefulWidget {
     required this.profileService,
     required this.i18n,
     required this.collectionPath,
+    this.onEventSearch,
   }) : super(key: key);
 
   @override
@@ -1879,6 +1908,15 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
               onTap: () {
                 Navigator.pop(context);
                 _addPlaceEntry();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.event),
+              title: Text(i18n.t('interaction_event')),
+              subtitle: Text(i18n.t('associate_with_event')),
+              onTap: () {
+                Navigator.pop(context);
+                _addEventEntry();
               },
             ),
             const SizedBox(height: 8),
@@ -2094,6 +2132,151 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
       place.longitude,
       metadata: {'place_path': place.folderPath ?? ''},
     );
+  }
+
+  /// Add an event entry by selecting from available events
+  Future<void> _addEventEntry() async {
+    // Load events from current collection
+    final eventService = EventService();
+    await eventService.initializeCollection(widget.collectionPath);
+    final events = await eventService.loadEvents();
+
+    if (events.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(i18n.t('no_events_found'))),
+        );
+      }
+      return;
+    }
+
+    // Sort events by date (most recent first)
+    events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    // Show event picker dialog
+    final Event? selectedEvent = await showDialog<Event>(
+      context: context,
+      builder: (context) => _EventPickerDialog(events: events, i18n: i18n),
+    );
+
+    if (selectedEvent == null || !mounted) return;
+
+    // Ask for an optional note about this event interaction
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(i18n.t('add_event_note')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Show selected event
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.event, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          selectedEvent.title,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          selectedEvent.displayDate,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: noteController,
+              decoration: InputDecoration(
+                labelText: i18n.t('note_optional'),
+                hintText: i18n.t('event_note_placeholder'),
+                border: const OutlineInputBorder(),
+              ),
+              maxLines: 3,
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(i18n.t('add')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Build content with event info
+    final content = noteController.text.isEmpty
+        ? '${i18n.t('spotted_at_event')}: ${selectedEvent.title}'
+        : '${noteController.text}\n${i18n.t('event')}: ${selectedEvent.title}';
+
+    // Save with event reference
+    await _saveHistoryEntryWithEvent(
+      ContactHistoryEntryType.event,
+      content,
+      selectedEvent.id,
+    );
+  }
+
+  Future<void> _saveHistoryEntryWithEvent(
+    ContactHistoryEntryType type,
+    String content,
+    String eventId,
+  ) async {
+    final profile = ProfileService().getProfile();
+
+    final entry = ContactHistoryEntry.now(
+      author: profile.callsign,
+      content: content,
+      type: type,
+      eventReference: eventId,
+    );
+
+    // Update the contact with the new history entry
+    final updatedEntries = List<ContactHistoryEntry>.from(contact.historyEntries)
+      ..add(entry);
+
+    final updatedContact = contact.copyWith(historyEntries: updatedEntries);
+
+    // Save the contact
+    final error = await contactService.saveContact(
+      updatedContact,
+      groupPath: contact.groupPath,
+    );
+
+    if (error == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(i18n.t('interaction_added')),
+          backgroundColor: Colors.green,
+        ),
+      );
+      // Return to browser with refresh signal
+      Navigator.pop(context, true);
+    }
   }
 
   Future<void> _saveHistoryEntry(ContactHistoryEntryType type, String content) async {
@@ -2491,6 +2674,44 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
                     ],
                   ),
                 ],
+                // Event reference - clickable to search for all contacts at this event
+                if (entry.eventReference != null) ...[
+                  const SizedBox(height: 4),
+                  InkWell(
+                    onTap: () {
+                      // Navigate back to contacts list with event search
+                      widget.onEventSearch?.call(entry.eventReference!);
+                    },
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.event,
+                            size: 14,
+                            color: theme.colorScheme.secondary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${i18n.t('event')}: ${entry.eventReference}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.secondary,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.search,
+                            size: 12,
+                            color: theme.colorScheme.secondary,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
               ],
             ),
@@ -2656,4 +2877,122 @@ class _PhoneWithMetrics {
     required this.index,
     required this.interactionCount,
   });
+}
+
+/// Dialog for picking an event to associate with a contact
+class _EventPickerDialog extends StatefulWidget {
+  final List<Event> events;
+  final I18nService i18n;
+
+  const _EventPickerDialog({
+    required this.events,
+    required this.i18n,
+  });
+
+  @override
+  State<_EventPickerDialog> createState() => _EventPickerDialogState();
+}
+
+class _EventPickerDialogState extends State<_EventPickerDialog> {
+  final TextEditingController _searchController = TextEditingController();
+  List<Event> _filteredEvents = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filteredEvents = widget.events;
+    _searchController.addListener(_filterEvents);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterEvents() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredEvents = widget.events;
+      } else {
+        _filteredEvents = widget.events.where((event) {
+          return event.title.toLowerCase().contains(query) ||
+              event.id.toLowerCase().contains(query) ||
+              (event.locationName?.toLowerCase().contains(query) ?? false);
+        }).toList();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.i18n.t('select_event')),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 400,
+        child: Column(
+          children: [
+            // Search bar
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: widget.i18n.t('search_events'),
+                prefixIcon: const Icon(Icons.search),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Event list
+            Expanded(
+              child: _filteredEvents.isEmpty
+                  ? Center(child: Text(widget.i18n.t('no_events_found')))
+                  : ListView.builder(
+                      itemCount: _filteredEvents.length,
+                      itemBuilder: (context, index) {
+                        final event = _filteredEvents[index];
+                        return ListTile(
+                          leading: const Icon(Icons.event),
+                          title: Text(
+                            event.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                event.displayDate,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              if (event.locationName != null)
+                                Text(
+                                  event.locationName!,
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: Theme.of(context).colorScheme.secondary,
+                                      ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
+                          isThreeLine: event.locationName != null,
+                          onTap: () => Navigator.pop(context, event),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(widget.i18n.t('cancel')),
+        ),
+      ],
+    );
+  }
 }

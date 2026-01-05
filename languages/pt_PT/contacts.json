@@ -85,5 +85,14 @@
   "visited": "Visitou",
   "interaction_added": "Interação adicionada",
   "interaction_history": "Histórico de Interações",
-  "no_interactions_yet": "Nenhuma interação registada"
+  "no_interactions_yet": "Nenhuma interação registada",
+  "interaction_event": "Evento",
+  "associate_with_event": "Associar a um evento",
+  "add_event_note": "Adicionar Nota de Evento",
+  "event_note_placeholder": "Nota sobre encontro com este contacto no evento...",
+  "spotted_at_event": "Visto no evento",
+  "event": "Evento",
+  "select_event": "Selecionar Evento",
+  "search_events": "Pesquisar eventos...",
+  "no_events_found": "Nenhum evento encontrado"
 }
