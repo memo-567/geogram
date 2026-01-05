@@ -1636,7 +1636,7 @@ class _CollectionGridCard extends StatelessWidget {
       case 'log':
         return Icons.article_outlined;
       case 'console':
-        return Icons.terminal;
+        return Icons.computer;
       default:
         return Icons.folder_special;
     }
@@ -2065,7 +2065,7 @@ class _CollectionCard extends StatelessWidget {
       case 'log':
         return Icons.article_outlined;
       case 'console':
-        return Icons.terminal;
+        return Icons.computer;
       default:
         return Icons.folder_special;
     }

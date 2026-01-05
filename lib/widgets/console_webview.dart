@@ -539,13 +539,11 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     #term { width: 100%; height: 100%; background: #000; }
     .loading { color: #0f0; font-family: monospace; padding: 20px; }
-    .error { color: #f00; font-family: monospace; padding: 20px; }
+    .error { color: #f00; font-family: monospace; padding: 20px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
   <div id="term"><div class="loading">Loading Alpine Linux VM...</div></div>
-  <script src="$vmBaseUrl/term.js"></script>
-  <script src="$vmBaseUrl/jslinux.js"></script>
   <script>
     window.geogramBridge = {
       sendMessage: function(type, data) {
@@ -554,12 +552,39 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       onReady: function() { this.sendMessage('ready', true); },
       onError: function(msg) { this.sendMessage('error', msg); }
     };
+    window.scriptsLoaded = { term: false, jslinux: false };
+    window.scriptErrors = [];
     var vmBaseUrl = '$vmBaseUrl';
     var sessionConfig = $vmConfig;
+
+    function showError(msg) {
+      document.getElementById('term').innerHTML = '<div class="error">' + msg + '</div>';
+      window.geogramBridge.onError(msg);
+    }
+
+    function loadScript(name, url, callback) {
+      var script = document.createElement('script');
+      script.src = url;
+      script.onload = function() {
+        window.scriptsLoaded[name] = true;
+        if (callback) callback();
+      };
+      script.onerror = function() {
+        window.scriptErrors.push(name + ': ' + url);
+        showError('Failed to load ' + name + '.js\\n\\nThe station may not have VM files yet.\\nPlease wait for the station to download them,\\nor check your network connection.\\n\\nURL: ' + url);
+      };
+      document.head.appendChild(script);
+    }
+
     function initVM() {
       try {
+        if (window.scriptErrors.length > 0) return;
         document.getElementById('term').innerHTML = '';
-        if (typeof pc_start !== 'function') throw new Error('JSLinux not loaded');
+        if (typeof pc_start !== 'function') {
+          showError('JSLinux not loaded\\n\\nThe emulator scripts failed to load.\\nPlease check your station connection.');
+          return;
+        }
+        window.vmStarted = true;
         pc_start({
           mem_size: sessionConfig.memory_size,
           cmdline: 'console=ttyS0 root=/dev/vda rw',
@@ -569,12 +594,25 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
           on_ready: function() { window.geogramBridge.onReady(); }
         });
       } catch (e) {
-        document.getElementById('term').innerHTML = '<div class="error">Error: ' + e.message + '</div>';
-        window.geogramBridge.onError(e.message);
+        showError('VM Error: ' + e.message);
       }
     }
-    window.addEventListener('load', function() { setTimeout(initVM, 100); });
-    setTimeout(function() { if (!window.vmStarted) initVM(); }, 2000);
+
+    // Load scripts in sequence
+    loadScript('term', vmBaseUrl + '/term.js', function() {
+      loadScript('jslinux', vmBaseUrl + '/jslinux.js', function() {
+        setTimeout(initVM, 100);
+      });
+    });
+
+    // Fallback timeout
+    setTimeout(function() {
+      if (!window.vmStarted && window.scriptErrors.length === 0) {
+        if (!window.scriptsLoaded.term || !window.scriptsLoaded.jslinux) {
+          showError('Timeout loading VM scripts\\n\\nThe station may be slow or unreachable.');
+        }
+      }
+    }, 10000);
   </script>
 </body>
 </html>
