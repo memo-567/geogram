@@ -499,9 +499,15 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
     }
   }
 
-  String? _getStationUrl() {
+  /// Default station URL for VM file downloads
+  static const String _defaultStationUrl = 'https://p2p.radio';
+
+  String _getStationUrl() {
     final station = StationService().getPreferredStation();
-    if (station == null || station.url.isEmpty) return null;
+    if (station == null || station.url.isEmpty) {
+      // Use default station as fallback
+      return _defaultStationUrl;
+    }
 
     var stationUrl = station.url;
     if (stationUrl.startsWith('ws://')) {
@@ -517,10 +523,6 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
 
   Future<String> _generateEmulatorHtml() async {
     final stationUrl = _getStationUrl();
-    if (stationUrl == null) {
-      return '<html><body style="background:#000;color:#f00;font-family:monospace;padding:20px;">'
-          '<h2>Error: No Station Connected</h2></body></html>';
-    }
 
     // Read locally cached JS files
     final vmManager = ConsoleVmManager();

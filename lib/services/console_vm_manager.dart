@@ -170,14 +170,17 @@ class ConsoleVmManager {
     return _activeDownloads[filename] ?? 0.0;
   }
 
-  /// Get station URL for VM file downloads (with proper validation)
-  String? _getStationUrl() {
+  /// Default station URL for VM file downloads
+  static const String _defaultStationUrl = 'https://p2p.radio';
+
+  /// Get station URL for VM file downloads (with fallback to default)
+  String _getStationUrl() {
     final station = StationService().getPreferredStation();
 
-    // Check both null AND empty string (station can have empty url)
+    // Use default station if no valid station URL
     if (station == null || station.url.isEmpty) {
-      LogService().log('ConsoleVmManager: No valid station URL available');
-      return null;
+      LogService().log('ConsoleVmManager: Using default station URL');
+      return _defaultStationUrl;
     }
 
     // Convert WebSocket URL to HTTP/HTTPS
@@ -199,10 +202,6 @@ class ConsoleVmManager {
   /// Fetch manifest from station
   Future<VmManifest?> fetchManifest() async {
     final stationUrl = _getStationUrl();
-    if (stationUrl == null) {
-      LogService().log('ConsoleVmManager: No station available for manifest');
-      return null;
-    }
     LogService().log('ConsoleVmManager: Fetching manifest from $stationUrl');
 
     try {
@@ -237,10 +236,6 @@ class ConsoleVmManager {
     }
 
     final stationUrl = _getStationUrl();
-    if (stationUrl == null) {
-      LogService().log('ConsoleVmManager: No station available for download');
-      return false;
-    }
     LogService().log('ConsoleVmManager: Downloading VM files from $stationUrl');
 
     bool allSuccess = true;
