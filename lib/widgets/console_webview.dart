@@ -522,11 +522,36 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
           '<h2>Error: No Station Connected</h2></body></html>';
     }
 
+    // Read locally cached JS files
+    final vmManager = ConsoleVmManager();
+    final vmPath = await vmManager.vmPath;
+
+    String termJs = '';
+    String jslinuxJs = '';
+
+    try {
+      final termFile = File('$vmPath/term.js');
+      final jslinuxFile = File('$vmPath/jslinux.js');
+
+      if (await termFile.exists() && await jslinuxFile.exists()) {
+        termJs = await termFile.readAsString();
+        jslinuxJs = await jslinuxFile.readAsString();
+        LogService().log('Console: Loaded scripts from local cache');
+      } else {
+        LogService().log('Console: Local scripts not found, will load from network');
+      }
+    } catch (e) {
+      LogService().log('Console: Error reading local scripts: $e');
+    }
+
     final vmBaseUrl = '$stationUrl/console/vm';
     final vmConfig = jsonEncode({
       'memory_size': widget.session.memory,
       'network': widget.session.networkEnabled,
     });
+
+    // If we have local scripts, embed them inline; otherwise load from network
+    final useLocalScripts = termJs.isNotEmpty && jslinuxJs.isNotEmpty;
 
     return '''
 <!DOCTYPE html>
@@ -544,6 +569,19 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
 </head>
 <body>
   <div id="term"><div class="loading">Loading Alpine Linux VM...</div></div>
+  ${useLocalScripts ? '''
+  <!-- Locally cached scripts -->
+  <script>
+$termJs
+  </script>
+  <script>
+$jslinuxJs
+  </script>
+''' : '''
+  <!-- Network loaded scripts -->
+  <script src="$vmBaseUrl/term.js"></script>
+  <script src="$vmBaseUrl/jslinux.js"></script>
+'''}
   <script>
     window.geogramBridge = {
       sendMessage: function(type, data) {
@@ -552,8 +590,6 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       onReady: function() { this.sendMessage('ready', true); },
       onError: function(msg) { this.sendMessage('error', msg); }
     };
-    window.scriptsLoaded = { term: false, jslinux: false };
-    window.scriptErrors = [];
     var vmBaseUrl = '$vmBaseUrl';
     var sessionConfig = $vmConfig;
 
@@ -562,23 +598,8 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       window.geogramBridge.onError(msg);
     }
 
-    function loadScript(name, url, callback) {
-      var script = document.createElement('script');
-      script.src = url;
-      script.onload = function() {
-        window.scriptsLoaded[name] = true;
-        if (callback) callback();
-      };
-      script.onerror = function() {
-        window.scriptErrors.push(name + ': ' + url);
-        showError('Failed to load ' + name + '.js\\n\\nThe station may not have VM files yet.\\nPlease wait for the station to download them,\\nor check your network connection.\\n\\nURL: ' + url);
-      };
-      document.head.appendChild(script);
-    }
-
     function initVM() {
       try {
-        if (window.scriptErrors.length > 0) return;
         document.getElementById('term').innerHTML = '';
         if (typeof pc_start !== 'function') {
           showError('JSLinux not loaded\\n\\nThe emulator scripts failed to load.\\nPlease check your station connection.');
@@ -598,21 +619,21 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       }
     }
 
-    // Load scripts in sequence
-    loadScript('term', vmBaseUrl + '/term.js', function() {
-      loadScript('jslinux', vmBaseUrl + '/jslinux.js', function() {
-        setTimeout(initVM, 100);
-      });
-    });
+    // Start VM after page load
+    if (document.readyState === 'complete') {
+      setTimeout(initVM, 100);
+    } else {
+      window.addEventListener('load', function() { setTimeout(initVM, 100); });
+    }
 
     // Fallback timeout
     setTimeout(function() {
-      if (!window.vmStarted && window.scriptErrors.length === 0) {
-        if (!window.scriptsLoaded.term || !window.scriptsLoaded.jslinux) {
-          showError('Timeout loading VM scripts\\n\\nThe station may be slow or unreachable.');
+      if (!window.vmStarted) {
+        if (typeof pc_start !== 'function') {
+          showError('Timeout: JSLinux not loaded\\n\\nPlease check your network connection.');
         }
       }
-    }, 10000);
+    }, 15000);
   </script>
 </body>
 </html>
