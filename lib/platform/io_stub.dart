@@ -553,9 +553,42 @@ class GZipCodec {
   List<int> decode(List<int> bytes) {
     throw UnsupportedError('GZipCodec is not supported on web');
   }
+
+  /// Decoder for streaming decompression
+  StreamTransformer<List<int>, List<int>> get decoder {
+    throw UnsupportedError('GZipCodec is not supported on web');
+  }
+
+  /// Encoder for streaming compression
+  StreamTransformer<List<int>, List<int>> get encoder {
+    throw UnsupportedError('GZipCodec is not supported on web');
+  }
 }
 
 const gzip = GZipCodec();
+
+/// Stub for HttpStatus
+class HttpStatus {
+  static const int ok = 200;
+  static const int created = 201;
+  static const int accepted = 202;
+  static const int noContent = 204;
+  static const int movedPermanently = 301;
+  static const int found = 302;
+  static const int seeOther = 303;
+  static const int notModified = 304;
+  static const int temporaryRedirect = 307;
+  static const int permanentRedirect = 308;
+  static const int badRequest = 400;
+  static const int unauthorized = 401;
+  static const int forbidden = 403;
+  static const int notFound = 404;
+  static const int methodNotAllowed = 405;
+  static const int internalServerError = 500;
+  static const int notImplemented = 501;
+  static const int badGateway = 502;
+  static const int serviceUnavailable = 503;
+}
 
 /// Stub for exit
 Never exit(int code) {
@@ -660,6 +693,38 @@ abstract class HttpHeaders {
   void set(String name, Object value);
   String? value(String name);
   List<String>? operator [](String name);
+}
+
+/// Concrete implementation of HttpHeaders for stubs
+class _HttpHeadersImpl implements HttpHeaders {
+  final Map<String, List<String>> _headers = {};
+
+  @override
+  ContentType? contentType;
+
+  @override
+  int contentLength = -1;
+
+  @override
+  void add(String name, Object value) {
+    _headers.putIfAbsent(name.toLowerCase(), () => []).add(value.toString());
+  }
+
+  @override
+  void set(String name, Object value) {
+    _headers[name.toLowerCase()] = [value.toString()];
+  }
+
+  @override
+  String? value(String name) {
+    final values = _headers[name.toLowerCase()];
+    return values?.isNotEmpty == true ? values!.first : null;
+  }
+
+  @override
+  List<String>? operator [](String name) {
+    return _headers[name.toLowerCase()];
+  }
 }
 
 /// Stub for ContentType
@@ -858,31 +923,34 @@ abstract class HttpRequest implements Stream<List<int>> {
       {Function? onError, void Function()? onDone, bool? cancelOnError});
 }
 
-/// Stub for HttpResponse
-abstract class HttpResponse {
-  int get statusCode;
-  set statusCode(int value);
-  String get reasonPhrase;
-  set reasonPhrase(String value);
-  HttpHeaders get headers;
-  List<Cookie> get cookies;
-  Duration? get deadline;
-  set deadline(Duration? value);
-  int get contentLength;
-  set contentLength(int value);
-  bool get persistentConnection;
-  set persistentConnection(bool value);
-  bool get bufferOutput;
-  set bufferOutput(bool value);
+/// Stub for HttpResponse - implements StreamConsumer for pipe() compatibility
+class HttpResponse implements StreamConsumer<List<int>> {
+  int statusCode = 200;
+  String reasonPhrase = 'OK';
+  final HttpHeaders headers = _HttpHeadersImpl();
+  final List<Cookie> cookies = [];
+  Duration? deadline;
+  int contentLength = -1;
+  bool persistentConnection = true;
+  bool bufferOutput = true;
 
-  void add(List<int> data);
-  void write(Object? object);
-  void writeln([Object? object]);
-  void writeAll(Iterable objects, [String separator]);
-  Future<void> close();
-  Future<void> flush();
-  Future<void> redirect(Uri location, {int status});
-  Future<dynamic> addStream(Stream<List<int>> stream);
+  void add(List<int> data) {}
+  void write(Object? object) {}
+  void writeln([Object? object]) {}
+  void writeAll(Iterable objects, [String separator = '']) {}
+
+  @override
+  Future<void> close() async {}
+
+  Future<void> flush() async {}
+  Future<void> redirect(Uri location, {int status = 302}) async {}
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await for (final _ in stream) {
+      // No-op on web
+    }
+  }
 }
 
 /// Stub for HttpSession
