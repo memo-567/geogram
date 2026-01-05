@@ -2452,7 +2452,11 @@ class StationServerService {
 
       request.response.headers.contentType = contentType;
       request.response.headers.contentLength = fileSize;
-      request.response.headers.add('Content-Disposition', 'attachment; filename="$filename"');
+      // Only add Content-Disposition for binary files, not scripts
+      // Scripts need to be executed inline, not downloaded
+      if (!filename.endsWith('.js') && !filename.endsWith('.json') && !filename.endsWith('.cfg')) {
+        request.response.headers.add('Content-Disposition', 'attachment; filename="$filename"');
+      }
 
       // Stream the file
       await request.response.addStream(file.openRead());
