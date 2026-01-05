@@ -683,14 +683,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('places')),
-        actions: [
-          if (!isMobilePlatform)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _refreshAllPlaces,
-              tooltip: _i18n.t('refresh'),
-            ),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
@@ -1379,6 +1371,22 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   }
 
   Widget _buildLocationRow(Place place) {
+    final userLocation = _userLocationService.currentLocation;
+    String coordsText = place.coordinatesString;
+
+    if (userLocation != null && userLocation.isValid) {
+      final distance = _calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        place.latitude,
+        place.longitude,
+      );
+      final distanceStr = distance < 1
+          ? '${(distance * 1000).toStringAsFixed(0)} m'
+          : '${distance.toStringAsFixed(1)} km';
+      coordsText = '${place.coordinatesString} ($distanceStr)';
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -1393,7 +1401,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
           ),
           Expanded(
             child: SelectableText(
-              place.coordinatesString,
+              coordsText,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
@@ -1491,6 +1499,16 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
   final UserLocationService _userLocationService = UserLocationService();
   bool _hasChanges = false;
   List<String> _photos = [];
+
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLon = (lon2 - lon1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) * sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
 
   @override
   void initState() {
@@ -1690,6 +1708,22 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
   }
 
   Widget _buildLocationRow() {
+    final userLocation = _userLocationService.currentLocation;
+    String coordsText = widget.place.coordinatesString;
+
+    if (userLocation != null && userLocation.isValid) {
+      final distance = _calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        widget.place.latitude,
+        widget.place.longitude,
+      );
+      final distanceStr = distance < 1
+          ? '${(distance * 1000).toStringAsFixed(0)} m'
+          : '${distance.toStringAsFixed(1)} km';
+      coordsText = '${widget.place.coordinatesString} ($distanceStr)';
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -1704,7 +1738,7 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
           ),
           Expanded(
             child: SelectableText(
-              widget.place.coordinatesString,
+              coordsText,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),

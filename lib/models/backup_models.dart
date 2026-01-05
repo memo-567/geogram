@@ -238,6 +238,9 @@ class BackupProviderRelationship {
   /// Maximum storage allocated by provider (bytes)
   int maxStorageBytes;
 
+  /// Current storage used on provider for this client (bytes)
+  int currentStorageBytes;
+
   /// Maximum snapshots allowed by provider
   int maxSnapshots;
 
@@ -256,6 +259,7 @@ class BackupProviderRelationship {
     this.backupIntervalDays = 3,
     this.status = BackupRelationshipStatus.pending,
     this.maxStorageBytes = 0,
+    this.currentStorageBytes = 0,
     this.maxSnapshots = 0,
     this.lastSuccessfulBackup,
     this.nextScheduledBackup,
@@ -269,6 +273,7 @@ class BackupProviderRelationship {
       backupIntervalDays: json['backup_interval_days'] as int? ?? 3,
       status: parseBackupRelationshipStatus(json['status'] as String? ?? 'pending'),
       maxStorageBytes: json['max_storage_bytes'] as int? ?? 0,
+      currentStorageBytes: json['current_storage_bytes'] as int? ?? 0,
       maxSnapshots: json['max_snapshots'] as int? ?? 0,
       lastSuccessfulBackup: json['last_successful_backup'] != null
           ? DateTime.parse(json['last_successful_backup'] as String)
@@ -289,6 +294,7 @@ class BackupProviderRelationship {
       'backup_interval_days': backupIntervalDays,
       'status': status.name,
       'max_storage_bytes': maxStorageBytes,
+      'current_storage_bytes': currentStorageBytes,
       'max_snapshots': maxSnapshots,
       if (lastSuccessfulBackup != null) 'last_successful_backup': lastSuccessfulBackup!.toIso8601String(),
       if (nextScheduledBackup != null) 'next_scheduled_backup': nextScheduledBackup!.toIso8601String(),
@@ -302,6 +308,7 @@ class BackupProviderRelationship {
     int? backupIntervalDays,
     BackupRelationshipStatus? status,
     int? maxStorageBytes,
+    int? currentStorageBytes,
     int? maxSnapshots,
     DateTime? lastSuccessfulBackup,
     DateTime? nextScheduledBackup,
@@ -313,6 +320,7 @@ class BackupProviderRelationship {
       backupIntervalDays: backupIntervalDays ?? this.backupIntervalDays,
       status: status ?? this.status,
       maxStorageBytes: maxStorageBytes ?? this.maxStorageBytes,
+      currentStorageBytes: currentStorageBytes ?? this.currentStorageBytes,
       maxSnapshots: maxSnapshots ?? this.maxSnapshots,
       lastSuccessfulBackup: lastSuccessfulBackup ?? this.lastSuccessfulBackup,
       nextScheduledBackup: nextScheduledBackup ?? this.nextScheduledBackup,
@@ -329,6 +337,9 @@ class BackupSnapshot {
   /// Snapshot status (in_progress, complete, partial, failed)
   String status;
 
+  /// Optional user note/label for the snapshot
+  String? note;
+
   /// Total number of files in snapshot
   int totalFiles;
 
@@ -344,6 +355,7 @@ class BackupSnapshot {
   BackupSnapshot({
     required this.snapshotId,
     this.status = 'in_progress',
+    this.note,
     this.totalFiles = 0,
     this.totalBytes = 0,
     DateTime? startedAt,
@@ -354,6 +366,7 @@ class BackupSnapshot {
     return BackupSnapshot(
       snapshotId: json['snapshot_id'] as String,
       status: json['status'] as String? ?? 'in_progress',
+      note: json['note'] as String?,
       totalFiles: json['total_files'] as int? ?? 0,
       totalBytes: json['total_bytes'] as int? ?? 0,
       startedAt: json['started_at'] != null
@@ -369,6 +382,7 @@ class BackupSnapshot {
     return {
       'snapshot_id': snapshotId,
       'status': status,
+      if (note != null) 'note': note,
       'total_files': totalFiles,
       'total_bytes': totalBytes,
       'started_at': startedAt.toIso8601String(),
@@ -379,6 +393,7 @@ class BackupSnapshot {
   BackupSnapshot copyWith({
     String? snapshotId,
     String? status,
+    String? note,
     int? totalFiles,
     int? totalBytes,
     DateTime? startedAt,
@@ -387,6 +402,7 @@ class BackupSnapshot {
     return BackupSnapshot(
       snapshotId: snapshotId ?? this.snapshotId,
       status: status ?? this.status,
+      note: note ?? this.note,
       totalFiles: totalFiles ?? this.totalFiles,
       totalBytes: totalBytes ?? this.totalBytes,
       startedAt: startedAt ?? this.startedAt,
@@ -679,6 +695,77 @@ class DiscoveredProvider {
       if (latestSnapshot != null) 'latest_snapshot': latestSnapshot,
     };
   }
+}
+
+/// Available backup provider for selection (LAN or station directory).
+class AvailableBackupProvider {
+  final String callsign;
+  final String npub;
+  final String connectionMethod; // 'lan' or 'station'
+  final int maxTotalStorageBytes;
+  final int defaultMaxClientStorageBytes;
+  final int defaultMaxSnapshots;
+  final DateTime? lastSeen;
+  final DateTime? updatedAt;
+
+  AvailableBackupProvider({
+    required this.callsign,
+    required this.npub,
+    required this.connectionMethod,
+    this.maxTotalStorageBytes = 0,
+    this.defaultMaxClientStorageBytes = 0,
+    this.defaultMaxSnapshots = 0,
+    this.lastSeen,
+    this.updatedAt,
+  });
+
+  factory AvailableBackupProvider.fromJson(
+    Map<String, dynamic> json, {
+    String? connectionMethodOverride,
+  }) {
+    DateTime? parseDate(dynamic value) {
+      if (value is String && value.isNotEmpty) {
+        return DateTime.tryParse(value);
+      }
+      return null;
+    }
+
+    return AvailableBackupProvider(
+      callsign: json['callsign'] as String? ?? '',
+      npub: json['npub'] as String? ?? '',
+      connectionMethod: connectionMethodOverride ??
+          json['connection_method'] as String? ??
+          'unknown',
+      maxTotalStorageBytes: json['max_total_storage_bytes'] as int? ?? 0,
+      defaultMaxClientStorageBytes: json['default_max_client_storage_bytes'] as int? ?? 0,
+      defaultMaxSnapshots: json['default_max_snapshots'] as int? ?? 0,
+      lastSeen: parseDate(json['last_seen']),
+      updatedAt: parseDate(json['updated_at']),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'callsign': callsign,
+      'npub': npub,
+      'connection_method': connectionMethod,
+      'max_total_storage_bytes': maxTotalStorageBytes,
+      'default_max_client_storage_bytes': defaultMaxClientStorageBytes,
+      'default_max_snapshots': defaultMaxSnapshots,
+      if (lastSeen != null) 'last_seen': lastSeen!.toIso8601String(),
+      if (updatedAt != null) 'updated_at': updatedAt!.toIso8601String(),
+    };
+  }
+}
+
+class BackupProviderAvailabilityResult {
+  final List<AvailableBackupProvider> lanProviders;
+  final List<AvailableBackupProvider> stationProviders;
+
+  const BackupProviderAvailabilityResult({
+    required this.lanProviders,
+    required this.stationProviders,
+  });
 }
 
 /// Discovery status for account restoration

@@ -120,6 +120,47 @@ final typeId = await showModalBottomSheet<String>(
 
 ---
 
+## Notification Helpers
+
+### BackupNotificationService
+
+**File:** `lib/services/backup_notification_service.dart`
+
+Lightweight local notification handler for backup events (invite received/accepted/declined, backup/restore start/complete/fail, snapshot note updates). It listens to `BackupEvent` on `EventBus` and shows platform notifications on Android/iOS when allowed by `NotificationService` settings.
+
+**Initialization (mobile only):**
+```dart
+// After NotificationService/DMNotificationService setup
+await BackupNotificationService().initialize(skipPermissionRequest: firstLaunch);
+```
+
+**How it works:**
+- Subscribes to `BackupEvent` (types in `lib/util/event_bus.dart`).
+- Respects notification preferences (`enableNotifications`, `notifySystemAlerts`).
+- Uses `flutter_local_notifications` with channel `geogram_backup`.
+
+**Reuse in other apps/features:**
+1. Fire `BackupEvent` with a relevant `BackupEventType` from your flow (e.g., for a new app that piggybacks on backup transfers). Example:
+   ```dart
+   EventBus().fire(BackupEvent(
+     type: BackupEventType.backupCompleted,
+     role: 'client',
+     counterpartCallsign: providerCallsign,
+     snapshotId: snapshotId,
+     totalFiles: totalFiles,
+     totalBytes: totalBytes,
+   ));
+   ```
+2. Ensure `BackupNotificationService().initialize()` is called during app startup (already wired in `main.dart`).
+3. Add any new `BackupEventType` variants to `lib/util/event_bus.dart` and handle them in `_handleEvent` if you want notifications.
+
+**Notes:**
+- No notifications on desktop/web (mobile-only guard).
+- Honors OS permission prompts; set `skipPermissionRequest` during onboarding as needed.
+- Uses plain title/body; extend `_handleEvent` for richer payloads if your app needs it.
+
+---
+
 ## Viewer Pages
 
 ### PhotoViewerPage

@@ -19,6 +19,7 @@ import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/dm_notification_service.dart';
+import 'services/backup_notification_service.dart';
 import 'services/message_attention_service.dart';
 import 'services/update_service.dart';
 import 'services/devices_service.dart';
@@ -60,6 +61,7 @@ import 'pages/news_browser_page.dart';
 import 'pages/postcards_browser_page.dart';
 import 'pages/contacts_browser_page.dart';
 import 'pages/places_browser_page.dart';
+import 'pages/console_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/inventory_browser_page.dart';
 import 'pages/wallet_browser_page.dart';
@@ -184,6 +186,12 @@ void main() async {
         );
 
         await windowManager.waitUntilReadyToShow(windowOptions, () async {
+          // Set size constraints to prevent Linux resize bug where dragging
+          // one edge can unexpectedly expand the other dimension
+          await windowManager.setMinimumSize(const Size(800, 600));
+          // Use 4K as maximum - windows should not grow larger than this
+          await windowManager.setMaximumSize(const Size(3840, 2160));
+
           // Apply saved position if not centering
           if (!validatedState.shouldCenter && validatedState.position != null) {
             await windowManager.setPosition(validatedState.position!);
@@ -209,6 +217,9 @@ void main() async {
             size: Size(1200, 800),
             center: true,
           ), () async {
+            // Set size constraints even in fallback mode
+            await windowManager.setMinimumSize(const Size(800, 600));
+            await windowManager.setMaximumSize(const Size(3840, 2160));
             await windowManager.show();
             await windowManager.focus();
           });
@@ -253,6 +264,9 @@ void main() async {
     }
     await DMNotificationService().initialize(skipPermissionRequest: firstLaunch);
     LogService().log('DMNotificationService initialized (skipPermission: $firstLaunch)');
+
+    await BackupNotificationService().initialize(skipPermissionRequest: firstLaunch);
+    LogService().log('BackupNotificationService initialized (skipPermission: $firstLaunch)');
 
     await MessageAttentionService().initialize();
     LogService().log('MessageAttentionService initialized');
@@ -663,7 +677,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
     // Hidden: transfer (not ready)
-    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory'];
+    final defaultTypes = ['chat', 'blog', 'alerts', 'places', 'inventory', 'backup'];
 
     LogService().log('Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}');
 
@@ -1161,12 +1175,21 @@ class _CollectionsPageState extends State<CollectionsPage> {
     final appCollections = collections.where((c) => !_isFileCollectionType(c)).toList();
     final fileCollections = collections.where(_isFileCollectionType).toList();
 
-    // Sort each group: favorites first, then alphabetically
+    // Sort each group: favorites first, then by usage count, then alphabetically
     void sortGroup(List<Collection> group) {
+      final config = ConfigService();
       group.sort((a, b) {
+        // 1. Favorites first
         if (a.isFavorite != b.isFavorite) {
           return a.isFavorite ? -1 : 1;
         }
+        // 2. By usage count (most used first)
+        final aUsage = config.getNestedValue('collections.usage.${a.type}', 0) as int;
+        final bUsage = config.getNestedValue('collections.usage.${b.type}', 0) as int;
+        if (aUsage != bUsage) {
+          return bUsage.compareTo(aUsage);
+        }
+        // 3. Alphabetically
         return a.title.toLowerCase().compareTo(b.title.toLowerCase());
       });
     }
@@ -1219,6 +1242,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
         );
       }
     }
+  }
+
+  /// Record app usage to enable sorting by frequency
+  void _recordAppUsage(String collectionType) {
+    final config = ConfigService();
+    final key = 'collections.usage.$collectionType';
+    final currentCount = config.getNestedValue(key, 0) as int;
+    config.setNestedValue(key, currentCount + 1);
   }
 
   @override
@@ -1298,6 +1329,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                           return _CollectionGridCard(
                                   collection: collection,
                                   onTap: () {
+                                    _recordAppUsage(collection.type);
                                     LogService().log('Opened collection: ${collection.title}');
                                     // Route to appropriate page based on collection type
                                     final Widget targetPage = collection.type == 'chat'
@@ -1364,9 +1396,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                                     collectionTitle: collection.title,
                                                                                                     i18n: _i18n,
                                                                                                   )
-                                                                                                : collection.type == 'log'
-                                                                                                    ? const LogPage()
-                                                                                                    : CollectionBrowserPage(collection: collection);
+                                                                                                : collection.type == 'console'
+                                                                                                    ? ConsoleBrowserPage(
+                                                                                                        collectionPath: collection.storagePath ?? '',
+                                                                                                        collectionTitle: collection.title,
+                                                                                                      )
+                                                                                                    : collection.type == 'log'
+                                                                                                        ? const LogPage()
+                                                                                                        : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1415,6 +1452,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                           return _CollectionGridCard(
                                             collection: collection,
                                             onTap: () {
+                                              _recordAppUsage(collection.type);
                                               LogService().log('Opened collection: ${collection.title}');
                                               // Route to appropriate page based on collection type
                                               final Widget targetPage = collection.type == 'chat'
@@ -1475,9 +1513,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                                                                       collectionTitle: collection.title,
                                                                                                       i18n: _i18n,
                                                                                                     )
-                                                                                                  : collection.type == 'log'
-                                                                                                      ? const LogPage()
-                                                                                                      : CollectionBrowserPage(collection: collection);
+                                                                                                  : collection.type == 'console'
+                                                                                                      ? ConsoleBrowserPage(
+                                                                                                          collectionPath: collection.storagePath ?? '',
+                                                                                                          collectionTitle: collection.title,
+                                                                                                        )
+                                                                                                      : collection.type == 'log'
+                                                                                                          ? const LogPage()
+                                                                                                          : CollectionBrowserPage(collection: collection);
 
                                               LogService().log('Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}');
                                               Navigator.push(
@@ -1592,8 +1635,184 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.account_balance_wallet;
       case 'log':
         return Icons.article_outlined;
+      case 'console':
+        return Icons.terminal;
       default:
         return Icons.folder_special;
+    }
+  }
+
+  /// Get gradient colors for collection type icon
+  LinearGradient _getTypeGradient(bool isDark) {
+    switch (collection.type) {
+      case 'chat':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
+              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
+        );
+      case 'blog':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
+              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
+        );
+      case 'places':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
+              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
+        );
+      case 'events':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
+              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
+        );
+      case 'alerts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
+              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
+        );
+      case 'backup':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00838F), const Color(0xFF006064)]
+              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
+        );
+      case 'inventory':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
+              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+        );
+      case 'wallet':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
+              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
+        );
+      case 'contacts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
+              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
+        );
+      case 'groups':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
+              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
+        );
+      case 'files':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
+              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
+        );
+      case 'log':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF37474F), const Color(0xFF263238)]
+              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
+        );
+      case 'forum':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF512DA8), const Color(0xFF4527A0)]
+              : [const Color(0xFF7E57C2), const Color(0xFF673AB7)],
+        );
+      case 'station':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
+              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
+        );
+      case 'transfer':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1976D2), const Color(0xFF1565C0)]
+              : [const Color(0xFF64B5F6), const Color(0xFF42A5F5)],
+        );
+      case 'www':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF7B1FA2), const Color(0xFF6A1B9A)]
+              : [const Color(0xFFBA68C8), const Color(0xFFAB47BC)],
+        );
+      case 'postcards':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFC2185B), const Color(0xFFAD1457)]
+              : [const Color(0xFFF06292), const Color(0xFFEC407A)],
+        );
+      case 'market':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
+              : [const Color(0xFFFFCA28), const Color(0xFFFFB300)],
+        );
+      case 'news':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF303F9F), const Color(0xFF283593)]
+              : [const Color(0xFF5C6BC0), const Color(0xFF3F51B5)],
+        );
+      case 'console':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF212121), const Color(0xFF000000)]
+              : [const Color(0xFF424242), const Color(0xFF212121)],
+        );
+      default:
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF546E7A), const Color(0xFF455A64)]
+              : [const Color(0xFF90A4AE), const Color(0xFF78909C)],
+        );
     }
   }
 
@@ -1646,9 +1865,15 @@ class _CollectionGridCard extends StatelessWidget {
     final theme = Theme.of(context);
     final i18n = I18nService();
     final isAndroid = !kIsWeb && Platform.isAndroid;
+    final isDark = theme.brightness == Brightness.dark;
+    final gradient = _getTypeGradient(isDark);
 
     return Card(
-      elevation: 2,
+      elevation: 0,
+      color: theme.colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: InkWell(
         onTap: onTap,
         onLongPress: isAndroid
@@ -1658,11 +1883,11 @@ class _CollectionGridCard extends StatelessWidget {
                 _showContextMenu(context, position);
               }
             : null,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Stack(
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Center(
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1671,20 +1896,36 @@ class _CollectionGridCard extends StatelessWidget {
                     Badge(
                       isLabelVisible: unreadCount > 0,
                       label: Text('$unreadCount'),
-                      child: Icon(
-                        _getCollectionIcon(),
-                        size: 32,
-                        color: theme.colorScheme.primary,
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          gradient: gradient,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: gradient.colors.first.withValues(alpha: 0.25),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          _getCollectionIcon(),
+                          size: 18,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                     Flexible(
                       child: Text(
                         _getDisplayTitle(),
                         style: theme.textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.w600,
-                          fontSize: 15,
+                          fontSize: 14,
                           height: 1.15,
+                          letterSpacing: -0.2,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1702,7 +1943,7 @@ class _CollectionGridCard extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.9),
+                    color: Colors.amber.withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(
@@ -1823,14 +2064,193 @@ class _CollectionCard extends StatelessWidget {
         return Icons.account_balance_wallet;
       case 'log':
         return Icons.article_outlined;
+      case 'console':
+        return Icons.terminal;
       default:
         return Icons.folder_special;
     }
   }
 
+  /// Get gradient colors for collection type icon
+  LinearGradient _getTypeGradient(bool isDark) {
+    switch (collection.type) {
+      case 'chat':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
+              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
+        );
+      case 'blog':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
+              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
+        );
+      case 'places':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
+              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
+        );
+      case 'events':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
+              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
+        );
+      case 'alerts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
+              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
+        );
+      case 'backup':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00838F), const Color(0xFF006064)]
+              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
+        );
+      case 'inventory':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
+              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+        );
+      case 'wallet':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
+              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
+        );
+      case 'contacts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
+              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
+        );
+      case 'groups':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
+              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
+        );
+      case 'files':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
+              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
+        );
+      case 'log':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF37474F), const Color(0xFF263238)]
+              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
+        );
+      case 'forum':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF512DA8), const Color(0xFF4527A0)]
+              : [const Color(0xFF7E57C2), const Color(0xFF673AB7)],
+        );
+      case 'station':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
+              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
+        );
+      case 'transfer':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1976D2), const Color(0xFF1565C0)]
+              : [const Color(0xFF64B5F6), const Color(0xFF42A5F5)],
+        );
+      case 'www':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF7B1FA2), const Color(0xFF6A1B9A)]
+              : [const Color(0xFFBA68C8), const Color(0xFFAB47BC)],
+        );
+      case 'postcards':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFC2185B), const Color(0xFFAD1457)]
+              : [const Color(0xFFF06292), const Color(0xFFEC407A)],
+        );
+      case 'market':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
+              : [const Color(0xFFFFCA28), const Color(0xFFFFB300)],
+        );
+      case 'news':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF303F9F), const Color(0xFF283593)]
+              : [const Color(0xFF5C6BC0), const Color(0xFF3F51B5)],
+        );
+      case 'console':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF212121), const Color(0xFF000000)]
+              : [const Color(0xFF424242), const Color(0xFF212121)],
+        );
+      default:
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF546E7A), const Color(0xFF455A64)]
+              : [const Color(0xFF90A4AE), const Color(0xFF78909C)],
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final i18n = I18nService();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final gradient = _getTypeGradient(isDark);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
@@ -1843,12 +2263,28 @@ class _CollectionCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(
-                    _getCollectionIcon(),
-                    color: Theme.of(context).colorScheme.primary,
-                    size: 32,
+                  // Circular gradient icon
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: gradient,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: gradient.colors.first.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      _getCollectionIcon(),
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1858,8 +2294,9 @@ class _CollectionCard extends StatelessWidget {
                             Expanded(
                               child: Text(
                                 collection.title,
-                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: -0.2,
                                     ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -1873,30 +2310,37 @@ class _CollectionCard extends StatelessWidget {
                                 color: collection.isFavorite
                                     ? Colors.amber
                                     : null,
+                                size: 22,
                               ),
                               onPressed: onFavoriteToggle,
                               tooltip: 'Toggle Favorite',
+                              visualDensity: VisualDensity.compact,
                             ),
                             IconButton(
-                              icon: const Icon(Icons.folder_open),
+                              icon: const Icon(Icons.folder_open, size: 22),
                               onPressed: onOpenFolder,
                               tooltip: 'Open Folder',
+                              visualDensity: VisualDensity.compact,
                             ),
                             IconButton(
-                              icon: const Icon(Icons.delete_outline),
+                              icon: const Icon(Icons.delete_outline, size: 22),
                               onPressed: onDelete,
                               tooltip: 'Delete',
+                              visualDensity: VisualDensity.compact,
                             ),
                           ],
                         ),
                         if (collection.description.isNotEmpty)
-                          Text(
-                            collection.description,
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              collection.description,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                       ],
                     ),

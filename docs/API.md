@@ -1871,8 +1871,8 @@ Triggers a debug action.
 | `backup_accept_invite` | Accept a pending backup invite (provider side) | `client_callsign` (required): Client to accept |
 | `backup_start` | Start backup to a provider | `provider_callsign` (required): Target provider |
 | `backup_get_status` | Get current backup/restore status | None |
-| `backup_restore` | Start restore from a provider snapshot | `provider_callsign` (required): Provider callsign, `snapshot_id` (optional): Snapshot date (YYYY-MM-DD) |
-| `backup_list_snapshots` | List available snapshots from a provider | `provider_callsign` (required): Provider callsign |
+| `backup_restore` | Start restore from a provider snapshot | `provider_callsign` (required): Provider callsign, `snapshot_id` (required): Snapshot date (YYYY-MM-DD) |
+| `backup_list_snapshots` | List available snapshots for a client | `client_callsign` (required): Client callsign |
 | `event_create` | Create an event for testing | `title` (required): Event title, `content` (required): Event content, `location` (required): "online" or "lat,lon", `app_name` (optional): App name (default: "my-events"), `location_name` (optional): Venue name |
 | `event_list` | List all events | `year` (optional): Filter by year |
 | `event_delete` | Delete an event | `event_id` (required): Event ID (e.g., "2025-01-15_party"), `app_name` (optional): App name (default: "my-events") |
@@ -2024,7 +2024,7 @@ curl -X POST http://localhost:3456/api/debug \
 # List snapshots from a provider
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
-  -d '{"action": "backup_list_snapshots", "provider_callsign": "X2BCDE"}'
+  -d '{"action": "backup_list_snapshots", "client_callsign": "X1ABCD"}'
 
 # Restore from a snapshot
 curl -X POST http://localhost:3456/api/debug \
@@ -2220,6 +2220,15 @@ The Backup API enables peer-to-peer backup and restore between devices. A device
 
 For detailed specifications, see [Backup Format Specification](apps/backup-format-specification.md).
 
+#### Authentication
+
+All backup endpoints require a NOSTR-signed event to prevent impersonation (including reads like availability, snapshots, and file transfers):
+
+- `Authorization: Nostr <base64_encoded_event_json>`
+
+The server verifies signature, freshness (5 minutes), and `callsign` tag before processing. The `t` tag should be `backup`.
+Large payloads (manifests/files) use `application/octet-stream` over HTTP (LAN or station proxy). WebRTC transports are used for signaling only.
+
 #### Provider Endpoints
 
 ##### GET /api/backup/settings
@@ -2254,6 +2263,23 @@ Update provider backup settings.
 ```
 
 **Response (200 OK):** Updated settings object.
+
+##### GET /api/backup/availability
+
+Lightweight provider availability response for LAN discovery. Requires NOSTR auth.
+
+**Response (200 OK):**
+```json
+{
+  "enabled": true,
+  "callsign": "X2BCDE",
+  "npub": "npub1xyz789...",
+  "max_total_storage_bytes": 10737418240,
+  "default_max_client_storage_bytes": 1073741824,
+  "default_max_snapshots": 10,
+  "updated_at": "2026-01-04T10:00:00Z"
+}
+```
 
 ##### GET /api/backup/clients
 
@@ -2316,12 +2342,38 @@ List client's snapshots.
     {
       "snapshot_id": "2025-12-12",
       "status": "complete",
+      "note": "Field work day 3",
       "total_files": 1234,
       "total_bytes": 524288000,
       "started_at": "2025-12-12T15:30:00Z",
       "completed_at": "2025-12-12T16:45:00Z"
     }
-  ]
+  ],
+  "total_snapshot_bytes": 524288000,
+  "max_storage_bytes": 1073741824,
+  "current_storage_bytes": 524288000,
+  "max_snapshots": 10,
+  "remaining_bytes": 548451824
+}
+```
+
+##### PUT /api/backup/clients/{callsign}/snapshots/{date}/note
+
+Update the human-readable note/label for a snapshot. Requires NOSTR authentication from the snapshot owner.
+
+**Request:**
+```json
+{
+  "note": "Why this snapshot matters"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "snapshot_id": "2025-12-12",
+  "note": "Why this snapshot matters"
 }
 ```
 
@@ -2335,13 +2387,37 @@ Get snapshot manifest (encrypted).
 | `callsign` | Client's callsign |
 | `date` | Snapshot date `YYYY-MM-DD` |
 
-**Response (200 OK):** Encrypted manifest JSON (decryptable only by client).
+**Response (200 OK):** Encrypted manifest as binary `application/octet-stream`.
+
+##### PUT /api/backup/clients/{callsign}/snapshots/{date}
+
+Upload encrypted manifest to snapshot. Requires NOSTR authentication.
+
+**Headers:**
+| Header | Description |
+|--------|-------------|
+| `Authorization` | `Nostr <base64_encoded_event>` |
+| `Content-Type` | `application/octet-stream` |
+
+**Notes:**
+- Raw binary body is preferred; JSON/base64 payloads are also accepted for compatibility.
+
+**Notes:**
+- Raw binary body is preferred; JSON/base64 payloads are also accepted for compatibility.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Manifest saved"
+}
+```
 
 ##### GET /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
 
 Download encrypted file from snapshot.
 
-**Response (200 OK):** Binary encrypted file data.
+**Response (200 OK):** Binary encrypted file data (`application/octet-stream`).
 
 ##### PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
 
@@ -2357,8 +2433,8 @@ Upload encrypted file to snapshot. Requires NOSTR authentication.
 ```json
 {
   "success": true,
-  "file": "a94a8fe5.enc",
-  "bytes": 4128
+  "message": "File saved",
+  "size": 4128
 }
 ```
 
@@ -2444,35 +2520,44 @@ Start manual backup to a provider.
 ```json
 {
   "success": true,
-  "snapshot_id": "2025-12-12",
-  "status": "in_progress"
+  "status": {
+    "provider_callsign": "X2BCDE",
+    "snapshot_id": "2025-12-12",
+    "status": "in_progress",
+    "progress_percent": 0,
+    "files_transferred": 0,
+    "files_total": 0,
+    "bytes_transferred": 0,
+    "bytes_total": 0,
+    "started_at": "2025-12-12T15:30:00Z"
+  }
 }
 ```
 
 ##### GET /api/backup/status
 
 Get current backup status.
+Note: This endpoint reports backup progress only; restore progress is not currently exposed via the public API.
 
 **Response (200 OK):**
 ```json
 {
-  "active_backup": {
-    "provider_callsign": "X2BCDE",
-    "snapshot_id": "2025-12-12",
-    "status": "in_progress",
-    "progress_percent": 45,
-    "files_transferred": 567,
-    "files_total": 1234,
-    "bytes_transferred": 234567890,
-    "bytes_total": 524288000,
-    "started_at": "2025-12-12T15:30:00Z"
-  }
+  "provider_callsign": "X2BCDE",
+  "snapshot_id": "2025-12-12",
+  "status": "in_progress",
+  "progress_percent": 45,
+  "files_transferred": 567,
+  "files_total": 1234,
+  "bytes_transferred": 234567890,
+  "bytes_total": 524288000,
+  "started_at": "2025-12-12T15:30:00Z"
 }
 ```
 
 ##### POST /api/backup/restore
 
 Start restore from a provider snapshot.
+Restore runs asynchronously.
 
 **Request:**
 ```json
@@ -2486,9 +2571,32 @@ Start restore from a provider snapshot.
 ```json
 {
   "success": true,
-  "status": "downloading",
-  "total_files": 1234,
-  "total_bytes": 524288000
+  "message": "Restore started"
+}
+```
+
+#### Provider Directory (Station)
+
+##### GET /api/backup/providers/available
+
+List available backup providers from the connected station directory. Requires NOSTR authorization.
+Requester must be connected to the station.
+Entries expire after roughly 90 seconds without provider refresh.
+
+**Response (200 OK):**
+```json
+{
+  "providers": [
+    {
+      "callsign": "X2BCDE",
+      "npub": "npub1xyz789...",
+      "max_total_storage_bytes": 10737418240,
+      "default_max_client_storage_bytes": 1073741824,
+      "default_max_snapshots": 10,
+      "last_seen": "2026-01-04T10:00:30Z",
+      "connection_method": "station"
+    }
+  ]
 }
 ```
 

@@ -8,13 +8,14 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/vision_result.dart';
 import '../models/vision_model_info.dart';
 import 'vision_model_manager.dart';
 import 'tflite_service.dart';
 import '../../services/log_service.dart';
+import '../../services/storage_config.dart';
 
 /// Main service for vision/image processing
 class VisionService {
@@ -36,8 +37,7 @@ class VisionService {
 
     await _modelManager.initialize();
 
-    final appDir = await getApplicationDocumentsDirectory();
-    _cachePath = '${appDir.path}/bot/cache/vision';
+    _cachePath = p.join(StorageConfig().baseDir, 'bot', 'cache', 'vision');
 
     final cacheDir = Directory(_cachePath!);
     if (!await cacheDir.exists()) {

@@ -143,6 +143,27 @@ else()
   message(WARNING "libopus not found for ${OPUS_ARCH} at ${OPUS_LIB}")
 endif()
 
+# Bundle TinyEMU for Console VM (lightweight x86 emulator - same as JSLinux)
+# TinyEMU is statically compiled so it has no dependencies
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(TINYEMU_ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+  set(TINYEMU_ARCH "x86_64")
+else()
+  set(TINYEMU_ARCH "x86_64")  # Default
+endif()
+
+set(TINYEMU_BIN "${CMAKE_CURRENT_SOURCE_DIR}/tinyemu/${TINYEMU_ARCH}/temu")
+if(EXISTS ${TINYEMU_BIN})
+  # Install to bin/ directory
+  install(PROGRAMS "${TINYEMU_BIN}"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/bin"
+    COMPONENT Runtime)
+  message(STATUS "Bundling TinyEMU for ${TINYEMU_ARCH} from ${TINYEMU_BIN}")
+else()
+  message(STATUS "TinyEMU not found for ${TINYEMU_ARCH} at ${TINYEMU_BIN} - Console VM will require system QEMU")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

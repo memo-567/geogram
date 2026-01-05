@@ -37,10 +37,11 @@ class ImportExportProfilesDialog extends StatelessWidget {
       ),
       content: SizedBox(
         width: 400,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             // Info text
             Container(
               padding: const EdgeInsets.all(12),
@@ -155,6 +156,7 @@ class ImportExportProfilesDialog extends StatelessWidget {
             ],
           ],
         ),
+      ),
       ),
       actions: [
         TextButton(

@@ -5,7 +5,6 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as path;
 
@@ -343,6 +342,24 @@ class TileCache {
   }
 }
 
+class _BackupProviderEntry {
+  final String callsign;
+  final String npub;
+  final int maxTotalStorageBytes;
+  final int defaultMaxClientStorageBytes;
+  final int defaultMaxSnapshots;
+  DateTime lastSeen;
+
+  _BackupProviderEntry({
+    required this.callsign,
+    required this.npub,
+    required this.maxTotalStorageBytes,
+    required this.defaultMaxClientStorageBytes,
+    required this.defaultMaxSnapshots,
+    required this.lastSeen,
+  });
+}
+
 /// Station server service for CLI mode
 class StationServerService {
   static final StationServerService _instance = StationServerService._internal();
@@ -352,6 +369,8 @@ class StationServerService {
   HttpServer? _httpServer;
   RelayServerSettings _settings = RelayServerSettings();
   final Map<String, ConnectedClient> _clients = {};
+  final Map<String, _BackupProviderEntry> _backupProviders = {};
+  static const Duration _backupProviderTtl = Duration(seconds: 90);
   final TileCache _tileCache = TileCache();
   bool _running = false;
   DateTime? _startTime;
@@ -429,14 +448,14 @@ class StationServerService {
   Future<void> initialize() async {
     await _loadSettings();
 
-    // Create tiles directory
-    final appDir = await getApplicationSupportDirectory();
-    _appDir = appDir.path;
-    _tilesDirectory = '${appDir.path}/tiles';
+    // Use StorageConfig for consistent paths with client
+    final storageConfig = StorageConfig();
+    _appDir = storageConfig.baseDir;
+    _tilesDirectory = storageConfig.tilesDir;
     await Directory(_tilesDirectory!).create(recursive: true);
 
-    // Create updates directory in current working directory (for server deployments)
-    _updatesDirectory = '${Directory.current.path}/updates';
+    // Create updates directory under data root
+    _updatesDirectory = path.join(storageConfig.baseDir, 'updates');
     await Directory(_updatesDirectory!).create(recursive: true);
 
     // Load cached release info if exists
@@ -515,6 +534,7 @@ class StationServerService {
       // Run synchronously to ensure models are available before clients connect
       await downloadAllVisionModels();
       await downloadAllMusicModels();
+      await downloadAllConsoleVmFiles();
 
       return true;
     } catch (e) {
@@ -582,6 +602,8 @@ class StationServerService {
         await _handleStatus(request);
       } else if (path == '/api/clients') {
         await _handleClients(request);
+      } else if (path == '/api/backup/providers/available' && method == 'GET') {
+        await _handleBackupProvidersAvailable(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         // GET /api/alerts - list alerts (using shared handler)
         await _handleAlertsApi(request);
@@ -618,6 +640,8 @@ class StationServerService {
         await _handleTileRequest(request);
       } else if (path.startsWith('/bot/models/')) {
         await _handleBotModelRequest(request);
+      } else if (path.startsWith('/console/vm/')) {
+        await _handleConsoleVmRequest(request);
       } else if (_isBlogPath(path)) {
         await _handleBlogRequest(request);
       } else if (path.contains('/api/dm/')) {
@@ -682,11 +706,17 @@ class StationServerService {
         (data) => _handleWebSocketMessage(client, data),
         onDone: () {
           _clients.remove(clientId);
+          if (client.callsign != null) {
+            _backupProviders.remove(client.callsign!.toUpperCase());
+          }
           LogService().log('WebSocket client disconnected: $clientId');
         },
         onError: (error) {
           LogService().log('WebSocket error: $error');
           _clients.remove(clientId);
+          if (client.callsign != null) {
+            _backupProviders.remove(client.callsign!.toUpperCase());
+          }
         },
       );
     } catch (e) {
@@ -706,6 +736,8 @@ class StationServerService {
         if (type == 'hello') {
           // Client hello handshake
           _handleHelloMessage(client, message);
+        } else if (type == 'backup_provider_announce') {
+          _handleBackupProviderAnnounce(client, message);
         } else if (type == 'EVENT') {
           // NOSTR EVENT message
           _handleNostrEvent(client, message);
@@ -789,6 +821,135 @@ class StationServerService {
       callsign: callsign,
       npub: npub,
     ));
+  }
+
+  void _handleBackupProviderAnnounce(ConnectedClient client, Map<String, dynamic> message) {
+    final eventData = message['event'] as Map<String, dynamic>?;
+    if (eventData == null) {
+      LogService().log('Backup announce missing event data');
+      return;
+    }
+
+    try {
+      final event = NostrEvent.fromJson(eventData);
+      if (!event.verify()) {
+        LogService().log('Backup announce signature verification failed');
+        return;
+      }
+      if (!_isFreshNostrEvent(event)) {
+        LogService().log('Backup announce rejected - event too old');
+        return;
+      }
+
+      final backupTag = event.getTagValue('t');
+      final actionTag = event.getTagValue('action');
+      if (backupTag != 'backup' || actionTag != 'provider_announce') {
+        LogService().log('Backup announce rejected - invalid tags');
+        return;
+      }
+
+      final callsignTag = event.getTagValue('callsign');
+      if (callsignTag == null || callsignTag.isEmpty) {
+        LogService().log('Backup announce rejected - missing callsign tag');
+        return;
+      }
+      if (client.callsign == null ||
+          client.callsign!.toUpperCase() != callsignTag.toUpperCase()) {
+        LogService().log('Backup announce rejected - callsign mismatch');
+        return;
+      }
+
+      final npub = event.npub;
+      if (client.npub != null && client.npub != npub) {
+        LogService().log('Backup announce rejected - npub mismatch');
+        return;
+      }
+
+      final enabledTag = event.getTagValue('enabled') ?? 'false';
+      final enabled = enabledTag.toLowerCase() == 'true';
+      if (!enabled) {
+        _backupProviders.remove(callsignTag.toUpperCase());
+        return;
+      }
+
+      final maxTotalStorageBytes = _parseTagInt(event.getTagValue('max_total_storage_bytes'));
+      final defaultMaxClientStorageBytes =
+          _parseTagInt(event.getTagValue('default_max_client_storage_bytes'));
+      final defaultMaxSnapshots = _parseTagInt(event.getTagValue('default_max_snapshots'));
+
+      _backupProviders[callsignTag.toUpperCase()] = _BackupProviderEntry(
+        callsign: callsignTag.toUpperCase(),
+        npub: npub,
+        maxTotalStorageBytes: maxTotalStorageBytes,
+        defaultMaxClientStorageBytes: defaultMaxClientStorageBytes,
+        defaultMaxSnapshots: defaultMaxSnapshots,
+        lastSeen: DateTime.now(),
+      );
+    } catch (e) {
+      LogService().log('Backup announce error: $e');
+    }
+  }
+
+  bool _isFreshNostrEvent(NostrEvent event) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return (now - event.createdAt).abs() <= 300;
+  }
+
+  int _parseTagInt(String? value, {int fallback = 0}) {
+    if (value == null || value.isEmpty) return fallback;
+    return int.tryParse(value) ?? fallback;
+  }
+
+  NostrEvent? _verifyNostrAuthHeader(HttpRequest request) {
+    final authHeader = request.headers.value('authorization');
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        LogService().log('StationServer: NOSTR auth failed - invalid signature');
+        return null;
+      }
+      if (!_isFreshNostrEvent(event)) {
+        LogService().log('StationServer: NOSTR auth failed - event too old');
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      LogService().log('StationServer: NOSTR auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  bool _isRequesterConnected(NostrEvent event) {
+    final callsignTag = event.getTagValue('callsign');
+    for (final client in _clients.values) {
+      if (client.npub != null && client.npub == event.npub) {
+        if (callsignTag == null ||
+            client.callsign?.toUpperCase() == callsignTag.toUpperCase()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void _pruneBackupProviders() {
+    final now = DateTime.now();
+    _backupProviders.removeWhere((callsign, entry) {
+      final isStale = now.difference(entry.lastSeen) > _backupProviderTtl;
+      final hasClient = _clients.values.any(
+        (client) => client.callsign?.toUpperCase() == callsign.toUpperCase(),
+      );
+      return isStale || !hasClient;
+    });
   }
 
   /// Handle NOSTR EVENT message
@@ -1008,6 +1169,48 @@ class StationServerService {
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(response));
+  }
+
+  Future<void> _handleBackupProvidersAvailable(HttpRequest request) async {
+    final authEvent = _verifyNostrAuthHeader(request);
+    if (authEvent == null) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Unauthorized backup request'}));
+      return;
+    }
+
+    final backupTag = authEvent.getTagValue('t');
+    if (backupTag != 'backup') {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid backup auth tag'}));
+      return;
+    }
+
+    if (!_isRequesterConnected(authEvent)) {
+      request.response.statusCode = 403;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Requester not connected'}));
+      return;
+    }
+
+    _pruneBackupProviders();
+
+    final providers = _backupProviders.values.map((entry) {
+      return {
+        'callsign': entry.callsign,
+        'npub': entry.npub,
+        'max_total_storage_bytes': entry.maxTotalStorageBytes,
+        'default_max_client_storage_bytes': entry.defaultMaxClientStorageBytes,
+        'default_max_snapshots': entry.defaultMaxSnapshots,
+        'last_seen': entry.lastSeen.toIso8601String(),
+        'connection_method': 'station',
+      };
+    }).toList();
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'providers': providers}));
   }
 
   /// Handle / root endpoint
@@ -2175,6 +2378,92 @@ class StationServerService {
     }
   }
 
+  /// Handle Console VM file requests
+  /// GET /console/vm/manifest.json - Returns VM files manifest
+  /// GET /console/vm/{filename} - Returns individual VM file
+  Future<void> _handleConsoleVmRequest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method not allowed');
+      return;
+    }
+
+    if (_appDir == null) {
+      request.response.statusCode = 500;
+      request.response.write('Server not initialized');
+      return;
+    }
+
+    final segments = request.uri.pathSegments;
+    if (segments.length < 3 || segments[0] != 'console' || segments[1] != 'vm') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid console VM path');
+      return;
+    }
+
+    final filename = segments[2];
+    final vmDir = path.join(_appDir!, 'console', 'vm');
+    final filePath = path.normalize(path.join(vmDir, filename));
+
+    // Security: Ensure path is within vmDir
+    if (!path.isWithin(vmDir, filePath)) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid file path');
+      return;
+    }
+
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      // If manifest.json doesn't exist, generate a placeholder
+      if (filename == 'manifest.json') {
+        final manifest = {
+          'version': '1.0.0',
+          'updated': DateTime.now().toIso8601String(),
+          'files': <Map<String, dynamic>>[],
+          'status': 'not_configured',
+          'message': 'Console VM files not yet available on this station',
+        };
+        request.response.statusCode = 200;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(manifest));
+        return;
+      }
+
+      request.response.statusCode = 404;
+      request.response.write('VM file not found: $filename');
+      return;
+    }
+
+    try {
+      final fileSize = await file.length();
+
+      // Set appropriate content type
+      ContentType contentType;
+      if (filename.endsWith('.json')) {
+        contentType = ContentType.json;
+      } else if (filename.endsWith('.js')) {
+        contentType = ContentType('application', 'javascript');
+      } else if (filename.endsWith('.wasm')) {
+        contentType = ContentType('application', 'wasm');
+      } else {
+        contentType = ContentType('application', 'octet-stream');
+      }
+
+      request.response.headers.contentType = contentType;
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.add('Content-Disposition', 'attachment; filename="$filename"');
+
+      // Stream the file
+      await request.response.addStream(file.openRead());
+      LogService().log('StationServer: Served console VM file $filename (${_formatBytes(fileSize)})');
+    } catch (e) {
+      LogService().log('StationServer: Error serving console VM file $filename: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error serving VM file');
+    }
+  }
+
   /// Download all vision models at station startup (offline-first pattern)
   /// This ensures clients can download models from the station even without internet
   /// Only downloads if sufficient disk space is available
@@ -2411,6 +2700,123 @@ class StationServerService {
       }
       LogService().log(summary);
     }
+  }
+
+  /// Download all Console VM files at station startup (offline-first pattern)
+  /// This ensures clients can run Alpine Linux VM even without internet
+  Future<void> downloadAllConsoleVmFiles() async {
+    if (_appDir == null) {
+      LogService().log('StationServer: Cannot download console VM files - not initialized');
+      return;
+    }
+
+    final vmDir = path.join(_appDir!, 'console', 'vm');
+    await Directory(vmDir).create(recursive: true);
+
+    // VM files to download from upstream
+    final vmFiles = <Map<String, dynamic>>[
+      {
+        'name': 'jslinux.js',
+        'url': 'https://bellard.org/jslinux/jslinux.js',
+        'size': 20000, // ~20KB
+      },
+      {
+        'name': 'term.js',
+        'url': 'https://bellard.org/jslinux/term.js',
+        'size': 45000, // ~45KB
+      },
+      {
+        'name': 'kernel-x86.bin',
+        'url': 'https://bellard.org/jslinux/kernel-x86.bin',
+        'size': 5000000, // ~5MB
+      },
+      {
+        'name': 'alpine-x86.cfg',
+        'url': 'https://bellard.org/jslinux/alpine-x86.cfg',
+        'size': 500, // ~500B
+      },
+      {
+        'name': 'alpine-x86-rootfs.tar.gz',
+        'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.12/releases/x86/alpine-minirootfs-3.12.0-x86.tar.gz',
+        'size': 2800000, // ~2.8MB
+      },
+    ];
+
+    LogService().log('StationServer: Checking console VM files for download...');
+
+    var alreadyAvailable = 0;
+    var downloadedCount = 0;
+    var failedCount = 0;
+
+    for (final fileInfo in vmFiles) {
+      final filename = fileInfo['name'] as String;
+      final url = fileInfo['url'] as String;
+      final expectedSize = fileInfo['size'] as int;
+      final filePath = path.join(vmDir, filename);
+      final file = File(filePath);
+
+      // Check if file exists and has reasonable size
+      if (await file.exists()) {
+        final actualSize = await file.length();
+        // Allow 20% tolerance for size check
+        if (actualSize > expectedSize * 0.8) {
+          alreadyAvailable++;
+          continue;
+        }
+        // File exists but too small - delete and re-download
+        await file.delete();
+      }
+
+      // Download file
+      LogService().log('StationServer: Downloading console VM file: $filename');
+      try {
+        await _downloadModelFromInternet(url, filePath);
+        downloadedCount++;
+        LogService().log('StationServer: Downloaded $filename successfully');
+      } catch (e) {
+        failedCount++;
+        LogService().log('StationServer: Failed to download $filename: $e');
+      }
+    }
+
+    // Generate manifest.json
+    await _generateConsoleVmManifest(vmDir);
+
+    if (alreadyAvailable > 0 || downloadedCount > 0 || failedCount > 0) {
+      var summary = 'StationServer: Console VM files - $alreadyAvailable available, $downloadedCount downloaded';
+      if (failedCount > 0) {
+        summary += ', $failedCount failed';
+      }
+      LogService().log(summary);
+    }
+  }
+
+  /// Generate manifest.json for console VM files
+  Future<void> _generateConsoleVmManifest(String vmDir) async {
+    final files = <Map<String, dynamic>>[];
+    final vmFiles = ['jslinux.js', 'term.js', 'kernel-x86.bin', 'alpine-x86.cfg', 'alpine-x86-rootfs.tar.gz'];
+
+    for (final filename in vmFiles) {
+      final file = File(path.join(vmDir, filename));
+      if (await file.exists()) {
+        final size = await file.length();
+        files.add({
+          'name': filename,
+          'size': size,
+          'sha256': '', // Skip hash for performance
+        });
+      }
+    }
+
+    final manifest = {
+      'version': '1.0.0',
+      'updated': DateTime.now().toUtc().toIso8601String(),
+      'files': files,
+    };
+
+    final manifestFile = File(path.join(vmDir, 'manifest.json'));
+    await manifestFile.writeAsString(jsonEncode(manifest));
+    LogService().log('StationServer: Generated console VM manifest with ${files.length} files');
   }
 
   /// Format bytes to human readable string

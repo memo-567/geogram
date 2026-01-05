@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.6.85+1
+version: 1.6.86+1
 
 environment:
   sdk: ^3.10.0
@@ -76,6 +76,11 @@ dependencies:
   unorm_dart: ^0.3.2             # Unicode normalization for MusicGen tokenizer
   pdfx: ^2.6.0                   # Native PDF rendering for document viewer
   video_player: ^2.9.2           # Video playback in media viewer
+  webview_flutter: ^4.10.0       # Cross-platform WebView for Console VM emulator
+  webview_flutter_android: ^4.3.0  # Android WebView implementation
+  webview_flutter_wkwebview: ^3.16.0  # iOS/macOS WebView implementation
+  xterm: ^4.0.0                  # Terminal emulator widget for Linux native QEMU
+  flutter_pty: ^0.4.1            # PTY support for Linux terminal
 
 dev_dependencies:
   flutter_test:

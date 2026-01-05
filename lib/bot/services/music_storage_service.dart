@@ -7,10 +7,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/music_track.dart';
 import '../../services/log_service.dart';
+import '../../services/storage_config.dart';
 
 /// Manages storage of generated music tracks
 class MusicStorageService {
@@ -39,8 +40,7 @@ class MusicStorageService {
 
   /// Initialize the service
   Future<void> initialize() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    _musicPath = '${appDir.path}/bot/music';
+    _musicPath = p.join(StorageConfig().baseDir, 'bot', 'music');
 
     // Create directories if they don't exist
     final tracksDir = Directory('$_musicPath/tracks');

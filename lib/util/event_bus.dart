@@ -369,6 +369,44 @@ class ChatMessagesLoadedEvent extends AppEvent {
 }
 
 // ============================================================
+// Backup Events
+// ============================================================
+
+enum BackupEventType {
+  backupStarted,
+  backupCompleted,
+  backupFailed,
+  restoreStarted,
+  restoreCompleted,
+  restoreFailed,
+  inviteReceived,
+  inviteAccepted,
+  inviteDeclined,
+  snapshotNoteUpdated,
+}
+
+/// Backup lifecycle and relationship events
+class BackupEvent extends AppEvent {
+  final BackupEventType type;
+  final String role; // 'client' or 'provider'
+  final String? counterpartCallsign;
+  final String? snapshotId;
+  final String? message;
+  final int? totalFiles;
+  final int? totalBytes;
+
+  BackupEvent({
+    required this.type,
+    required this.role,
+    this.counterpartCallsign,
+    this.snapshotId,
+    this.message,
+    this.totalFiles,
+    this.totalBytes,
+  });
+}
+
+// ============================================================
 // Transfer Events
 // ============================================================
 

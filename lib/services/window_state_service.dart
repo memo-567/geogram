@@ -74,12 +74,15 @@ class WindowStateService with WindowListener {
     );
   }
 
+  // Maximum dimensions (4K)
+  static const double maxWidth = 3840.0;
+  static const double maxHeight = 2160.0;
+
   /// Validate window state against screen bounds
   Future<WindowState> validateState(WindowState state) async {
-    // Clamp size to minimum and reasonable maximum
-    // Most screens are at most 4K (3840x2160), cap at slightly above
-    final width = max(state.size.width, minWidth).clamp(minWidth, 4000.0);
-    final height = max(state.size.height, minHeight).clamp(minHeight, 2500.0);
+    // Clamp size to minimum and maximum (4K resolution)
+    final width = max(state.size.width, minWidth).clamp(minWidth, maxWidth);
+    final height = max(state.size.height, minHeight).clamp(minHeight, maxHeight);
     final size = Size(width, height);
 
     // If no saved position, center the window
@@ -123,6 +126,8 @@ class WindowStateService with WindowListener {
     _isListening = true;
     windowManager.addListener(this);
     _isMaximized = await windowManager.isMaximized();
+    // Initialize last known size for resize validation
+    _lastKnownSize = await windowManager.getSize();
     LogService().log('WindowStateService: Started listening for window changes');
   }
 
@@ -173,10 +178,40 @@ class WindowStateService with WindowListener {
     LogService().log('WindowStateService: Saved maximized state: $maximized');
   }
 
+  // Track last known good size to detect unexpected expansion
+  Size? _lastKnownSize;
+
   // WindowListener callbacks
 
   @override
-  void onWindowResized() {
+  void onWindowResized() async {
+    // On Linux, dragging one edge can unexpectedly expand the other dimension.
+    // Detect and correct this by comparing to the last known good size.
+    try {
+      final currentSize = await windowManager.getSize();
+
+      if (_lastKnownSize != null) {
+        // Check if width expanded unexpectedly while height was being changed
+        // (or vice versa) - this indicates the Linux resize bug
+        final widthGrew = currentSize.width > _lastKnownSize!.width + 50;
+        final heightGrew = currentSize.height > _lastKnownSize!.height + 50;
+
+        // If both dimensions grew significantly in one resize event, it's suspicious
+        if (widthGrew && heightGrew) {
+          // Check if size exceeds maximum bounds (4K)
+          if (currentSize.width > maxWidth || currentSize.height > maxHeight) {
+            LogService().log('WindowStateService: Detected invalid resize, correcting');
+            await windowManager.setSize(_lastKnownSize!);
+            return;
+          }
+        }
+      }
+
+      _lastKnownSize = currentSize;
+    } catch (e) {
+      // Ignore errors, just save state
+    }
+
     _saveStateDebounced();
   }
 

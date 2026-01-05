@@ -1341,6 +1341,9 @@ class PureStationServer {
       // Start heartbeat timer for connection stability
       _startHeartbeat();
 
+      // Download console VM files in background
+      downloadAllConsoleVmFiles();
+
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
         // Check if we need to request certificates first
@@ -1965,6 +1968,8 @@ class PureStationServer {
         await _handleTileRequest(request);
       } else if (path.startsWith('/bot/models/')) {
         await _handleBotModelRequest(request);
+      } else if (path.startsWith('/console/vm/')) {
+        await _handleConsoleVmRequest(request);
       } else if (path == '/api/cli' && method == 'POST') {
         await _handleCliCommand(request);
       } else if (path == '/alerts') {
@@ -7383,6 +7388,213 @@ class PureStationServer {
     } finally {
       client.close();
     }
+  }
+
+  /// Handle Console VM file requests
+  /// GET /console/vm/manifest.json - Returns VM files manifest
+  /// GET /console/vm/{filename} - Returns individual VM file
+  Future<void> _handleConsoleVmRequest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method not allowed');
+      return;
+    }
+
+    if (_dataDir == null) {
+      request.response.statusCode = 500;
+      request.response.write('Server not initialized');
+      return;
+    }
+
+    final segments = request.uri.pathSegments;
+    if (segments.length < 3 || segments[0] != 'console' || segments[1] != 'vm') {
+      request.response.statusCode = 400;
+      request.response.write('Invalid console VM path');
+      return;
+    }
+
+    final filename = segments[2];
+    final vmDir = path.join(_dataDir!, 'console', 'vm');
+    final filePath = path.normalize(path.join(vmDir, filename));
+
+    // Security: Ensure path is within vmDir
+    if (!path.isWithin(vmDir, filePath)) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid file path');
+      return;
+    }
+
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      // If manifest.json doesn't exist, generate a placeholder
+      if (filename == 'manifest.json') {
+        final manifest = {
+          'version': '1.0.0',
+          'updated': DateTime.now().toIso8601String(),
+          'files': <Map<String, dynamic>>[],
+          'status': 'not_configured',
+          'message': 'Console VM files not yet available on this station',
+        };
+        request.response.statusCode = 200;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(manifest));
+        return;
+      }
+
+      request.response.statusCode = 404;
+      request.response.write('VM file not found: $filename');
+      return;
+    }
+
+    try {
+      final fileSize = await file.length();
+
+      // Set appropriate content type
+      ContentType contentType;
+      if (filename.endsWith('.json')) {
+        contentType = ContentType.json;
+      } else if (filename.endsWith('.js')) {
+        contentType = ContentType('application', 'javascript');
+      } else if (filename.endsWith('.wasm')) {
+        contentType = ContentType('application', 'wasm');
+      } else if (filename.endsWith('.tar.gz')) {
+        contentType = ContentType('application', 'gzip');
+      } else {
+        contentType = ContentType('application', 'octet-stream');
+      }
+
+      request.response.headers.contentType = contentType;
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.add('Content-Disposition', 'attachment; filename="$filename"');
+
+      // Stream the file
+      await request.response.addStream(file.openRead());
+      _log('INFO', 'Served console VM file $filename (${_formatBytes(fileSize)})');
+    } catch (e) {
+      _log('ERROR', 'Error serving console VM file $filename: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error serving file');
+    }
+  }
+
+  /// Download all Console VM files at station startup (offline-first pattern)
+  Future<void> downloadAllConsoleVmFiles() async {
+    if (_dataDir == null) {
+      _log('ERROR', 'Cannot download console VM files - not initialized');
+      return;
+    }
+
+    final vmDir = path.join(_dataDir!, 'console', 'vm');
+    await Directory(vmDir).create(recursive: true);
+
+    // VM files to download from upstream
+    final vmFiles = <Map<String, dynamic>>[
+      {
+        'name': 'jslinux.js',
+        'url': 'https://bellard.org/jslinux/jslinux.js',
+        'size': 20000,
+      },
+      {
+        'name': 'term.js',
+        'url': 'https://bellard.org/jslinux/term.js',
+        'size': 45000,
+      },
+      {
+        'name': 'kernel-x86.bin',
+        'url': 'https://bellard.org/jslinux/kernel-x86.bin',
+        'size': 5000000,
+      },
+      {
+        'name': 'alpine-x86.cfg',
+        'url': 'https://bellard.org/jslinux/alpine-x86.cfg',
+        'size': 500,
+      },
+      {
+        'name': 'alpine-x86-rootfs.tar.gz',
+        'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.12/releases/x86/alpine-minirootfs-3.12.0-x86.tar.gz',
+        'size': 2800000,
+      },
+    ];
+
+    _log('INFO', 'Checking console VM files for download...');
+
+    var alreadyAvailable = 0;
+    var downloadedCount = 0;
+    var failedCount = 0;
+
+    for (final fileInfo in vmFiles) {
+      final filename = fileInfo['name'] as String;
+      final url = fileInfo['url'] as String;
+      final expectedSize = fileInfo['size'] as int;
+      final filePath = path.join(vmDir, filename);
+      final file = File(filePath);
+
+      // Check if file exists and has reasonable size
+      if (await file.exists()) {
+        final actualSize = await file.length();
+        if (actualSize > expectedSize * 0.8) {
+          alreadyAvailable++;
+          continue;
+        }
+        await file.delete();
+      }
+
+      // Download file
+      _log('INFO', 'Downloading console VM file: $filename');
+      try {
+        final response = await http.get(Uri.parse(url)).timeout(const Duration(minutes: 5));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+          downloadedCount++;
+          _log('INFO', 'Downloaded $filename successfully (${_formatBytes(response.bodyBytes.length)})');
+        } else {
+          throw Exception('HTTP ${response.statusCode}');
+        }
+      } catch (e) {
+        failedCount++;
+        _log('ERROR', 'Failed to download $filename: $e');
+      }
+    }
+
+    // Generate manifest.json
+    await _generateConsoleVmManifest(vmDir);
+
+    if (alreadyAvailable > 0 || downloadedCount > 0 || failedCount > 0) {
+      var summary = 'Console VM files - $alreadyAvailable available, $downloadedCount downloaded';
+      if (failedCount > 0) {
+        summary += ', $failedCount failed';
+      }
+      _log('INFO', summary);
+    }
+  }
+
+  /// Generate manifest.json for console VM files
+  Future<void> _generateConsoleVmManifest(String vmDir) async {
+    final files = <Map<String, dynamic>>[];
+    final vmFiles = ['jslinux.js', 'term.js', 'kernel-x86.bin', 'alpine-x86.cfg', 'alpine-x86-rootfs.tar.gz'];
+
+    for (final filename in vmFiles) {
+      final file = File(path.join(vmDir, filename));
+      if (await file.exists()) {
+        final size = await file.length();
+        files.add({
+          'name': filename,
+          'size': size,
+          'sha256': '',
+        });
+      }
+    }
+
+    final manifest = {
+      'version': '1.0.0',
+      'updated': DateTime.now().toUtc().toIso8601String(),
+      'files': files,
+    };
+
+    final manifestFile = File(path.join(vmDir, 'manifest.json'));
+    await manifestFile.writeAsString(jsonEncode(manifest));
+    _log('INFO', 'Generated console VM manifest with ${files.length} files');
   }
 
   String _formatBytes(int bytes) {

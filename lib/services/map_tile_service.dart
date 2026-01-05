@@ -13,8 +13,8 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart' as fmtc;
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'profile_service.dart';
+import 'storage_config.dart';
 import 'station_service.dart';
 import 'log_service.dart';
 import 'config_service.dart';
@@ -56,7 +56,7 @@ class TileLoadingStatus {
 
 /// Centralized service for managing map tiles with offline caching
 /// Tile fetching priority: 1) Cache, 2) Station, 3) Direct Internet (OSM)
-/// Tiles are stored in ~/Documents/geogram/tiles/
+/// Tiles are stored in {data-root}/tiles/
 class MapTileService {
   static final MapTileService _instance = MapTileService._internal();
   factory MapTileService() => _instance;
@@ -132,14 +132,13 @@ class MapTileService {
 
   /// Initialize the tile caching system
   /// Should be called once at app startup or before first map use
-  /// Tiles are stored in ~/Documents/geogram/tiles/
+  /// Tiles are stored in {data-root}/tiles/
   Future<void> initialize() async {
     if (_initialized || kIsWeb) return;
 
     try {
-      // Create tiles directory at ~/Documents/geogram/tiles/
-      final appDir = await getApplicationDocumentsDirectory();
-      _tilesPath = '${appDir.path}/geogram/tiles';
+      // Create tiles directory at {data-root}/tiles/
+      _tilesPath = StorageConfig().tilesDir;
       final tilesDir = Directory(_tilesPath!);
 
       if (!await tilesDir.exists()) {

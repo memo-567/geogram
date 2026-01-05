@@ -8,7 +8,6 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
-import '../models/collection.dart';
 import '../services/collection_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -27,15 +26,26 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
 
-  String _selectedType = 'places';
+  String? _selectedType;
   String _visibility = 'public';
   bool _useAutoFolder = true;
   String? _selectedFolderPath;
   bool _isCreating = false;
   Set<String> _existingTypes = {};
+  final ScrollController _scrollController = ScrollController();
+  final Map<String, GlobalKey> _itemKeys = {};
+
+  /// Get app types sorted alphabetically by localized name
+  List<_CollectionTypeInfo> get _sortedTypes {
+    final types = List<_CollectionTypeInfo>.from(_collectionTypes);
+    types.sort((a, b) => _i18n.t('collection_type_${a.type}')
+        .toLowerCase()
+        .compareTo(_i18n.t('collection_type_${b.type}').toLowerCase()));
+    return types;
+  }
 
   // Collection types with their icons (ordered by relevance)
-  // Hidden types (not ready): forum, transfer, bot, postcards, market, backup, www, news
+  // Hidden types (not ready): forum, transfer, bot, postcards, market, www, news
   static const List<_CollectionTypeInfo> _collectionTypes = [
     _CollectionTypeInfo('places', Icons.place),
     _CollectionTypeInfo('blog', Icons.article),
@@ -49,21 +59,19 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('inventory', Icons.inventory_2),
     _CollectionTypeInfo('wallet', Icons.account_balance_wallet),
     _CollectionTypeInfo('log', Icons.article_outlined),
-    // _CollectionTypeInfo('backup', Icons.backup),  // Hidden: not ready
+    _CollectionTypeInfo('backup', Icons.backup),
     // _CollectionTypeInfo('transfer', Icons.swap_horiz),  // Hidden: not ready
     _CollectionTypeInfo('files', Icons.folder),
     // _CollectionTypeInfo('postcards', Icons.mail),  // Hidden: not ready
     // _CollectionTypeInfo('market', Icons.storefront),  // Hidden: not ready
     _CollectionTypeInfo('groups', Icons.groups),
+    _CollectionTypeInfo('console', Icons.terminal),
   ];
-
-  // Breakpoint for switching to portrait/stacked layout
-  static const double _portraitBreakpoint = 600;
 
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log', 'console'
   };
 
   @override
@@ -86,13 +94,10 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
         setState(() {
           _existingTypes = _singleInstanceTypes.intersection(existingFolderNames);
-          // Select the first available type that isn't already created
-          _selectedType = _collectionTypes
-              .map((t) => t.type)
-              .firstWhere(
-                (type) => !_existingTypes.contains(type),
-                orElse: () => 'files', // Fallback to files which allows multiple
-              );
+          // Initialize item keys for scroll-to functionality
+          for (final type in _collectionTypes) {
+            _itemKeys[type.type] = GlobalKey();
+          }
         });
       }
     } catch (e) {
@@ -104,11 +109,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   bool get _canCreate {
     if (_isCreating) return false;
+    if (_selectedType == null) return false;
     if (_selectedType == 'files') {
       if (_titleController.text.trim().isEmpty) return false;
       if (!_useAutoFolder && _selectedFolderPath == null) return false;
@@ -140,26 +147,27 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   }
 
   Future<void> _create() async {
-    if (!_canCreate) return;
+    if (!_canCreate || _selectedType == null) return;
 
     setState(() => _isCreating = true);
 
     try {
-      final title = _selectedType == 'files'
+      final type = _selectedType!;
+      final title = type == 'files'
           ? _titleController.text.trim()
-          : _i18n.t('collection_type_$_selectedType');
+          : _i18n.t('collection_type_$type');
 
       final collection = await CollectionService().createCollection(
         title: title,
         description: _descriptionController.text.trim(),
-        type: _selectedType,
-        customRootPath: _selectedType == 'files'
+        type: type,
+        customRootPath: type == 'files'
             ? (_useAutoFolder ? null : _selectedFolderPath)
             : null,
       );
 
       // Update visibility if not public
-      if (_selectedType == 'files' && _visibility != 'public') {
+      if (type == 'files' && _visibility != 'public') {
         collection.visibility = _visibility;
         await CollectionService().updateCollection(collection);
       }
@@ -186,8 +194,6 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('add_new_collection')),
@@ -196,526 +202,585 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _canCreate ? _create : null,
-        backgroundColor: _canCreate
-            ? theme.colorScheme.primary
-            : theme.colorScheme.surfaceContainerHighest,
-        foregroundColor: _canCreate
-            ? theme.colorScheme.onPrimary
-            : theme.colorScheme.onSurface.withOpacity(0.38),
-        icon: _isCreating
-            ? SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: _canCreate
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.onSurface.withOpacity(0.38),
-                ),
-              )
-            : const Icon(Icons.add),
-        label: Text(_i18n.t('add')),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final isPortrait = constraints.maxWidth < _portraitBreakpoint;
-
-          if (isPortrait) {
-            // Portrait/narrow layout - stacked vertically
-            return Column(
-              children: [
-                // Type selector as horizontal scrollable list
-                SizedBox(
-                  height: 56,
-                  child: _buildTypeSelector(theme, isPortrait: true),
-                ),
-                const Divider(height: 1),
-                // Details panel takes remaining space
-                Expanded(
-                  child: _buildDetailsPanel(theme),
-                ),
-              ],
-            );
-          }
-
-          // Landscape/wide layout - side by side
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Left column - Type selector
-              SizedBox(
-                width: 280,
-                child: _buildTypeSelector(theme, isPortrait: false),
-              ),
-              const VerticalDivider(width: 1),
-              // Right column - Details panel
-              Expanded(
-                child: _buildDetailsPanel(theme),
-              ),
-            ],
-          );
-        },
-      ),
+      body: _buildAppList(),
     );
   }
 
-  Widget _buildTypeSelector(ThemeData theme, {required bool isPortrait}) {
-    if (isPortrait) {
-      // Portrait mode - horizontal scrollable list
-      return Container(
-        color: theme.colorScheme.surfaceContainerLow,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          itemCount: _collectionTypes.length,
-          itemBuilder: (context, index) {
-            final typeInfo = _collectionTypes[index];
-            final isSelected = typeInfo.type == _selectedType;
-            final isDisabled = _existingTypes.contains(typeInfo.type);
+  Widget _buildAppList() {
+    final sortedTypes = _sortedTypes;
 
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilterChip(
-                selected: isSelected,
-                onSelected: isDisabled
-                    ? null
-                    : (_) {
-                        setState(() {
-                          _selectedType = typeInfo.type;
-                        });
-                      },
-                avatar: Icon(
-                  typeInfo.icon,
-                  size: 18,
-                  color: isDisabled
-                      ? theme.colorScheme.onSurface.withOpacity(0.38)
-                      : isSelected
-                          ? theme.colorScheme.onPrimaryContainer
-                          : theme.colorScheme.onSurfaceVariant,
-                ),
-                label: Text(
-                  _i18n.t('collection_type_${typeInfo.type}'),
-                  style: TextStyle(
-                    color: isDisabled
-                        ? theme.colorScheme.onSurface.withOpacity(0.38)
-                        : null,
-                  ),
-                ),
-                showCheckmark: false,
-              ),
-            );
-          },
-        ),
-      );
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: sortedTypes.length,
+      itemBuilder: (context, index) => _buildAppListItem(sortedTypes[index]),
+    );
+  }
+
+  /// Get a gradient for the app type icon
+  LinearGradient _getTypeGradient(String type, ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
+    switch (type) {
+      case 'chat':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
+              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
+        );
+      case 'blog':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
+              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
+        );
+      case 'places':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
+              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
+        );
+      case 'events':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
+              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
+        );
+      case 'alerts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
+              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
+        );
+      case 'backup':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00838F), const Color(0xFF006064)]
+              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
+        );
+      case 'inventory':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
+              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+        );
+      case 'wallet':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
+              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
+        );
+      case 'contacts':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
+              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
+        );
+      case 'groups':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
+              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
+        );
+      case 'files':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
+              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
+        );
+      case 'log':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF37474F), const Color(0xFF263238)]
+              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
+        );
+      case 'console':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1A237E), const Color(0xFF0D47A1)]
+              : [const Color(0xFF3F51B5), const Color(0xFF303F9F)],
+        );
+      default:
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [theme.colorScheme.primary.withValues(alpha: 0.8), theme.colorScheme.primary]
+              : [theme.colorScheme.primary.withValues(alpha: 0.8), theme.colorScheme.primary],
+        );
     }
-
-    // Landscape mode - vertical list
-    return Container(
-      color: theme.colorScheme.surfaceContainerLow,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        itemCount: _collectionTypes.length,
-        itemBuilder: (context, index) {
-          final typeInfo = _collectionTypes[index];
-          final isSelected = typeInfo.type == _selectedType;
-          final isDisabled = _existingTypes.contains(typeInfo.type);
-          final isMultipleAllowed = typeInfo.type == 'files';
-
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Material(
-              color: isSelected
-                  ? theme.colorScheme.primaryContainer
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                onTap: isDisabled
-                    ? null
-                    : () {
-                        setState(() {
-                          _selectedType = typeInfo.type;
-                        });
-                      },
-                borderRadius: BorderRadius.circular(12),
-                child: Opacity(
-                  opacity: isDisabled ? 0.5 : 1.0,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          typeInfo.icon,
-                          size: 24,
-                          color: isSelected
-                              ? theme.colorScheme.onPrimaryContainer
-                              : theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _i18n.t('collection_type_${typeInfo.type}'),
-                            style: TextStyle(
-                              fontWeight: isSelected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                              color: isSelected
-                                  ? theme.colorScheme.onPrimaryContainer
-                                  : theme.colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                        if (isDisabled)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              _i18n.t('exists'),
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          )
-                        else if (isMultipleAllowed)
-                          Icon(
-                            Icons.add_circle_outline,
-                            size: 16,
-                            color: theme.colorScheme.primary,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
   }
 
-  Widget _buildDetailsPanel(ThemeData theme) {
-    final typeInfo = _collectionTypes.firstWhere(
-      (t) => t.type == _selectedType,
-      orElse: () => _collectionTypes.first,
-    );
-    final isDisabled = _existingTypes.contains(_selectedType);
+  Widget _buildAppListItem(_CollectionTypeInfo typeInfo) {
+    final theme = Theme.of(context);
+    final isDisabled = _existingTypes.contains(typeInfo.type) &&
+        _singleInstanceTypes.contains(typeInfo.type);
+    final isExpanded = _selectedType == typeInfo.type;
+    final description = _getTypeDescription(typeInfo.type);
+    final features = _getTypeFeatures(typeInfo.type);
 
-    return Align(
-      alignment: Alignment.topLeft,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-          // Header with icon and title
-          Row(
+    return Padding(
+      key: _itemKeys[typeInfo.type],
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Material(
+        color: isExpanded
+            ? theme.colorScheme.surfaceContainerHigh
+            : theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: isDisabled
+              ? null
+              : () {
+                  setState(() {
+                    _selectedType = isExpanded ? null : typeInfo.type;
+                    // Clear title when collapsing or switching types
+                    if (!isExpanded && typeInfo.type != 'files') {
+                      _titleController.clear();
+                    }
+                  });
+                  // Scroll to make expanded item visible
+                  if (!isExpanded) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      final key = _itemKeys[typeInfo.type];
+                      if (key?.currentContext != null) {
+                        Scrollable.ensureVisible(
+                          key!.currentContext!,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        );
+                      }
+                    });
+                  }
+                },
+          borderRadius: BorderRadius.circular(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
+              // Header (always visible)
+              Padding(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  typeInfo.icon,
-                  size: 32,
-                  color: theme.colorScheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Text(
-                      _i18n.t('collection_type_$_selectedType'),
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
+                    // Circular gradient icon
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        gradient: _getTypeGradient(typeInfo.type, theme),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: _getTypeGradient(typeInfo.type, theme).colors.first.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        typeInfo.icon,
+                        size: 26,
+                        color: Colors.white,
                       ),
                     ),
-                    if (_selectedType == 'files')
-                      Chip(
-                        label: Text(_i18n.t('multiple_allowed')),
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                        labelStyle: TextStyle(
-                          fontSize: 11,
-                          color: theme.colorScheme.onPrimaryContainer,
+                    const SizedBox(width: 16),
+                    // Title + short description
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _i18n.t('collection_type_${typeInfo.type}'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            description,
+                            maxLines: isExpanded ? 3 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Status badge or expand indicator
+                    if (isDisabled)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                        padding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
+                        child: Text(
+                          _i18n.t('exists'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
                       )
-                    else if (isDisabled)
-                      Chip(
-                        label: Text(_i18n.t('already_exists')),
-                        backgroundColor: theme.colorScheme.errorContainer,
-                        labelStyle: TextStyle(
-                          fontSize: 11,
-                          color: theme.colorScheme.onErrorContainer,
+                    else
+                      AnimatedRotation(
+                        turns: isExpanded ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.keyboard_arrow_down,
+                            size: 20,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
-                        padding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
                       ),
                   ],
                 ),
               ),
+              // Expanded details with animation
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                child: isExpanded
+                    ? _buildExpandedDetails(typeInfo, theme, description, features)
+                    : const SizedBox.shrink(),
+              ),
             ],
           ),
-          const SizedBox(height: 24),
-
-          // Description
-          Text(
-            _getTypeDescription(_selectedType),
-            style: theme.textTheme.bodyLarge?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Features list
-          _buildFeaturesList(theme),
-
-          // Settings section (only for 'files' type)
-          if (_selectedType == 'files' && !isDisabled) ...[
-            const SizedBox(height: 32),
-            const Divider(),
-            const SizedBox(height: 24),
-            Text(
-              _i18n.t('settings'),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildSettingsForm(theme),
-          ],
-
-          // Disabled message for existing single-instance types
-          if (isDisabled) ...[
-            const SizedBox(height: 32),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.errorContainer.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: theme.colorScheme.error.withOpacity(0.3),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    color: theme.colorScheme.error,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _i18n.t('collection_type_exists_message'),
-                      style: TextStyle(
-                        color: theme.colorScheme.onErrorContainer,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
+        ),
       ),
     );
   }
 
-  Widget _buildFeaturesList(ThemeData theme) {
-    final features = _getTypeFeatures(_selectedType);
-
+  Widget _buildExpandedDetails(
+    _CollectionTypeInfo typeInfo,
+    ThemeData theme,
+    String description,
+    List<String> features,
+  ) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          _i18n.t('features'),
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: theme.colorScheme.primary,
-          ),
+        // Subtle divider
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          height: 1,
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
         ),
-        const SizedBox(height: 8),
-        ...features.map((feature) => Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Row(
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Features as horizontal chips
+              if (features.isNotEmpty) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: features.map((f) => Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.check,
+                          size: 14,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          f,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )).toList(),
+                ),
+              ],
+              // Settings for 'files' type
+              if (typeInfo.type == 'files') ...[
+                const SizedBox(height: 20),
+                _buildFilesSettings(theme),
+              ],
+              const SizedBox(height: 24),
+              // Create button - more prominent
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton(
+                  onPressed: _canCreate ? _create : null,
+                  style: FilledButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _isCreating
+                      ? SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                        )
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.add_circle_outline, size: 22),
+                            const SizedBox(width: 10),
+                            Text(
+                              _i18n.t('create'),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilesSettings(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Section header
+          Row(
+            children: [
               Icon(
-                Icons.check_circle,
+                Icons.settings_outlined,
                 size: 18,
                 color: theme.colorScheme.primary,
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  feature,
-                  style: theme.textTheme.bodyMedium,
+              Text(
+                _i18n.t('settings'),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
                 ),
               ),
             ],
           ),
-        )),
-      ],
-    );
-  }
+          const SizedBox(height: 16),
 
-  Widget _buildSettingsForm(ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Title field
-        TextField(
-          controller: _titleController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('collection_title'),
-            hintText: _i18n.t('collection_title_hint'),
-            border: const OutlineInputBorder(),
-            prefixIcon: const Icon(Icons.title),
-          ),
-          autofocus: true,
-          enabled: !_isCreating,
-          textInputAction: TextInputAction.next,
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 16),
-
-        // Description field
-        TextField(
-          controller: _descriptionController,
-          decoration: InputDecoration(
-            labelText: _i18n.t('collection_description'),
-            hintText: _i18n.t('collection_description_hint'),
-            border: const OutlineInputBorder(),
-            prefixIcon: const Icon(Icons.description),
-          ),
-          maxLines: 3,
-          enabled: !_isCreating,
-        ),
-        const SizedBox(height: 16),
-
-        // Visibility dropdown
-        DropdownButtonFormField<String>(
-          value: _visibility,
-          decoration: InputDecoration(
-            labelText: _i18n.t('visibility'),
-            border: const OutlineInputBorder(),
-            prefixIcon: const Icon(Icons.visibility),
-          ),
-          items: [
-            DropdownMenuItem(
-              value: 'public',
-              child: Text(_i18n.t('visibility_public')),
-            ),
-            DropdownMenuItem(
-              value: 'private',
-              child: Text(_i18n.t('visibility_private')),
-            ),
-            DropdownMenuItem(
-              value: 'restricted',
-              child: Text(_i18n.t('visibility_restricted')),
-            ),
-          ],
-          onChanged: _isCreating
-              ? null
-              : (value) {
-                  if (value != null) {
-                    setState(() {
-                      _visibility = value;
-                    });
-                  }
-                },
-        ),
-        const SizedBox(height: 24),
-
-        // Folder selection
-        Text(
-          _i18n.t('storage_location'),
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 8),
-        CheckboxListTile(
-          title: Text(_i18n.t('use_default_folder')),
-          subtitle: Text(
-            _useAutoFolder
-                ? '~/Documents/geogram/devices/${CollectionService().currentCallsign ?? "..."}'
-                : _i18n.t('choose_custom_location'),
-            style: theme.textTheme.bodySmall,
-          ),
-          value: _useAutoFolder,
-          enabled: !_isCreating,
-          onChanged: (value) {
-            setState(() {
-              _useAutoFolder = value ?? true;
-              if (_useAutoFolder) {
-                _selectedFolderPath = null;
-              }
-            });
-          },
-          contentPadding: EdgeInsets.zero,
-        ),
-
-        // Custom folder picker
-        if (!_useAutoFolder) ...[
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _isCreating ? null : _pickFolder,
-            icon: const Icon(Icons.folder_open),
-            label: Text(_i18n.t('choose_folder')),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 48),
-            ),
-          ),
-          if (_selectedFolderPath != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
+          // Title field
+          TextField(
+            controller: _titleController,
+            decoration: InputDecoration(
+              labelText: _i18n.t('collection_title'),
+              hintText: _i18n.t('collection_title_hint'),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.folder,
-                    size: 20,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _selectedFolderPath!,
-                      style: theme.textTheme.bodySmall,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+              prefixIcon: const Icon(Icons.title),
+              filled: true,
+              fillColor: theme.colorScheme.surface,
+            ),
+            enabled: !_isCreating,
+            textInputAction: TextInputAction.next,
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 16),
+
+          // Visibility dropdown
+          DropdownButtonFormField<String>(
+            value: _visibility,
+            decoration: InputDecoration(
+              labelText: _i18n.t('visibility'),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              prefixIcon: const Icon(Icons.visibility_outlined),
+              filled: true,
+              fillColor: theme.colorScheme.surface,
+            ),
+            items: [
+              DropdownMenuItem(
+                value: 'public',
+                child: Text(_i18n.t('visibility_public')),
+              ),
+              DropdownMenuItem(
+                value: 'private',
+                child: Text(_i18n.t('visibility_private')),
+              ),
+              DropdownMenuItem(
+                value: 'restricted',
+                child: Text(_i18n.t('visibility_restricted')),
+              ),
+            ],
+            onChanged: _isCreating
+                ? null
+                : (value) {
+                    if (value != null) {
+                      setState(() {
+                        _visibility = value;
+                      });
+                    }
+                  },
+          ),
+          const SizedBox(height: 16),
+
+          // Storage location toggle
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _i18n.t('storage_location'),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _useAutoFolder
+                                ? '~/Documents/geogram/devices/${CollectionService().currentCallsign ?? "..."}'
+                                : _i18n.t('choose_custom_location'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _useAutoFolder,
+                      onChanged: _isCreating
+                          ? null
+                          : (value) {
+                              setState(() {
+                                _useAutoFolder = value;
+                                if (_useAutoFolder) {
+                                  _selectedFolderPath = null;
+                                }
+                              });
+                            },
+                    ),
+                  ],
+                ),
+
+                // Custom folder picker
+                if (!_useAutoFolder) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _isCreating ? null : _pickFolder,
+                    icon: const Icon(Icons.folder_open, size: 20),
+                    label: Text(_i18n.t('choose_folder')),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 44),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                   ),
+                  if (_selectedFolderPath != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.folder,
+                            size: 18,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _selectedFolderPath!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
-              ),
+              ],
             ),
-          ],
+          ),
         ],
-      ],
+      ),
     );
   }
 
@@ -759,6 +824,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Track and manage your items with folder-based organization. Keep track of quantities, usage, expiry dates, and borrowed items.';
       case 'station':
         return 'Station configuration for network communication settings. Manage how your node connects to the network.';
+      case 'console':
+        return 'Run Alpine Linux virtual machines with TinyEMU emulator. Access a full Linux terminal, mount host folders, and connect to network services.';
       default:
         return '';
     }
@@ -882,6 +949,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Connection settings',
           'Peer management',
           'Bandwidth controls',
+        ];
+      case 'console':
+        return [
+          'Alpine Linux VM',
+          'Mount host folders',
+          'Network access',
+          'Save/restore state',
         ];
       default:
         return [];

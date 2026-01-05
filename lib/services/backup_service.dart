@@ -12,20 +12,25 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../connection/connection_manager.dart';
+import '../connection/transports/lan_transport.dart';
 import '../models/backup_models.dart';
 import '../util/backup_encryption.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
-import 'config_service.dart';
+import '../util/event_bus.dart';
+import 'app_args.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
-import 'security_service.dart';
+import 'station_discovery_service.dart';
 import 'storage_config.dart';
 import 'websocket_service.dart';
 
@@ -38,6 +43,10 @@ class BackupService {
   // === State ===
   bool _initialized = false;
   String? _basePath;
+  String get _backupsDirPath => p.join(_basePath ?? '', 'backups');
+  String get _configDirPath => p.join(_backupsDirPath, 'config');
+  String get _providersConfigDirPath => p.join(_configDirPath, 'providers');
+  String get _legacyConfigDirPath => p.join(_basePath ?? '', 'backup-config');
 
   // Provider state
   BackupProviderSettings? _providerSettings;
@@ -50,9 +59,15 @@ class BackupService {
 
   // Discovery state
   final Map<String, DiscoveryStatus> _activeDiscoveries = {};
+  final Map<String, String> _resolvedUrls = {};
 
   // Pending invitations (client waiting for provider response)
   final Map<String, Completer<BackupProviderRelationship>> _pendingInvites = {};
+
+  // Station availability announcements
+  EventSubscription<ConnectionStateChangedEvent>? _stationConnectionSubscription;
+  Timer? _providerAnnounceTimer;
+  static const Duration _providerAnnounceInterval = Duration(seconds: 60);
 
   // === Stream controllers ===
   final _statusController = StreamController<BackupStatus>.broadcast();
@@ -93,6 +108,12 @@ class BackupService {
       await _loadProviderSettings();
       await _loadClients();
       await _loadProviders();
+      _setupStationConnectionListener();
+
+      if (_providerSettings?.enabled == true && WebSocketService().isConnected) {
+        await _announceProviderAvailability();
+        _startProviderAnnounceTimer();
+      }
 
       _initialized = true;
       _log('BackupService initialized');
@@ -103,17 +124,32 @@ class BackupService {
 
   /// Ensure required directories exist
   Future<void> _ensureDirectories() async {
-    final backupsDir = Directory(p.join(_basePath!, 'backups'));
+    final backupsDir = Directory(_backupsDirPath);
     if (!await backupsDir.exists()) {
       await backupsDir.create(recursive: true);
     }
 
-    final configDir = Directory(p.join(_basePath!, 'backup-config'));
+    final configDir = Directory(_configDirPath);
     if (!await configDir.exists()) {
-      await configDir.create(recursive: true);
+      final legacyDir = Directory(_legacyConfigDirPath);
+      if (await legacyDir.exists()) {
+        try {
+          await legacyDir.rename(configDir.path);
+        } catch (_) {
+          await configDir.create(recursive: true);
+          await for (final entity in legacyDir.list()) {
+            final newPath = p.join(configDir.path, p.basename(entity.path));
+            try {
+              await entity.rename(newPath);
+            } catch (_) {}
+          }
+        }
+      } else {
+        await configDir.create(recursive: true);
+      }
     }
 
-    final providersDir = Directory(p.join(_basePath!, 'backup-config', 'providers'));
+    final providersDir = Directory(_providersConfigDirPath);
     if (!await providersDir.exists()) {
       await providersDir.create(recursive: true);
     }
@@ -193,11 +229,23 @@ class BackupService {
 
   /// Save provider settings to disk
   Future<void> saveProviderSettings(BackupProviderSettings settings) async {
+    settings.updatedAt = DateTime.now();
     _providerSettings = settings;
     final settingsFile = File(p.join(_basePath!, 'backups', 'settings.json'));
     await settingsFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(settings.toJson()),
     );
+
+    if (WebSocketService().isConnected) {
+      await _announceProviderAvailability(force: true);
+      if (settings.enabled) {
+        _startProviderAnnounceTimer();
+      } else {
+        _stopProviderAnnounceTimer();
+      }
+    } else {
+      _stopProviderAnnounceTimer();
+    }
   }
 
   /// Load all client relationships from disk
@@ -318,6 +366,16 @@ class BackupService {
     return snapshots;
   }
 
+  /// Get a specific snapshot for a client
+  Future<BackupSnapshot?> getSnapshot(String clientCallsign, String snapshotId) async {
+    final snapshots = await getSnapshots(clientCallsign);
+    try {
+      return snapshots.firstWhere((s) => s.snapshotId == snapshotId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Get manifest for a snapshot
   Future<Uint8List?> getManifest(String clientCallsign, String snapshotId) async {
     final manifestFile = File(p.join(
@@ -336,6 +394,25 @@ class BackupService {
 
   /// Get encrypted file from a snapshot
   Future<Uint8List?> getEncryptedFile(String clientCallsign, String snapshotId, String fileName) async {
+    final archiveFile = await _getSnapshotArchiveFile(clientCallsign, snapshotId, createIfMissing: false);
+    if (archiveFile != null && await archiveFile.exists()) {
+      try {
+        final archiveBytes = await archiveFile.readAsBytes();
+        final archive = ZipDecoder().decodeBytes(archiveBytes, verify: false);
+        final entry = archive.files.firstWhere(
+          (f) => f.name == fileName,
+          orElse: () => ArchiveFile('missing', 0, null),
+        );
+        if (entry.size != 0 && entry.content != null) {
+          final content = entry.content;
+          if (content is Uint8List) return content;
+          if (content is List<int>) return Uint8List.fromList(content);
+        }
+      } catch (e) {
+        _log('Error reading $fileName from archive: $e');
+      }
+    }
+
     final filePath = p.join(
       _basePath!,
       'backups',
@@ -414,8 +491,18 @@ class BackupService {
       await snapshotDir.create(recursive: true);
     }
 
-    final file = File(p.join(snapshotDir.path, 'status.json'));
-    await file.writeAsString(
+    // Preserve existing note if caller didn't provide one
+    final statusFile = File(p.join(snapshotDir.path, 'status.json'));
+    if (snapshot.note == null && await statusFile.exists()) {
+      try {
+        final existingJson = jsonDecode(await statusFile.readAsString()) as Map<String, dynamic>;
+        snapshot = snapshot.copyWith(note: existingJson['note'] as String?);
+      } catch (_) {
+        // Ignore parse errors; continue with provided snapshot
+      }
+    }
+
+    await statusFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(snapshot.toJson()),
     );
 
@@ -433,6 +520,24 @@ class BackupService {
     }
   }
 
+  /// Update snapshot note for a client (provider-side)
+  Future<void> setSnapshotNote(String clientCallsign, String snapshotId, String note) async {
+    final existing = await getSnapshot(clientCallsign, snapshotId);
+    if (existing == null) {
+      _log('Snapshot note update skipped: snapshot not found for $clientCallsign/$snapshotId');
+      return;
+    }
+    final updated = existing.copyWith(note: note);
+    await updateSnapshotStatus(clientCallsign, updated);
+    _fireBackupEvent(
+      type: BackupEventType.snapshotNoteUpdated,
+      role: 'provider',
+      counterpartCallsign: clientCallsign,
+      snapshotId: snapshotId,
+      message: note,
+    );
+  }
+
   /// Check if client has quota available
   bool hasQuotaAvailable(String clientCallsign, int additionalBytes) {
     final client = _clients[clientCallsign.toUpperCase()];
@@ -446,7 +551,7 @@ class BackupService {
 
   /// Load provider relationships from disk
   Future<void> _loadProviders() async {
-    final providersDir = Directory(p.join(_basePath!, 'backup-config', 'providers'));
+    final providersDir = Directory(_providersConfigDirPath);
     if (!await providersDir.exists()) return;
 
     await for (final entity in providersDir.list()) {
@@ -475,6 +580,161 @@ class BackupService {
     return _providers[callsign.toUpperCase()];
   }
 
+  /// Fetch snapshot list from a provider (client-side)
+  Future<List<BackupSnapshot>> fetchProviderSnapshots(String providerCallsign) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final myCallsign = profile.callsign;
+      if (myCallsign.isEmpty) {
+        _log('Fetch snapshots error: identity not available');
+        return [];
+      }
+
+      final connectionManager = ConnectionManager();
+      if (!connectionManager.isInitialized) {
+        _log('Fetch snapshots error: ConnectionManager not initialized');
+        return [];
+      }
+
+      final authHeaders = _buildBackupAuthHeaders(
+        'snapshot_list',
+        targetCallsign: providerCallsign,
+      );
+      if (authHeaders == null) {
+        _log('Fetch snapshots error: failed to sign auth header');
+        return [];
+      }
+
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots';
+      final requestHeaders = {
+        'Accept': 'application/json',
+        ...authHeaders,
+      };
+
+      _syncDeviceForTransfer(providerCallsign);
+      final result = await connectionManager.apiRequest(
+        callsign: providerCallsign,
+        method: 'GET',
+        path: requestPath,
+        headers: requestHeaders,
+        excludeTransports: _backupApiExcludeTransports(),
+      );
+
+      Map<String, dynamic>? payload;
+      if (result.success && result.responseData != null) {
+        payload = _decodeJsonPayload(result.responseData);
+      }
+      payload ??= await _httpGetJson(providerCallsign, requestPath, requestHeaders);
+      if (payload == null) {
+        return [];
+      }
+
+      final rawSnapshots = payload['snapshots'];
+      final totalSnapshotBytes = payload['total_snapshot_bytes'];
+      final maxStorageBytes = payload['max_storage_bytes'];
+      final currentStorageBytes = payload['current_storage_bytes'];
+      final maxSnapshots = payload['max_snapshots'];
+
+      // Update provider quota info if available
+      final provider = _providers[providerCallsign.toUpperCase()];
+      if (provider != null &&
+          (maxStorageBytes != null || currentStorageBytes != null || maxSnapshots != null)) {
+        final updated = provider.copyWith(
+          maxStorageBytes: maxStorageBytes is int ? maxStorageBytes : provider.maxStorageBytes,
+          currentStorageBytes: currentStorageBytes is int ? currentStorageBytes : provider.currentStorageBytes,
+          maxSnapshots: maxSnapshots is int ? maxSnapshots : provider.maxSnapshots,
+        );
+        _providers[providerCallsign.toUpperCase()] = updated;
+        _providersController.add(getProviders());
+      }
+
+      if (rawSnapshots is! List) {
+        return [];
+      }
+
+      final snapshots = <BackupSnapshot>[];
+      for (final entry in rawSnapshots) {
+        if (entry is Map<String, dynamic>) {
+          snapshots.add(BackupSnapshot.fromJson(entry));
+        } else if (entry is Map) {
+          snapshots.add(BackupSnapshot.fromJson(Map<String, dynamic>.from(entry)));
+        }
+      }
+
+      snapshots.sort((a, b) => b.snapshotId.compareTo(a.snapshotId));
+      return snapshots;
+    } catch (e) {
+      _log('Fetch snapshots error: $e');
+      return [];
+    }
+  }
+
+  /// Update snapshot note on provider (client-side)
+  Future<bool> updateSnapshotNote(String providerCallsign, String snapshotId, String note) async {
+    try {
+      final profile = ProfileService().getProfile();
+      final myCallsign = profile.callsign;
+      if (myCallsign.isEmpty) {
+        _log('Update snapshot note error: identity not available');
+        return false;
+      }
+
+      final authHeaders = _buildBackupAuthHeaders(
+        'snapshot_note',
+        targetCallsign: providerCallsign,
+        snapshotId: snapshotId,
+      );
+      if (authHeaders == null) {
+        _log('Update snapshot note error: failed to sign auth header');
+        return false;
+      }
+
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots/$snapshotId/note';
+      final requestHeaders = {
+        'Accept': 'application/json',
+        ...authHeaders,
+      };
+
+      final connectionManager = ConnectionManager();
+      bool success = false;
+      if (connectionManager.isInitialized) {
+        _syncDeviceForTransfer(providerCallsign);
+        final result = await connectionManager.apiRequest(
+          callsign: providerCallsign,
+          method: 'PUT',
+          path: requestPath,
+          headers: {
+            ...requestHeaders,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'note': note}),
+          excludeTransports: _backupApiExcludeTransports(),
+        );
+        if (result.success) {
+          success = true;
+        }
+      }
+
+      if (!success) {
+        success = await _httpPutJson(providerCallsign, requestPath, requestHeaders, {'note': note});
+      }
+
+      if (success) {
+        _fireBackupEvent(
+          type: BackupEventType.snapshotNoteUpdated,
+          role: 'client',
+          counterpartCallsign: providerCallsign,
+          snapshotId: snapshotId,
+          message: note,
+        );
+      }
+      return success;
+    } catch (e) {
+      _log('Update snapshot note error: $e');
+      return false;
+    }
+  }
+
   /// Send backup invitation to a provider
   Future<BackupProviderRelationship?> sendInvite(String providerCallsign, int intervalDays) async {
     final profile = ProfileService().getProfile();
@@ -501,13 +761,23 @@ class BackupService {
 
     // Create signed invite event
     final event = _createInviteEvent(providerCallsign, intervalDays);
+    if (event == null) {
+      _log('Cannot send invite: failed to sign event');
+      return null;
+    }
 
-    // Send via WebSocket
-    WebSocketService().send({
-      'type': 'backup_invite',
-      'target': providerCallsign,
-      'event': event.toJson(),
-    });
+    final sent = await _sendBackupMessage(
+      providerCallsign,
+      {
+        'type': 'backup_invite',
+        'event': event.toJson(),
+      },
+    );
+
+    if (!sent) {
+      _log('Backup invite failed: no route to $providerCallsign');
+      return null;
+    }
 
     // Wait for response (with timeout)
     final completer = Completer<BackupProviderRelationship>();
@@ -530,8 +800,7 @@ class BackupService {
   /// Save provider relationship to disk
   Future<void> _saveProviderRelationship(BackupProviderRelationship relationship) async {
     final providerDir = Directory(p.join(
-      _basePath!,
-      'backup-config',
+      _configDirPath,
       'providers',
       relationship.providerCallsign,
     ));
@@ -559,11 +828,13 @@ class BackupService {
     _providersController.add(getProviders());
 
     // Notify provider
-    WebSocketService().send({
-      'type': 'backup_status_change',
-      'target': providerCallsign,
-      'status': 'terminated',
-    });
+    await _sendBackupMessage(
+      providerCallsign,
+      {
+        'type': 'backup_status_change',
+        'status': 'terminated',
+      },
+    );
   }
 
   /// Update a provider relationship
@@ -599,6 +870,12 @@ class BackupService {
       startedAt: DateTime.now(),
     );
     _statusController.add(_backupStatus);
+    _fireBackupEvent(
+      type: BackupEventType.backupStarted,
+      role: 'client',
+      counterpartCallsign: providerCallsign,
+      snapshotId: snapshotId,
+    );
 
     // Run backup in background
     _runBackup(providerCallsign, snapshotId);
@@ -617,6 +894,14 @@ class BackupService {
       if (myNsec.isEmpty || myNpub.isEmpty || myCallsign.isEmpty) {
         throw Exception('Identity not available');
       }
+
+      await _sendBackupMessage(
+        providerCallsign,
+        {
+          'type': 'backup_start',
+          'snapshot_id': snapshotId,
+        },
+      );
 
       // Get list of files to backup (entire working folder)
       final workingDir = Directory(_basePath!);
@@ -644,7 +929,7 @@ class BackupService {
         final relativePath = p.relative(file.path, from: _basePath!);
 
         // Skip backup-related directories
-        if (relativePath.startsWith('backups') || relativePath.startsWith('backup-config')) {
+        if (relativePath.startsWith('backups')) {
           continue;
         }
 
@@ -719,14 +1004,24 @@ class BackupService {
       }
 
       // Notify provider
-      WebSocketService().send({
-        'type': 'backup_complete',
-        'target': providerCallsign,
-        'snapshot_id': snapshotId,
-        'total_files': manifest.totalFiles,
-        'total_bytes': manifest.totalBytes,
-      });
+      await _sendBackupMessage(
+        providerCallsign,
+        {
+          'type': 'backup_complete',
+          'snapshot_id': snapshotId,
+          'total_files': manifest.totalFiles,
+          'total_bytes': manifest.totalBytes,
+        },
+      );
 
+      _fireBackupEvent(
+        type: BackupEventType.backupCompleted,
+        role: 'client',
+        counterpartCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        totalFiles: manifest.totalFiles,
+        totalBytes: manifest.totalBytes,
+      );
       _log('Backup completed: $snapshotId, ${manifest.totalFiles} files, ${manifest.totalBytes} bytes');
     } catch (e) {
       _backupStatus = _backupStatus.copyWith(
@@ -735,13 +1030,20 @@ class BackupService {
       );
       _statusController.add(_backupStatus);
       _log('Backup failed: $e');
+      _fireBackupEvent(
+        type: BackupEventType.backupFailed,
+        role: 'client',
+        counterpartCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        message: e.toString(),
+      );
     }
   }
 
   /// Enumerate files for backup (excluding certain directories)
   Future<List<File>> _enumerateFilesForBackup(Directory dir) async {
     final files = <File>[];
-    final excludeDirs = {'backups', 'backup-config', 'updates', '.dart_tool', 'build'};
+    final excludeDirs = {'backups', 'updates', '.dart_tool', 'build'};
 
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (entity is File) {
@@ -780,6 +1082,12 @@ class BackupService {
       startedAt: DateTime.now(),
     );
     _statusController.add(_restoreStatus);
+    _fireBackupEvent(
+      type: BackupEventType.restoreStarted,
+      role: 'client',
+      counterpartCallsign: providerCallsign,
+      snapshotId: snapshotId,
+    );
 
     // Run restore in background
     _runRestore(providerCallsign, snapshotId);
@@ -795,8 +1103,20 @@ class BackupService {
         throw Exception('Identity not available');
       }
 
+      try {
+        await DevicesService().refreshAllDevices(force: true);
+      } catch (e) {
+        _log('Restore: Device refresh failed: $e');
+      }
+
+      final providerBaseUrl = await _resolveDeviceUrl(providerCallsign);
+
       // Download encrypted manifest
-      final encryptedManifest = await _downloadManifest(providerCallsign, snapshotId);
+      final encryptedManifest = await _downloadManifest(
+        providerCallsign,
+        snapshotId,
+        baseUrlOverride: providerBaseUrl,
+      );
       if (encryptedManifest == null) {
         throw Exception('Failed to download manifest');
       }
@@ -821,6 +1141,7 @@ class BackupService {
           providerCallsign,
           snapshotId,
           entry.encryptedName,
+          baseUrlOverride: providerBaseUrl,
         );
 
         if (encrypted == null) {
@@ -864,6 +1185,14 @@ class BackupService {
       );
       _statusController.add(_restoreStatus);
 
+      _fireBackupEvent(
+        type: BackupEventType.restoreCompleted,
+        role: 'client',
+        counterpartCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        totalFiles: manifest.totalFiles,
+        totalBytes: manifest.totalBytes,
+      );
       _log('Restore completed: $snapshotId, ${manifest.totalFiles} files');
     } catch (e) {
       _restoreStatus = _restoreStatus.copyWith(
@@ -872,6 +1201,13 @@ class BackupService {
       );
       _statusController.add(_restoreStatus);
       _log('Restore failed: $e');
+      _fireBackupEvent(
+        type: BackupEventType.restoreFailed,
+        role: 'client',
+        counterpartCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        message: e.toString(),
+      );
     }
   }
 
@@ -929,14 +1265,20 @@ class BackupService {
       for (final device in onlineDevices) {
         // Create signed discovery query
         final event = _createDiscoveryQueryEvent(myNpub, challenge, device.callsign);
+        if (event == null) {
+          _log('Discovery query: failed to sign event for ${device.callsign}');
+          continue;
+        }
 
         // Send query
-        WebSocketService().send({
-          'type': 'backup_discovery_challenge',
-          'target': device.callsign,
-          'event': event.toJson(),
-          'discovery_id': discoveryId,
-        });
+        await _sendBackupMessage(
+          device.callsign,
+          {
+            'type': 'backup_discovery_challenge',
+            'event': event.toJson(),
+            'discovery_id': discoveryId,
+          },
+        );
 
         discovery = discovery.copyWith(devicesQueried: discovery.devicesQueried + 1);
         _activeDiscoveries[discoveryId] = discovery;
@@ -969,6 +1311,162 @@ class BackupService {
           providersFound: discovery.providersFound,
         );
       }
+    }
+  }
+
+  // ============================================================
+  // AVAILABILITY (LAN + Station)
+  // ============================================================
+
+  Future<BackupProviderAvailabilityResult> getAvailableProviders({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final lanFuture = _queryLanProviders(timeout: timeout);
+    final stationFuture = _queryStationProviders(timeout: timeout);
+    final lanProviders = _dedupeAvailableProviders(await lanFuture);
+    final stationProviders = _dedupeAvailableProviders(await stationFuture);
+
+    final lanCallsigns = lanProviders.map((p) => p.callsign.toUpperCase()).toSet();
+    final filteredStation = stationProviders
+        .where((p) => !lanCallsigns.contains(p.callsign.toUpperCase()))
+        .toList()
+      ..sort((a, b) => a.callsign.compareTo(b.callsign));
+
+    return BackupProviderAvailabilityResult(
+      lanProviders: [...lanProviders]..sort((a, b) => a.callsign.compareTo(b.callsign)),
+      stationProviders: filteredStation,
+    );
+  }
+
+  Future<List<AvailableBackupProvider>> _queryLanProviders({Duration timeout = const Duration(seconds: 4)}) async {
+    final connectionManager = ConnectionManager();
+    if (!connectionManager.isInitialized) {
+      _log('BackupService: ConnectionManager not initialized for LAN availability');
+      return [];
+    }
+
+    try {
+      await DevicesService()
+          .refreshAllDevices(force: false)
+          .timeout(const Duration(seconds: 1), onTimeout: () => false);
+    } catch (e) {
+      _log('BackupService: Failed to refresh devices: $e');
+    }
+
+    final devices = DevicesService().getAllDevices();
+    final seenCandidates = <String>{};
+    final candidates = devices.where(_isLanCandidate).where((device) {
+      final key = device.callsign.toUpperCase();
+      return seenCandidates.add(key);
+    }).toList();
+    if (candidates.isEmpty) return [];
+
+    final excludeTransports = _excludeTransportsExcept({'lan'});
+    final futures = candidates.map((device) => _fetchAvailabilityFromDevice(
+      device.callsign,
+      connectionMethod: 'lan',
+      timeout: timeout,
+      excludeTransports: excludeTransports,
+    ));
+
+    final results = await Future.wait(futures);
+    final deduped = _dedupeAvailableProviders(results.whereType<AvailableBackupProvider>().toList());
+    deduped.sort((a, b) => a.callsign.compareTo(b.callsign));
+    return deduped;
+  }
+
+  Future<List<AvailableBackupProvider>> _queryStationProviders({Duration timeout = const Duration(seconds: 4)}) async {
+    if (!WebSocketService().isConnected) return [];
+    final stationHttpUrl = _getConnectedStationHttpUrl();
+    if (stationHttpUrl == null) return [];
+
+    try {
+      final headers = _buildBackupAuthHeaders('provider_directory_query');
+      if (headers == null) return [];
+
+      final uri = Uri.parse('$stationHttpUrl/api/backup/providers/available');
+      final response = await http.get(uri, headers: headers).timeout(timeout);
+      if (response.statusCode != 200) {
+        _log('BackupService: Station provider query failed (${response.statusCode})');
+        return [];
+      }
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) return [];
+      final providers = decoded['providers'];
+      if (providers is! List) return [];
+
+      return providers
+          .whereType<Map>()
+          .map((entry) => AvailableBackupProvider.fromJson(
+                Map<String, dynamic>.from(entry),
+                connectionMethodOverride: 'station',
+              ))
+          .where((provider) => provider.callsign.isNotEmpty)
+          .toList();
+    } catch (e) {
+      _log('BackupService: Station provider query error: $e');
+      return [];
+    }
+  }
+
+  List<AvailableBackupProvider> _dedupeAvailableProviders(List<AvailableBackupProvider> providers) {
+    final seen = <String>{};
+    final filtered = <AvailableBackupProvider>[];
+    for (final provider in providers) {
+      final key = provider.callsign.toUpperCase();
+      if (seen.add(key)) {
+        filtered.add(provider);
+      }
+    }
+    return filtered;
+  }
+
+  bool _isLanCandidate(RemoteDevice device) {
+    if (!device.isOnline) return false;
+    if (device.url == null || device.url!.isEmpty) return false;
+    final methods = device.connectionMethods.map((m) => m.toLowerCase()).toList();
+    return methods.any((m) => m.contains('wifi') || m.contains('lan'));
+  }
+
+  Future<AvailableBackupProvider?> _fetchAvailabilityFromDevice(
+    String callsign, {
+    required String connectionMethod,
+    required Duration timeout,
+    required Set<String> excludeTransports,
+  }) async {
+    final connectionManager = ConnectionManager();
+    final headers = _buildBackupAuthHeaders(
+      'availability_query',
+      targetCallsign: callsign,
+    );
+    if (headers == null) return null;
+
+    try {
+      _syncDeviceForTransfer(callsign);
+      final result = await connectionManager.apiRequest(
+        callsign: callsign,
+        method: 'GET',
+        path: '/api/backup/availability',
+        headers: headers,
+        excludeTransports: excludeTransports,
+        timeout: timeout,
+      );
+      if (!result.success || result.responseData == null) return null;
+
+      final payload = _decodeJsonPayload(result.responseData);
+      if (payload == null) return null;
+      final enabled = _readBool(payload['enabled']);
+      if (enabled != true) return null;
+
+      payload['callsign'] ??= callsign.toUpperCase();
+      return AvailableBackupProvider.fromJson(
+        payload,
+        connectionMethodOverride: connectionMethod,
+      );
+    } catch (e) {
+      _log('BackupService: Availability query failed for $callsign: $e');
+      return null;
     }
   }
 
@@ -1022,7 +1520,11 @@ class BackupService {
       _saveClientRelationship(relationship);
       _clientsController.add(getClients());
 
-      // TODO: Emit event for UI to show pending invite
+      _fireBackupEvent(
+        type: BackupEventType.inviteReceived,
+        role: 'provider',
+        counterpartCallsign: clientCallsign,
+      );
     } catch (e) {
       _log('Error handling backup invite: $e');
     }
@@ -1055,6 +1557,12 @@ class BackupService {
         _providersController.add(getProviders());
 
         completer?.complete(updated);
+
+        _fireBackupEvent(
+          type: accepted ? BackupEventType.inviteAccepted : BackupEventType.inviteDeclined,
+          role: 'client',
+          counterpartCallsign: providerCallsign,
+        );
       }
     } catch (e) {
       _log('Error handling invite response: $e');
@@ -1076,10 +1584,16 @@ class BackupService {
     );
 
     updateSnapshotStatus(clientCallsign, snapshot);
+    _fireBackupEvent(
+      type: BackupEventType.backupStarted,
+      role: 'provider',
+      counterpartCallsign: clientCallsign,
+      snapshotId: snapshotId,
+    );
   }
 
   /// Handle backup complete notification (provider side)
-  void handleBackupComplete(Map<String, dynamic> message) {
+  Future<void> handleBackupComplete(Map<String, dynamic> message) async {
     final clientCallsign = message['from'] as String? ?? '';
     final snapshotId = message['snapshot_id'] as String? ?? '';
     final totalFiles = message['total_files'] as int? ?? 0;
@@ -1097,6 +1611,22 @@ class BackupService {
     );
 
     updateSnapshotStatus(clientCallsign, snapshot);
+
+    await _waitForSnapshotFiles(
+      clientCallsign,
+      snapshotId,
+      expectedFiles: totalFiles,
+      timeout: const Duration(seconds: 20),
+    );
+    await _finalizeSnapshotArchive(clientCallsign, snapshotId);
+    _fireBackupEvent(
+      type: BackupEventType.backupCompleted,
+      role: 'provider',
+      counterpartCallsign: clientCallsign,
+      snapshotId: snapshotId,
+      totalFiles: totalFiles,
+      totalBytes: totalBytes,
+    );
   }
 
   /// Handle discovery challenge (provider side - checking if we have backups for this npub)
@@ -1246,45 +1776,381 @@ class BackupService {
   // HELPERS
   // ============================================================
 
-  /// Create signed invite event
-  NostrEvent _createInviteEvent(String targetCallsign, int intervalDays) {
-    final profile = ProfileService().getProfile();
-    final myCallsign = profile.callsign;
-    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+  void _setupStationConnectionListener() {
+    _stationConnectionSubscription?.cancel();
+    _stationConnectionSubscription = EventBus().on<ConnectionStateChangedEvent>((event) {
+      if (event.connectionType != ConnectionType.station) return;
+      if (event.isConnected) {
+        if (_providerSettings?.enabled == true) {
+          unawaited(_announceProviderAvailability());
+          _startProviderAnnounceTimer();
+        }
+      } else {
+        _stopProviderAnnounceTimer();
+      }
+    });
+  }
 
-    final event = NostrEvent.textNote(
-      pubkeyHex: pubkeyHex,
+  void _startProviderAnnounceTimer() {
+    _providerAnnounceTimer?.cancel();
+    _providerAnnounceTimer = Timer.periodic(_providerAnnounceInterval, (_) {
+      unawaited(_announceProviderAvailability());
+    });
+  }
+
+  void _stopProviderAnnounceTimer() {
+    _providerAnnounceTimer?.cancel();
+    _providerAnnounceTimer = null;
+  }
+
+  Future<void> _announceProviderAvailability({bool force = false}) async {
+    if (!WebSocketService().isConnected) return;
+    final settings = _providerSettings;
+    if (settings == null) return;
+    if (!settings.enabled && !force) return;
+
+    final event = _createSignedBackupEvent(
+      action: 'provider_announce',
+      content: '',
+      extraTags: [
+        ['enabled', settings.enabled.toString()],
+        ['max_total_storage_bytes', settings.maxTotalStorageBytes.toString()],
+        ['default_max_client_storage_bytes', settings.defaultMaxClientStorageBytes.toString()],
+        ['default_max_snapshots', settings.defaultMaxSnapshots.toString()],
+      ],
+    );
+    if (event == null) return;
+
+    WebSocketService().send({
+      'type': 'backup_provider_announce',
+      'event': event.toJson(),
+    });
+  }
+
+  String? _getConnectedStationHttpUrl() {
+    final wsUrl = WebSocketService().connectedUrl;
+    if (wsUrl == null || wsUrl.isEmpty) return null;
+    return wsUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+  }
+
+  Set<String> _excludeTransportsExcept(Set<String> allowed) {
+    final connectionManager = ConnectionManager();
+    final all = connectionManager.transports.map((t) => t.id).toSet();
+    return all.difference(allowed);
+  }
+
+  Set<String> _backupApiExcludeTransports() {
+    return _excludeTransportsExcept({'lan', 'station'});
+  }
+
+  Future<String?> _resolveDeviceUrl(String callsign) async {
+    final normalized = callsign.toUpperCase();
+    final cached = _resolvedUrls[normalized];
+    if (cached != null && cached.isNotEmpty) return cached;
+
+    final device = DevicesService().getDevice(normalized);
+    final deviceUrl = device?.url;
+    if (deviceUrl != null && deviceUrl.isNotEmpty) {
+      _resolvedUrls[normalized] = deviceUrl;
+      return deviceUrl;
+    }
+
+    final localhostPorts = AppArgs().scanLocalhostPorts;
+    if (localhostPorts != null) {
+      final (startPort, endPort) = localhostPorts;
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      for (int port = startPort; port <= endPort; port++) {
+        if (DateTime.now().isAfter(deadline)) break;
+        final url = 'http://127.0.0.1:$port';
+        try {
+          final response = await http
+              .get(Uri.parse('$url/api/status'))
+              .timeout(const Duration(milliseconds: 200));
+          if (response.statusCode != 200) continue;
+          final data = jsonDecode(response.body);
+          if (data is Map<String, dynamic>) {
+            final found = data['callsign']?.toString().toUpperCase();
+            if (found == normalized) {
+              _resolvedUrls[normalized] = url;
+              return url;
+            }
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    }
+
+    try {
+      final results = await StationDiscoveryService()
+          .scanWithProgress(timeoutMs: 500)
+          .timeout(const Duration(seconds: 4), onTimeout: () => <NetworkScanResult>[]);
+      for (final result in results) {
+        final resultCallsign = result.callsign?.toUpperCase();
+        if (resultCallsign == normalized) {
+          final url = 'http://${result.ip}:${result.port}';
+          _resolvedUrls[normalized] = url;
+          return url;
+        }
+      }
+    } catch (e) {
+      _log('BackupService: Failed to resolve device URL for $callsign ($e)');
+    }
+
+    return null;
+  }
+
+  Map<String, dynamic>? _decodeJsonPayload(dynamic responseData) {
+    if (responseData == null) return null;
+    if (responseData is Map<String, dynamic>) return responseData;
+    if (responseData is String) {
+      try {
+        final decoded = jsonDecode(responseData);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _httpGetJson(
+    String callsign,
+    String path,
+    Map<String, String> headers, {
+    String? baseUrlOverride,
+  }) async {
+    final baseUrl = baseUrlOverride ?? await _resolveDeviceUrl(callsign);
+    if (baseUrl == null || baseUrl.isEmpty) return null;
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (e) {
+      _log('BackupService: HTTP JSON fallback failed for $callsign $path ($e)');
+    }
+    return null;
+  }
+
+  Future<bool> _httpPutJson(
+    String callsign,
+    String path,
+    Map<String, String> headers,
+    Map<String, dynamic> body, {
+    String? baseUrlOverride,
+  }) async {
+    final baseUrl = baseUrlOverride ?? await _resolveDeviceUrl(callsign);
+    if (baseUrl == null || baseUrl.isEmpty) return false;
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final mergedHeaders = {
+        ...headers,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      final response = await http
+          .put(uri, headers: mergedHeaders, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 20));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      _log('BackupService: HTTP JSON PUT failed for $callsign $path ($e)');
+      return false;
+    }
+  }
+
+  Future<Uint8List?> _httpGetBinary(
+    String callsign,
+    String path,
+    Map<String, String> headers, {
+    String? baseUrlOverride,
+  }) async {
+    final baseUrl = baseUrlOverride ?? await _resolveDeviceUrl(callsign);
+    if (baseUrl == null || baseUrl.isEmpty) return null;
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return null;
+      return response.bodyBytes;
+    } catch (e) {
+      _log('BackupService: HTTP binary fallback failed for $callsign $path ($e)');
+      return null;
+    }
+  }
+
+  bool? _readBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is String) {
+      final normalized = value.toLowerCase();
+      if (normalized == 'true') return true;
+      if (normalized == 'false') return false;
+    }
+    return null;
+  }
+
+  Future<bool> _httpPutBinary(
+    String callsign,
+    String path,
+    Map<String, String> headers,
+    Uint8List body, {
+    String? baseUrlOverride,
+  }) async {
+    final baseUrl = baseUrlOverride ?? await _resolveDeviceUrl(callsign);
+    if (baseUrl == null || baseUrl.isEmpty) return false;
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final response = await http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 30));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      _log('BackupService: HTTP binary upload failed for $callsign $path ($e)');
+      return false;
+    }
+  }
+
+  NostrEvent? _createSignedBackupEvent({
+    required String action,
+    String content = '',
+    List<List<String>> extraTags = const [],
+  }) {
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.npub.isEmpty || profile.nsec.isEmpty || profile.callsign.isEmpty) {
+        _log('BackupService: Missing NOSTR keys for signing');
+        return null;
+      }
+
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final tags = <List<String>>[
+        ['t', 'backup'],
+        ['action', action],
+        ['callsign', profile.callsign],
+        ...extraTags,
+      ];
+
+      final event = NostrEvent.textNote(
+        pubkeyHex: pubkeyHex,
+        content: content,
+        tags: tags,
+      );
+      event.sign(NostrCrypto.decodeNsec(profile.nsec));
+      return event;
+    } catch (e) {
+      _log('BackupService: Failed to sign backup event: $e');
+      return null;
+    }
+  }
+
+  Map<String, String>? _buildBackupAuthHeaders(
+    String action, {
+    String? targetCallsign,
+    String? snapshotId,
+    String? fileName,
+  }) {
+    final tags = <List<String>>[];
+    if (targetCallsign != null && targetCallsign.isNotEmpty) {
+      tags.add(['target', targetCallsign]);
+    }
+    if (snapshotId != null && snapshotId.isNotEmpty) {
+      tags.add(['snapshot_id', snapshotId]);
+    }
+    if (fileName != null && fileName.isNotEmpty) {
+      tags.add(['file', fileName]);
+    }
+
+    final event = _createSignedBackupEvent(
+      action: action,
+      content: '',
+      extraTags: tags,
+    );
+    if (event == null) return null;
+
+    final eventJson = jsonEncode(event.toJson());
+    final base64Event = base64Encode(utf8.encode(eventJson));
+    return {'Authorization': 'Nostr $base64Event'};
+  }
+
+  NostrEvent? _createBackupMessageEvent(Map<String, dynamic> payload) {
+    final type = payload['type'] as String?;
+    if (type == null || type.isEmpty) return null;
+    final action = _actionForBackupMessageType(type);
+    if (action == null) return null;
+
+    final extraTags = <List<String>>[];
+    final target = payload['target'];
+    if (target is String && target.isNotEmpty) {
+      extraTags.add(['target', target]);
+    }
+    final snapshotId = payload['snapshot_id'];
+    if (snapshotId != null && snapshotId.toString().isNotEmpty) {
+      extraTags.add(['snapshot_id', snapshotId.toString()]);
+    }
+    final status = payload['status'];
+    if (status != null && status.toString().isNotEmpty) {
+      extraTags.add(['status', status.toString()]);
+    }
+    final totalFiles = payload['total_files'];
+    if (totalFiles != null) {
+      extraTags.add(['total_files', totalFiles.toString()]);
+    }
+    final totalBytes = payload['total_bytes'];
+    if (totalBytes != null) {
+      extraTags.add(['total_bytes', totalBytes.toString()]);
+    }
+
+    return _createSignedBackupEvent(
+      action: action,
+      content: payload['content']?.toString() ?? '',
+      extraTags: extraTags,
+    );
+  }
+
+  String? _actionForBackupMessageType(String type) {
+    switch (type) {
+      case 'backup_invite':
+        return 'backup_invite';
+      case 'backup_invite_response':
+        return 'backup_invite_response';
+      case 'backup_start':
+        return 'backup_start';
+      case 'backup_complete':
+        return 'backup_complete';
+      case 'backup_status_change':
+        return 'backup_status_change';
+      case 'backup_discovery_challenge':
+        return 'discovery_query';
+      case 'backup_discovery_response':
+        return 'discovery_response';
+      default:
+        return null;
+    }
+  }
+
+  /// Create signed invite event
+  NostrEvent? _createInviteEvent(String targetCallsign, int intervalDays) {
+    return _createSignedBackupEvent(
+      action: 'backup_invite',
       content: 'Backup provider invitation',
-      tags: [
-        ['action', 'backup_invite'],
+      extraTags: [
         ['target', targetCallsign],
-        ['callsign', myCallsign],
         ['interval_days', intervalDays.toString()],
       ],
     );
-    event.sign(NostrCrypto.decodeNsec(profile.nsec));
-    return event;
   }
 
   /// Create signed discovery query event
-  NostrEvent _createDiscoveryQueryEvent(String targetNpub, String challenge, String targetCallsign) {
-    final profile = ProfileService().getProfile();
-    final myCallsign = profile.callsign;
-    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-
-    final event = NostrEvent.textNote(
-      pubkeyHex: pubkeyHex,
+  NostrEvent? _createDiscoveryQueryEvent(String targetNpub, String challenge, String targetCallsign) {
+    return _createSignedBackupEvent(
+      action: 'discovery_query',
       content: 'Backup discovery query',
-      tags: [
-        ['action', 'discovery_query'],
+      extraTags: [
         ['target', targetNpub],
         ['challenge', challenge],
-        ['callsign', myCallsign],
         ['target_callsign', targetCallsign],
       ],
     );
-    event.sign(NostrCrypto.decodeNsec(profile.nsec));
-    return event;
   }
 
   /// Send invite response
@@ -1296,15 +2162,17 @@ class BackupService {
     int maxSnapshots,
   ) {
     final profile = ProfileService().getProfile();
-
-    WebSocketService().send({
-      'type': 'backup_invite_response',
-      'target': clientCallsign,
-      'accepted': accepted,
-      'provider_npub': profile.npub,
-      'max_storage_bytes': maxStorageBytes,
-      'max_snapshots': maxSnapshots,
-    });
+    unawaited(_sendBackupMessage(
+      clientCallsign,
+      {
+        'type': 'backup_invite_response',
+        'accepted': accepted,
+        'provider_npub': profile.npub,
+        'max_storage_bytes': maxStorageBytes,
+        'max_snapshots': maxSnapshots,
+        'target': clientCallsign,
+      },
+    ));
   }
 
   /// Send discovery response
@@ -1316,20 +2184,15 @@ class BackupService {
     BackupClientRelationship? client,
     List<BackupSnapshot>? snapshots,
   ) {
-    final profile = ProfileService().getProfile();
-    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-
-    // Create signed response event
-    final event = NostrEvent.textNote(
-      pubkeyHex: pubkeyHex,
+    final event = _createSignedBackupEvent(
+      action: 'discovery_response',
       content: 'Backup discovery response',
-      tags: [
-        ['action', 'discovery_response'],
+      extraTags: [
         ['challenge', challenge],
         ['has_backups', hasBackups.toString()],
       ],
     );
-    event.sign(NostrCrypto.decodeNsec(profile.nsec));
+    if (event == null) return;
 
     final message = <String, dynamic>{
       'type': 'backup_discovery_response',
@@ -1347,7 +2210,7 @@ class BackupService {
       }
     }
 
-    WebSocketService().send(message);
+    unawaited(_sendBackupMessage(targetCallsign, message));
   }
 
   /// Upload encrypted file to provider via ConnectionManager
@@ -1359,11 +2222,47 @@ class BackupService {
   ) async {
     try {
       final myCallsign = ProfileService().getProfile().callsign;
-      final result = await ConnectionManager().apiRequest(
+      final authHeaders = _buildBackupAuthHeaders(
+        'file_upload',
+        targetCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        fileName: fileName,
+      );
+      if (authHeaders == null) {
+        _log('Upload file error: failed to sign auth header');
+        return false;
+      }
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots/$snapshotId/files/$fileName';
+      final requestHeaders = {
+        'Content-Type': 'application/octet-stream',
+        ...authHeaders,
+      };
+
+      final baseUrl = await _resolveDeviceUrl(providerCallsign);
+      if (baseUrl != null && baseUrl.isNotEmpty) {
+        final direct = await _httpPutBinary(
+          providerCallsign,
+          requestPath,
+          requestHeaders,
+          data,
+          baseUrlOverride: baseUrl,
+        );
+        if (direct) return true;
+      }
+
+      final connectionManager = ConnectionManager();
+      if (!connectionManager.isInitialized) {
+        _log('Upload file error: ConnectionManager not initialized');
+        return false;
+      }
+      _syncDeviceForTransfer(providerCallsign);
+      final result = await connectionManager.apiRequest(
         callsign: providerCallsign,
         method: 'PUT',
-        path: '/api/backup/clients/$myCallsign/snapshots/$snapshotId/files/$fileName',
-        body: base64Encode(data),
+        path: requestPath,
+        headers: requestHeaders,
+        body: data,
+        excludeTransports: _backupApiExcludeTransports(),
       );
       return result.success;
     } catch (e) {
@@ -1380,11 +2279,46 @@ class BackupService {
   ) async {
     try {
       final myCallsign = ProfileService().getProfile().callsign;
-      final result = await ConnectionManager().apiRequest(
+      final authHeaders = _buildBackupAuthHeaders(
+        'manifest_upload',
+        targetCallsign: providerCallsign,
+        snapshotId: snapshotId,
+      );
+      if (authHeaders == null) {
+        _log('Upload manifest error: failed to sign auth header');
+        return false;
+      }
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots/$snapshotId';
+      final requestHeaders = {
+        'Content-Type': 'application/octet-stream',
+        ...authHeaders,
+      };
+
+      final baseUrl = await _resolveDeviceUrl(providerCallsign);
+      if (baseUrl != null && baseUrl.isNotEmpty) {
+        final direct = await _httpPutBinary(
+          providerCallsign,
+          requestPath,
+          requestHeaders,
+          data,
+          baseUrlOverride: baseUrl,
+        );
+        if (direct) return true;
+      }
+
+      final connectionManager = ConnectionManager();
+      if (!connectionManager.isInitialized) {
+        _log('Upload manifest error: ConnectionManager not initialized');
+        return false;
+      }
+      _syncDeviceForTransfer(providerCallsign);
+      final result = await connectionManager.apiRequest(
         callsign: providerCallsign,
         method: 'PUT',
-        path: '/api/backup/clients/$myCallsign/snapshots/$snapshotId',
-        body: base64Encode(data),
+        path: requestPath,
+        headers: requestHeaders,
+        body: data,
+        excludeTransports: _backupApiExcludeTransports(),
       );
       return result.success;
     } catch (e) {
@@ -1394,21 +2328,58 @@ class BackupService {
   }
 
   /// Download manifest from provider via ConnectionManager
-  Future<Uint8List?> _downloadManifest(String providerCallsign, String snapshotId) async {
+  Future<Uint8List?> _downloadManifest(
+    String providerCallsign,
+    String snapshotId, {
+    String? baseUrlOverride,
+  }) async {
     try {
       final myCallsign = ProfileService().getProfile().callsign;
+      final connectionManager = ConnectionManager();
+      if (!connectionManager.isInitialized) {
+        _log('Download manifest error: ConnectionManager not initialized');
+        return null;
+      }
+      final authHeaders = _buildBackupAuthHeaders(
+        'manifest_download',
+        targetCallsign: providerCallsign,
+        snapshotId: snapshotId,
+      );
+      if (authHeaders == null) {
+        _log('Download manifest error: failed to sign auth header');
+        return null;
+      }
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots/$snapshotId';
+      final requestHeaders = {
+        'Accept': 'application/octet-stream',
+        ...authHeaders,
+      };
+
+      if (baseUrlOverride != null && baseUrlOverride.isNotEmpty) {
+        final direct = await _httpGetBinary(
+          providerCallsign,
+          requestPath,
+          requestHeaders,
+          baseUrlOverride: baseUrlOverride,
+        );
+        if (direct != null) return direct;
+      }
+
+      _syncDeviceForTransfer(providerCallsign);
       final result = await ConnectionManager().apiRequest(
         callsign: providerCallsign,
         method: 'GET',
-        path: '/api/backup/clients/$myCallsign/snapshots/$snapshotId',
+        path: requestPath,
+        headers: requestHeaders,
+        excludeTransports: _backupApiExcludeTransports(),
       );
+
+      Uint8List? decoded;
       if (result.success && result.responseData != null) {
-        final data = result.responseData;
-        if (data is Map && data['data'] != null) {
-          return base64Decode(data['data'] as String);
-        }
+        decoded = _decodeBinaryPayload(result.responseData, preferredKey: 'manifest');
       }
-      return null;
+      decoded ??= await _httpGetBinary(providerCallsign, requestPath, requestHeaders);
+      return decoded;
     } catch (e) {
       _log('Download manifest error: $e');
       return null;
@@ -1419,22 +2390,62 @@ class BackupService {
   Future<Uint8List?> _downloadEncryptedFile(
     String providerCallsign,
     String snapshotId,
-    String fileName,
-  ) async {
+    String fileName, {
+    String? baseUrlOverride,
+  }) async {
     try {
       final myCallsign = ProfileService().getProfile().callsign;
+      final connectionManager = ConnectionManager();
+      if (!connectionManager.isInitialized) {
+        _log('Download file error: ConnectionManager not initialized');
+        return null;
+      }
+      final authHeaders = _buildBackupAuthHeaders(
+        'file_download',
+        targetCallsign: providerCallsign,
+        snapshotId: snapshotId,
+        fileName: fileName,
+      );
+      if (authHeaders == null) {
+        _log('Download file error: failed to sign auth header');
+        return null;
+      }
+      final requestPath = '/api/backup/clients/$myCallsign/snapshots/$snapshotId/files/$fileName';
+      final requestHeaders = {
+        'Accept': 'application/octet-stream',
+        ...authHeaders,
+      };
+
+      if (baseUrlOverride != null && baseUrlOverride.isNotEmpty) {
+        final direct = await _httpGetBinary(
+          providerCallsign,
+          requestPath,
+          requestHeaders,
+          baseUrlOverride: baseUrlOverride,
+        );
+        if (direct != null) return direct;
+      }
+
+      _syncDeviceForTransfer(providerCallsign);
       final result = await ConnectionManager().apiRequest(
         callsign: providerCallsign,
         method: 'GET',
-        path: '/api/backup/clients/$myCallsign/snapshots/$snapshotId/files/$fileName',
+        path: requestPath,
+        headers: requestHeaders,
+        excludeTransports: _backupApiExcludeTransports(),
       );
+
+      Uint8List? decoded;
       if (result.success && result.responseData != null) {
-        final data = result.responseData;
-        if (data is Map && data['data'] != null) {
-          return base64Decode(data['data'] as String);
-        }
+        decoded = _decodeBinaryPayload(result.responseData);
       }
-      return null;
+      decoded ??= await _httpGetBinary(
+        providerCallsign,
+        requestPath,
+        requestHeaders,
+        baseUrlOverride: baseUrlOverride,
+      );
+      return decoded;
     } catch (e) {
       _log('Download file error: $e');
       return null;
@@ -1444,7 +2455,11 @@ class BackupService {
   /// Generate snapshot ID (YYYY-MM-DD format)
   String _generateSnapshotId() {
     final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final time = '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    final random = Random.secure();
+    final suffix = random.nextInt(0xFFFF).toRadixString(16).padLeft(4, '0');
+    return '${date}_$time-$suffix';
   }
 
   /// Generate encrypted file name
@@ -1468,6 +2483,225 @@ class BackupService {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
+  void _syncDeviceForTransfer(String callsign) {
+    final device = DevicesService().getDevice(callsign.toUpperCase());
+    final connectionManager = ConnectionManager();
+    if (device?.url == null || !connectionManager.isInitialized) return;
+    final transport = connectionManager.getTransport('lan');
+    if (transport is LanTransport) {
+      transport.registerLocalDevice(callsign.toUpperCase(), device!.url!);
+    }
+  }
+
+  Future<bool> _sendBackupMessage(String targetCallsign, Map<String, dynamic> message) async {
+    final normalizedTarget = targetCallsign.toUpperCase();
+    final profile = ProfileService().getProfile();
+    final payload = Map<String, dynamic>.from(message);
+    payload['from'] ??= profile.callsign;
+    payload['target'] ??= normalizedTarget;
+    if (!payload.containsKey('event')) {
+      final event = _createBackupMessageEvent(payload);
+      if (event == null) {
+        _log('BackupService: Cannot send ${payload['type']} without signed event');
+        return false;
+      }
+      payload['event'] = event.toJson();
+    }
+
+    final connectionManager = ConnectionManager();
+    if (connectionManager.isInitialized) {
+      _syncDeviceForTransfer(normalizedTarget);
+      final result = await connectionManager.apiRequest(
+        callsign: normalizedTarget,
+        method: 'POST',
+        path: '/api/backup/message',
+        headers: {'Content-Type': 'application/json'},
+        body: payload,
+      );
+      if (result.success) {
+        return true;
+      }
+    }
+
+    if (WebSocketService().isConnected) {
+      WebSocketService().send(payload);
+      return true;
+    }
+
+    return false;
+  }
+
+  Uint8List? _decodeBinaryPayload(dynamic responseData, {String? preferredKey}) {
+    if (responseData == null) return null;
+    if (responseData is Uint8List) return responseData;
+    if (responseData is List<int>) return Uint8List.fromList(responseData);
+    if (responseData is List) {
+      final bytes = responseData
+          .map((e) => e is int ? e : int.tryParse(e.toString()))
+          .whereType<int>()
+          .toList();
+      if (bytes.isNotEmpty) {
+        return Uint8List.fromList(bytes);
+      }
+    }
+    if (responseData is Map) {
+      final dynamic value = preferredKey != null ? responseData[preferredKey] : null;
+      final dynamic candidate = value ??
+          responseData['data'] ??
+          responseData['manifest'] ??
+          responseData['file'];
+      if (candidate != null) {
+        return _decodeBinaryPayload(candidate);
+      }
+    }
+    if (responseData is String) {
+      final trimmed = responseData.trim();
+      if (trimmed.isEmpty) return null;
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          final decoded = jsonDecode(trimmed);
+          return _decodeBinaryPayload(decoded, preferredKey: preferredKey);
+        } catch (_) {
+          // Fall through to base64 decode.
+        }
+      }
+      try {
+        return base64Decode(trimmed);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  void _fireBackupEvent({
+    required BackupEventType type,
+    required String role,
+    String? counterpartCallsign,
+    String? snapshotId,
+    String? message,
+    int? totalFiles,
+    int? totalBytes,
+  }) {
+    try {
+      EventBus().fire(
+        BackupEvent(
+          type: type,
+          role: role,
+          counterpartCallsign: counterpartCallsign,
+          snapshotId: snapshotId,
+          message: message,
+          totalFiles: totalFiles,
+          totalBytes: totalBytes,
+        ),
+      );
+    } catch (e) {
+      _log('BackupService: Failed to fire backup event: $e');
+    }
+  }
+
+  Future<File?> _getSnapshotArchiveFile(
+    String clientCallsign,
+    String snapshotId, {
+    required bool createIfMissing,
+  }) async {
+    final snapshotDir = Directory(p.join(
+      _basePath ?? '',
+      'backups',
+      clientCallsign.toUpperCase(),
+      snapshotId,
+    ));
+    if (!await snapshotDir.exists()) {
+      if (!createIfMissing) return null;
+      await snapshotDir.create(recursive: true);
+    }
+    return File(p.join(snapshotDir.path, 'files.zip'));
+  }
+
+  Future<void> _finalizeSnapshotArchive(String clientCallsign, String snapshotId) async {
+    final snapshotDir = Directory(p.join(
+      _basePath ?? '',
+      'backups',
+      clientCallsign.toUpperCase(),
+      snapshotId,
+    ));
+    final filesDir = Directory(p.join(snapshotDir.path, 'files'));
+    if (!await filesDir.exists()) {
+      return;
+    }
+    final archiveFile = File(p.join(snapshotDir.path, 'files.zip'));
+    final files = <File>[];
+    await for (final entity in filesDir.list(recursive: true, followLinks: false)) {
+      if (entity is File) {
+        files.add(entity);
+      }
+    }
+
+    if (files.isEmpty) {
+      _log('Finalizing archive for $clientCallsign/$snapshotId skipped: no files found');
+      return;
+    }
+
+    _log('Finalizing archive for $clientCallsign/$snapshotId with ${files.length} files');
+
+    if (!await archiveFile.parent.exists()) {
+      await archiveFile.parent.create(recursive: true);
+    }
+    if (await archiveFile.exists()) {
+      await archiveFile.delete();
+    }
+
+    final encoder = ZipFileEncoder();
+    encoder.create(archiveFile.path);
+    for (final entity in files) {
+      try {
+        encoder.addFile(entity);
+        await entity.delete();
+      } catch (e) {
+        _log('Failed to add ${p.basename(entity.path)} to archive: $e');
+      }
+    }
+    encoder.close();
+
+    try {
+      await filesDir.delete(recursive: true);
+    } catch (e) {
+      _log('Failed to clean up plaintext backup files after archiving: $e');
+    }
+  }
+
+  Future<void> _waitForSnapshotFiles(
+    String clientCallsign,
+    String snapshotId, {
+    required int expectedFiles,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (expectedFiles <= 0) return;
+    final filesDir = Directory(p.join(
+      _basePath ?? '',
+      'backups',
+      clientCallsign.toUpperCase(),
+      snapshotId,
+      'files',
+    ));
+
+    final end = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(end)) {
+      if (await filesDir.exists()) {
+        final count = await filesDir
+            .list(recursive: false, followLinks: false)
+            .where((e) => e is File)
+            .length;
+        if (count >= expectedFiles) {
+          _log('Snapshot $snapshotId reached $count/$expectedFiles encrypted files before archiving');
+          return;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+    _log('Snapshot $snapshotId archiving with fewer files than expected ($expectedFiles)');
+  }
+
   void _log(String message) {
     LogService().log(message);
   }
@@ -1477,5 +2711,7 @@ class BackupService {
     _statusController.close();
     _providersController.close();
     _clientsController.close();
+    _stationConnectionSubscription?.cancel();
+    _providerAnnounceTimer?.cancel();
   }
 }

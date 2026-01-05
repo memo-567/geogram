@@ -34,13 +34,20 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   // Client state
   List<BackupProviderRelationship> _providers = [];
   BackupStatus? _backupStatus;
+  BackupStatus? _restoreStatus;
 
   // Loading state
   bool _isLoading = true;
+  bool _isProviderDiscoveryLoading = false;
+
+  // Available providers
+  List<AvailableBackupProvider> _lanProviders = [];
+  List<AvailableBackupProvider> _stationProviders = [];
 
   // Stream subscriptions
   StreamSubscription<BackupStatus>? _statusSubscription;
   StreamSubscription<List<BackupProviderRelationship>>? _providersSubscription;
+  StreamSubscription<List<BackupClientRelationship>>? _clientsSubscription;
 
   @override
   void initState() {
@@ -53,19 +60,29 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   void dispose() {
     _statusSubscription?.cancel();
     _providersSubscription?.cancel();
+    _clientsSubscription?.cancel();
     super.dispose();
   }
 
   void _setupSubscriptions() {
     _statusSubscription = _backupService.statusStream.listen((status) {
       if (mounted) {
-        setState(() => _backupStatus = status);
+        setState(() {
+          _backupStatus = _backupService.backupStatus;
+          _restoreStatus = _backupService.restoreStatus;
+        });
       }
     });
 
     _providersSubscription = _backupService.providersStream.listen((providers) {
       if (mounted) {
-        setState(() => _providers = providers);
+        setState(() => _providers = _dedupeProviderRelationships(providers));
+      }
+    });
+
+    _clientsSubscription = _backupService.clientsStream.listen((clients) {
+      if (mounted) {
+        setState(() => _clients = _dedupeClients(clients));
       }
     });
   }
@@ -78,11 +95,12 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
       // Load provider settings (sync getters)
       _providerSettings = _backupService.providerSettings;
-      _clients = _backupService.getClients();
+      _clients = _dedupeClients(_backupService.getClients());
 
       // Load client state (sync getters)
-      _providers = _backupService.getProviders();
+      _providers = _dedupeProviderRelationships(_backupService.getProviders());
       _backupStatus = _backupService.backupStatus;
+      _restoreStatus = _backupService.restoreStatus;
 
       // Determine initial view state based on existing configuration
       _determineViewState();
@@ -91,6 +109,34 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _enterProviderSelection() {
+    setState(() => _viewState = _BackupViewState.selectProvider);
+    _refreshAvailableProviders();
+  }
+
+  Future<void> _refreshAvailableProviders() async {
+    setState(() => _isProviderDiscoveryLoading = true);
+    try {
+      final result = await _backupService.getAvailableProviders();
+      if (!mounted) return;
+      setState(() {
+        _lanProviders = _dedupeAvailableProviders(result.lanProviders);
+        _stationProviders = _dedupeAvailableProviders(result.stationProviders);
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _lanProviders = [];
+          _stationProviders = [];
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProviderDiscoveryLoading = false);
       }
     }
   }
@@ -114,6 +160,7 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: true,
         title: Text(_i18n.t('backup_app')),
         actions: [
           if (_viewState != _BackupViewState.roleSelection)
@@ -124,9 +171,9 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
             ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _buildContent(),
+      body: SafeArea(
+        child: _isLoading ? const Center(child: CircularProgressIndicator()) : _buildContent(),
+      ),
     );
   }
 
@@ -186,7 +233,7 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                 icon: Icons.cloud_upload,
                 title: _i18n.t('backup_role_user'),
                 description: _i18n.t('backup_role_user_description'),
-                onTap: () => setState(() => _viewState = _BackupViewState.selectProvider),
+                onTap: _enterProviderSelection,
               ),
 
               const SizedBox(height: 16),
@@ -266,26 +313,38 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   }
 
   // ============================================================
-  // PROVIDER SELECTION (Contact picker)
+  // PROVIDER SELECTION
   // ============================================================
 
   Widget _buildProviderSelectionPage() {
     final theme = Theme.of(context);
-    final folders = _devicesService.getFolders();
-    final devicesByFolder = <String, List<RemoteDevice>>{};
+    final hasResults = _lanProviders.isNotEmpty || _stationProviders.isNotEmpty;
+    final children = <Widget>[];
 
-    // Organize devices by folder, filtering to those with npubs
-    for (final folder in folders) {
-      final devicesInFolder = _devicesService.getDevicesInFolder(folder.id)
-          .where((device) => device.npub != null && device.npub!.isNotEmpty)
-          .toList();
-      if (devicesInFolder.isNotEmpty) {
-        devicesByFolder[folder.id] = devicesInFolder;
+    if (!hasResults) {
+      children.add(_buildNoProvidersState(theme));
+    } else {
+      if (_lanProviders.isNotEmpty) {
+        children.add(_buildProviderSection(
+          theme,
+          _i18n.t('backup_nearby_lan'),
+          _lanProviders,
+        ));
+      }
+      if (_stationProviders.isNotEmpty) {
+        children.add(_buildProviderSection(
+          theme,
+          _i18n.t('backup_station_directory'),
+          _stationProviders,
+        ));
       }
     }
-
-    // Also include devices that are already providers (to show pending status)
-    final existingProviderNpubs = _providers.map((p) => p.providerNpub).toSet();
+    if (_isProviderDiscoveryLoading && hasResults) {
+      children.add(const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: CircularProgressIndicator()),
+      ));
+    }
 
     return Column(
       children: [
@@ -318,31 +377,38 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                   ],
                 ),
               ),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _isProviderDiscoveryLoading ? null : _refreshAvailableProviders,
+                tooltip: _i18n.t('refresh'),
+              ),
             ],
           ),
         ),
         const Divider(height: 1),
 
-        // Contact list
+        // Provider list
         Expanded(
-          child: devicesByFolder.isEmpty
-              ? _buildNoContactsState(theme)
-              : ListView.builder(
-                  itemCount: folders.length,
-                  itemBuilder: (context, index) {
-                    final folder = folders[index];
-                    final devices = devicesByFolder[folder.id];
-                    if (devices == null || devices.isEmpty) return const SizedBox.shrink();
-
-                    return _buildFolderSection(theme, folder, devices, existingProviderNpubs);
-                  },
-                ),
+          child: RefreshIndicator(
+            onRefresh: _refreshAvailableProviders,
+            child: _isProviderDiscoveryLoading && !hasResults
+                ? ListView(
+                    children: const [
+                      SizedBox(height: 160),
+                      Center(child: CircularProgressIndicator()),
+                    ],
+                  )
+                : ListView(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    children: children,
+                  ),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildNoContactsState(ThemeData theme) {
+  Widget _buildNoProvidersState(ThemeData theme) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -350,13 +416,13 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.people_outline,
+              Icons.cloud_off,
               size: 64,
               color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
             ),
             const SizedBox(height: 16),
             Text(
-              _i18n.t('backup_no_contacts'),
+              _i18n.t('backup_no_providers'),
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -364,7 +430,7 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              _i18n.t('backup_no_contacts_hint'),
+              _i18n.t('backup_no_providers_hint'),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
               ),
@@ -376,186 +442,118 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     );
   }
 
-  Widget _buildFolderSection(
+  Widget _buildProviderSection(
     ThemeData theme,
-    DeviceFolder folder,
-    List<RemoteDevice> devices,
-    Set<String> existingProviderNpubs,
+    String title,
+    List<AvailableBackupProvider> providers,
   ) {
+    final uniqueProviders = _dedupeAvailableProviders(providers);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Folder header
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.3),
           child: Row(
             children: [
               Icon(
-                Icons.folder,
+                Icons.storage,
                 size: 20,
                 color: theme.colorScheme.primary,
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  folder.name,
+                  title,
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              Text(
-                '${devices.length}',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
             ],
           ),
         ),
-        // Devices in folder
-        ...devices.map((device) => _buildContactTile(theme, device, existingProviderNpubs)),
+        ...uniqueProviders.map((provider) => _buildAvailableProviderTile(theme, provider)),
       ],
     );
   }
 
-  Widget _buildContactTile(
+  Widget _buildAvailableProviderTile(
     ThemeData theme,
-    RemoteDevice device,
-    Set<String> existingProviderNpubs,
+    AvailableBackupProvider provider,
   ) {
-    final isPending = existingProviderNpubs.contains(device.npub);
-    final existingProvider = isPending
-        ? _providers.firstWhere(
-            (p) => p.providerNpub == device.npub,
-            orElse: () => BackupProviderRelationship(
-              providerNpub: device.npub!,
-              providerCallsign: device.callsign,
-              backupIntervalDays: 1,
-              status: BackupRelationshipStatus.pending,
-              createdAt: DateTime.now(),
-            ),
-          )
-        : null;
+    final existingProvider = _providers.firstWhere(
+      (p) => p.providerCallsign.toUpperCase() == provider.callsign.toUpperCase(),
+      orElse: () => BackupProviderRelationship(
+        providerNpub: provider.npub,
+        providerCallsign: provider.callsign,
+        backupIntervalDays: 1,
+        status: BackupRelationshipStatus.pending,
+        createdAt: DateTime.now(),
+      ),
+    );
+    final isExisting = _providers.any(
+      (p) => p.providerCallsign.toUpperCase() == provider.callsign.toUpperCase(),
+    );
+    final connectionLabel = provider.connectionMethod == 'lan' ? 'LAN' : 'Station';
+    final displayName = _getProviderDisplayName(provider);
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: device.isOnline
-            ? Colors.green.withOpacity(0.1)
-            : theme.colorScheme.surfaceContainerHighest,
+        backgroundColor: theme.colorScheme.surfaceContainerHighest,
         child: Icon(
-          _getDeviceIcon(device),
-          color: device.isOnline ? Colors.green : theme.colorScheme.onSurfaceVariant,
+          _getProviderIcon(provider),
+          color: theme.colorScheme.onSurfaceVariant,
         ),
       ),
       title: Row(
         children: [
-          Text(device.displayName),
-          if (device.isOnline) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                _i18n.t('online'),
-                style: theme.textTheme.labelSmall?.copyWith(color: Colors.green),
-              ),
+          Expanded(child: Text(displayName)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ],
+            child: Text(
+              connectionLabel,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary),
+            ),
+          ),
         ],
       ),
-      subtitle: isPending
-          ? Text(
-              _i18n.t('backup_status_${existingProvider?.status.name ?? 'pending'}'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: _getStatusColor(existingProvider?.status),
-              ),
-            )
-          : Text(
-              device.callsign,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-      trailing: isPending
-          ? _buildStatusChip(theme, existingProvider?.status)
+      subtitle: Text(
+        provider.callsign,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      trailing: isExisting
+          ? _buildStatusChip(theme, existingProvider.status)
           : FilledButton.tonal(
-              onPressed: () => _requestBackupProvider(device),
+              onPressed: () => _requestBackupProviderCallsign(provider.callsign),
               child: Text(_i18n.t('backup_request')),
             ),
-      onTap: isPending ? null : () => _requestBackupProvider(device),
+      onTap: isExisting ? null : () => _requestBackupProviderCallsign(provider.callsign),
     );
   }
 
-  Widget _buildStatusChip(ThemeData theme, BackupRelationshipStatus? status) {
-    Color color;
-    IconData icon;
-
-    switch (status) {
-      case BackupRelationshipStatus.pending:
-        color = Colors.orange;
-        icon = Icons.hourglass_empty;
-        break;
-      case BackupRelationshipStatus.active:
-        color = Colors.green;
-        icon = Icons.check_circle;
-        break;
-      case BackupRelationshipStatus.declined:
-        color = Colors.red;
-        icon = Icons.cancel;
-        break;
-      default:
-        color = theme.colorScheme.onSurfaceVariant;
-        icon = Icons.help_outline;
+  IconData _getProviderIcon(AvailableBackupProvider provider) {
+    if (provider.connectionMethod == 'lan') {
+      return Icons.wifi;
     }
-
-    return Chip(
-      avatar: Icon(icon, size: 16, color: color),
-      label: Text(
-        _i18n.t('backup_status_${status?.name ?? 'unknown'}'),
-        style: TextStyle(color: color, fontSize: 12),
-      ),
-      backgroundColor: color.withOpacity(0.1),
-      side: BorderSide.none,
-      padding: EdgeInsets.zero,
-      visualDensity: VisualDensity.compact,
-    );
+    return Icons.cloud;
   }
 
-  Color _getStatusColor(BackupRelationshipStatus? status) {
-    switch (status) {
-      case BackupRelationshipStatus.pending:
-        return Colors.orange;
-      case BackupRelationshipStatus.active:
-        return Colors.green;
-      case BackupRelationshipStatus.declined:
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
+  String _getProviderDisplayName(AvailableBackupProvider provider) {
+    final device = _devicesService.getDevice(provider.callsign);
+    return device?.displayName ?? provider.callsign;
   }
 
-  IconData _getDeviceIcon(RemoteDevice device) {
-    final platform = device.platform?.toLowerCase() ?? '';
-    if (platform == 'esp32' || platform == 'esp8266' || platform == 'arduino' || platform == 'embedded') {
-      return Icons.settings_input_antenna;
-    }
-    if (device.callsign.startsWith('X3')) {
-      return Icons.cell_tower;
-    }
-    if (platform == 'linux' || platform == 'macos' || platform == 'windows') {
-      return Icons.laptop;
-    }
-    return Icons.smartphone;
-  }
-
-  Future<void> _requestBackupProvider(RemoteDevice device) async {
+  Future<void> _requestBackupProviderCallsign(String callsign) async {
     try {
-      await _backupService.sendInvite(device.callsign, 1); // Default 1 day interval
+      await _backupService.sendInvite(callsign, 1); // Default 1 day interval
       await _loadData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -590,6 +588,8 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
           // Backup status card
           if (_backupStatus != null && _backupStatus!.status != 'idle')
             _buildBackupProgressCard(theme),
+          if (_restoreStatus != null && _restoreStatus!.status != 'idle')
+            _buildRestoreProgressCard(theme),
 
           // Providers section
           Text(
@@ -607,7 +607,7 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
           // Add provider button
           OutlinedButton.icon(
-            onPressed: () => setState(() => _viewState = _BackupViewState.selectProvider),
+            onPressed: _enterProviderSelection,
             icon: const Icon(Icons.add),
             label: Text(_i18n.t('backup_add_provider')),
           ),
@@ -659,6 +659,49 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     );
   }
 
+  Widget _buildRestoreProgressCard(ThemeData theme) {
+    final status = _restoreStatus!;
+    final isRestoring = status.status == 'in_progress';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.restore,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    isRestoring
+                        ? _i18n.t('backup_restoring')
+                        : _i18n.t('backup_restore_complete'),
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            if (isRestoring) ...[
+              const SizedBox(height: 16),
+              LinearProgressIndicator(value: status.progressPercent / 100),
+              const SizedBox(height: 8),
+              Text(
+                '${status.filesTransferred}/${status.filesTotal} ${_i18n.t('files')} - ${status.progressPercent}%',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyProvidersCard(ThemeData theme) {
     return Card(
       child: Padding(
@@ -693,6 +736,9 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
   Widget _buildProviderCard(ThemeData theme, BackupProviderRelationship provider) {
     final isActive = provider.status == BackupRelationshipStatus.active;
+    final storageQuota = provider.maxStorageBytes;
+    final usedBytes = provider.currentStorageBytes;
+    final hasQuota = storageQuota > 0;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -725,6 +771,30 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                           color: _getStatusColor(provider.status),
                         ),
                       ),
+                      if (hasQuota) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '${_formatBytes(usedBytes)} / ${_formatBytes(storageQuota)}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${_i18n.t('backup_storage_remaining')}: ${_formatBytes((storageQuota - usedBytes).clamp(0, storageQuota))}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        if (provider.maxSnapshots > 0)
+                          Text(
+                            '${_i18n.t('backup_max_snapshots')}: ${provider.maxSnapshots}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
                     ],
                   ),
                 ),
@@ -741,16 +811,29 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
               ),
             ],
             const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 if (isActive)
+                  OutlinedButton.icon(
+                    onPressed: () => _showSnapshotHistory(provider, allowRestore: true, allowBackup: false),
+                    icon: const Icon(Icons.restore, size: 18),
+                    label: Text(_i18n.t('backup_restore')),
+                  ),
+                if (isActive)
+                  OutlinedButton.icon(
+                    onPressed: () => _showSnapshotHistory(provider, allowRestore: true),
+                    icon: const Icon(Icons.history, size: 18),
+                    label: Text(_i18n.t('backup_view_snapshots')),
+                  ),
+                if (isActive)
                   FilledButton.icon(
-                    onPressed: () => _startBackup(provider),
+                    onPressed: () => _showSnapshotHistory(provider, allowRestore: false),
                     icon: const Icon(Icons.backup, size: 18),
                     label: Text(_i18n.t('backup_now')),
                   ),
-                const SizedBox(width: 8),
                 IconButton(
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () => _removeProvider(provider),
@@ -1025,6 +1108,317 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     }
   }
 
+  Future<void> _showRestoreDialog(BackupProviderRelationship provider) async {
+    await _showSnapshotHistory(provider, allowRestore: true, allowBackup: false);
+  }
+
+  Future<void> _showSnapshotHistory(
+    BackupProviderRelationship provider, {
+    bool allowRestore = false,
+    bool allowBackup = true,
+  }) async {
+    final theme = Theme.of(context);
+    var snapshotsFuture = _backupService.fetchProviderSnapshots(provider.providerCallsign);
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              Future<void> refreshSnapshots() async {
+                setModalState(() {
+                  snapshotsFuture = _backupService.fetchProviderSnapshots(provider.providerCallsign);
+                });
+              }
+
+              return SizedBox(
+                height: MediaQuery.of(context).size.height * 0.7,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _i18n.t('backup_snapshots_for').replaceFirst('{0}', provider.providerCallsign),
+                                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  _i18n.t('backup_history_hint'),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.of(sheetContext).pop(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (allowBackup)
+                            FilledButton.icon(
+                              onPressed: () async {
+                                await _startBackup(provider);
+                                if (mounted) Navigator.of(sheetContext).pop();
+                              },
+                              icon: const Icon(Icons.backup, size: 18),
+                              label: Text(_i18n.t('backup_now')),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: refreshSnapshots,
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: Text(_i18n.t('refresh')),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: FutureBuilder<List<BackupSnapshot>>(
+                          future: snapshotsFuture,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState != ConnectionState.done) {
+                              return const Center(child: CircularProgressIndicator());
+                            }
+                            final snapshots = snapshot.data ?? [];
+                            if (snapshots.isEmpty) {
+                              return Center(child: Text(_i18n.t('backup_no_snapshots')));
+                            }
+
+                            final totalBytes = snapshots.fold<int>(0, (sum, s) => sum + s.totalBytes);
+                            final quota = provider.maxStorageBytes;
+                            final quotaInfo = quota > 0
+                                ? '${_formatBytes(totalBytes)} / ${_formatBytes(quota)}'
+                                : _formatBytes(totalBytes);
+                            final maxSnap = provider.maxSnapshots > 0 ? provider.maxSnapshots : null;
+
+                            return ListView.separated(
+                                padding: const EdgeInsets.only(top: 8),
+                                itemCount: snapshots.length + 1,
+                                separatorBuilder: (_, __) => const Divider(height: 1),
+                                itemBuilder: (context, index) {
+                                  if (index == 0) {
+                                    return ListTile(
+                                      title: Text(_i18n.t('backup_usage')),
+                                      subtitle: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(quotaInfo),
+                                          if (maxSnap != null)
+                                            Text(
+                                              _i18n
+                                                  .t('backup_snapshots_used')
+                                                  .replaceFirst('{0}', snapshots.length.toString())
+                                                  .replaceFirst('{1}', maxSnap.toString()),
+                                              style: theme.textTheme.bodySmall,
+                                            ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                  final entry = snapshots[index - 1];
+                                  final note = entry.note?.trim() ?? '';
+                                  final details = '${entry.totalFiles} ${_i18n.t('files')}'
+                                      ' • ${_formatBytes(entry.totalBytes)}';
+                                  final dateLabel = entry.completedAt ?? entry.startedAt;
+                                  return ListTile(
+                                    title: Text(entry.snapshotId),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        if (note.isNotEmpty)
+                                          Padding(
+                                            padding: const EdgeInsets.only(bottom: 4),
+                                            child: Text(
+                                              note,
+                                              style: theme.textTheme.bodyMedium,
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        Text(details, style: theme.textTheme.bodySmall),
+                                        Text(
+                                          _formatDate(dateLabel),
+                                          style: theme.textTheme.bodySmall?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    trailing: Wrap(
+                                      spacing: 6,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.edit_note_outlined),
+                                          tooltip: _i18n.t('backup_edit_note'),
+                                          onPressed: () => _editSnapshotNote(
+                                            provider,
+                                            entry,
+                                            refreshSnapshots,
+                                          ),
+                                        ),
+                                        if (allowRestore)
+                                          IconButton(
+                                            icon: const Icon(Icons.restore),
+                                            tooltip: _i18n.t('backup_restore'),
+                                            onPressed: () {
+                                              Navigator.of(sheetContext).pop();
+                                              _confirmRestore(provider, entry);
+                                            },
+                                          ),
+                                      ],
+                                    ),
+                                    onTap: allowRestore
+                                        ? () {
+                                            Navigator.of(sheetContext).pop();
+                                            _confirmRestore(provider, entry);
+                                          }
+                                        : null,
+                                  );
+                                },
+                              );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmRestore(BackupProviderRelationship provider, BackupSnapshot snapshot) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('backup_confirm_restore')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_i18n.t('backup_restore_warning')),
+            const SizedBox(height: 12),
+            Text(
+              _i18n.t('backup_restore_overwrites'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('backup_restore')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      await _backupService.startRestore(provider.providerCallsign, snapshot.snapshotId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('backup_restore_started'))),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString()),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _editSnapshotNote(
+    BackupProviderRelationship provider,
+    BackupSnapshot snapshot,
+    Future<void> Function() onUpdated,
+  ) async {
+    final controller = TextEditingController(text: snapshot.note ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('backup_edit_note')),
+        content: TextField(
+          controller: controller,
+          minLines: 2,
+          maxLines: 4,
+          decoration: InputDecoration(
+            labelText: _i18n.t('backup_snapshot_note'),
+            hintText: _i18n.t('backup_note_placeholder'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('save')),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) {
+      controller.dispose();
+      return;
+    }
+
+    final note = controller.text.trim();
+    controller.dispose();
+
+    final success = await _backupService.updateSnapshotNote(
+      provider.providerCallsign,
+      snapshot.snapshotId,
+      note,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success ? _i18n.t('backup_note_saved') : _i18n.t('backup_note_update_failed'),
+          ),
+          backgroundColor: success ? null : Theme.of(context).colorScheme.error,
+        ),
+      );
+    }
+
+    if (success) {
+      await onUpdated();
+    }
+  }
+
   Future<void> _removeProvider(BackupProviderRelationship provider) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1257,6 +1651,44 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   // HELPERS
   // ============================================================
 
+  List<AvailableBackupProvider> _dedupeAvailableProviders(List<AvailableBackupProvider> providers) {
+    final seen = <String>{};
+    final filtered = <AvailableBackupProvider>[];
+    for (final provider in providers) {
+      final key = provider.callsign.toUpperCase();
+      if (seen.add(key)) {
+        filtered.add(provider);
+      }
+    }
+    return filtered;
+  }
+
+  List<BackupProviderRelationship> _dedupeProviderRelationships(
+    List<BackupProviderRelationship> providers,
+  ) {
+    final seen = <String>{};
+    final filtered = <BackupProviderRelationship>[];
+    for (final provider in providers) {
+      final key = provider.providerCallsign.toUpperCase();
+      if (seen.add(key)) {
+        filtered.add(provider);
+      }
+    }
+    return filtered;
+  }
+
+  List<BackupClientRelationship> _dedupeClients(List<BackupClientRelationship> clients) {
+    final seen = <String>{};
+    final filtered = <BackupClientRelationship>[];
+    for (final client in clients) {
+      final key = client.clientCallsign.toUpperCase();
+      if (seen.add(key)) {
+        filtered.add(client);
+      }
+    }
+    return filtered;
+  }
+
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -1266,6 +1698,54 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
   String _formatDate(DateTime date) {
     return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildStatusChip(ThemeData theme, BackupRelationshipStatus? status) {
+    Color color;
+    IconData icon;
+
+    switch (status) {
+      case BackupRelationshipStatus.pending:
+        color = Colors.orange;
+        icon = Icons.hourglass_empty;
+        break;
+      case BackupRelationshipStatus.active:
+        color = Colors.green;
+        icon = Icons.check_circle;
+        break;
+      case BackupRelationshipStatus.declined:
+        color = Colors.red;
+        icon = Icons.cancel;
+        break;
+      default:
+        color = theme.colorScheme.onSurfaceVariant;
+        icon = Icons.help_outline;
+    }
+
+    return Chip(
+      avatar: Icon(icon, size: 16, color: color),
+      label: Text(
+        _i18n.t('backup_status_${status?.name ?? 'unknown'}'),
+        style: TextStyle(color: color, fontSize: 12),
+      ),
+      backgroundColor: color.withOpacity(0.1),
+      side: BorderSide.none,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Color _getStatusColor(BackupRelationshipStatus? status) {
+    switch (status) {
+      case BackupRelationshipStatus.pending:
+        return Colors.orange;
+      case BackupRelationshipStatus.active:
+        return Colors.green;
+      case BackupRelationshipStatus.declined:
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
   }
 }
 

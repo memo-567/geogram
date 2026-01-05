@@ -1,7 +1,7 @@
 # Backup Format Specification
 
-**Version**: 1.1
-**Last Updated**: 2025-12-12
+**Version**: 1.3
+**Last Updated**: 2026-01-04
 **Status**: Draft
 
 ## Table of Contents
@@ -11,6 +11,7 @@
 - [File Organization](#file-organization)
 - [Configuration Files](#configuration-files)
 - [Backup Relationship Lifecycle](#backup-relationship-lifecycle)
+- [Provider Availability and Discovery (LAN + Station)](#provider-availability-and-discovery-lan--station)
 - [Snapshot Format](#snapshot-format)
 - [Encryption](#encryption)
 - [Protocol Messages](#protocol-messages)
@@ -29,17 +30,19 @@ The Backup app enables peer-to-peer backup and restore functionality between Geo
 
 - **End-to-end encryption**: Backup data is encrypted using the client's NPUB before transmission; the provider cannot read the contents
 - **Scheduled backups**: Automatic backups at configurable intervals (e.g., every 3 days)
-- **Snapshot versioning**: Multiple snapshots retained based on provider-defined limits
+- **Snapshot versioning**: Multiple snapshots retained; retention limits are stored but not enforced yet
 - **Integrity verification**: SHA1 hashes for all files to ensure download correctness
-- **Full restore**: Complete working folder restoration from any snapshot
+- **Restore**: Writes files from a snapshot and overwrites existing files (extra files are not deleted)
 
 ### Key Features
 
 1. **Invitation-based trust**: Providers must explicitly accept backup requests
-2. **Provider-controlled quotas**: Storage limits and max snapshots per client
+2. **Provider-controlled quotas**: Storage limits and max snapshots per client (tracked, not enforced yet)
 3. **Client-controlled scheduling**: Backup frequency determined by the client
 4. **Bidirectional control**: Either party can pause or terminate the relationship
-5. **Multi-transport support**: Works over LAN (fast) and Station relay (remote)
+5. **Multi-transport support**: Bulk transfers use HTTP over LAN or Station proxy; message-only signaling can use other transports
+6. **Snapshot notes & history**: Users can browse all snapshots, attach notes, and restore from any point-in-time copy
+7. **Event-driven alerts**: Backup/restore lifecycle events are published on the app EventBus to trigger UI and push notifications
 
 ## Terminology
 
@@ -48,7 +51,7 @@ The Backup app enables peer-to-peer backup and restore functionality between Geo
 | **Backup Client** | The device that wants to backup its data to a remote device |
 | **Backup Provider** | The device that stores encrypted backup data for one or more clients |
 | **Snapshot** | A point-in-time copy of the client's working folder, identified by start date |
-| **Manifest** | JSON file listing all files in a snapshot with their SHA1 hashes |
+| **Manifest** | Encrypted file containing a JSON list of files in a snapshot with SHA1 hashes |
 | **Relationship** | An established backup agreement between a client and provider |
 | **Working Folder** | The Geogram data directory to be backed up |
 
@@ -63,29 +66,26 @@ Providers store backup data in a dedicated directory structure:
 ├── settings.json                    # Provider global settings
 └── {client_callsign}/               # Per-client directory
     ├── config.json                  # Relationship configuration
-    ├── 2025-12-12/                  # Snapshot folder (start date)
-    │   ├── manifest.json            # File list with SHA1 hashes
+    ├── 2025-12-12_153015-abcd/      # Snapshot folder (start datetime + random suffix)
+    │   ├── manifest.json            # Encrypted manifest bytes (decrypt to get file list)
     │   ├── status.json              # Snapshot status (in_progress/complete/failed)
-    │   └── files/                   # Encrypted file blobs
-    │       ├── a94a8fe5.enc
-    │       ├── b2c3d4e5.enc
-    │       └── ...
+    │   └── files.zip                # Encrypted file blobs (one entry per file)
     ├── 2025-12-09/
     │   ├── manifest.json
     │   ├── status.json
-    │   └── files/
+    │   └── files.zip
     └── 2025-12-06/
         ├── manifest.json
         ├── status.json
-        └── files/
+        └── files.zip
 ```
 
 ### Client Storage Structure
 
-Clients store backup configuration locally:
+Clients store backup configuration inside the same backup root:
 
 ```
-{data_dir}/backup-config/
+{data_dir}/backups/config/
 ├── settings.json                    # Client global settings
 └── providers/
     └── {provider_callsign}/
@@ -94,9 +94,8 @@ Clients store backup configuration locally:
 
 ### Naming Conventions
 
-- **Snapshot folders**: Named by start date `YYYY-MM-DD` (even if backup spans multiple days)
-- **Encrypted files**: Named by first 8 characters of SHA1 hash with `.enc` extension
-- **Only one snapshot per day**: If a second backup is requested on the same day, it overwrites the existing snapshot
+- **Snapshot folders**: Named by start datetime `YYYY-MM-DD_HHMMSS-rrrr` (local time, plus 4-hex random suffix) so multiple snapshots per day are kept separately
+- **Encrypted files**: Named by 16 random bytes (32 hex chars) with `.enc` extension
 
 ## Configuration Files
 
@@ -158,7 +157,7 @@ Clients store backup configuration locally:
 
 ### Client Global Settings
 
-`{data_dir}/backup-config/settings.json`:
+`{data_dir}/backups/config/settings.json`:
 
 ```json
 {
@@ -172,9 +171,11 @@ Clients store backup configuration locally:
 }
 ```
 
+Note: `exclude_patterns` are not applied yet; current backups use fixed exclusions for system folders (see Backup Process).
+
 ### Client-Provider Config
 
-`{data_dir}/backup-config/providers/{provider_callsign}/config.json`:
+`{data_dir}/backups/config/providers/{provider_callsign}/config.json`:
 
 ```json
 {
@@ -232,6 +233,155 @@ Clients store backup configuration locally:
 6. **Resume**: Either party resumes paused relationship
 7. **Terminate**: Either party permanently ends relationship
 
+## Provider Availability and Discovery (LAN + Station)
+
+This section covers opt-in provider discovery for selecting a backup provider.
+It is separate from "Automatic Provider Discovery", which is used for account restoration and uses a privacy-preserving challenge.
+
+### Goals
+
+- Fast listing of devices that are willing to receive backups
+- Prefer LAN devices as the most trusted and reliable option
+- Keep station listings fresh (no offline devices)
+- Avoid exposing client relationships or snapshot details
+
+### Provider Availability State
+
+Providers are considered "available" when:
+
+- `backups/settings.json` has `enabled = true`
+- The device is reachable (LAN or station connection)
+- The provider is actively advertising or has a fresh station registry entry
+
+### Authentication
+
+All availability requests and announces must be authenticated with a NOSTR-signed JSON event.
+This prevents attackers from impersonating other users or forging provider announcements.
+
+Accepted authentication patterns:
+
+1. **HTTP Authorization header** (recommended for GET):
+   - `Authorization: Nostr <base64_encoded_event_json>`
+2. **Signed JSON body** (for POST):
+   - `{ "event": { ...signed_nostr_event... }, "payload": { ... } }`
+
+Verification rules:
+
+- Signature must verify for the `pubkey` in the event
+- `created_at` must be within a short freshness window (recommended: 5 minutes)
+- `callsign` tag must match the device identity for announce messages
+- Station should ignore announces that do not match the connected device identity
+
+### LAN Priority Query
+
+Clients must query LAN devices first. These are typically the most trusted devices and do not require any station access.
+
+Recommended flow:
+
+1. Use device discovery to get LAN-reachable devices (local URL or LAN transport)
+2. For each LAN device, query provider availability:
+   - `GET /api/backup/availability` (recommended lightweight response)
+   - or `GET /api/backup/settings` if availability endpoint is not implemented
+   - include `Authorization: Nostr <base64_event_json>` on the request
+3. Include only devices that return `enabled = true`
+4. Show LAN results in a "Nearby (LAN)" section and use them as first choice
+
+Suggested `GET /api/backup/availability` response:
+
+```json
+{
+  "enabled": true,
+  "callsign": "X2BCDE",
+  "npub": "npub1xyz789...",
+  "max_total_storage_bytes": 10737418240,
+  "default_max_client_storage_bytes": 1073741824,
+  "default_max_snapshots": 10,
+  "updated_at": "2026-01-04T10:00:00Z"
+}
+```
+
+### Station Provider Directory (Fast Listing)
+
+When a device is connected to a station and is willing to receive backups, it should notify the station so clients can query a fast list of available providers.
+
+#### Provider Announce Message (Provider -> Station)
+
+Providers send an availability announce on connect and whenever settings change. A periodic refresh keeps the listing alive.
+
+```json
+{
+  "type": "backup_provider_announce",
+  "event": {
+    "pubkey": "provider_hex_pubkey",
+    "created_at": 1767520800,
+    "kind": 30000,
+    "tags": [
+      ["t", "backup"],
+      ["action", "provider_announce"],
+      ["callsign", "X2BCDE"],
+      ["enabled", "true"],
+      ["max_total_storage_bytes", "10737418240"],
+      ["default_max_client_storage_bytes", "1073741824"],
+      ["default_max_snapshots", "10"]
+    ],
+    "content": "",
+    "sig": "signature_hex"
+  }
+}
+```
+
+Station behavior:
+
+- Store an in-memory directory keyed by callsign/npub
+- Expire entries after a short TTL (current: 90 seconds)
+- Remove entries immediately on device disconnect
+- Only return providers that are currently connected and enabled
+- Never include client lists or snapshot details
+- Verify announce signatures and reject mismatched callsign/npub identity
+
+#### Station Query
+
+`GET /api/backup/providers/available`
+
+Clients must include `Authorization: Nostr <base64_event_json>` so the station can verify the requester.
+Station verifies signature, timestamp freshness, and requester identity before responding.
+
+**Response:**
+```json
+{
+  "providers": [
+    {
+      "callsign": "X2BCDE",
+      "npub": "npub1xyz789...",
+      "max_total_storage_bytes": 10737418240,
+      "default_max_client_storage_bytes": 1073741824,
+      "default_max_snapshots": 10,
+      "last_seen": "2026-01-04T10:00:30Z",
+      "connection_method": "station"
+    }
+  ]
+}
+```
+
+### Discovery Order (Recommended)
+
+1. LAN availability query (fast, trusted)
+2. Station provider directory (fast, wider reach)
+3. Manual add by callsign
+
+If the same provider appears in both LAN and station results, prefer the LAN route for invitations and backups.
+
+### Transport Notes
+
+- The station directory is discovery only; invitations and backups still use ConnectionManager routing
+- If no station is connected, LAN discovery remains the primary path
+
+### Privacy Notes
+
+- Availability only indicates willingness to accept new backup clients
+- No relationship details or snapshot metadata are exposed
+- Clients still need explicit provider approval
+
 ## Snapshot Format
 
 ### Snapshot Directory
@@ -250,7 +400,7 @@ Each snapshot is stored in a date-named directory:
 
 ### Manifest File
 
-`manifest.json` contains the complete file list with integrity hashes:
+`manifest.json` stores encrypted bytes (nonce + ciphertext). After decrypting with the client's NSEC, the JSON payload is:
 
 ```json
 {
@@ -260,17 +410,15 @@ Each snapshot is stored in a date-named directory:
   "client_npub": "npub1abc123...",
   "started_at": "2025-12-12T15:30:00Z",
   "completed_at": "2025-12-12T16:45:00Z",
-  "status": "complete",
   "total_files": 1234,
-  "total_bytes_original": 524288000,
-  "total_bytes_encrypted": 528482304,
+  "total_bytes": 524288000,
   "files": [
     {
       "path": "chat/general/2025/2025-12-12_chat.txt",
       "sha1": "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",
       "size": 4096,
       "encrypted_size": 4128,
-      "encrypted_name": "a94a8fe5.enc",
+      "encrypted_name": "9f3a2b1c4d5e6f7890ab12cd34ef56aa.enc",
       "modified_at": "2025-12-12T14:30:00Z"
     },
     {
@@ -278,7 +426,7 @@ Each snapshot is stored in a date-named directory:
       "sha1": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1",
       "size": 512,
       "encrypted_size": 544,
-      "encrypted_name": "b2c3d4e5.enc",
+      "encrypted_name": "0a1b2c3d4e5f66778899aabbccddeeff.enc",
       "modified_at": "2025-12-12T10:00:00Z"
     }
   ]
@@ -293,10 +441,8 @@ Each snapshot is stored in a date-named directory:
 | `client_npub` | string | Client's NPUB (for decryption) |
 | `started_at` | string | Backup start time |
 | `completed_at` | string | Backup completion time (null if in progress) |
-| `status` | string | `in_progress`, `complete`, `partial`, `failed` |
 | `total_files` | integer | Number of files in snapshot |
-| `total_bytes_original` | integer | Total unencrypted size |
-| `total_bytes_encrypted` | integer | Total encrypted size |
+| `total_bytes` | integer | Total unencrypted size |
 | `files` | array | List of file entries |
 
 ### File Entry
@@ -307,26 +453,27 @@ Each snapshot is stored in a date-named directory:
 | `sha1` | string | SHA1 hash of original (unencrypted) file |
 | `size` | integer | Original file size in bytes |
 | `encrypted_size` | integer | Encrypted file size in bytes |
-| `encrypted_name` | string | Filename in `files/` directory |
+| `encrypted_name` | string | Random 16-byte hex filename in `files/` directory |
 | `modified_at` | string | File modification timestamp |
 
 ### Status File
 
-`status.json` tracks snapshot progress:
+`status.json` tracks snapshot metadata:
 
 ```json
 {
   "snapshot_id": "2025-12-12",
-  "status": "in_progress",
-  "files_total": 1234,
-  "files_transferred": 567,
-  "bytes_total": 524288000,
-  "bytes_transferred": 234567890,
+  "status": "complete",
+  "note": "Field work day 3",
+  "total_files": 1234,
+  "total_bytes": 524288000,
   "started_at": "2025-12-12T15:30:00Z",
-  "last_activity_at": "2025-12-12T15:45:00Z",
-  "error": null
+  "completed_at": "2025-12-12T16:45:00Z"
 }
 ```
+
+**Fields:**
+- `note` (optional): User-supplied label for the snapshot. Providers persist it alongside status for history/restore UI.
 
 ## Encryption
 
@@ -372,15 +519,54 @@ All backup data is end-to-end encrypted using the client's NOSTR key pair. The p
 
 ### Manifest Encryption
 
-The manifest file is also encrypted, but uses a deterministic key derived from the client's NPUB so the client can always decrypt it:
+The manifest is encrypted with a deterministic key derived from the client's NSEC so the client can always decrypt it:
 
 ```
-manifest_key = HKDF(ECDH(client_nsec, client_npub), "geogram-backup-manifest")
+manifest_key = SHA256("geogram-backup-manifest" || client_nsec_bytes)
 ```
+
+Encrypted manifest format:
+
+- Nonce (12 bytes) + Ciphertext + Auth tag (16 bytes)
 
 ## Protocol Messages
 
 All protocol messages are sent as JSON over WebSocket or HTTP, depending on connectivity. Messages requiring authentication include a NOSTR-signed event.
+
+### Signed Request Envelope
+
+For HTTP APIs, requests that change state or enumerate providers must be authenticated:
+
+- `Authorization: Nostr <base64_encoded_event_json>`
+- or include a signed `event` object inside the JSON body
+
+The receiver must verify the signature, freshness, and `callsign`/`pubkey` tags before acting on the request.
+Once the sender is authenticated, large payloads (files/manifests) are transferred as raw bytes (`application/octet-stream`) over LAN or station proxy HTTP.
+WebRTC transports are used for message signaling only and are not used for bulk file transfers.
+
+### Provider Availability Announce (Provider → Station)
+
+```json
+{
+  "type": "backup_provider_announce",
+  "event": {
+    "pubkey": "provider_hex_pubkey",
+    "created_at": 1767520800,
+    "kind": 30000,
+    "tags": [
+      ["t", "backup"],
+      ["action", "provider_announce"],
+      ["callsign", "X2BCDE"],
+      ["enabled", "true"],
+      ["max_total_storage_bytes", "10737418240"],
+      ["default_max_client_storage_bytes", "1073741824"],
+      ["default_max_snapshots", "10"]
+    ],
+    "content": "",
+    "sig": "signature_hex"
+  }
+}
+```
 
 ### Backup Invite (Client → Provider)
 
@@ -393,10 +579,12 @@ All protocol messages are sent as JSON over WebSocket or HTTP, depending on conn
     "kind": 30000,
     "tags": [
       ["t", "backup"],
-      ["action", "invite"],
-      ["callsign", "X1ABCD"]
+      ["action", "backup_invite"],
+      ["callsign", "X1ABCD"],
+      ["target", "X2BCDE"],
+      ["interval_days", "3"]
     ],
-    "content": "Requesting backup provider relationship",
+    "content": "Backup provider invitation",
     "sig": "signature_hex"
   }
 }
@@ -413,12 +601,17 @@ All protocol messages are sent as JSON over WebSocket or HTTP, depending on conn
     "kind": 30000,
     "tags": [
       ["t", "backup"],
-      ["action", "invite_response"],
-      ["client", "npub1abc123..."]
+      ["action", "backup_invite_response"],
+      ["callsign", "X2BCDE"],
+      ["target", "X1ABCD"]
     ],
-    "content": "{\"accepted\":true,\"max_storage_bytes\":10737418240,\"max_snapshots\":10}",
+    "content": "",
     "sig": "signature_hex"
-  }
+  },
+  "accepted": true,
+  "provider_npub": "npub1xyz789...",
+  "max_storage_bytes": 10737418240,
+  "max_snapshots": 10
 }
 ```
 
@@ -433,25 +626,18 @@ All protocol messages are sent as JSON over WebSocket or HTTP, depending on conn
     "kind": 30000,
     "tags": [
       ["t", "backup"],
-      ["action", "start"],
+      ["action", "backup_start"],
+      ["callsign", "X1ABCD"],
+      ["target", "X2BCDE"],
       ["snapshot_id", "2025-12-12"]
     ],
-    "content": "{\"total_files\":1234,\"total_bytes\":524288000}",
+    "content": "",
     "sig": "signature_hex"
   }
 }
 ```
 
-### Backup Acknowledgment (Provider → Client)
-
-```json
-{
-  "type": "backup_start_ack",
-  "accepted": true,
-  "snapshot_id": "2025-12-12",
-  "upload_url": "/api/backup/clients/X1ABCD/upload"
-}
-```
+Note: There is no explicit backup-start acknowledgment. After sending the `backup_start` message, the client begins file uploads immediately.
 
 ### File Upload (Client → Provider)
 
@@ -476,15 +662,20 @@ Authorization: Nostr <base64_encoded_event>
     "kind": 30000,
     "tags": [
       ["t", "backup"],
-      ["action", "complete"],
-      ["snapshot_id", "2025-12-12"]
+      ["action", "backup_complete"],
+      ["callsign", "X1ABCD"],
+      ["target", "X2BCDE"],
+      ["snapshot_id", "2025-12-12"],
+      ["total_files", "1234"],
+      ["total_bytes", "524288000"]
     ],
-    "content": "{\"status\":\"complete\",\"total_files\":1234,\"total_bytes\":524288000}",
+    "content": "",
     "sig": "signature_hex"
-  },
-  "manifest": "<encrypted_manifest_json>"
+  }
 }
 ```
+
+The encrypted manifest is uploaded separately via `PUT /api/backup/clients/{callsign}/snapshots/{date}`.
 
 ### Status Change (Either → Either)
 
@@ -497,8 +688,10 @@ Authorization: Nostr <base64_encoded_event>
     "kind": 30000,
     "tags": [
       ["t", "backup"],
-      ["action", "status_change"],
-      ["new_status", "paused"]
+      ["action", "backup_status_change"],
+      ["callsign", "X1ABCD"],
+      ["target", "X2BCDE"],
+      ["status", "paused"]
     ],
     "content": "Pausing backup relationship",
     "sig": "signature_hex"
@@ -508,7 +701,20 @@ Authorization: Nostr <base64_encoded_event>
 
 ## API Endpoints
 
+### Authentication
+
+All backup API requests in this section require a NOSTR-signed event (including reads like availability and snapshot/file transfers):
+
+- `Authorization: Nostr <base64_encoded_event_json>`
+- or `{"event": { ...signed_event... }, "payload": { ... } }`
+
+The server verifies signature, `created_at` freshness, and callsign/npub tags before processing.
+After successful authentication, binary transfers are preferred for large payloads.
+Requests sent to other devices or the station directory MUST be signed to prevent impersonation.
+
 ### Provider Endpoints
+
+All provider endpoints require backup owner authentication (signed by the provider's NSEC).
 
 #### GET /api/backup/settings
 
@@ -538,6 +744,24 @@ Update provider backup settings.
   "max_total_storage_bytes": 214748364800,
   "default_max_client_storage_bytes": 21474836480,
   "default_max_snapshots": 15
+}
+```
+
+#### GET /api/backup/availability
+
+Lightweight provider availability response for LAN queries.
+Requires NOSTR-signed authorization.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "callsign": "X2BCDE",
+  "npub": "npub1xyz789...",
+  "max_total_storage_bytes": 10737418240,
+  "default_max_client_storage_bytes": 1073741824,
+  "default_max_snapshots": 10,
+  "updated_at": "2026-01-04T10:00:00Z"
 }
 ```
 
@@ -577,6 +801,8 @@ Remove client and optionally delete their backups.
 
 List client's snapshots.
 
+Requires client authentication for the `callsign` in the URL.
+
 **Response:**
 ```json
 {
@@ -597,15 +823,53 @@ List client's snapshots.
 
 Get snapshot manifest (encrypted).
 
+Requires client authentication for the `callsign` in the URL.
+
+Response after authentication:
+
+- `Content-Type: application/octet-stream`
+- Response body is raw encrypted manifest bytes
+
+#### PUT /api/backup/clients/{callsign}/snapshots/{date}
+
+Upload encrypted manifest (requires NOSTR auth).
+
+Requires client authentication for the `callsign` in the URL.
+
+Request (preferred):
+
+- `Content-Type: application/octet-stream`
+- Body is raw encrypted manifest bytes
+
+Server also accepts JSON/base64 payloads for compatibility.
+
 #### GET /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
 
 Download encrypted file.
+
+Requires client authentication for the `callsign` in the URL.
+
+Response after authentication:
+
+- `Content-Type: application/octet-stream`
+- Response body is raw encrypted file bytes
 
 #### PUT /api/backup/clients/{callsign}/snapshots/{date}/files/{name}
 
 Upload encrypted file (requires NOSTR auth).
 
+Requires client authentication for the `callsign` in the URL.
+
+Request (preferred):
+
+- `Content-Type: application/octet-stream`
+- Body is raw encrypted file bytes
+
+Server also accepts JSON/base64 payloads for compatibility.
+
 ### Client Endpoints
+
+All client endpoints require backup owner authentication (signed by the local user's NSEC).
 
 #### GET /api/backup/providers
 
@@ -663,8 +927,17 @@ Start manual backup to a provider.
 ```json
 {
   "success": true,
-  "snapshot_id": "2025-12-12",
-  "status": "in_progress"
+  "status": {
+    "provider_callsign": "X2BCDE",
+    "snapshot_id": "2025-12-12",
+    "status": "in_progress",
+    "progress_percent": 0,
+    "files_transferred": 0,
+    "files_total": 0,
+    "bytes_transferred": 0,
+    "bytes_total": 0,
+    "started_at": "2025-12-12T15:30:00Z"
+  }
 }
 ```
 
@@ -675,17 +948,15 @@ Get current backup status.
 **Response:**
 ```json
 {
-  "active_backup": {
-    "provider_callsign": "X2BCDE",
-    "snapshot_id": "2025-12-12",
-    "status": "in_progress",
-    "progress_percent": 45,
-    "files_transferred": 567,
-    "files_total": 1234,
-    "bytes_transferred": 234567890,
-    "bytes_total": 524288000,
-    "started_at": "2025-12-12T15:30:00Z"
-  }
+  "provider_callsign": "X2BCDE",
+  "snapshot_id": "2025-12-12",
+  "status": "in_progress",
+  "progress_percent": 45,
+  "files_transferred": 567,
+  "files_total": 1234,
+  "bytes_transferred": 234567890,
+  "bytes_total": 524288000,
+  "started_at": "2025-12-12T15:30:00Z"
 }
 ```
 
@@ -705,59 +976,65 @@ Start restore from a provider snapshot.
 ```json
 {
   "success": true,
-  "status": "downloading",
-  "total_files": 1234,
-  "total_bytes": 524288000
+  "message": "Restore started"
+}
+```
+
+### Station Directory Endpoints
+
+#### GET /api/backup/providers/available
+
+Return only online providers that have advertised availability to the station.
+Requires NOSTR-signed authorization.
+Requester must be connected to the station; provider entries expire after ~90 seconds without refresh.
+
+**Response:**
+```json
+{
+  "providers": [
+    {
+      "callsign": "X2BCDE",
+      "npub": "npub1xyz789...",
+      "max_total_storage_bytes": 10737418240,
+      "default_max_client_storage_bytes": 1073741824,
+      "default_max_snapshots": 10,
+      "last_seen": "2026-01-04T10:00:30Z",
+      "connection_method": "station"
+    }
+  ]
 }
 ```
 
 ## Backup Process
 
-### Automatic Backup Flow
+### Current Backup Flow
 
-1. **Schedule Check**: Client checks if `backup_interval_days` has elapsed since last backup
-2. **Connectivity Check**: Verify provider is reachable (LAN or Station relay)
-3. **Start Notification**: Send `backup_start` message to provider
-4. **Acknowledgment**: Provider responds with upload URL and confirms space available
-5. **File Enumeration**: Client scans working folder, calculates SHA1 hashes
-6. **Incremental Check**: Compare with last snapshot manifest to find changed files
-7. **Encryption**: Encrypt each file with client's NPUB
-8. **Upload**: Transfer encrypted files to provider
-9. **Manifest Upload**: Send encrypted manifest
-10. **Completion**: Send `backup_complete` message
-11. **Cleanup**: Provider deletes oldest snapshot if `max_snapshots` exceeded
+1. **Schedule or Manual Start**: Client triggers backup when scheduled or on demand.
+2. **Relationship Check**: Client verifies provider relationship is `active`.
+3. **Start Notification**: Client sends `backup_start` message (notification only).
+4. **File Enumeration**: Client scans the working folder recursively.
+5. **Exclusions**: The following directories are skipped: `backups`, `updates`, `.dart_tool`, `build`.
+6. **Encryption + Upload**: Each file is hashed (SHA1), encrypted with the client's NPUB, and uploaded via HTTP PUT to the provider (LAN preferred, station proxy fallback).
+7. **Manifest Upload**: Client writes and encrypts the manifest, then uploads it via HTTP PUT.
+8. **Completion**: Client sends `backup_complete` and provider records `status.json`.
 
-### File Transfer Optimization
+### Current Limitations
 
-- **Incremental backups**: Only transfer files that changed since last snapshot
-- **Chunked uploads**: Large files split into chunks for resume capability
-- **Parallel transfers**: Multiple files uploaded concurrently when bandwidth allows
-- **Compression**: Optional gzip compression before encryption for text files
-
-### Quota Management
-
-When disk space fills before backup completes:
-
-1. Provider detects quota would be exceeded
-2. Provider sends `backup_quota_exceeded` message
-3. Client receives notification of partial backup
-4. Snapshot marked as `partial` in status.json
-5. Both parties notified via UI
-6. Client can retry with smaller selection or request more quota
+- Backups are full snapshots (no incremental or deduplicated uploads).
+- Transfers are sequential (no parallelization or chunked resume).
+- Provider quotas and max snapshot limits are stored but not strictly enforced yet.
+- Snapshot retention cleanup is not automatic.
 
 ## Restore Process
 
 ### Full Restore Flow
 
-1. **Request**: Client initiates restore via API
-2. **Manifest Download**: Client downloads and decrypts manifest
-3. **Verification**: Client reviews file list
-4. **Warning**: Client acknowledges working folder will be overwritten
-5. **Download**: Client downloads all encrypted files
-6. **Decryption**: Client decrypts files using NSEC
-7. **Verification**: Client verifies SHA1 hash for each file
-8. **Replacement**: Working folder contents replaced with restored files
-9. **Completion**: Restore complete notification
+1. **Snapshot List**: Client fetches snapshots from the provider.
+2. **Request**: Client initiates restore via API with `provider_callsign` and `snapshot_id`.
+3. **Manifest Download**: Client downloads and decrypts the manifest.
+4. **Download Loop**: For each manifest entry, the client downloads the encrypted file, decrypts it with NSEC, and verifies SHA1.
+5. **Write to Disk**: Files are written to the working folder (overwriting existing files).
+6. **Completion**: Restore completes when all files are written.
 
 ### Integrity Verification
 
@@ -769,8 +1046,13 @@ For each file during restore:
 3. Calculate SHA1 hash of decrypted content
 4. Compare with SHA1 in manifest
 5. If match: write file to disk
-6. If mismatch: report error, skip file, continue restore
+6. If mismatch: abort restore and report error
 ```
+
+### Restore Notes
+
+- Restore is additive/overwrite only; files not present in the snapshot are not deleted.
+- A failure during download, decryption, or hash verification stops the restore. Files already written remain.
 
 ## Automatic Provider Discovery
 
@@ -1026,31 +1308,19 @@ If a backup provider is offline during discovery:
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `quota_exceeded` | Backup would exceed storage limit | Request more quota or delete old snapshots |
-| `provider_offline` | Cannot reach provider | Retry when provider online |
-| `snapshot_not_found` | Requested snapshot doesn't exist | List available snapshots |
-| `auth_failed` | Invalid NOSTR signature | Check keys, retry |
-| `hash_mismatch` | File integrity verification failed | Re-download file |
-| `relationship_not_active` | Backup relationship paused/terminated | Check status, resume if paused |
+| `provider_offline` | Cannot reach provider | Retry when provider online or use LAN |
+| `snapshot_not_found` | Requested snapshot doesn't exist | Fetch snapshot list and retry |
+| `auth_failed` | Invalid or expired NOSTR signature | Regenerate auth header and retry |
+| `hash_mismatch` | File integrity verification failed | Re-run restore |
+| `relationship_not_active` | Backup relationship paused/terminated | Re-activate the relationship |
 | `encryption_failed` | Encryption error | Check key availability |
-| `decryption_failed` | Decryption error | Verify using correct NSEC |
+| `decryption_failed` | Decryption error (invalid auth tag) | Verify using correct NSEC |
 
-### Partial Backup Handling
+### Current Behavior
 
-When backup fails partway:
-
-1. Snapshot status set to `partial`
-2. Successfully uploaded files are retained
-3. Manifest updated with actual files transferred
-4. Client notified of incomplete backup
-5. Next backup attempts full sync again
-
-### Connection Loss Recovery
-
-- File uploads support resume from last chunk
-- Interrupted backups can be continued
-- Provider tracks partially uploaded files
-- Client can query upload progress and resume
+- Backups stop on the first failed upload and report `failed`.
+- Restores stop on the first failed download, decryption, or SHA1 mismatch.
+- There is no resume or partial-restore retry flow yet; re-run the operation.
 
 ## Security Considerations
 
@@ -1071,7 +1341,8 @@ When backup fails partway:
 ### Key Management
 
 - Client NSEC never transmitted or shared
-- Client NPUB used for encryption key derivation
+- Client NPUB used for file encryption key derivation
+- Manifest encryption key derived from client NSEC + context string
 - Provider only stores encrypted data and client's NPUB
 - Key compromise requires re-encrypting all backups
 
@@ -1102,8 +1373,24 @@ Even though data is encrypted, consider:
 - [NOSTR Integration](./chat-format-specification.md#nostr-integration) - Signature verification
 - [API Documentation](../API.md) - General API patterns
 - [Device Discovery](../devices.md) - How devices find each other
+- [Data Transmission](../data-transmission.md) - Transport priority and offline routing
 
 ## Change Log
+
+### Version 1.3 (2026-01-04)
+- Updated manifest schema and encryption key derivation
+- Documented binary HTTP transfers and transport constraints
+- Aligned protocol message actions with current implementation
+- Clarified backup/restore flow limitations and overwrite behavior
+- Added optional snapshot notes persisted in `status.json` and exposed via API
+- Documented history/restore UI expectations and EventBus notifications for backup lifecycle
+- Moved client config into `{data_dir}/backups/config/` to keep a single backup app folder
+- Snapshot folders now include time + random suffix (`YYYY-MM-DD_HHMMSS-rrrr`) so multiple daily snapshots are retained
+
+### Version 1.2 (2026-01-04)
+- Added provider availability and discovery flow (LAN priority + station directory)
+- Defined provider announce message for station availability index
+- Added LAN availability endpoint with NOSTR auth
 
 ### Version 1.1 (2025-12-12)
 - Added Automatic Provider Discovery section

@@ -36,6 +36,7 @@ class I18nService {
     'inventory',
     'wallet',
     'contacts',
+    'console',
   ];
 
   // Notifier for UI updates when language changes

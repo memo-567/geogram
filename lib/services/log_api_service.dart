@@ -501,6 +501,7 @@ class LogApiService {
           '/api/dm/{callsign}/messages': 'GET/POST direct messages with a device',
           '/api/dm/sync/{callsign}': 'Sync DM messages with remote device',
           '/api/backup/settings': 'GET/PUT backup provider settings',
+          '/api/backup/availability': 'GET provider availability (requires NOSTR auth)',
           '/api/backup/clients': 'GET list of backup clients (as provider)',
           '/api/backup/clients/{callsign}': 'GET/DELETE specific backup client',
           '/api/backup/providers': 'GET list of backup providers (as client)',
@@ -2119,6 +2120,128 @@ class LogApiService {
       LogService().log('LogApiService: NOSTR auth failed - parse error: $e');
       return null;
     }
+  }
+
+  NostrEvent? _verifyNostrAuthEvent(shelf.Request request) {
+    final authHeader = request.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        LogService().log('LogApiService: NOSTR auth failed - invalid signature');
+        return null;
+      }
+
+      if (!_isFreshNostrEvent(event)) {
+        LogService().log('LogApiService: NOSTR auth failed - event too old');
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      LogService().log('LogApiService: NOSTR auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  bool _isFreshNostrEvent(NostrEvent event) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return (now - event.createdAt).abs() <= 300;
+  }
+
+  NostrEvent? _verifyBackupAuthEvent(
+    shelf.Request request, {
+    String? expectedCallsign,
+    List<String>? allowedActions,
+  }) {
+    final event = _verifyNostrAuthEvent(request);
+    if (event == null) return null;
+
+    final backupTag = event.getTagValue('t');
+    if (backupTag != 'backup') {
+      LogService().log('LogApiService: Backup auth failed - missing backup tag');
+      return null;
+    }
+
+    if (expectedCallsign != null) {
+      final tagCallsign = event.getTagValue('callsign');
+      if (tagCallsign == null || tagCallsign.toUpperCase() != expectedCallsign.toUpperCase()) {
+        LogService().log('LogApiService: Backup auth failed - callsign mismatch');
+        return null;
+      }
+    }
+
+    if (allowedActions != null && allowedActions.isNotEmpty) {
+      final action = event.getTagValue('action');
+      if (action == null || !allowedActions.contains(action)) {
+        LogService().log('LogApiService: Backup auth failed - action mismatch: $action');
+        return null;
+      }
+    }
+
+    return event;
+  }
+
+  NostrEvent? _verifyBackupOwnerAuth(
+    shelf.Request request, {
+    List<String>? allowedActions,
+  }) {
+    final event = _verifyBackupAuthEvent(request, allowedActions: allowedActions);
+    if (event == null) return null;
+
+    final profile = ProfileService().getProfile();
+    if (event.npub != profile.npub) {
+      LogService().log('LogApiService: Backup auth failed - npub mismatch');
+      return null;
+    }
+
+    final callsignTag = event.getTagValue('callsign');
+    if (callsignTag == null || callsignTag.toUpperCase() != profile.callsign.toUpperCase()) {
+      LogService().log('LogApiService: Backup auth failed - callsign mismatch');
+      return null;
+    }
+
+    return event;
+  }
+
+  BackupClientRelationship? _verifyBackupClientAuth(
+    shelf.Request request,
+    String callsign, {
+    bool requireActive = true,
+  }) {
+    final event = _verifyBackupAuthEvent(request, expectedCallsign: callsign);
+    if (event == null) return null;
+
+    final backupService = BackupService();
+    final client = backupService.getClient(callsign);
+    if (client == null) {
+      LogService().log('LogApiService: Backup auth failed - client not found: $callsign');
+      return null;
+    }
+    if (client.clientNpub != event.npub) {
+      LogService().log('LogApiService: Backup auth failed - client npub mismatch');
+      return null;
+    }
+    if (requireActive && client.status != BackupRelationshipStatus.active) {
+      LogService().log('LogApiService: Backup auth failed - client not active');
+      return null;
+    }
+
+    return client;
+  }
+
+  shelf.Response _backupAuthDenied(Map<String, String> headers, {String? error}) {
+    return shelf.Response.forbidden(
+      jsonEncode({'error': error ?? 'Unauthorized backup request'}),
+      headers: headers,
+    );
   }
 
   /// Load room config from disk (config.json in room folder)
@@ -4741,16 +4864,26 @@ class LogApiService {
       // GET/PUT /api/backup/settings - Provider settings
       if (subPath == 'settings' || subPath == 'settings/') {
         if (method == 'GET') {
-          return await _handleBackupSettingsGet(headers);
+          return await _handleBackupSettingsGet(request, headers);
         } else if (method == 'PUT') {
           return await _handleBackupSettingsPut(request, headers);
         }
       }
 
+      // GET /api/backup/availability - Provider availability (LAN query)
+      if ((subPath == 'availability' || subPath == 'availability/') && method == 'GET') {
+        return await _handleBackupAvailabilityGet(request, headers);
+      }
+
+      // POST /api/backup/message - Internal backup message relay (device-to-device)
+      if ((subPath == 'message' || subPath == 'message/') && method == 'POST') {
+        return await _handleBackupMessage(request, headers);
+      }
+
       // GET /api/backup/clients - List clients (provider endpoint)
       if (subPath == 'clients' || subPath == 'clients/') {
         if (method == 'GET') {
-          return await _handleBackupClientsGet(headers);
+          return await _handleBackupClientsGet(request, headers);
         }
       }
 
@@ -4759,7 +4892,7 @@ class LogApiService {
         final callsign = _extractCallsignFromBackupPath(subPath, 'clients/');
         if (callsign != null) {
           if (method == 'GET') {
-            return await _handleBackupClientGet(callsign, headers);
+            return await _handleBackupClientGet(request, callsign, headers);
           } else if (method == 'DELETE') {
             return await _handleBackupClientDelete(request, callsign, headers);
           } else if (method == 'PUT') {
@@ -4774,8 +4907,18 @@ class LogApiService {
         if (match != null) {
           final callsign = match.group(1)!.toUpperCase();
           if (method == 'GET') {
-            return await _handleBackupSnapshotsGet(callsign, headers);
+            return await _handleBackupSnapshotsGet(request, callsign, headers);
           }
+        }
+      }
+
+      // PUT /api/backup/clients/{callsign}/snapshots/{date}/note - Update note
+      final noteMatch = RegExp(r'^clients/([^/]+)/snapshots/(\d{4}-\d{2}-\d{2})/note/?$').firstMatch(subPath);
+      if (noteMatch != null) {
+        final callsign = noteMatch.group(1)!.toUpperCase();
+        final snapshotId = noteMatch.group(2)!;
+        if (method == 'PUT') {
+          return await _handleBackupSnapshotNotePut(request, callsign, snapshotId, headers);
         }
       }
 
@@ -4785,7 +4928,7 @@ class LogApiService {
         final callsign = snapshotMatch.group(1)!.toUpperCase();
         final snapshotId = snapshotMatch.group(2)!;
         if (method == 'GET') {
-          return await _handleBackupManifestGet(callsign, snapshotId, headers);
+          return await _handleBackupManifestGet(request, callsign, snapshotId, headers);
         } else if (method == 'PUT') {
           return await _handleBackupManifestPut(request, callsign, snapshotId, headers);
         }
@@ -4798,7 +4941,7 @@ class LogApiService {
         final snapshotId = fileMatch.group(2)!;
         final fileName = fileMatch.group(3)!;
         if (method == 'GET') {
-          return await _handleBackupFileGet(callsign, snapshotId, fileName, headers);
+          return await _handleBackupFileGet(request, callsign, snapshotId, fileName, headers);
         } else if (method == 'PUT') {
           return await _handleBackupFilePut(request, callsign, snapshotId, fileName, headers);
         }
@@ -4807,7 +4950,7 @@ class LogApiService {
       // GET /api/backup/providers - List providers (client endpoint)
       if (subPath == 'providers' || subPath == 'providers/') {
         if (method == 'GET') {
-          return await _handleBackupProvidersGet(headers);
+          return await _handleBackupProvidersGet(request, headers);
         }
       }
 
@@ -4820,9 +4963,9 @@ class LogApiService {
           } else if (method == 'PUT') {
             return await _handleBackupProviderUpdate(request, callsign, headers);
           } else if (method == 'DELETE') {
-            return await _handleBackupProviderRemove(callsign, headers);
+            return await _handleBackupProviderRemove(request, callsign, headers);
           } else if (method == 'GET') {
-            return await _handleBackupProviderGet(callsign, headers);
+            return await _handleBackupProviderGet(request, callsign, headers);
           }
         }
       }
@@ -4834,7 +4977,7 @@ class LogApiService {
 
       // GET /api/backup/status - Get backup/restore status
       if (subPath == 'status' && method == 'GET') {
-        return await _handleBackupStatusGet(headers);
+        return await _handleBackupStatusGet(request, headers);
       }
 
       // POST /api/backup/restore - Start restore
@@ -4850,7 +4993,7 @@ class LogApiService {
       if (subPath.startsWith('discover/')) {
         final discoveryId = subPath.substring('discover/'.length);
         if (discoveryId.isNotEmpty && method == 'GET') {
-          return await _handleBackupDiscoverStatus(discoveryId, headers);
+          return await _handleBackupDiscoverStatus(request, discoveryId, headers);
         }
       }
 
@@ -4876,20 +5019,233 @@ class LogApiService {
     return callsign.isEmpty ? null : callsign.toUpperCase();
   }
 
+  /// POST /api/backup/message - Receive backup control messages from other devices
+  Future<shelf.Response> _handleBackupMessage(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      if (body.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing message payload'}),
+          headers: headers,
+        );
+      }
+
+      final data = jsonDecode(body);
+      if (data is! Map<String, dynamic>) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Invalid message format'}),
+          headers: headers,
+        );
+      }
+
+      final type = data['type'] as String?;
+      if (type == null || type.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'error': 'Missing message type'}),
+          headers: headers,
+        );
+      }
+
+      final backupService = BackupService();
+      await backupService.initialize();
+
+      final authEvent = _verifyBackupMessageAuth(request, data, backupService);
+      if (authEvent == null) {
+        return _backupAuthDenied(headers, error: 'Invalid backup message auth');
+      }
+      data['from'] ??= authEvent.getTagValue('callsign');
+
+      switch (type) {
+        case 'backup_invite':
+          backupService.handleBackupInvite(data);
+          break;
+        case 'backup_invite_response':
+          backupService.handleBackupInviteResponse(data);
+          break;
+        case 'backup_start':
+          backupService.handleBackupStart(data);
+          break;
+        case 'backup_complete':
+          await backupService.handleBackupComplete(data);
+          break;
+        case 'backup_discovery_challenge':
+          backupService.handleDiscoveryChallenge(data);
+          break;
+        case 'backup_discovery_response':
+          backupService.handleDiscoveryResponse(data);
+          break;
+        case 'backup_status_change':
+          backupService.handleStatusChange(data);
+          break;
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({'error': 'Unsupported backup message type', 'type': type}),
+            headers: headers,
+          );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Error handling backup message: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  NostrEvent? _verifyBackupMessageAuth(
+    shelf.Request request,
+    Map<String, dynamic> data,
+    BackupService backupService,
+  ) {
+    final event = _parseBackupEventFromMessage(data['event']) ??
+        _verifyNostrAuthEvent(request);
+    if (event == null) return null;
+
+    if (event.getTagValue('t') != 'backup') {
+      LogService().log('LogApiService: Backup message auth failed - missing backup tag');
+      return null;
+    }
+
+    final type = data['type'] as String?;
+    if (type == null || type.isEmpty) return null;
+
+    final action = event.getTagValue('action');
+    if (!_isBackupMessageActionValid(type, action)) {
+      LogService().log('LogApiService: Backup message auth failed - action mismatch');
+      return null;
+    }
+
+    final from = data['from'] as String? ?? event.getTagValue('callsign');
+    if (from == null || from.isEmpty) {
+      LogService().log('LogApiService: Backup message auth failed - missing callsign');
+      return null;
+    }
+
+    final tagCallsign = event.getTagValue('callsign');
+    if (tagCallsign == null || tagCallsign.toUpperCase() != from.toUpperCase()) {
+      LogService().log('LogApiService: Backup message auth failed - callsign mismatch');
+      return null;
+    }
+
+    final target = data['target'] as String?;
+    final targetTag = event.getTagValue('target');
+    if (target != null && targetTag != null && targetTag.toUpperCase() != target.toUpperCase()) {
+      LogService().log('LogApiService: Backup message auth failed - target mismatch');
+      return null;
+    }
+
+    switch (type) {
+      case 'backup_start':
+      case 'backup_complete':
+        final client = backupService.getClient(from);
+        if (client == null || client.clientNpub != event.npub) {
+          LogService().log('LogApiService: Backup message auth failed - client mismatch');
+          return null;
+        }
+        break;
+      case 'backup_status_change':
+        final client = backupService.getClient(from);
+        final provider = backupService.getProvider(from);
+        if (client == null && provider == null) {
+          LogService().log('LogApiService: Backup message auth failed - relationship missing');
+          return null;
+        }
+        if (client != null && client.clientNpub != event.npub) {
+          LogService().log('LogApiService: Backup message auth failed - client npub mismatch');
+          return null;
+        }
+        if (provider != null && provider.providerNpub.isNotEmpty && provider.providerNpub != event.npub) {
+          LogService().log('LogApiService: Backup message auth failed - provider npub mismatch');
+          return null;
+        }
+        break;
+      case 'backup_invite_response':
+        final provider = backupService.getProvider(from);
+        if (provider != null && provider.providerNpub.isNotEmpty && provider.providerNpub != event.npub) {
+          LogService().log('LogApiService: Backup message auth failed - provider mismatch');
+          return null;
+        }
+        break;
+      default:
+        break;
+    }
+
+    return event;
+  }
+
+  NostrEvent? _parseBackupEventFromMessage(dynamic eventData) {
+    if (eventData is Map) {
+      try {
+        final event = NostrEvent.fromJson(Map<String, dynamic>.from(eventData));
+        if (!event.verify()) {
+          LogService().log('LogApiService: Backup message auth failed - invalid signature');
+          return null;
+        }
+        if (!_isFreshNostrEvent(event)) {
+          LogService().log('LogApiService: Backup message auth failed - event too old');
+          return null;
+        }
+        return event;
+      } catch (e) {
+        LogService().log('LogApiService: Backup message auth failed - parse error: $e');
+        return null;
+      }
+    }
+    return null;
+  }
+
+  bool _isBackupMessageActionValid(String type, String? action) {
+    switch (type) {
+      case 'backup_invite':
+        return action == 'backup_invite';
+      case 'backup_invite_response':
+        return action == 'backup_invite_response';
+      case 'backup_start':
+        return action == 'backup_start';
+      case 'backup_complete':
+        return action == 'backup_complete';
+      case 'backup_status_change':
+        return action == 'backup_status_change';
+      case 'backup_discovery_challenge':
+        return action == 'discovery_query';
+      case 'backup_discovery_response':
+        return action == 'discovery_response';
+      default:
+        return false;
+    }
+  }
+
   // === Provider Settings Endpoints ===
 
   /// GET /api/backup/settings - Get provider settings
-  Future<shelf.Response> _handleBackupSettingsGet(Map<String, String> headers) async {
+  Future<shelf.Response> _handleBackupSettingsGet(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup settings access denied');
+    }
+
     final settings = backupService.providerSettings;
 
     return shelf.Response.ok(
       jsonEncode(settings?.toJson() ?? {
         'enabled': false,
-        'maxTotalStorageBytes': 0,
-        'defaultMaxClientStorageBytes': 0,
-        'defaultMaxSnapshots': 0,
-        'autoAcceptFromContacts': false,
+        'max_total_storage_bytes': 0,
+        'default_max_client_storage_bytes': 0,
+        'default_max_snapshots': 0,
+        'auto_accept_from_contacts': false,
       }),
       headers: headers,
     );
@@ -4900,10 +5256,15 @@ class LogApiService {
     shelf.Request request,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup settings update denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
 
     final backupService = BackupService();
+    await backupService.initialize();
     final currentSettings = backupService.providerSettings ?? BackupProviderSettings(
       enabled: false,
       maxTotalStorageBytes: 0,
@@ -4913,13 +5274,45 @@ class LogApiService {
       updatedAt: DateTime.now(),
     );
 
+    int? readInt(List<String> keys) {
+      for (final key in keys) {
+        final value = data[key];
+        if (value is int) return value;
+        if (value is String) {
+          final parsed = int.tryParse(value);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    bool? readBool(List<String> keys) {
+      for (final key in keys) {
+        final value = data[key];
+        if (value is bool) return value;
+        if (value is String) {
+          final normalized = value.toLowerCase();
+          if (normalized == 'true') return true;
+          if (normalized == 'false') return false;
+        }
+      }
+      return null;
+    }
+
     // Update settings
     final newSettings = BackupProviderSettings(
-      enabled: data['enabled'] as bool? ?? currentSettings.enabled,
-      maxTotalStorageBytes: data['maxTotalStorageBytes'] as int? ?? currentSettings.maxTotalStorageBytes,
-      defaultMaxClientStorageBytes: data['defaultMaxClientStorageBytes'] as int? ?? currentSettings.defaultMaxClientStorageBytes,
-      defaultMaxSnapshots: data['defaultMaxSnapshots'] as int? ?? currentSettings.defaultMaxSnapshots,
-      autoAcceptFromContacts: data['autoAcceptFromContacts'] as bool? ?? currentSettings.autoAcceptFromContacts,
+      enabled: readBool(['enabled']) ?? currentSettings.enabled,
+      maxTotalStorageBytes: readInt(['max_total_storage_bytes', 'maxTotalStorageBytes']) ??
+          currentSettings.maxTotalStorageBytes,
+      defaultMaxClientStorageBytes: readInt([
+            'default_max_client_storage_bytes',
+            'defaultMaxClientStorageBytes',
+          ]) ??
+          currentSettings.defaultMaxClientStorageBytes,
+      defaultMaxSnapshots: readInt(['default_max_snapshots', 'defaultMaxSnapshots']) ??
+          currentSettings.defaultMaxSnapshots,
+      autoAcceptFromContacts: readBool(['auto_accept_from_contacts', 'autoAcceptFromContacts']) ??
+          currentSettings.autoAcceptFromContacts,
       updatedAt: DateTime.now(),
     );
 
@@ -4931,12 +5324,50 @@ class LogApiService {
     );
   }
 
+  /// GET /api/backup/availability - Provider availability for LAN queries
+  Future<shelf.Response> _handleBackupAvailabilityGet(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    if (_verifyBackupAuthEvent(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup availability auth required');
+    }
+
+    final backupService = BackupService();
+    await backupService.initialize();
+
+    final settings = backupService.providerSettings ?? BackupProviderSettings();
+    final profile = ProfileService().getProfile();
+
+    return shelf.Response.ok(
+      jsonEncode({
+        'enabled': settings.enabled,
+        'callsign': profile.callsign,
+        'npub': profile.npub,
+        'max_total_storage_bytes': settings.maxTotalStorageBytes,
+        'default_max_client_storage_bytes': settings.defaultMaxClientStorageBytes,
+        'default_max_snapshots': settings.defaultMaxSnapshots,
+        'updated_at': settings.updatedAt.toIso8601String(),
+      }),
+      headers: headers,
+    );
+  }
+
   // === Provider Client Management Endpoints ===
 
   /// GET /api/backup/clients - List all clients
-  Future<shelf.Response> _handleBackupClientsGet(Map<String, String> headers) async {
+  Future<shelf.Response> _handleBackupClientsGet(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
     final backupService = BackupService();
-    final clients = await backupService.getClients();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup clients access denied');
+    }
+
+    final clients = backupService.getClients();
 
     return shelf.Response.ok(
       jsonEncode({
@@ -4949,11 +5380,18 @@ class LogApiService {
 
   /// GET /api/backup/clients/{callsign} - Get specific client
   Future<shelf.Response> _handleBackupClientGet(
+    shelf.Request request,
     String callsign,
     Map<String, String> headers,
   ) async {
     final backupService = BackupService();
-    final clients = await backupService.getClients();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup client access denied');
+    }
+
+    final clients = backupService.getClients();
     final client = clients.where((c) => c.clientCallsign == callsign).firstOrNull;
 
     if (client == null) {
@@ -4975,16 +5413,33 @@ class LogApiService {
     String callsign,
     Map<String, String> headers,
   ) async {
+    final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup client update denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
     final action = data['action'] as String?;
 
-    final backupService = BackupService();
-
     if (action == 'accept') {
-      final maxStorageBytes = data['maxStorageBytes'] as int? ??
+      int? readInt(List<String> keys) {
+        for (final key in keys) {
+          final value = data[key];
+          if (value is int) return value;
+          if (value is String) {
+            final parsed = int.tryParse(value);
+            if (parsed != null) return parsed;
+          }
+        }
+        return null;
+      }
+
+      final maxStorageBytes = readInt(['max_storage_bytes', 'maxStorageBytes']) ??
           backupService.providerSettings?.defaultMaxClientStorageBytes ?? 1073741824;
-      final maxSnapshots = data['maxSnapshots'] as int? ??
+      final maxSnapshots = readInt(['max_snapshots', 'maxSnapshots']) ??
           backupService.providerSettings?.defaultMaxSnapshots ?? 7;
 
       // Find the client npub
@@ -5037,6 +5492,12 @@ class LogApiService {
     final deleteData = queryParams['deleteData'] == 'true';
 
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup client removal denied');
+    }
+
     await backupService.removeClient(callsign, deleteData: deleteData);
 
     return shelf.Response.ok(
@@ -5047,28 +5508,93 @@ class LogApiService {
 
   /// GET /api/backup/clients/{callsign}/snapshots - List snapshots
   Future<shelf.Response> _handleBackupSnapshotsGet(
+    shelf.Request request,
     String callsign,
     Map<String, String> headers,
   ) async {
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup snapshot list denied');
+    }
+
     final snapshots = await backupService.getSnapshots(callsign);
+    final client = backupService.getClient(callsign);
+    final totalBytes = snapshots.fold<int>(0, (sum, s) => sum + s.totalBytes);
 
     return shelf.Response.ok(
       jsonEncode({
         'snapshots': snapshots.map((s) => s.toJson()).toList(),
         'total': snapshots.length,
+        if (client != null) ...{
+          'max_storage_bytes': client.maxStorageBytes,
+          'current_storage_bytes': client.currentStorageBytes,
+          'max_snapshots': client.maxSnapshots,
+          'remaining_bytes': (client.maxStorageBytes - client.currentStorageBytes).clamp(0, client.maxStorageBytes),
+        },
+        'total_snapshot_bytes': totalBytes,
       }),
+      headers: headers,
+    );
+  }
+
+  /// PUT /api/backup/clients/{callsign}/snapshots/{date}/note - Update snapshot note
+  Future<shelf.Response> _handleBackupSnapshotNotePut(
+    shelf.Request request,
+    String callsign,
+    String snapshotId,
+    Map<String, String> headers,
+  ) async {
+    final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup snapshot note denied');
+    }
+
+    final body = await request.readAsString();
+    String note = '';
+    if (body.isNotEmpty) {
+      try {
+        final json = jsonDecode(body);
+        if (json is Map<String, dynamic>) {
+          final value = json['note'];
+          if (value is String) {
+            note = value;
+          } else if (value != null) {
+            note = value.toString();
+          }
+        } else if (json is String) {
+          note = json;
+        }
+      } catch (_) {
+        note = body;
+      }
+    }
+
+    await backupService.setSnapshotNote(callsign, snapshotId, note);
+
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'snapshot_id': snapshotId, 'note': note}),
       headers: headers,
     );
   }
 
   /// GET /api/backup/clients/{callsign}/snapshots/{date} - Get manifest
   Future<shelf.Response> _handleBackupManifestGet(
+    shelf.Request request,
     String callsign,
     String snapshotId,
     Map<String, String> headers,
   ) async {
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup manifest access denied');
+    }
+
     final manifest = await backupService.getManifest(callsign, snapshotId);
 
     if (manifest == null) {
@@ -5078,10 +5604,13 @@ class LogApiService {
       );
     }
 
-    // Return raw encrypted manifest (base64 encoded)
+    // Return raw encrypted manifest as binary
     return shelf.Response.ok(
-      jsonEncode({'manifest': manifest}),
-      headers: headers,
+      manifest,
+      headers: {
+        ...headers,
+        'Content-Type': 'application/octet-stream',
+      },
     );
   }
 
@@ -5092,20 +5621,58 @@ class LogApiService {
     String snapshotId,
     Map<String, String> headers,
   ) async {
-    final body = await request.readAsString();
-    final data = jsonDecode(body) as Map<String, dynamic>;
-    final manifestBase64 = data['manifest'] as String?;
+    final backupService = BackupService();
+    await backupService.initialize();
 
-    if (manifestBase64 == null) {
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup manifest upload denied');
+    }
+
+    final rawBytes = await request.read().expand((chunk) => chunk).toList();
+    if (rawBytes.isEmpty) {
       return shelf.Response.badRequest(
-        body: jsonEncode({'error': 'Missing manifest field'}),
+        body: jsonEncode({'error': 'Missing manifest payload'}),
         headers: headers,
       );
     }
 
-    final backupService = BackupService();
-    // Decode base64 to bytes for storage
-    final manifestBytes = Uint8List.fromList(base64Decode(manifestBase64));
+    final contentType = request.headers['content-type'] ?? '';
+    final transferEncoding = request.headers['content-transfer-encoding'] ?? '';
+    final bodyString = utf8.decode(rawBytes, allowMalformed: true);
+
+    Uint8List? manifestBytes;
+    if (transferEncoding.toLowerCase() == 'base64') {
+      manifestBytes = Uint8List.fromList(base64Decode(bodyString));
+    } else if (contentType.contains('application/json')) {
+      try {
+        final decoded = jsonDecode(bodyString);
+        if (decoded is Map) {
+          final dynamic value = decoded['manifest'] ?? decoded['data'];
+          if (value is String) {
+            manifestBytes = Uint8List.fromList(base64Decode(value));
+          } else if (value is List) {
+            manifestBytes = Uint8List.fromList(value.cast<int>());
+          }
+        } else if (decoded is String) {
+          manifestBytes = Uint8List.fromList(base64Decode(decoded));
+        } else if (decoded is List) {
+          manifestBytes = Uint8List.fromList(decoded.cast<int>());
+        }
+      } catch (_) {
+        // If JSON parsing fails, fall back to raw base64 string.
+        manifestBytes = Uint8List.fromList(base64Decode(bodyString));
+      }
+    } else {
+      manifestBytes = Uint8List.fromList(rawBytes);
+    }
+
+    if (manifestBytes == null) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Invalid manifest payload'}),
+        headers: headers,
+      );
+    }
+
     await backupService.saveManifest(callsign, snapshotId, manifestBytes);
 
     return shelf.Response.ok(
@@ -5116,12 +5683,19 @@ class LogApiService {
 
   /// GET /api/backup/clients/{callsign}/snapshots/{date}/files/{name} - Get encrypted file
   Future<shelf.Response> _handleBackupFileGet(
+    shelf.Request request,
     String callsign,
     String snapshotId,
     String fileName,
     Map<String, String> headers,
   ) async {
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup file access denied');
+    }
+
     final fileData = await backupService.getEncryptedFile(callsign, snapshotId, fileName);
 
     if (fileData == null) {
@@ -5146,10 +5720,55 @@ class LogApiService {
     String fileName,
     Map<String, String> headers,
   ) async {
-    final bytes = await request.read().expand((chunk) => chunk).toList();
-    final fileData = Uint8List.fromList(bytes);
-
     final backupService = BackupService();
+    await backupService.initialize();
+
+    if (_verifyBackupClientAuth(request, callsign) == null) {
+      return _backupAuthDenied(headers, error: 'Backup file upload denied');
+    }
+
+    final rawBytes = await request.read().expand((chunk) => chunk).toList();
+    if (rawBytes.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'error': 'Missing file payload'}),
+        headers: headers,
+      );
+    }
+
+    final contentType = request.headers['content-type'] ?? '';
+    final transferEncoding = request.headers['content-transfer-encoding'] ?? '';
+    final bodyString = utf8.decode(rawBytes, allowMalformed: true);
+
+    Uint8List fileData;
+    if (transferEncoding.toLowerCase() == 'base64') {
+      fileData = Uint8List.fromList(base64Decode(bodyString));
+    } else if (contentType.contains('application/json')) {
+      try {
+        final decoded = jsonDecode(bodyString);
+        if (decoded is Map) {
+          final dynamic value = decoded['data'] ?? decoded['file'];
+          if (value is String) {
+            fileData = Uint8List.fromList(base64Decode(value));
+          } else if (value is List) {
+            fileData = Uint8List.fromList(value.cast<int>());
+          } else {
+            fileData = Uint8List.fromList(rawBytes);
+          }
+        } else if (decoded is String) {
+          fileData = Uint8List.fromList(base64Decode(decoded));
+        } else if (decoded is List) {
+          fileData = Uint8List.fromList(decoded.cast<int>());
+        } else {
+          fileData = Uint8List.fromList(rawBytes);
+        }
+      } catch (_) {
+        // JSON parsing failed, treat as raw base64 string.
+        fileData = Uint8List.fromList(base64Decode(bodyString));
+      }
+    } else {
+      fileData = Uint8List.fromList(rawBytes);
+    }
+
     await backupService.saveEncryptedFile(callsign, snapshotId, fileName, fileData);
 
     return shelf.Response.ok(
@@ -5161,9 +5780,18 @@ class LogApiService {
   // === Client Provider Management Endpoints ===
 
   /// GET /api/backup/providers - List providers
-  Future<shelf.Response> _handleBackupProvidersGet(Map<String, String> headers) async {
+  Future<shelf.Response> _handleBackupProvidersGet(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
     final backupService = BackupService();
-    final providers = await backupService.getProviders();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup providers access denied');
+    }
+
+    final providers = backupService.getProviders();
 
     return shelf.Response.ok(
       jsonEncode({
@@ -5176,11 +5804,18 @@ class LogApiService {
 
   /// GET /api/backup/providers/{callsign} - Get specific provider
   Future<shelf.Response> _handleBackupProviderGet(
+    shelf.Request request,
     String callsign,
     Map<String, String> headers,
   ) async {
     final backupService = BackupService();
-    final providers = await backupService.getProviders();
+    await backupService.initialize();
+
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup provider access denied');
+    }
+
+    final providers = backupService.getProviders();
     final provider = providers.where((p) => p.providerCallsign == callsign).firstOrNull;
 
     if (provider == null) {
@@ -5202,12 +5837,29 @@ class LogApiService {
     String callsign,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup invite denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
-    final intervalDays = data['intervalDays'] as int? ?? 1;
+    int? readInt(List<String> keys) {
+      for (final key in keys) {
+        final value = data[key];
+        if (value is int) return value;
+        if (value is String) {
+          final parsed = int.tryParse(value);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    final intervalDays = readInt(['backup_interval_days', 'interval_days', 'intervalDays']) ?? 1;
 
     final backupService = BackupService();
-    await backupService.sendInvite(callsign, intervalDays);
+    await backupService.initialize();
+    unawaited(backupService.sendInvite(callsign, intervalDays));
 
     return shelf.Response.ok(
       jsonEncode({'success': true, 'message': 'Invite sent to provider', 'callsign': callsign}),
@@ -5221,11 +5873,16 @@ class LogApiService {
     String callsign,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup provider update denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
 
     final backupService = BackupService();
-    final providers = await backupService.getProviders();
+    await backupService.initialize();
+    final providers = backupService.getProviders();
     final provider = providers.where((p) => p.providerCallsign == callsign).firstOrNull;
 
     if (provider == null) {
@@ -5236,8 +5893,20 @@ class LogApiService {
     }
 
     // Update provider settings (e.g., interval)
-    if (data.containsKey('intervalDays')) {
-      final newInterval = data['intervalDays'] as int;
+    int? readInt(List<String> keys) {
+      for (final key in keys) {
+        final value = data[key];
+        if (value is int) return value;
+        if (value is String) {
+          final parsed = int.tryParse(value);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    final newInterval = readInt(['backup_interval_days', 'interval_days', 'intervalDays']);
+    if (newInterval != null) {
       final updatedProvider = BackupProviderRelationship(
         providerNpub: provider.providerNpub,
         providerCallsign: provider.providerCallsign,
@@ -5260,10 +5929,16 @@ class LogApiService {
 
   /// DELETE /api/backup/providers/{callsign} - Remove provider
   Future<shelf.Response> _handleBackupProviderRemove(
+    shelf.Request request,
     String callsign,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup provider removal denied');
+    }
+
     final backupService = BackupService();
+    await backupService.initialize();
     await backupService.removeProvider(callsign);
 
     return shelf.Response.ok(
@@ -5279,9 +5954,13 @@ class LogApiService {
     shelf.Request request,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup start denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
-    final providerCallsign = data['providerCallsign'] as String?;
+    final providerCallsign = (data['provider_callsign'] ?? data['providerCallsign']) as String?;
 
     if (providerCallsign == null) {
       return shelf.Response.badRequest(
@@ -5291,6 +5970,7 @@ class LogApiService {
     }
 
     final backupService = BackupService();
+    await backupService.initialize();
     final status = await backupService.startBackup(providerCallsign);
 
     return shelf.Response.ok(
@@ -5300,8 +5980,16 @@ class LogApiService {
   }
 
   /// GET /api/backup/status - Get current backup/restore status
-  Future<shelf.Response> _handleBackupStatusGet(Map<String, String> headers) async {
+  Future<shelf.Response> _handleBackupStatusGet(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup status denied');
+    }
+
     final backupService = BackupService();
+    await backupService.initialize();
     final status = backupService.backupStatus;
 
     return shelf.Response.ok(
@@ -5315,10 +6003,14 @@ class LogApiService {
     shelf.Request request,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup restore denied');
+    }
+
     final body = await request.readAsString();
     final data = jsonDecode(body) as Map<String, dynamic>;
-    final providerCallsign = data['providerCallsign'] as String?;
-    final snapshotId = data['snapshotId'] as String?;
+    final providerCallsign = (data['provider_callsign'] ?? data['providerCallsign']) as String?;
+    final snapshotId = (data['snapshot_id'] ?? data['snapshotId']) as String?;
 
     if (providerCallsign == null || snapshotId == null) {
       return shelf.Response.badRequest(
@@ -5328,6 +6020,7 @@ class LogApiService {
     }
 
     final backupService = BackupService();
+    await backupService.initialize();
     await backupService.startRestore(providerCallsign, snapshotId);
 
     return shelf.Response.ok(
@@ -5343,11 +6036,28 @@ class LogApiService {
     shelf.Request request,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup discovery denied');
+    }
+
     final body = await request.readAsString();
     final data = body.isEmpty ? <String, dynamic>{} : jsonDecode(body) as Map<String, dynamic>;
-    final timeoutSeconds = data['timeoutSeconds'] as int? ?? 30;
+    int? readInt(List<String> keys) {
+      for (final key in keys) {
+        final value = data[key];
+        if (value is int) return value;
+        if (value is String) {
+          final parsed = int.tryParse(value);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    final timeoutSeconds = readInt(['timeout_seconds', 'timeoutSeconds']) ?? 30;
 
     final backupService = BackupService();
+    await backupService.initialize();
     final discoveryId = await backupService.startDiscovery(timeoutSeconds);
 
     return shelf.Response.ok(
@@ -5358,10 +6068,16 @@ class LogApiService {
 
   /// GET /api/backup/discover/{id} - Get discovery status
   Future<shelf.Response> _handleBackupDiscoverStatus(
+    shelf.Request request,
     String discoveryId,
     Map<String, String> headers,
   ) async {
+    if (_verifyBackupOwnerAuth(request) == null) {
+      return _backupAuthDenied(headers, error: 'Backup discovery status denied');
+    }
+
     final backupService = BackupService();
+    await backupService.initialize();
     final status = backupService.getDiscoveryStatus(discoveryId);
 
     if (status == null) {

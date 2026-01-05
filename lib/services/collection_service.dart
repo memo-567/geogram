@@ -845,6 +845,10 @@ class CollectionService {
         // Initialize station collection structure
         await _initializeRelayCollection(collectionFolder);
         stderr.writeln('Created station collection skeleton');
+      } else if (type == 'console') {
+        // Initialize console collection structure
+        await _initializeConsoleCollection(collectionFolder);
+        stderr.writeln('Created console collection skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
@@ -1237,6 +1241,29 @@ ${currentProfile.callsign}
     );
 
     stderr.writeln('Station collection initialized');
+  }
+
+  /// Initialize console collection structure
+  Future<void> _initializeConsoleCollection(Directory collectionFolder) async {
+    // Create sessions directory
+    final sessionsDir = Directory('${collectionFolder.path}/sessions');
+    await sessionsDir.create();
+
+    // Create security.json with current user as admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await securityFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(securityData),
+    );
+
+    stderr.writeln('Console collection initialized');
   }
 
   /// Write collection metadata files to disk
