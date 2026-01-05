@@ -938,6 +938,13 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                                     label: Text(_i18n.t('create_contact')),
                                     onPressed: _createNewContact,
                                   ),
+                                  // Show import option on Android only
+                                  if (!kIsWeb && Platform.isAndroid)
+                                    TextButton.icon(
+                                      icon: const Icon(Icons.import_contacts),
+                                      label: Text(_i18n.t('import_from_device')),
+                                      onPressed: _importFromDevice,
+                                    ),
                                 ],
                               ),
                             )
