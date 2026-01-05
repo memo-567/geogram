@@ -138,11 +138,15 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
     var filtered = _allContacts;
 
-    // Apply view mode filter
+    // Apply view mode filter - folder-style navigation
     if (_viewMode == 'group' && _selectedGroupPath != null) {
+      // Inside a specific group folder - show only contacts in this group
       filtered = filtered.where((c) => c.groupPath == _selectedGroupPath).toList();
     } else if (_viewMode == 'revoked') {
       filtered = filtered.where((c) => c.revoked).toList();
+    } else if (_viewMode == 'all') {
+      // Root level - show only contacts without a group (folder-style)
+      filtered = filtered.where((c) => c.groupPath == null || c.groupPath!.isEmpty).toList();
     }
 
     // Apply search filter
@@ -814,32 +818,73 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                   ),
                 ),
 
-                // View mode selector
+                // Navigation breadcrumb / folder path
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
                   child: Row(
                     children: [
-                      ChoiceChip(
-                        label: Text('${_i18n.t('all')} (${_allContacts.length})'),
-                        selected: _viewMode == 'all',
-                        onSelected: (_) => _selectGroup(null),
+                      // Back button when inside a group
+                      if (_viewMode == 'group' && _selectedGroupPath != null)
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back),
+                          onPressed: () => _selectGroup(null),
+                          tooltip: _i18n.t('back'),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      // Current location
+                      Expanded(
+                        child: InkWell(
+                          onTap: _viewMode != 'all' ? () => _selectGroup(null) : null,
+                          child: Row(
+                            children: [
+                              Icon(
+                                _viewMode == 'group' ? Icons.folder_open : Icons.home,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _viewMode == 'group' && _selectedGroupPath != null
+                                      ? _groups.firstWhere(
+                                          (g) => g.path == _selectedGroupPath,
+                                          orElse: () => ContactGroup(name: _selectedGroupPath!, path: _selectedGroupPath!, contactCount: 0),
+                                        ).name
+                                      : _viewMode == 'revoked'
+                                          ? _i18n.t('revoked')
+                                          : _i18n.t('contacts'),
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: Text('${_i18n.t('revoked')} (${_allContacts.where((c) => c.revoked).length})'),
-                        selected: _viewMode == 'revoked',
-                        onSelected: (_) {
-                          setState(() => _viewMode = 'revoked');
-                          _filterContacts();
-                        },
-                      ),
+                      // Revoked filter chip
+                      if (_allContacts.any((c) => c.revoked))
+                        FilterChip(
+                          label: Text(_i18n.t('revoked')),
+                          selected: _viewMode == 'revoked',
+                          onSelected: (_) {
+                            if (_viewMode == 'revoked') {
+                              _selectGroup(null);
+                            } else {
+                              setState(() => _viewMode = 'revoked');
+                              _filterContacts();
+                            }
+                          },
+                          visualDensity: VisualDensity.compact,
+                        ),
                     ],
                   ),
                 ),
 
                 const Divider(height: 1),
 
-                // Quick Access (Top 10)
+                // Quick Access (Top 10) - only at root level
                 if (_topContacts.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty) ...[
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
@@ -866,19 +911,16 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                   const Divider(height: 1),
                 ],
 
-                // Groups list
-                if (_groups.isNotEmpty) ...[
-                  ExpansionTile(
-                    title: Text(_i18n.t('groups')),
-                    initiallyExpanded: true,
-                    children: _groups.map((group) {
-                      return ListTile(
-                        leading: const Icon(Icons.folder),
-                        title: Text(group.name),
-                        subtitle: Text('${group.contactCount} ${_i18n.t('contacts').toLowerCase()}'),
-                        selected: _selectedGroupPath == group.path,
-                        onTap: () => _selectGroup(group.path),
-                        trailing: PopupMenuButton(
+                // Groups as folder items - only show at root level
+                if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
+                  for (final group in _groups) ListTile(
+                    leading: const Icon(Icons.folder, color: Colors.amber),
+                    title: Text(group.name),
+                    subtitle: Text('${group.contactCount} ${_i18n.t('contacts').toLowerCase()}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        PopupMenuButton(
                           icon: const Icon(Icons.more_vert, size: 20),
                           itemBuilder: (context) => [
                             PopupMenuItem(
@@ -907,11 +949,14 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                             if (value == 'delete') _deleteGroup(group);
                           },
                         ),
-                      );
-                    }).toList(),
+                        const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                    onTap: () => _selectGroup(group.path),
                   ),
+
+                if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
                   const Divider(height: 1),
-                ],
 
                 // Contact list
                 Expanded(
