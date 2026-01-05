@@ -94,5 +94,7 @@
   "event": "Event",
   "select_event": "Select Event",
   "search_events": "Search events...",
-  "no_events_found": "No events found"
+  "no_events_found": "No events found",
+  "no_root_contacts": "All contacts are in folders. Select a folder above to view contacts.",
+  "loading": "Loading"
 }

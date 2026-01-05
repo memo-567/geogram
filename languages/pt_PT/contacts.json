@@ -94,5 +94,7 @@
   "event": "Evento",
   "select_event": "Selecionar Evento",
   "search_events": "Pesquisar eventos...",
-  "no_events_found": "Nenhum evento encontrado"
+  "no_events_found": "Nenhum evento encontrado",
+  "no_root_contacts": "Todos os contactos estão em pastas. Selecione uma pasta acima para ver os contactos.",
+  "loading": "A carregar"
 }

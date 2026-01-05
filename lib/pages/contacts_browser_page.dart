@@ -1001,38 +1001,69 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 // Contact list
                 Expanded(
                   child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : _filteredContacts.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.contacts, size: 64, color: Colors.grey),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _searchController.text.isNotEmpty
-                                        ? _i18n.t('no_contacts_found')
-                                        : _i18n.t('no_contacts_yet'),
-                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                          color: Colors.grey,
-                                        ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  TextButton.icon(
-                                    icon: const Icon(Icons.add),
-                                    label: Text(_i18n.t('create_contact')),
-                                    onPressed: _createNewContact,
-                                  ),
-                                  // Show import option on Android only
-                                  if (!kIsWeb && Platform.isAndroid)
-                                    TextButton.icon(
-                                      icon: const Icon(Icons.import_contacts),
-                                      label: Text(_i18n.t('import_from_device')),
-                                      onPressed: _importFromDevice,
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const CircularProgressIndicator(),
+                              const SizedBox(height: 16),
+                              Text(
+                                '${_i18n.t('loading')}... ${_allContacts.length}',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      color: Colors.grey,
                                     ),
-                                ],
                               ),
-                            )
+                            ],
+                          ),
+                        )
+                      : _filteredContacts.isEmpty
+                          // Only show "no contacts" if there are truly no contacts anywhere
+                          ? (_allContacts.isEmpty && _groups.isEmpty)
+                              ? Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.contacts, size: 64, color: Colors.grey),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        _searchController.text.isNotEmpty
+                                            ? _i18n.t('no_contacts_found')
+                                            : _i18n.t('no_contacts_yet'),
+                                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                              color: Colors.grey,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      TextButton.icon(
+                                        icon: const Icon(Icons.add),
+                                        label: Text(_i18n.t('create_contact')),
+                                        onPressed: _createNewContact,
+                                      ),
+                                      // Show import option on Android only
+                                      if (!kIsWeb && Platform.isAndroid)
+                                        TextButton.icon(
+                                          icon: const Icon(Icons.import_contacts),
+                                          label: Text(_i18n.t('import_from_device')),
+                                          onPressed: _importFromDevice,
+                                        ),
+                                    ],
+                                  ),
+                                )
+                              // Groups exist but no root contacts - show hint
+                              : Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(32),
+                                    child: Text(
+                                      _searchController.text.isNotEmpty
+                                          ? _i18n.t('no_contacts_found')
+                                          : _i18n.t('no_root_contacts'),
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.grey,
+                                          ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                )
                           : ListView.builder(
                               itemCount: _filteredContacts.length,
                               itemBuilder: (context, index) {
