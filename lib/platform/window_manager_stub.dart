@@ -30,6 +30,8 @@ class WindowManagerStub {
   Future<void> restore() async {}
 
   Future<void> setSize(Size size) async {}
+  Future<void> setMinimumSize(Size size) async {}
+  Future<void> setMaximumSize(Size size) async {}
   Future<void> setPosition(Offset position) async {}
   Future<void> setTitle(String title) async {}
   Future<void> setFullScreen(bool isFullScreen) async {}

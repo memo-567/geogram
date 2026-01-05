@@ -495,6 +495,17 @@ class Process {
   static bool killPid(int pid, [ProcessSignal signal = ProcessSignal.sigterm]) {
     return false;
   }
+
+  // Instance methods (for Process instances returned by start)
+  int get pid => 0;
+  Stream<List<int>> get stdout => const Stream.empty();
+  Stream<List<int>> get stderr => const Stream.empty();
+  IOSink get stdin => throw UnsupportedError('Process is not supported on web');
+  Future<int> get exitCode => Future.value(-1);
+
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    return false;
+  }
 }
 
 /// Stub for ProcessResult

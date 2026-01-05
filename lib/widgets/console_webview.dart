@@ -8,12 +8,14 @@
  */
 
 import 'dart:convert';
-import 'dart:io' show Platform, Process, Directory, File;
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart'
+    show Platform, Process, Directory, File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:xterm/xterm.dart';
-import 'package:flutter_pty/flutter_pty.dart';
+// Conditional imports for Linux-only packages (PTY/terminal)
+import 'console_pty_stub.dart' if (dart.library.io) 'package:flutter_pty/flutter_pty.dart';
+import 'console_terminal_stub.dart' if (dart.library.io) 'package:xterm/xterm.dart';
 import '../models/console_session.dart';
 import '../services/console_vm_manager.dart';
 import '../services/log_service.dart';
