@@ -183,5 +183,8 @@
   "create_new_folder": "Criar Nova Pasta",
   "contacts_moved_successfully": "Contactos movidos com sucesso",
   "root_folder": "Raiz (sem pasta)",
-  "x_contacts_moved": "{count} contactos movidos"
+  "x_contacts_moved": "{count} contactos movidos",
+  "send_email": "Enviar email",
+  "copy": "Copiar",
+  "copied_to_clipboard": "Copiado para a área de transferência"
 }

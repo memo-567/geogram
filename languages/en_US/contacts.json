@@ -183,5 +183,8 @@
   "create_new_folder": "Create New Folder",
   "contacts_moved_successfully": "Contacts moved successfully",
   "root_folder": "Root (no folder)",
-  "x_contacts_moved": "{count} contacts moved"
+  "x_contacts_moved": "{count} contacts moved",
+  "send_email": "Send email",
+  "copy": "Copy",
+  "copied_to_clipboard": "Copied to clipboard"
 }

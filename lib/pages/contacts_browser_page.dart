@@ -2344,6 +2344,7 @@ class _ContactDetailPage extends StatefulWidget {
 class _ContactDetailPageState extends State<_ContactDetailPage> {
   ContactCallsignMetrics? _metrics;
   List<_PhoneWithMetrics>? _sortedPhones;
+  List<_EmailWithMetrics>? _sortedEmails;
 
   @override
   void initState() {
@@ -2362,8 +2363,24 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
       setState(() {
         _metrics = metrics;
         _sortedPhones = _buildSortedPhones();
+        _sortedEmails = _buildSortedEmails();
       });
     }
+  }
+
+  List<_EmailWithMetrics> _buildSortedEmails() {
+    final emails = <_EmailWithMetrics>[];
+
+    for (var i = 0; i < widget.contact.emails.length; i++) {
+      final email = widget.contact.emails[i];
+      final count = _metrics?.getInteractionCount('email', i, value: email) ?? 0;
+      emails.add(_EmailWithMetrics(email: email, index: i, interactionCount: count));
+    }
+
+    // Sort by interaction count descending
+    emails.sort((a, b) => b.interactionCount.compareTo(a.interactionCount));
+
+    return emails;
   }
 
   List<_PhoneWithMetrics> _buildSortedPhones() {
@@ -3120,7 +3137,16 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
-            ...contact.emails.map((e) => _buildDetailRow(i18n.t('email'), e)),
+            // Use sorted emails if available, otherwise use original order
+            if (_sortedEmails != null)
+              ..._sortedEmails!.map((e) => _buildEmailRowWithMetrics(e))
+            else
+              ...contact.emails.asMap().entries.map((e) =>
+                  _buildEmailRowWithMetrics(_EmailWithMetrics(
+                    email: e.value,
+                    index: e.key,
+                    interactionCount: 0,
+                  ))),
           ],
 
           if (contact.phones.isNotEmpty) ...[
@@ -3498,6 +3524,107 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
       await launchUrl(uri);
     }
   }
+
+  Widget _buildEmailRowWithMetrics(_EmailWithMetrics emailData) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              i18n.t('email'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(emailData.email),
+                if (emailData.interactionCount > 0)
+                  Text(
+                    i18n.t('times_emailed', params: [emailData.interactionCount.toString()]),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[600],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Show "most used" badge for the first one if it has interactions
+          if (emailData.interactionCount > 0 && _sortedEmails?.first == emailData)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Chip(
+                label: Text(
+                  i18n.t('most_used'),
+                  style: const TextStyle(fontSize: 10),
+                ),
+                padding: EdgeInsets.zero,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                backgroundColor: Colors.green.withAlpha(30),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 20),
+            tooltip: i18n.t('copy'),
+            onPressed: () => _copyEmail(emailData.email),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(Icons.email, size: 20),
+            tooltip: i18n.t('send_email'),
+            onPressed: () => _launchEmail(emailData.email, emailData.index),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _launchEmail(String email, int index) async {
+    // Record the interaction
+    await contactService.recordMethodInteraction(
+      contact.callsign,
+      'email',
+      index,
+      value: email,
+    );
+
+    // Refresh metrics display
+    final metrics = await contactService.getContactMetrics(contact.callsign);
+    if (mounted) {
+      setState(() {
+        _metrics = metrics;
+        _sortedEmails = _buildSortedEmails();
+      });
+    }
+
+    // Launch the email client
+    final uri = Uri(scheme: 'mailto', path: email);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
+  }
+
+  Future<void> _copyEmail(String email) async {
+    await Clipboard.setData(ClipboardData(text: email));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(i18n.t('copied_to_clipboard')),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
 }
 
 /// Helper class for phone numbers with interaction metrics
@@ -3508,6 +3635,19 @@ class _PhoneWithMetrics {
 
   _PhoneWithMetrics({
     required this.phone,
+    required this.index,
+    required this.interactionCount,
+  });
+}
+
+/// Helper class for email addresses with interaction metrics
+class _EmailWithMetrics {
+  final String email;
+  final int index;
+  final int interactionCount;
+
+  _EmailWithMetrics({
+    required this.email,
     required this.index,
     required this.interactionCount,
   });
