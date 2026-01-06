@@ -34,6 +34,11 @@ jobs:
         channel: 'stable'
         cache: true
 
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        cache-read-only: false
+
     - name: Setup Android signing
       env:
         ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
