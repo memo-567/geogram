@@ -74,8 +74,8 @@ jobs:
 
         echo "Version: $VERSION, Build: $BUILD_NUMBER"
 
-        # Update pubspec.yaml with correct version
-        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        # Update pubspec.yaml with correct version (macOS compatible)
+        sed -i '' "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
 
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
