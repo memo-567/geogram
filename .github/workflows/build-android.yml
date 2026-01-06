@@ -39,6 +39,29 @@ jobs:
       with:
         cache-read-only: false
 
+    - name: Configure Maven mirrors
+      run: |
+        mkdir -p ~/.gradle
+        cat > ~/.gradle/init.gradle << 'EOF'
+        allprojects {
+            repositories {
+                maven { url 'https://maven.google.com' }
+                maven { url 'https://plugins.gradle.org/m2/' }
+                maven { url 'https://repo.maven.apache.org/maven2' }
+                maven { url 'https://jcenter.bintray.com' }
+            }
+        }
+        settingsEvaluated { settings ->
+            settings.pluginManagement {
+                repositories {
+                    maven { url 'https://maven.google.com' }
+                    maven { url 'https://plugins.gradle.org/m2/' }
+                    maven { url 'https://repo.maven.apache.org/maven2' }
+                }
+            }
+        }
+        EOF
+
     - name: Setup Android signing
       env:
         ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -84,7 +107,18 @@ jobs:
       run: flutter pub get
 
     - name: Build Android APK
-      run: flutter build apk --release
+      run: |
+        for i in 1 2 3 4 5; do
+          echo "Build attempt $i..."
+          if flutter build apk --release; then
+            echo "Build succeeded on attempt $i"
+            exit 0
+          fi
+          echo "Build failed on attempt $i, waiting 30 seconds..."
+          sleep 30
+        done
+        echo "All build attempts failed"
+        exit 1
 
     - name: Build Android App Bundle
       run: flutter build appbundle --release
