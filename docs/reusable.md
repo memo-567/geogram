@@ -161,6 +161,120 @@ await BackupNotificationService().initialize(skipPermissionRequest: firstLaunch)
 
 ---
 
+### Notification Tap Handling Pattern
+
+**Files:** `lib/services/dm_notification_service.dart`, `lib/main.dart`
+
+Handle navigation when users tap on notifications. This pattern works reliably across all app states (foreground, background, terminated).
+
+#### Why Not EventBus for Notification Taps?
+
+When a notification is tapped on Android, the callback may run in a **separate Dart isolate**. Each isolate has its own memory, so `EventBus()` returns a different singleton instance. Events fired in the notification isolate never reach the main UI isolate.
+
+**Use EventBus for:** Creating notifications when events occur (same isolate)
+**Don't use EventBus for:** Handling notification taps (cross-isolate)
+
+#### The Pattern: Static Pending Action + Lifecycle Check
+
+1. **Define a static pending action variable** in the notification service
+2. **Set it in notification tap callbacks** (both foreground and background)
+3. **Check it on app resume** via `WidgetsBindingObserver.didChangeAppLifecycleState`
+
+#### Payload Format
+
+Use a standardized payload format: `type:data`
+
+| Type | Format | Example | Action |
+|------|--------|---------|--------|
+| dm | `dm:CALLSIGN` | `dm:ALPHA1` | Open DM chat with ALPHA1 |
+| chat | `chat:ROOM_ID` | `chat:general` | Open chat room |
+| alert | `alert:ALERT_ID` | `alert:abc123` | Open alert details |
+| backup | `backup:SNAPSHOT_ID` | `backup:xyz789` | Open backup details |
+
+#### Implementation
+
+**In notification service (e.g., `dm_notification_service.dart`):**
+
+```dart
+/// Notification action from tap - stored statically to persist across isolates
+class NotificationAction {
+  final String type;
+  final String data;
+  NotificationAction({required this.type, required this.data});
+}
+
+class DMNotificationService {
+  /// Pending action from notification tap - checked on app resume
+  static NotificationAction? pendingAction;
+
+  // In notification tap callback:
+  void _onNotificationTapped(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload == null) return;
+
+    final colonIndex = payload.indexOf(':');
+    if (colonIndex > 0) {
+      pendingAction = NotificationAction(
+        type: payload.substring(0, colonIndex),
+        data: payload.substring(colonIndex + 1),
+      );
+    }
+  }
+}
+```
+
+**In main.dart:**
+
+```dart
+class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Check on startup too (handles cold start)
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkPendingNotification());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPendingNotification();
+    }
+  }
+
+  void _checkPendingNotification() {
+    final action = DMNotificationService.pendingAction;
+    if (action == null) return;
+    DMNotificationService.pendingAction = null; // Clear it
+
+    switch (action.type) {
+      case 'dm':
+        _navigateToDMChat(action.data);
+        break;
+      case 'chat':
+        _navigateToChatRoom(action.data);
+        break;
+      // Add more types as needed
+    }
+  }
+}
+```
+
+#### Adding New Notification Types
+
+1. Define the payload format: `newtype:DATA`
+2. Create notifications with that payload in your service
+3. Add case to `_checkPendingNotification()` switch in main.dart
+4. Implement the navigation method
+
+---
+
 ## Viewer Pages
 
 ### PhotoViewerPage
@@ -781,6 +895,183 @@ if (jurisdiction != null) {
 
 ---
 
+## QR Widgets
+
+### QrShareReceiveWidget
+
+**File:** `lib/widgets/qr_share_receive_widget.dart`
+
+Generic, reusable QR code share and receive widget with tabs. Designed to work with any data type through configuration.
+
+**Generic Type Parameter:** `T` - The type of data being shared/received
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dataToShare` | T? | No | Data to display as QR code (null shows empty state) |
+| `config` | QrShareReceiveConfig\<T\> | Yes | Configuration for encoding/decoding |
+| `i18n` | I18nService | Yes | Localization service |
+| `initialTab` | int | No | Initial tab (0=Send, 1=Receive) |
+| `onDataReceived` | void Function(T)? | No | Callback when data is received |
+
+**QrShareReceiveConfig Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `shareTabTitle` | String | Yes | Tab title for send/share |
+| `receiveTabTitle` | String | Yes | Tab title for receive/scan |
+| `appBarTitle` | String | Yes | App bar title |
+| `getFields` | List\<QrShareField\> Function(T) | Yes | Get selectable fields from data |
+| `encode` | String Function(T, List\<QrShareField\>) | Yes | Encode data to JSON string |
+| `decode` | QrScanResult\<T\> Function(String) | Yes | Decode JSON string to data |
+| `onSave` | Future\<bool\> Function(T) | Yes | Save scanned data |
+| `buildPreview` | Widget Function(BuildContext, T) | Yes | Build preview for scanned data |
+| `validate` | Future\<String?\> Function(T)? | No | Validate before saving |
+| `formatVersion` | String | No | Format version identifier (default: '1.0') |
+| `maxRecommendedSize` | int | No | Max QR size in bytes (default: 1500) |
+| `warningThreshold` | int | No | Warning threshold in bytes (default: 1000) |
+
+**QrShareField Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | String | Unique field identifier |
+| `label` | String | Display label |
+| `icon` | IconData | Icon to display |
+| `isRequired` | bool | Cannot be deselected if true |
+| `isSelected` | bool | Currently selected state |
+| `subFields` | List\<QrShareSubField\>? | Individual items for multi-value fields |
+| `estimatedSize` | int | Estimated size in bytes |
+
+**QrShareSubField Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | String | Unique identifier |
+| `value` | String | Display value |
+| `parentId` | String | Parent field ID |
+| `isSelected` | bool | Selection state |
+
+**Usage Example (Contacts):**
+```dart
+// Create configuration for contacts
+final config = QrShareReceiveConfig<Contact>(
+  shareTabTitle: 'Send',
+  receiveTabTitle: 'Receive',
+  appBarTitle: 'QR Code',
+  getFields: (contact) => [
+    QrShareField(
+      id: 'displayName',
+      label: 'Name',
+      icon: Icons.person,
+      isRequired: true,
+    ),
+    QrShareField(
+      id: 'emails',
+      label: 'Emails',
+      icon: Icons.email,
+      subFields: contact.emails.asMap().entries.map((e) =>
+        QrShareSubField(
+          id: 'email_${e.key}',
+          value: e.value,
+          parentId: 'emails',
+        ),
+      ).toList(),
+    ),
+  ],
+  encode: (contact, fields) => jsonEncode({
+    'type': 'contact',
+    'name': contact.displayName,
+    'emails': _getSelectedEmails(fields, contact.emails),
+  }),
+  decode: (json) {
+    try {
+      final data = jsonDecode(json);
+      if (data['type'] != 'contact') {
+        return QrScanResult(error: 'Invalid QR code');
+      }
+      return QrScanResult(data: Contact.fromJson(data));
+    } catch (e) {
+      return QrScanResult(error: 'Invalid format');
+    }
+  },
+  onSave: (contact) async {
+    await contactService.saveContact(contact);
+    return true;
+  },
+  buildPreview: (context, contact) => ListTile(
+    leading: const Icon(Icons.person),
+    title: Text(contact.displayName),
+    subtitle: Text('${contact.emails.length} emails'),
+  ),
+);
+
+// Use the widget
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => QrShareReceiveWidget<Contact>(
+      dataToShare: selectedContact,
+      config: config,
+      i18n: i18n,
+      initialTab: 0, // Send tab
+      onDataReceived: (contact) {
+        print('Received: ${contact.displayName}');
+      },
+    ),
+  ),
+);
+```
+
+**Features:**
+- **Send Tab:**
+  - QR code generation with real-time updates
+  - Field selection with checkboxes
+  - Sub-field selection for multi-value fields (e.g., individual emails)
+  - "Select All" and "Minimal" quick actions
+  - Size indicator (OK/Warning/Too Large)
+  - Copy JSON to clipboard
+- **Receive Tab:**
+  - Camera-based QR code scanning
+  - Permission handling (request, denied, permanently denied)
+  - Preview dialog before saving
+  - Validation support
+  - Error handling with user feedback
+- **General:**
+  - Fully generic - works with any data type
+  - Localization support
+  - Material 3 styling
+
+**Platform Support:**
+| Platform | Send (QR Generation) | Receive (Camera Scan) | Notes |
+|----------|---------------------|----------------------|-------|
+| Android | ✅ | ✅ | CameraX/ML Kit |
+| iOS | ✅ | ✅ | AVFoundation/Apple Vision |
+| macOS | ✅ | ✅ | AVFoundation/Apple Vision |
+| Web | ✅ | ✅ | QR generation works everywhere; scanning uses browser camera API (ZXing) |
+| Windows | ✅ | ❌ | QR generation only - no native camera support |
+| Linux | ✅ | ❌ | QR generation only - no native camera support |
+
+**Dependencies:**
+- `qr_flutter: ^4.1.0` - QR code generation (cross-platform)
+- `mobile_scanner: ^7.1.4` - Camera-based QR scanning (Android, iOS, macOS, Web)
+
+**Web Camera Notes:**
+- Uses browser's `getUserMedia` API for camera access
+- User must grant camera permission in browser
+- Works in Chrome, Firefox, Safari, Edge
+- HTTPS required for camera access (except localhost)
+
+**Required i18n Keys:**
+- `qr_size_ok`, `qr_size_warning`, `qr_size_too_large`
+- `copied_to_clipboard`, `qr_size`
+- `minimal`, `select_all`, `select_fields_to_share`
+- `field_required`, `no_data_to_share`
+- `camera_permission_required`, `camera_permission_denied`
+- `camera_not_supported`, `initializing_camera`, `scanning_qr`
+- `open_settings`, `try_again`
+- `data_scanned`, `saved_successfully`, `save_failed`
+- `save`, `cancel`
+
+---
+
 ## Summary Table
 
 | Component | Location | Type | Main Use |
@@ -803,3 +1094,4 @@ if (jurisdiction != null) {
 | MessageBubbleWidget | widgets/ | Message | Chat bubbles |
 | MessageInputWidget | widgets/ | Input | Message composer |
 | LocationService | services/ | Service | City lookup from coordinates |
+| QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |

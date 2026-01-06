@@ -326,6 +326,9 @@ class Contact {
   // Tags for categorization
   final List<String> tags;
 
+  // Radio amateur callsigns (for different jurisdictions)
+  final List<String> radioCallsigns;
+
   // Temporary identity (for imported contacts without NOSTR)
   final bool isTemporaryIdentity;
   final String? temporaryNsec; // Stored encrypted in file
@@ -366,6 +369,7 @@ class Contact {
     this.socialHandles = const {},
     this.profilePicture,
     this.tags = const [],
+    this.radioCallsigns = const [],
     this.isTemporaryIdentity = false,
     this.temporaryNsec,
     this.revoked = false,
@@ -489,6 +493,7 @@ class Contact {
         if (socialHandles.isNotEmpty) 'socialHandles': socialHandles,
         if (profilePicture != null) 'profilePicture': profilePicture,
         if (tags.isNotEmpty) 'tags': tags,
+        if (radioCallsigns.isNotEmpty) 'radioCallsigns': radioCallsigns,
         if (isTemporaryIdentity) 'isTemporaryIdentity': isTemporaryIdentity,
         if (temporaryNsec != null) 'temporaryNsec': temporaryNsec,
         'revoked': revoked,
@@ -525,6 +530,7 @@ class Contact {
           : const {},
       profilePicture: json['profilePicture'] as String?,
       tags: json['tags'] != null ? List<String>.from(json['tags'] as List) : const [],
+      radioCallsigns: json['radioCallsigns'] != null ? List<String>.from(json['radioCallsigns'] as List) : const [],
       isTemporaryIdentity: json['isTemporaryIdentity'] as bool? ?? false,
       temporaryNsec: json['temporaryNsec'] as String?,
       revoked: json['revoked'] as bool? ?? false,
@@ -559,6 +565,7 @@ class Contact {
     Map<String, String>? socialHandles,
     String? profilePicture,
     List<String>? tags,
+    List<String>? radioCallsigns,
     bool? isTemporaryIdentity,
     String? temporaryNsec,
     bool? revoked,
@@ -588,6 +595,7 @@ class Contact {
       socialHandles: socialHandles ?? this.socialHandles,
       profilePicture: profilePicture ?? this.profilePicture,
       tags: tags ?? this.tags,
+      radioCallsigns: radioCallsigns ?? this.radioCallsigns,
       isTemporaryIdentity: isTemporaryIdentity ?? this.isTemporaryIdentity,
       temporaryNsec: temporaryNsec ?? this.temporaryNsec,
       revoked: revoked ?? this.revoked,

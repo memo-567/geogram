@@ -7,6 +7,7 @@
 .atom/
 .build/
 .buildlog/
+.cli_history
 .history
 .svn/
 .swiftpm/
@@ -54,8 +55,25 @@ android/app/keystore/
 # Local runtime data
 config.json
 relay_config.json
+station_config.json
 devices/
 tiles/
 ssl/
 logs/
 updates/
+
+# VM/Emulator build artifacts
+*.bin
+alpine-x86-rootfs.*
+jslinux_device.js
+term_device.js
+
+# Third-party sources and build outputs
+third_party/buildroot-*/
+third_party/buildroot-*.tar.xz
+third_party/buildroot-*-out/
+third_party/tinyemu-*/
+third_party/tinyemu-*.tar.gz
+
+# Windows redistributable DLLs
+windows/dlls/

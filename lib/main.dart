@@ -74,6 +74,7 @@ import 'pages/devices_browser_page.dart';
 import 'pages/bot_page.dart';
 import 'pages/backup_browser_page.dart';
 import 'pages/transfer_page.dart';
+import 'pages/dm_chat_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -462,28 +463,91 @@ class GeogramApp extends StatefulWidget {
   State<GeogramApp> createState() => _GeogramAppState();
 }
 
-class _GeogramAppState extends State<GeogramApp> {
+class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final AppThemeService _themeService = AppThemeService();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _themeService.addListener(_onThemeChanged);
+
+    // Subscribe to DM notification tap events for deep linking (foreground only)
+    _dmNotificationSubscription = EventBus().on<DMNotificationTappedEvent>((event) {
+      LogService().log('GeogramApp: DM notification tapped for ${event.targetCallsign}');
+      _navigateToDMChat(event.targetCallsign);
+    });
+
+    // Check for pending notification on startup (handles cold start)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkPendingNotification();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _themeService.removeListener(_onThemeChanged);
+    _dmNotificationSubscription?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPendingNotification();
+    }
+  }
+
+  /// Check for pending notification action and navigate accordingly
+  void _checkPendingNotification() {
+    final action = DMNotificationService.pendingAction;
+    if (action == null) return;
+    DMNotificationService.pendingAction = null; // Clear it
+
+    LogService().log('GeogramApp: Processing pending notification: ${action.type}:${action.data}');
+
+    switch (action.type) {
+      case 'dm':
+        DebugController().triggerOpenDM(callsign: action.data);
+        break;
+      case 'chat':
+        // Future: navigate to chat room
+        break;
+    }
   }
 
   void _onThemeChanged() {
     if (mounted) setState(() {});
   }
 
+  /// Navigate to DM chat, waiting for navigator if needed (handles cold start timing)
+  void _navigateToDMChat(String callsign) {
+    // If navigator is ready, navigate immediately
+    if (_navigatorKey.currentState != null) {
+      _navigatorKey.currentState!.push(
+        MaterialPageRoute(
+          builder: (context) => DMChatPage(
+            otherCallsign: callsign.toUpperCase(),
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Navigator not ready yet (cold start) - wait for next frame and retry
+    LogService().log('GeogramApp: Navigator not ready, waiting for next frame');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _navigateToDMChat(callsign);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'Geogram',
       debugShowCheckedModeBanner: false,
       theme: _themeService.getLightTheme(),

@@ -30,6 +30,12 @@
     <!-- Permission to install APK updates -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Contacts permission for importing device contacts -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Camera permission for QR code scanning -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <application
         android:label="Geogram"
         android:name="${applicationName}"

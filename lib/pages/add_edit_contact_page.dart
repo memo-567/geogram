@@ -53,6 +53,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
   List<TextEditingController> _phoneControllers = [];
   List<TextEditingController> _addressControllers = [];
   List<TextEditingController> _websiteControllers = [];
+  List<TextEditingController> _radioCallsignControllers = [];
   List<Map<String, dynamic>> _locationControllers = []; // name, lat, long controllers + type + place
   List<Map<String, dynamic>> _socialHandleControllers = [];
 
@@ -146,6 +147,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
       _phoneControllers = contact.phones.map((p) => TextEditingController(text: p)).toList();
       _addressControllers = contact.addresses.map((a) => TextEditingController(text: a)).toList();
       _websiteControllers = contact.websites.map((w) => TextEditingController(text: w)).toList();
+      _radioCallsignControllers = contact.radioCallsigns.map((c) => TextEditingController(text: c)).toList();
       _locationControllers = contact.locations.map((loc) => <String, dynamic>{
         'name': TextEditingController(text: loc.name),
         'lat': TextEditingController(text: loc.latitude?.toString() ?? ''),
@@ -194,6 +196,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
     for (var controller in _phoneControllers) controller.dispose();
     for (var controller in _addressControllers) controller.dispose();
     for (var controller in _websiteControllers) controller.dispose();
+    for (var controller in _radioCallsignControllers) controller.dispose();
     for (var controllers in _locationControllers) {
       (controllers['name'] as TextEditingController?)?.dispose();
       (controllers['lat'] as TextEditingController?)?.dispose();
@@ -267,6 +270,11 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
       final websites = _websiteControllers
           .map((c) => c.text.trim())
           .where((w) => w.isNotEmpty)
+          .toList();
+
+      final radioCallsigns = _radioCallsignControllers
+          .map((c) => c.text.trim().toUpperCase())
+          .where((c) => c.isNotEmpty)
           .toList();
 
       final locations = _locationControllers
@@ -360,6 +368,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
         socialHandles: socialHandles,
         profilePicture: profilePicture,
         tags: _tags,
+        radioCallsigns: radioCallsigns,
         isTemporaryIdentity: finalIsTemporaryIdentity,
         temporaryNsec: finalTemporaryNsec,
         historyEntries: widget.contact?.historyEntries ?? [],
@@ -528,6 +537,9 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                     'https://example.com',
                   ),
 
+                  // Radio Callsigns
+                  _buildRadioCallsignsSection(),
+
                   // Social Handles
                   _buildSocialHandlesSection(),
 
@@ -622,6 +634,79 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
         const SizedBox(height: 16),
       ],
     );
+  }
+
+  Widget _buildRadioCallsignsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.radio, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              _i18n.t('radio_callsigns'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed: _addRadioCallsign,
+              tooltip: _i18n.t('add_another'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_radioCallsignControllers.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              _i18n.t('no_radio_callsigns'),
+              style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic),
+            ),
+          )
+        else
+          ...List.generate(_radioCallsignControllers.length, (index) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _radioCallsignControllers[index],
+                      decoration: InputDecoration(
+                        border: const OutlineInputBorder(),
+                        hintText: 'CT7ALZ, W1ABC...',
+                        helperText: index == 0 ? _i18n.t('radio_callsign_hint') : null,
+                      ),
+                      textCapitalization: TextCapitalization.characters,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: () => _removeRadioCallsign(index),
+                    color: Colors.red,
+                  ),
+                ],
+              ),
+            );
+          }),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  void _addRadioCallsign() {
+    setState(() {
+      _radioCallsignControllers.add(TextEditingController());
+    });
+  }
+
+  void _removeRadioCallsign(int index) {
+    setState(() {
+      _radioCallsignControllers[index].dispose();
+      _radioCallsignControllers.removeAt(index);
+    });
   }
 
   Widget _buildSocialHandlesSection() {

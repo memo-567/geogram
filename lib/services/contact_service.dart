@@ -3,10 +3,62 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import '../models/contact.dart';
 import 'log_service.dart';
+
+/// Minimal contact info for fast loading
+class ContactSummary {
+  final String callsign;
+  final String displayName;
+  final String? profilePicture;
+  final String? groupPath;
+  final String filePath;
+  final int popularityScore;
+
+  ContactSummary({
+    required this.callsign,
+    required this.displayName,
+    this.profilePicture,
+    this.groupPath,
+    required this.filePath,
+    this.popularityScore = 0,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'callsign': callsign,
+    'displayName': displayName,
+    if (profilePicture != null) 'profilePicture': profilePicture,
+    if (groupPath != null && groupPath!.isNotEmpty) 'groupPath': groupPath,
+    'filePath': filePath,
+    if (popularityScore > 0) 'popularityScore': popularityScore,
+  };
+
+  factory ContactSummary.fromJson(Map<String, dynamic> json) {
+    return ContactSummary(
+      callsign: json['callsign'] as String,
+      displayName: json['displayName'] as String,
+      profilePicture: json['profilePicture'] as String?,
+      groupPath: json['groupPath'] as String?,
+      filePath: json['filePath'] as String,
+      popularityScore: json['popularityScore'] as int? ?? 0,
+    );
+  }
+
+  /// Create from full Contact
+  factory ContactSummary.fromContact(Contact contact, {int popularityScore = 0}) {
+    return ContactSummary(
+      callsign: contact.callsign,
+      displayName: contact.displayName,
+      profilePicture: contact.profilePicture,
+      groupPath: contact.groupPath,
+      filePath: contact.filePath ?? '',
+      popularityScore: popularityScore,
+    );
+  }
+}
 
 /// Service for managing contacts collection (people and machines)
 class ContactService {
@@ -15,6 +67,13 @@ class ContactService {
   ContactService._internal();
 
   String? _collectionPath;
+
+  /// Cache for contact summaries (loaded from fast.json)
+  List<ContactSummary>? _summaryCache;
+  DateTime? _summaryCacheTime;
+
+  /// Get fast.json path
+  String get _fastJsonPath => '$_collectionPath/contacts/fast.json';
 
   /// Initialize contact service for a collection
   Future<void> initializeCollection(String collectionPath) async {
@@ -121,6 +180,212 @@ class ContactService {
         LogService().log('ContactService: Error loading contact $filePath: $e');
       }
     }
+  }
+
+  /// Load contact summaries from fast.json (instant)
+  /// Returns null if fast.json doesn't exist or is invalid
+  Future<List<ContactSummary>?> loadContactSummaries() async {
+    if (_collectionPath == null) return null;
+
+    // Use in-memory cache if still valid (5 seconds)
+    final now = DateTime.now();
+    if (_summaryCache != null &&
+        _summaryCacheTime != null &&
+        now.difference(_summaryCacheTime!) < const Duration(seconds: 5)) {
+      return _summaryCache;
+    }
+
+    final file = File(_fastJsonPath);
+    if (!await file.exists()) {
+      LogService().log('ContactService: fast.json not found, need to rebuild');
+      return null;
+    }
+
+    try {
+      final content = await file.readAsString();
+      final List<dynamic> jsonList = json.decode(content);
+      final summaries = jsonList
+          .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))
+          .toList();
+
+      // Sort by popularity score (descending) then alphabetically
+      summaries.sort((a, b) {
+        if (a.popularityScore != b.popularityScore) {
+          return b.popularityScore.compareTo(a.popularityScore);
+        }
+        return a.displayName.compareTo(b.displayName);
+      });
+
+      _summaryCache = summaries;
+      _summaryCacheTime = now;
+
+      LogService().log('ContactService: Loaded ${summaries.length} contact summaries from fast.json');
+      return summaries;
+    } catch (e) {
+      LogService().log('ContactService: Error loading fast.json: $e');
+      return null;
+    }
+  }
+
+  /// Save contact summaries to fast.json
+  Future<void> saveContactSummaries(List<ContactSummary> summaries) async {
+    if (_collectionPath == null) return;
+
+    try {
+      final file = File(_fastJsonPath);
+      final jsonList = summaries.map((s) => s.toJson()).toList();
+      await file.writeAsString(json.encode(jsonList));
+      _summaryCache = summaries;
+      _summaryCacheTime = DateTime.now();
+      LogService().log('ContactService: Saved ${summaries.length} contact summaries to fast.json');
+    } catch (e) {
+      LogService().log('ContactService: Error saving fast.json: $e');
+    }
+  }
+
+  /// Rebuild fast.json from all contact files
+  /// This should be called when contacts change or initially if fast.json is missing
+  Future<void> rebuildFastJson() async {
+    if (_collectionPath == null) return;
+
+    LogService().log('ContactService: Rebuilding fast.json...');
+
+    final contactsDir = Directory('$_collectionPath/contacts');
+    if (!await contactsDir.exists()) return;
+
+    // Load metrics for popularity scores
+    final metrics = await loadMetrics();
+
+    // Collect all contact file paths
+    final allFilePaths = <String>[];
+    await _collectContactFilePaths(contactsDir, allFilePaths);
+
+    // Build summaries by quickly parsing just the header info from each file
+    final summaries = <ContactSummary>[];
+    for (final filePath in allFilePaths) {
+      try {
+        final summary = await _parseContactSummary(filePath, metrics);
+        if (summary != null) {
+          summaries.add(summary);
+        }
+      } catch (e) {
+        LogService().log('ContactService: Error parsing summary for $filePath: $e');
+      }
+    }
+
+    await saveContactSummaries(summaries);
+    LogService().log('ContactService: Rebuilt fast.json with ${summaries.length} contacts');
+  }
+
+  /// Parse just the essential fields from a contact file (very fast)
+  Future<ContactSummary?> _parseContactSummary(String filePath, ContactMetrics metrics) async {
+    final file = File(filePath);
+    if (!await file.exists()) return null;
+
+    try {
+      final content = await file.readAsString();
+      final lines = content.split('\n');
+
+      String? displayName;
+      String? callsign;
+      String? profilePicture;
+
+      // Only parse the first ~20 lines for speed
+      final maxLines = lines.length > 20 ? 20 : lines.length;
+      for (int i = 0; i < maxLines; i++) {
+        final trimmed = lines[i].trim();
+
+        if (trimmed.startsWith('# CONTACT:')) {
+          displayName = trimmed.substring('# CONTACT:'.length).trim();
+        } else if (trimmed.startsWith('CALLSIGN:')) {
+          callsign = trimmed.substring('CALLSIGN:'.length).trim();
+        } else if (trimmed.startsWith('PROFILE_PICTURE:')) {
+          profilePicture = trimmed.substring('PROFILE_PICTURE:'.length).trim();
+        }
+
+        // Stop early if we have all we need
+        if (displayName != null && callsign != null) break;
+      }
+
+      if (displayName == null || callsign == null) return null;
+
+      // Determine group path from file path
+      String? groupPath;
+      final contactsMarker = '/contacts/';
+      final lastContactsIndex = filePath.lastIndexOf(contactsMarker);
+      if (lastContactsIndex != -1) {
+        final afterContacts = filePath.substring(lastContactsIndex + contactsMarker.length);
+        final parts = afterContacts.split('/');
+        if (parts.length > 1) {
+          parts.removeLast();
+          groupPath = parts.join('/');
+        }
+      }
+
+      final popularityScore = metrics.contacts[callsign]?.totalScore ?? 0;
+
+      return ContactSummary(
+        callsign: callsign,
+        displayName: displayName,
+        profilePicture: profilePicture,
+        groupPath: groupPath,
+        filePath: filePath,
+        popularityScore: popularityScore,
+      );
+    } catch (e) {
+      LogService().log('ContactService: Error parsing summary $filePath: $e');
+      return null;
+    }
+  }
+
+  /// Stream contacts with fast initial load
+  /// First yields from fast.json (instant), then loads full details in background
+  Stream<Contact> loadAllContactsStreamFast() async* {
+    if (_collectionPath == null) return;
+
+    // Try to load from fast.json first
+    final summaries = await loadContactSummaries();
+
+    if (summaries != null && summaries.isNotEmpty) {
+      // Yield placeholder contacts from summaries (instant)
+      for (final summary in summaries) {
+        yield _placeholderContactFromSummary(summary);
+      }
+    } else {
+      // No fast.json, fall back to regular stream and rebuild cache
+      await for (final contact in loadAllContactsStream()) {
+        yield contact;
+      }
+      // Rebuild fast.json for next time
+      await rebuildFastJson();
+    }
+  }
+
+  /// Create a placeholder contact from summary (for display while loading)
+  Contact _placeholderContactFromSummary(ContactSummary summary) {
+    final now = DateTime.now();
+    final timestamp = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}_'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    return Contact(
+      displayName: summary.displayName,
+      callsign: summary.callsign,
+      created: timestamp,
+      firstSeen: timestamp,
+      profilePicture: summary.profilePicture,
+      groupPath: summary.groupPath,
+      filePath: summary.filePath,
+    );
+  }
+
+  /// Invalidate the fast.json cache (call after contact changes)
+  void invalidateSummaryCache() {
+    _summaryCache = null;
+    _summaryCacheTime = null;
   }
 
   /// Collect all contact file paths without loading contacts (fast scan)
@@ -251,6 +516,7 @@ class ContactService {
 
     // New fields
     final tags = <String>[];
+    final radioCallsigns = <String>[];
     final socialHandles = <String, String>{};
     bool isTemporaryIdentity = false;
     String? temporaryNsec;
@@ -349,6 +615,8 @@ class ContactService {
       } else if (trimmed.startsWith('TAGS:')) {
         final tagsStr = trimmed.substring('TAGS:'.length).trim();
         tags.addAll(tagsStr.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty));
+      } else if (trimmed.startsWith('RADIO_CALLSIGN:')) {
+        radioCallsigns.add(trimmed.substring('RADIO_CALLSIGN:'.length).trim());
       } else if (trimmed.startsWith('SOCIAL_')) {
         // Parse SOCIAL_NETWORK: handle format
         final colonIndex = trimmed.indexOf(':');
@@ -419,6 +687,7 @@ class ContactService {
       socialHandles: socialHandles,
       profilePicture: profilePicture,
       tags: tags,
+      radioCallsigns: radioCallsigns,
       isTemporaryIdentity: isTemporaryIdentity,
       temporaryNsec: temporaryNsec,
       revoked: revoked,
@@ -584,6 +853,11 @@ class ContactService {
       buffer.writeln('TAGS: ${contact.tags.join(', ')}');
     }
 
+    // Radio callsigns (amateur radio)
+    for (var callsign in contact.radioCallsigns) {
+      buffer.writeln('RADIO_CALLSIGN: $callsign');
+    }
+
     // Social handles
     for (var entry in contact.socialHandles.entries) {
       buffer.writeln('SOCIAL_${entry.key.toUpperCase()}: ${entry.value}');
@@ -592,7 +866,8 @@ class ContactService {
     if (contact.emails.isNotEmpty || contact.phones.isNotEmpty ||
         contact.addresses.isNotEmpty || contact.websites.isNotEmpty ||
         contact.locations.isNotEmpty || contact.profilePicture != null ||
-        contact.tags.isNotEmpty || contact.socialHandles.isNotEmpty) {
+        contact.tags.isNotEmpty || contact.radioCallsigns.isNotEmpty ||
+        contact.socialHandles.isNotEmpty) {
       buffer.writeln();
     }
 
@@ -686,6 +961,11 @@ class ContactService {
         }
       }
 
+      // Invalidate and rebuild fast.json cache
+      invalidateSummaryCache();
+      // Rebuild in background (don't await)
+      rebuildFastJson();
+
       return null; // Success
     } catch (e) {
       LogService().log('ContactService: Error saving contact: $e');
@@ -724,6 +1004,44 @@ class ContactService {
     return null; // No duplicates found
   }
 
+  /// Get contact by callsign (searches all groups)
+  Future<Contact?> getContactByCallsign(String callsign) async {
+    final allContacts = await loadAllContactsRecursively();
+    for (var contact in allContacts) {
+      if (contact.callsign == callsign) {
+        return contact;
+      }
+    }
+    return null;
+  }
+
+  /// Generate a unique callsign for a contact based on their name
+  /// Format: First 4 letters of name (uppercase) + number if needed
+  Future<String> generateUniqueCallsign(String displayName) async {
+    // Extract alphanumeric characters and take first 4, uppercase
+    final cleaned = displayName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
+    final base = cleaned.length >= 4 ? cleaned.substring(0, 4) : cleaned.padRight(4, 'X');
+
+    // Check if base callsign is available
+    var candidate = base;
+    var suffix = 1;
+    var existing = await getContactByCallsign(candidate);
+
+    while (existing != null) {
+      candidate = '$base$suffix';
+      suffix++;
+      existing = await getContactByCallsign(candidate);
+
+      // Safety limit
+      if (suffix > 999) {
+        candidate = '${base}${DateTime.now().millisecondsSinceEpoch % 10000}';
+        break;
+      }
+    }
+
+    return candidate;
+  }
+
   /// Delete contact
   Future<bool> deleteContact(String callsign, {String? groupPath}) async {
     if (_collectionPath == null) return false;
@@ -741,6 +1059,10 @@ class ContactService {
 
       // Also delete profile picture if exists
       await _deleteProfilePicture(callsign);
+
+      // Invalidate and rebuild fast.json cache
+      invalidateSummaryCache();
+      rebuildFastJson();
 
       return true;
     } catch (e) {

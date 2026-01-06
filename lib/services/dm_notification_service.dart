@@ -11,11 +11,37 @@ import '../services/notification_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
 
+/// Notification action from tap - stored statically to persist across isolates
+class NotificationAction {
+  final String type;
+  final String data;
+  NotificationAction({required this.type, required this.data});
+}
+
+/// Top-level callback for handling notification taps when app is in background
+/// MUST be top-level (not a class method) for Android isolate compatibility
+@pragma('vm:entry-point')
+void onBackgroundNotificationResponse(NotificationResponse response) {
+  final payload = response.payload;
+  if (payload == null) return;
+
+  final colonIndex = payload.indexOf(':');
+  if (colonIndex > 0) {
+    DMNotificationService.pendingAction = NotificationAction(
+      type: payload.substring(0, colonIndex),
+      data: payload.substring(colonIndex + 1),
+    );
+  }
+}
+
 /// Service for showing local push notifications for direct messages
 class DMNotificationService {
   static final DMNotificationService _instance = DMNotificationService._internal();
   factory DMNotificationService() => _instance;
   DMNotificationService._internal();
+
+  /// Pending action from notification tap - checked on app resume
+  static NotificationAction? pendingAction;
 
   static const String _messageGroupKey = 'geogram_messages';
   static const int _summaryNotificationId = 900100;
@@ -78,6 +104,7 @@ class DMNotificationService {
     await _notificationsPlugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: _onNotificationTapped,
+      onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationResponse,
     );
 
     // Request permissions for iOS (unless skipping for onboarding)
@@ -101,6 +128,20 @@ class DMNotificationService {
     }
 
     LogService().log('DMNotificationService: Notifications initialized (skipPermissionRequest: $skipPermissionRequest)');
+
+    // Check if app was launched from notification (cold start)
+    final launchDetails = await _notificationsPlugin.getNotificationAppLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp == true) {
+      final payload = launchDetails?.notificationResponse?.payload;
+      LogService().log('DMNotificationService: App launched from notification with payload: $payload');
+      if (payload != null && payload.startsWith('dm:')) {
+        final fromCallsign = payload.substring(3);
+        // Fire event after a short delay to ensure app UI is ready
+        Future.delayed(const Duration(milliseconds: 500), () {
+          EventBus().fire(DMNotificationTappedEvent(targetCallsign: fromCallsign));
+        });
+      }
+    }
   }
 
   /// Request notification permission (call this after onboarding)
@@ -397,14 +438,20 @@ class DMNotificationService {
 
     LogService().log('DMNotificationService: Notification tapped with payload: $payload');
 
-    // Parse payload (format: "dm:CALLSIGN")
-    if (payload.startsWith('dm:')) {
-      final fromCallsign = payload.substring(3);
+    // Parse payload (format: "type:data", e.g., "dm:CALLSIGN")
+    final colonIndex = payload.indexOf(':');
+    if (colonIndex > 0) {
+      pendingAction = NotificationAction(
+        type: payload.substring(0, colonIndex),
+        data: payload.substring(colonIndex + 1),
+      );
 
-      // Fire an event that the UI can listen to for navigation
-      EventBus().fire(DMNotificationTappedEvent(
-        targetCallsign: fromCallsign,
-      ));
+      // Also fire event for immediate handling if app is active in foreground
+      if (payload.startsWith('dm:')) {
+        EventBus().fire(DMNotificationTappedEvent(
+          targetCallsign: payload.substring(3),
+        ));
+      }
     }
   }
 

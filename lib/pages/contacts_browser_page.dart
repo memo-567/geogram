@@ -15,14 +15,17 @@ import '../models/contact.dart';
 export '../models/contact.dart' show ContactHistoryEntry, ContactHistoryEntryType;
 import '../platform/file_image_helper.dart' as file_helper;
 import '../services/contact_service.dart';
-// Re-export metrics classes from contact_service
-export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics;
+// Re-export metrics and summary classes from contact_service
+export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics, ContactSummary;
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../models/event.dart';
 import 'add_edit_contact_page.dart';
 import 'contact_import_page.dart';
+import 'contact_qr_share_page.dart';
+import 'contact_qr_scan_page.dart';
+import 'contact_qr_page.dart';
 import 'location_picker_page.dart';
 
 /// Get initials from display name (e.g., "John Smith" -> "JS")
@@ -103,9 +106,9 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       _filteredContacts = [];
     });
 
-    // Use streaming loader for incremental display
-    // Contacts are yielded in popularity order (most used first)
-    await for (final contact in _contactService.loadAllContactsStream()) {
+    // Use fast streaming loader for instant display
+    // First loads from fast.json (instant), then populates full details in background
+    await for (final contact in _contactService.loadAllContactsStreamFast()) {
       if (!mounted) return;
 
       setState(() {
@@ -194,7 +197,28 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     }
   }
 
-  void _selectContact(Contact contact) {
+  void _selectContact(Contact contact) async {
+    // Check if this is a placeholder contact (from fast.json)
+    // Placeholders have no npub set and no created timestamp from file
+    final isPlaceholder = contact.npub == null && contact.emails.isEmpty && contact.phones.isEmpty;
+
+    if (isPlaceholder && contact.filePath != null) {
+      // Load full contact details from disk
+      final fullContact = await _contactService.loadContactFromFile(contact.filePath!);
+      if (fullContact != null && mounted) {
+        // Update the contact in the list
+        final index = _allContacts.indexWhere((c) => c.callsign == contact.callsign);
+        if (index >= 0) {
+          _allContacts[index] = fullContact;
+        }
+        setState(() {
+          _selectedContact = fullContact;
+        });
+        _contactService.recordContactView(fullContact.callsign);
+        return;
+      }
+    }
+
     setState(() {
       _selectedContact = contact;
     });
@@ -205,11 +229,33 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   Future<void> _selectContactMobile(Contact contact) async {
     if (!mounted) return;
 
+    // Check if this is a placeholder contact (from fast.json)
+    final isPlaceholder = contact.npub == null && contact.emails.isEmpty && contact.phones.isEmpty;
+    Contact contactToShow = contact;
+
+    if (isPlaceholder && contact.filePath != null) {
+      // Load full contact details from disk
+      final fullContact = await _contactService.loadContactFromFile(contact.filePath!);
+      if (fullContact != null) {
+        // Update the contact in the list
+        final index = _allContacts.indexWhere((c) => c.callsign == contact.callsign);
+        if (index >= 0) {
+          _allContacts[index] = fullContact;
+        }
+        contactToShow = fullContact;
+        _contactService.recordContactView(fullContact.callsign);
+      }
+    } else {
+      _contactService.recordContactView(contact.callsign);
+    }
+
+    if (!mounted) return;
+
     // Navigate to full-screen detail view
     final result = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(
         builder: (context) => _ContactDetailPage(
-          contact: contact,
+          contact: contactToShow,
           contactService: _contactService,
           profileService: _profileService,
           i18n: _i18n,
@@ -408,6 +454,23 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     if (result == true) {
       await _loadContacts();
       await _loadGroups();
+    }
+  }
+
+  Future<void> _openQrCode() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactQrPage(
+          contactService: _contactService,
+          i18n: _i18n,
+          initialContact: _selectedContact,
+        ),
+      ),
+    );
+
+    if (result == true) {
+      await _loadContacts();
     }
   }
 
@@ -773,6 +836,16 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                     ],
                   ),
                 ),
+              PopupMenuItem(
+                value: 'qr_code',
+                child: Row(
+                  children: [
+                    const Icon(Icons.qr_code),
+                    const SizedBox(width: 12),
+                    Text(_i18n.t('qr_code')),
+                  ],
+                ),
+              ),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'delete_all',
@@ -793,6 +866,8 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 _createNewGroup();
               } else if (value == 'import_contacts') {
                 _importFromDevice();
+              } else if (value == 'qr_code') {
+                _openQrCode();
               } else if (value == 'delete_all') {
                 _deleteAllContactsAndGroups();
               }
@@ -1856,20 +1931,54 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
         title: Text(contact.displayName),
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit),
-            onPressed: () async {
-              final result = await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => AddEditContactPage(
-                    collectionPath: collectionPath,
-                    contact: contact,
-                  ),
-                ),
-              );
-              if (result == true && context.mounted) {
-                Navigator.pop(context, true);
+            icon: const Icon(Icons.qr_code),
+            tooltip: i18n.t('share_via_qr'),
+            onPressed: () => _shareViaQr(),
+          ),
+          PopupMenuButton<String>(
+            onSelected: (value) async {
+              switch (value) {
+                case 'edit':
+                  final result = await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => AddEditContactPage(
+                        collectionPath: collectionPath,
+                        contact: contact,
+                      ),
+                    ),
+                  );
+                  if (result == true && context.mounted) {
+                    Navigator.pop(context, true);
+                  }
+                  break;
+                case 'scan_qr':
+                  _scanQrCode();
+                  break;
               }
             },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'edit',
+                child: Row(
+                  children: [
+                    const Icon(Icons.edit, size: 20),
+                    const SizedBox(width: 12),
+                    Text(i18n.t('edit')),
+                  ],
+                ),
+              ),
+              if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+                PopupMenuItem(
+                  value: 'scan_qr',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.qr_code_scanner, size: 20),
+                      const SizedBox(width: 12),
+                      Text(i18n.t('scan_contact_qr')),
+                    ],
+                  ),
+                ),
+            ],
           ),
         ],
       ),
@@ -1880,6 +1989,32 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
         label: Text(i18n.t('add_interaction')),
       ),
     );
+  }
+
+  void _shareViaQr() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ContactQrSharePage(
+          contact: contact,
+          i18n: i18n,
+        ),
+      ),
+    );
+  }
+
+  void _scanQrCode() async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => ContactQrScanPage(
+          contactService: contactService,
+          i18n: i18n,
+        ),
+      ),
+    );
+    if (result == true && context.mounted) {
+      // Contact was imported, pop back to refresh list
+      Navigator.pop(context, true);
+    }
   }
 
   void _showAddInteractionMenu() {
