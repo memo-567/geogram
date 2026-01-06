@@ -26,6 +26,8 @@ import 'contact_import_page.dart';
 import 'contact_qr_share_page.dart';
 import 'contact_qr_scan_page.dart';
 import 'contact_qr_page.dart';
+import 'contact_tools_page.dart';
+import 'contact_merge_page.dart';
 import 'location_picker_page.dart';
 
 /// Get initials from display name (e.g., "John Smith" -> "JS")
@@ -71,6 +73,10 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   String _viewMode = 'all'; // all, group, revoked
   Set<String> _expandedGroups = {};
 
+  // Multi-select state
+  bool _isSelectionMode = false;
+  Set<String> _selectedCallsigns = {};
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +103,268 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     setState(() {
       _topContacts = topContacts;
     });
+  }
+
+  // Multi-select methods
+  void _enterSelectionMode([String? initialCallsign]) {
+    setState(() {
+      _isSelectionMode = true;
+      _selectedCallsigns.clear();
+      if (initialCallsign != null) {
+        _selectedCallsigns.add(initialCallsign);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _isSelectionMode = false;
+      _selectedCallsigns.clear();
+    });
+  }
+
+  void _toggleContactSelection(String callsign) {
+    setState(() {
+      if (_selectedCallsigns.contains(callsign)) {
+        _selectedCallsigns.remove(callsign);
+        // Exit selection mode if no contacts selected
+        if (_selectedCallsigns.isEmpty) {
+          _isSelectionMode = false;
+        }
+      } else {
+        _selectedCallsigns.add(callsign);
+      }
+    });
+  }
+
+  void _selectAllContacts() {
+    setState(() {
+      _selectedCallsigns = _filteredContacts.map((c) => c.callsign).toSet();
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedCallsigns.clear();
+    });
+  }
+
+  bool _isContactSelected(String callsign) {
+    return _selectedCallsigns.contains(callsign);
+  }
+
+  List<Contact> _getSelectedContacts() {
+    return _allContacts
+        .where((c) => _selectedCallsigns.contains(c.callsign))
+        .toList();
+  }
+
+  // Selection action methods
+  Future<void> _deleteSelectedContacts() async {
+    final count = _selectedCallsigns.length;
+    if (count == 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_selected')),
+        content: Text(_i18n.t('delete_x_contacts_confirm').replaceAll('{count}', count.toString())),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Delete each selected contact
+    for (final callsign in _selectedCallsigns.toList()) {
+      final contact = _allContacts.firstWhere(
+        (c) => c.callsign == callsign,
+        orElse: () => Contact(displayName: '', callsign: callsign, created: '', firstSeen: ''),
+      );
+      if (contact.filePath != null) {
+        await _contactService.deleteContact(contact.filePath!);
+      }
+    }
+
+    _exitSelectionMode();
+    await _loadContacts();
+    await _loadGroups();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('x_contacts_deleted').replaceAll('{count}', count.toString())),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _moveSelectedContacts() async {
+    final count = _selectedCallsigns.length;
+    if (count == 0) return;
+
+    // Show folder picker dialog
+    final targetGroup = await showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('select_destination_folder')),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Root (no folder)
+              ListTile(
+                leading: const Icon(Icons.home),
+                title: Text(_i18n.t('root_folder')),
+                onTap: () => Navigator.pop(context, ''),
+              ),
+              const Divider(),
+              // Existing groups
+              ..._groups.map((group) => ListTile(
+                leading: const Icon(Icons.folder, color: Colors.amber),
+                title: Text(_getTranslatedGroupName(group)),
+                onTap: () => Navigator.pop(context, group.path),
+              )),
+              const Divider(),
+              // Create new folder
+              ListTile(
+                leading: const Icon(Icons.create_new_folder),
+                title: Text(_i18n.t('create_new_folder')),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final newPath = await _createNewGroupAndGetPath();
+                  if (newPath != null && mounted) {
+                    _moveContactsToGroup(newPath);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+        ],
+      ),
+    );
+
+    if (targetGroup == null || !mounted) return;
+
+    await _moveContactsToGroup(targetGroup);
+  }
+
+  Future<void> _moveContactsToGroup(String targetGroupPath) async {
+    final count = _selectedCallsigns.length;
+
+    for (final callsign in _selectedCallsigns.toList()) {
+      final contact = _allContacts.firstWhere(
+        (c) => c.callsign == callsign,
+        orElse: () => Contact(displayName: '', callsign: callsign, created: '', firstSeen: ''),
+      );
+      if (contact.filePath != null) {
+        await _contactService.moveContactToGroup(contact.callsign, targetGroupPath.isEmpty ? null : targetGroupPath);
+      }
+    }
+
+    _exitSelectionMode();
+    await _loadContacts();
+    await _loadGroups();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('x_contacts_moved').replaceAll('{count}', count.toString())),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<String?> _createNewGroupAndGetPath() async {
+    final nameController = TextEditingController();
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('create_group')),
+        content: TextField(
+          controller: nameController,
+          decoration: InputDecoration(
+            labelText: _i18n.t('folder_name'),
+          ),
+          autofocus: true,
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, nameController.text.trim()),
+            child: Text(_i18n.t('create')),
+          ),
+        ],
+      ),
+    );
+
+    if (name == null || name.isEmpty) return null;
+
+    final success = await _contactService.createGroup(name);
+    if (!success) return null;
+
+    await _loadGroups();
+    return name;
+  }
+
+  Future<void> _mergeSelectedContacts() async {
+    final selectedContacts = _getSelectedContacts();
+    if (selectedContacts.length < 2) return;
+
+    // Navigate to merge page with selected contacts
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactMergePage(
+          contactService: _contactService,
+          i18n: _i18n,
+          contactsToMerge: selectedContacts,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      _exitSelectionMode();
+      await _loadContacts();
+    }
+  }
+
+  void _openContactTools() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactToolsPage(
+          contactService: _contactService,
+          i18n: _i18n,
+          collectionPath: widget.collectionPath,
+          onDeleteAll: _deleteAllContactsAndGroups,
+        ),
+      ),
+    );
   }
 
   Future<void> _loadContacts() async {
@@ -501,6 +769,120 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     );
   }
 
+  Widget _buildEmptyStateWithQuickAccess(bool isMobileView) {
+    // Show top contacts when no root contacts exist but contacts are in folders
+    if (_topContacts.isEmpty) {
+      // No top contacts available - just show the hint message
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            _i18n.t('no_root_contacts'),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey,
+                ),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Quick Access header
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(Icons.star, size: 24, color: Colors.amber.shade600),
+              const SizedBox(width: 8),
+              Text(
+                _i18n.t('quick_access'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
+          ),
+        ),
+        // Top contacts grid
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              childAspectRatio: 0.85,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: _topContacts.length,
+            itemBuilder: (context, index) => _buildQuickAccessCard(_topContacts[index], isMobileView),
+          ),
+        ),
+        // Hint text below
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            _i18n.t('no_root_contacts'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey,
+                ),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuickAccessCard(Contact contact, bool isMobileView) {
+    final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
+    final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
+    final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
+
+    return Card(
+      elevation: 2,
+      child: InkWell(
+        onTap: () => isMobileView
+            ? _selectContactMobile(contact)
+            : _selectContact(contact),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: contact.revoked ? Colors.red : Colors.blue,
+                backgroundImage: profileImage,
+                child: profileImage == null
+                    ? Text(
+                        _getContactInitials(contact.displayName),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      )
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                contact.displayName,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _renameGroup(ContactGroup group) async {
     final nameController = TextEditingController(text: group.name);
 
@@ -800,81 +1182,116 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     }
   }
 
+  AppBar _buildNormalAppBar() {
+    return AppBar(
+      title: Text(_i18n.t('contacts')),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.add),
+          onPressed: _createNewContact,
+          tooltip: _i18n.t('new_contact'),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.menu),
+          tooltip: _i18n.t('menu'),
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'create_group',
+              child: Row(
+                children: [
+                  const Icon(Icons.create_new_folder),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('create_group')),
+                ],
+              ),
+            ),
+            if (!kIsWeb && Platform.isAndroid)
+              PopupMenuItem(
+                value: 'import_contacts',
+                child: Row(
+                  children: [
+                    const Icon(Icons.contact_phone),
+                    const SizedBox(width: 12),
+                    Text(_i18n.t('import_from_device')),
+                  ],
+                ),
+              ),
+            PopupMenuItem(
+              value: 'qr_code',
+              child: Row(
+                children: [
+                  const Icon(Icons.qr_code),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('qr_code')),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'tools',
+              child: Row(
+                children: [
+                  const Icon(Icons.build),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('contact_tools')),
+                ],
+              ),
+            ),
+          ],
+          onSelected: (value) {
+            if (value == 'create_group') {
+              _createNewGroup();
+            } else if (value == 'import_contacts') {
+              _importFromDevice();
+            } else if (value == 'qr_code') {
+              _openQrCode();
+            } else if (value == 'tools') {
+              _openContactTools();
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  AppBar _buildSelectionAppBar() {
+    final count = _selectedCallsigns.length;
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _exitSelectionMode,
+        tooltip: _i18n.t('cancel'),
+      ),
+      title: Text(_i18n.t('x_selected').replaceAll('{count}', count.toString())),
+      actions: [
+        if (count >= 2)
+          IconButton(
+            icon: const Icon(Icons.merge),
+            onPressed: _mergeSelectedContacts,
+            tooltip: _i18n.t('merge_selected'),
+          ),
+        IconButton(
+          icon: const Icon(Icons.drive_file_move),
+          onPressed: count > 0 ? _moveSelectedContacts : null,
+          tooltip: _i18n.t('move_selected'),
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete),
+          onPressed: count > 0 ? _deleteSelectedContacts : null,
+          tooltip: _i18n.t('delete_selected'),
+        ),
+        IconButton(
+          icon: const Icon(Icons.select_all),
+          onPressed: _selectAllContacts,
+          tooltip: _i18n.t('select_all'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_i18n.t('contacts')),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createNewContact,
-            tooltip: _i18n.t('new_contact'),
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.menu),
-            tooltip: _i18n.t('menu'),
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'create_group',
-                child: Row(
-                  children: [
-                    const Icon(Icons.create_new_folder),
-                    const SizedBox(width: 12),
-                    Text(_i18n.t('create_group')),
-                  ],
-                ),
-              ),
-              if (!kIsWeb && Platform.isAndroid)
-                PopupMenuItem(
-                  value: 'import_contacts',
-                  child: Row(
-                    children: [
-                      const Icon(Icons.contact_phone),
-                      const SizedBox(width: 12),
-                      Text(_i18n.t('import_from_device')),
-                    ],
-                  ),
-                ),
-              PopupMenuItem(
-                value: 'qr_code',
-                child: Row(
-                  children: [
-                    const Icon(Icons.qr_code),
-                    const SizedBox(width: 12),
-                    Text(_i18n.t('qr_code')),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              PopupMenuItem(
-                value: 'delete_all',
-                child: Row(
-                  children: [
-                    const Icon(Icons.delete_forever, color: Colors.red),
-                    const SizedBox(width: 12),
-                    Text(
-                      _i18n.t('delete_all_contacts'),
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            onSelected: (value) {
-              if (value == 'create_group') {
-                _createNewGroup();
-              } else if (value == 'import_contacts') {
-                _importFromDevice();
-              } else if (value == 'qr_code') {
-                _openQrCode();
-              } else if (value == 'delete_all') {
-                _deleteAllContactsAndGroups();
-              }
-            },
-          ),
-        ],
-      ),
+      appBar: _isSelectionMode ? _buildSelectionAppBar() : _buildNormalAppBar(),
       body: LayoutBuilder(
         builder: (context, constraints) {
           // Use two-panel layout for wide screens, single panel for narrow
@@ -1124,21 +1541,21 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                                     ],
                                   ),
                                 )
-                              // Groups exist but no root contacts - show hint
-                              : Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(32),
-                                    child: Text(
-                                      _searchController.text.isNotEmpty
-                                          ? _i18n.t('no_contacts_found')
-                                          : _i18n.t('no_root_contacts'),
-                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                            color: Colors.grey,
-                                          ),
-                                      textAlign: TextAlign.center,
-                                    ),
-                                  ),
-                                )
+                              // Groups exist but no root contacts - show Quick Access with top contacts
+                              : _searchController.text.isNotEmpty
+                                  ? Center(
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(32),
+                                        child: Text(
+                                          _i18n.t('no_contacts_found'),
+                                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.grey,
+                                              ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ),
+                                    )
+                                  : _buildEmptyStateWithQuickAccess(isMobileView)
                           : ListView.builder(
                               itemCount: _filteredContacts.length,
                               itemBuilder: (context, index) {
@@ -1155,18 +1572,50 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
     final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
     final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
+    final isSelected = _isContactSelected(contact.callsign);
+
+    // Build avatar widget
+    Widget avatar = CircleAvatar(
+      backgroundColor: contact.revoked ? Colors.red : Colors.blue,
+      backgroundImage: profileImage,
+      child: profileImage == null
+          ? Text(
+              _getContactInitials(contact.displayName),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            )
+          : null,
+    );
+
+    // In selection mode, show checkbox overlay or replace avatar
+    Widget leadingWidget;
+    if (_isSelectionMode) {
+      leadingWidget = Stack(
+        children: [
+          avatar,
+          Positioned(
+            right: -4,
+            bottom: -4,
+            child: Container(
+              decoration: BoxDecoration(
+                color: isSelected ? Theme.of(context).colorScheme.primary : Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Icon(
+                isSelected ? Icons.check : Icons.circle_outlined,
+                size: 18,
+                color: isSelected ? Colors.white : Colors.grey,
+              ),
+            ),
+          ),
+        ],
+      );
+    } else {
+      leadingWidget = avatar;
+    }
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-        backgroundImage: profileImage,
-        child: profileImage == null
-            ? Text(
-                _getContactInitials(contact.displayName),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              )
-            : null,
-      ),
+      leading: leadingWidget,
       title: Row(
         children: [
           Expanded(child: Text(contact.displayName)),
@@ -1190,18 +1639,33 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         ],
       ),
       subtitle: Text(contact.callsign),
-      selected: _selectedContact?.callsign == contact.callsign,
-      onTap: () => isMobileView ? _selectContactMobile(contact) : _selectContact(contact),
-      trailing: PopupMenuButton(
-        itemBuilder: (context) => [
-          PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
-          PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
-        ],
-        onSelected: (value) {
-          if (value == 'edit') _editContact(contact);
-          if (value == 'delete') _deleteContact(contact);
-        },
-      ),
+      selected: _isSelectionMode ? isSelected : _selectedContact?.callsign == contact.callsign,
+      onTap: () {
+        if (_isSelectionMode) {
+          _toggleContactSelection(contact.callsign);
+        } else if (isMobileView) {
+          _selectContactMobile(contact);
+        } else {
+          _selectContact(contact);
+        }
+      },
+      onLongPress: () {
+        if (!_isSelectionMode) {
+          _enterSelectionMode(contact.callsign);
+        }
+      },
+      trailing: _isSelectionMode
+          ? null
+          : PopupMenuButton(
+              itemBuilder: (context) => [
+                PopupMenuItem(value: 'edit', child: Text(_i18n.t('edit'))),
+                PopupMenuItem(value: 'delete', child: Text(_i18n.t('delete'))),
+              ],
+              onSelected: (value) {
+                if (value == 'edit') _editContact(contact);
+                if (value == 'delete') _deleteContact(contact);
+              },
+            ),
     );
   }
 
@@ -1926,22 +2390,24 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(contact.displayName),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.qr_code),
-            tooltip: i18n.t('share_via_qr'),
-            onPressed: () => _shareViaQr(),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (value) async {
-              switch (value) {
-                case 'edit':
-                  final result = await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => AddEditContactPage(
+    return PopScope(
+      canPop: true,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(contact.displayName),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.qr_code),
+              tooltip: i18n.t('share_via_qr'),
+              onPressed: () => _shareViaQr(),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (value) async {
+                switch (value) {
+                  case 'edit':
+                    final result = await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => AddEditContactPage(
                         collectionPath: collectionPath,
                         contact: contact,
                       ),
@@ -1987,6 +2453,7 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
         onPressed: _showAddInteractionMenu,
         icon: const Icon(Icons.add),
         label: Text(i18n.t('add_interaction')),
+      ),
       ),
     );
   }

@@ -1071,6 +1071,74 @@ class ContactService {
     }
   }
 
+  /// Move contact to a different group/folder
+  Future<bool> moveContactToGroup(String callsign, String? newGroupPath) async {
+    if (_collectionPath == null) return false;
+
+    // Find the contact file
+    final contactFile = await _findContactFile(callsign);
+    if (contactFile == null) return false;
+
+    // Load the contact
+    final contact = await loadContactFromFile(contactFile.path);
+    if (contact == null) return false;
+
+    // Determine new path
+    final newBasePath = newGroupPath != null && newGroupPath.isNotEmpty
+        ? '$_collectionPath/contacts/$newGroupPath'
+        : '$_collectionPath/contacts';
+
+    // Create new group directory if needed
+    final newDir = Directory(newBasePath);
+    if (!await newDir.exists()) {
+      await newDir.create(recursive: true);
+    }
+
+    final newFilePath = '$newBasePath/$callsign.txt';
+
+    // If already in the target location, do nothing
+    if (contactFile.path == newFilePath) return true;
+
+    try {
+      // Move the file
+      await contactFile.rename(newFilePath);
+      LogService().log('ContactService: Moved contact $callsign to ${newGroupPath ?? 'root'}');
+
+      // Invalidate and rebuild fast.json cache
+      invalidateSummaryCache();
+      rebuildFastJson();
+
+      return true;
+    } catch (e) {
+      LogService().log('ContactService: Error moving contact: $e');
+      return false;
+    }
+  }
+
+  /// Find a contact file by callsign across all directories
+  Future<File?> _findContactFile(String callsign) async {
+    if (_collectionPath == null) return null;
+
+    final contactsDir = Directory('$_collectionPath/contacts');
+    if (!await contactsDir.exists()) return null;
+
+    return await _findContactFileRecursive(contactsDir, callsign);
+  }
+
+  Future<File?> _findContactFileRecursive(Directory dir, String callsign) async {
+    final entities = await dir.list().toList();
+
+    for (var entity in entities) {
+      if (entity is File && entity.path.endsWith('/$callsign.txt')) {
+        return entity;
+      } else if (entity is Directory && !entity.path.split('/').last.startsWith('.')) {
+        final found = await _findContactFileRecursive(entity, callsign);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
   /// Delete profile picture for a contact
   Future<void> _deleteProfilePicture(String callsign) async {
     if (_collectionPath == null) return;

@@ -90,6 +90,7 @@ jobs:
         $targetPath = "build\windows\x64\runner\Release"
 
         Copy-Item "$dllPath\msvcp140.dll" $targetPath -Force
+        Copy-Item "$dllPath\msvcp140_1.dll" $targetPath -Force
         Copy-Item "$dllPath\vcruntime140.dll" $targetPath -Force
         Copy-Item "$dllPath\vcruntime140_1.dll" $targetPath -Force
 

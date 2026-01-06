@@ -6,10 +6,14 @@
 import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../util/event_bus.dart';
 import '../services/notification_service.dart';
 import '../services/profile_service.dart';
 import '../services/log_service.dart';
+
+/// Key for storing pending notification action in SharedPreferences
+const String _pendingActionKey = 'pending_notification_action';
 
 /// Notification action from tap - stored statically to persist across isolates
 class NotificationAction {
@@ -20,18 +24,21 @@ class NotificationAction {
 
 /// Top-level callback for handling notification taps when app is in background
 /// MUST be top-level (not a class method) for Android isolate compatibility
+/// NOTE: This runs in a SEPARATE isolate - static variables are NOT shared!
+/// We use SharedPreferences to persist the action across isolates.
 @pragma('vm:entry-point')
 void onBackgroundNotificationResponse(NotificationResponse response) {
+  print('NOTIFICATION_DEBUG: onBackgroundNotificationResponse called');
   final payload = response.payload;
+  print('NOTIFICATION_DEBUG: payload=$payload');
   if (payload == null) return;
 
-  final colonIndex = payload.indexOf(':');
-  if (colonIndex > 0) {
-    DMNotificationService.pendingAction = NotificationAction(
-      type: payload.substring(0, colonIndex),
-      data: payload.substring(colonIndex + 1),
-    );
-  }
+  // Save to SharedPreferences for cross-isolate communication
+  // This is async but we can't await in a top-level callback
+  SharedPreferences.getInstance().then((prefs) {
+    prefs.setString(_pendingActionKey, payload);
+    print('NOTIFICATION_DEBUG: Saved pending action to SharedPreferences: $payload');
+  });
 }
 
 /// Service for showing local push notifications for direct messages
@@ -433,8 +440,17 @@ class DMNotificationService {
 
   /// Handle notification tap
   void _onNotificationTapped(NotificationResponse response) {
+    // This callback is called when notification is tapped:
+    // - App in foreground: called immediately
+    // - App in background: called when app resumes
+    print('NOTIFICATION_DEBUG: *** _onNotificationTapped CALLED ***');
+    print('NOTIFICATION_DEBUG: actionId=${response.actionId}, id=${response.id}');
     final payload = response.payload;
-    if (payload == null) return;
+    print('NOTIFICATION_DEBUG: payload=$payload');
+    if (payload == null) {
+      print('NOTIFICATION_DEBUG: payload is null, returning');
+      return;
+    }
 
     LogService().log('DMNotificationService: Notification tapped with payload: $payload');
 
@@ -445,14 +461,57 @@ class DMNotificationService {
         type: payload.substring(0, colonIndex),
         data: payload.substring(colonIndex + 1),
       );
+      print('NOTIFICATION_DEBUG: pendingAction SET: type=${payload.substring(0, colonIndex)}, data=${payload.substring(colonIndex + 1)}');
 
       // Also fire event for immediate handling if app is active in foreground
       if (payload.startsWith('dm:')) {
+        print('NOTIFICATION_DEBUG: Firing DMNotificationTappedEvent for ${payload.substring(3)}');
         EventBus().fire(DMNotificationTappedEvent(
           targetCallsign: payload.substring(3),
         ));
       }
+    } else {
+      print('NOTIFICATION_DEBUG: No colon in payload, cannot parse');
     }
+  }
+
+  /// Check for pending notification action from SharedPreferences (cross-isolate)
+  /// Returns the action and clears it from storage
+  Future<NotificationAction?> consumePendingAction() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = prefs.getString(_pendingActionKey);
+      print('NOTIFICATION_DEBUG: consumePendingAction - payload from SharedPreferences: $payload');
+
+      if (payload == null) {
+        // Also check static variable for foreground case
+        final action = pendingAction;
+        if (action != null) {
+          pendingAction = null;
+          print('NOTIFICATION_DEBUG: consumePendingAction - returning static pendingAction: ${action.type}:${action.data}');
+          return action;
+        }
+        return null;
+      }
+
+      // Clear from storage
+      await prefs.remove(_pendingActionKey);
+      print('NOTIFICATION_DEBUG: consumePendingAction - cleared from SharedPreferences');
+
+      // Parse payload
+      final colonIndex = payload.indexOf(':');
+      if (colonIndex > 0) {
+        final action = NotificationAction(
+          type: payload.substring(0, colonIndex),
+          data: payload.substring(colonIndex + 1),
+        );
+        print('NOTIFICATION_DEBUG: consumePendingAction - returning: ${action.type}:${action.data}');
+        return action;
+      }
+    } catch (e) {
+      print('NOTIFICATION_DEBUG: consumePendingAction error: $e');
+    }
+    return null;
   }
 
   /// Dispose resources
