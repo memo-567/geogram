@@ -14,9 +14,6 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
-        // Fallback mirrors
-        maven { url = uri("https://maven.aliyun.com/repository/central") }
-        maven { url = uri("https://repo1.maven.org/maven2") }
     }
 }
 
