@@ -186,5 +186,6 @@
   "x_contacts_moved": "{count} contactos movidos",
   "send_email": "Enviar email",
   "copy": "Copiar",
-  "copied_to_clipboard": "Copiado para a área de transferência"
+  "copied_to_clipboard": "Copiado para a área de transferência",
+  "interaction_message": "Mensagem curta"
 }

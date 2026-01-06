@@ -2536,6 +2536,14 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.sms),
+              title: Text(i18n.t('interaction_message')),
+              onTap: () {
+                Navigator.pop(context);
+                _addHistoryEntry(ContactHistoryEntryType.message);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.handshake),
               title: Text(i18n.t('interaction_meeting')),
               onTap: () {
@@ -2593,6 +2601,7 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
           ),
           maxLines: 4,
           autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
         ),
         actions: [
           TextButton(
@@ -3016,7 +3025,7 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
       case ContactHistoryEntryType.location:
         return i18n.t('interaction_location');
       case ContactHistoryEntryType.message:
-        return i18n.t('message');
+        return i18n.t('interaction_message');
       case ContactHistoryEntryType.event:
         return i18n.t('event');
       case ContactHistoryEntryType.system:
