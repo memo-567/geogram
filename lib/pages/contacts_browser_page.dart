@@ -23,7 +23,6 @@ import '../services/i18n_service.dart';
 import '../models/event.dart';
 import 'add_edit_contact_page.dart';
 import 'contact_import_page.dart';
-import 'contact_qr_share_page.dart';
 import 'contact_qr_scan_page.dart';
 import 'contact_qr_page.dart';
 import 'contact_tools_page.dart';
@@ -2461,9 +2460,11 @@ class _ContactDetailPageState extends State<_ContactDetailPage> {
   void _shareViaQr() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => ContactQrSharePage(
-          contact: contact,
+        builder: (context) => ContactQrPage(
+          contactService: contactService,
           i18n: i18n,
+          initialContact: contact,
+          initialTab: 0, // Send tab
         ),
       ),
     );
