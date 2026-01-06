@@ -68,6 +68,9 @@ class ContactService {
 
   String? _collectionPath;
 
+  /// Get the current collection path
+  String? get collectionPath => _collectionPath;
+
   /// Cache for contact summaries (loaded from fast.json)
   List<ContactSummary>? _summaryCache;
   DateTime? _summaryCacheTime;
@@ -1641,31 +1644,146 @@ class ContactService {
     }
   }
 
-  /// Get top N most clicked contacts
+  /// Get top N most popular contacts based on metrics (views + interactions)
+  /// Only returns contacts with score > 0
+  /// Uses cached favorites for instant loading
   Future<List<Contact>> getTopContacts(int limit) async {
     if (_collectionPath == null) return [];
 
-    final stats = await loadClickStats();
-    if (stats.isEmpty) return [];
+    // Load from favorites cache (instant)
+    final favorites = await loadFavorites();
 
-    // Sort by count descending
-    final sortedCallsigns = stats.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    final topCallsigns = sortedCallsigns.take(limit).map((e) => e.key).toList();
-
-    // Load the contacts
-    final allContacts = await loadAllContactsRecursively();
-    final topContacts = <Contact>[];
-
-    for (var callsign in topCallsigns) {
-      final contact = allContacts.where((c) => c.callsign == callsign).firstOrNull;
-      if (contact != null) {
-        topContacts.add(contact);
-      }
+    if (favorites.isEmpty) {
+      // No cache yet - rebuild it in background and return empty for now
+      rebuildFavorites(limit: limit);
+      return [];
     }
 
+    // Convert summaries to placeholder contacts (instant)
+    final topContacts = favorites.take(limit).map((summary) {
+      return _placeholderContactFromSummary(summary);
+    }).toList();
+
     return topContacts;
+  }
+
+  // ============ Favorites Cache ============
+
+  /// Get favorites cache file path
+  String get _favoritesPath => '$_collectionPath/contacts/.favorites.json';
+
+  /// In-memory favorites cache
+  List<ContactSummary>? _favoritesCache;
+
+  /// Load favorites from cache (instant)
+  Future<List<ContactSummary>> loadFavorites() async {
+    if (_collectionPath == null) return [];
+
+    // Return in-memory cache if available
+    if (_favoritesCache != null) {
+      return _favoritesCache!;
+    }
+
+    final file = File(_favoritesPath);
+    if (!await file.exists()) {
+      return [];
+    }
+
+    try {
+      final content = await file.readAsString();
+      final List<dynamic> jsonList = json.decode(content);
+      _favoritesCache = jsonList
+          .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))
+          .toList();
+      return _favoritesCache!;
+    } catch (e) {
+      LogService().log('ContactService: Error loading favorites: $e');
+      return [];
+    }
+  }
+
+  /// Rebuild favorites cache from metrics (call after metrics change)
+  Future<void> rebuildFavorites({int limit = 30}) async {
+    if (_collectionPath == null) return;
+
+    try {
+      final metrics = await loadMetrics();
+      if (metrics.contacts.isEmpty) {
+        _favoritesCache = [];
+        await _saveFavorites([]);
+        return;
+      }
+
+      // Filter contacts with score > 0 and sort by score descending
+      final sortedEntries = metrics.contacts.entries
+          .where((e) => e.value.totalScore > 0)
+          .toList()
+        ..sort((a, b) => b.value.totalScore.compareTo(a.value.totalScore));
+
+      if (sortedEntries.isEmpty) {
+        _favoritesCache = [];
+        await _saveFavorites([]);
+        return;
+      }
+
+      // Load summaries from fast.json and filter to top callsigns
+      final allSummaries = await loadContactSummaries();
+      if (allSummaries == null) {
+        // Fall back to loading contacts if no fast.json
+        final allContacts = await loadAllContactsRecursively();
+        final favorites = <ContactSummary>[];
+        for (final entry in sortedEntries.take(limit)) {
+          final contact = allContacts.where((c) => c.callsign == entry.key).firstOrNull;
+          if (contact != null) {
+            favorites.add(ContactSummary.fromContact(contact, popularityScore: entry.value.totalScore));
+          }
+        }
+        _favoritesCache = favorites;
+        await _saveFavorites(favorites);
+        return;
+      }
+
+      // Build favorites list maintaining score order
+      final summaryMap = {for (var s in allSummaries) s.callsign: s};
+      final favorites = <ContactSummary>[];
+      for (final entry in sortedEntries.take(limit)) {
+        final summary = summaryMap[entry.key];
+        if (summary != null) {
+          favorites.add(ContactSummary(
+            callsign: summary.callsign,
+            displayName: summary.displayName,
+            profilePicture: summary.profilePicture,
+            groupPath: summary.groupPath,
+            filePath: summary.filePath,
+            popularityScore: entry.value.totalScore,
+          ));
+        }
+      }
+
+      _favoritesCache = favorites;
+      await _saveFavorites(favorites);
+    } catch (e) {
+      LogService().log('ContactService: Error rebuilding favorites: $e');
+    }
+  }
+
+  /// Save favorites to cache file
+  Future<void> _saveFavorites(List<ContactSummary> favorites) async {
+    if (_collectionPath == null) return;
+
+    try {
+      final file = File(_favoritesPath);
+      final jsonList = favorites.map((s) => s.toJson()).toList();
+      await file.writeAsString(json.encode(jsonList));
+      LogService().log('ContactService: Saved ${favorites.length} favorites to cache');
+    } catch (e) {
+      LogService().log('ContactService: Error saving favorites: $e');
+    }
+  }
+
+  /// Invalidate favorites cache
+  void invalidateFavoritesCache() {
+    _favoritesCache = null;
   }
 
   // ============ Contact Metrics ============
@@ -1721,6 +1839,10 @@ class ContactService {
     try {
       final file = File(_metricsPath);
       await file.writeAsString(metrics.serialize());
+
+      // Rebuild favorites cache in background (don't await)
+      invalidateFavoritesCache();
+      rebuildFavorites();
     } catch (e) {
       LogService().log('ContactService: Error saving metrics: $e');
     }
@@ -1749,6 +1871,26 @@ class ContactService {
 
     final metrics = await loadMetrics();
     metrics.recordInteraction(callsign, type, index, value: value);
+    await _saveMetrics(metrics);
+  }
+
+  /// Record an event association for a contact
+  Future<void> recordEventAssociation(String callsign) async {
+    if (_collectionPath == null) return;
+
+    final metrics = await loadMetrics();
+    metrics.recordEvent(callsign);
+    await _saveMetrics(metrics);
+  }
+
+  /// Record event associations for multiple contacts
+  Future<void> recordEventAssociations(List<String> callsigns) async {
+    if (_collectionPath == null || callsigns.isEmpty) return;
+
+    final metrics = await loadMetrics();
+    for (final callsign in callsigns) {
+      metrics.recordEvent(callsign);
+    }
     await _saveMetrics(metrics);
   }
 
@@ -1896,6 +2038,7 @@ class ContactService {
 class ContactCallsignMetrics {
   int views = 0;
   int totalInteractions = 0;
+  int events = 0;
   String? lastAccessed;
 
   /// Method interactions: key is "type:index" or "type:value", value is count
@@ -1904,12 +2047,18 @@ class ContactCallsignMetrics {
 
   ContactCallsignMetrics();
 
-  /// Get total popularity score (views + interactions weighted)
-  int get totalScore => views + (totalInteractions * 2);
+  /// Get total popularity score (views + interactions + events weighted)
+  int get totalScore => views + (totalInteractions * 2) + (events * 3);
 
   /// Record a view
   void recordView() {
     views++;
+    _updateLastAccessed();
+  }
+
+  /// Record an event association
+  void recordEvent() {
+    events++;
     _updateLastAccessed();
   }
 
@@ -1969,7 +2118,7 @@ class ContactCallsignMetrics {
     final methodsStr = methodInteractions.entries
         .map((e) => '${e.key}=${e.value}')
         .join(',');
-    return '$views|$totalInteractions|${lastAccessed ?? ''}|$methodsStr';
+    return '$views|$totalInteractions|${lastAccessed ?? ''}|$methodsStr|$events';
   }
 
   /// Parse from string format
@@ -1991,6 +2140,9 @@ class ContactCallsignMetrics {
       }
     }
 
+    // Parse events count (added in newer version, backward compatible)
+    if (parts.length > 4) metrics.events = int.tryParse(parts[4]) ?? 0;
+
     return metrics;
   }
 }
@@ -2011,6 +2163,12 @@ class ContactMetrics {
   void recordInteraction(String callsign, String type, int index, {String? value}) {
     contacts.putIfAbsent(callsign, () => ContactCallsignMetrics());
     contacts[callsign]!.recordInteraction(type, index, value: value);
+  }
+
+  /// Record an event association for a contact
+  void recordEvent(String callsign) {
+    contacts.putIfAbsent(callsign, () => ContactCallsignMetrics());
+    contacts[callsign]!.recordEvent();
   }
 
   /// Serialize to file content

@@ -10,7 +10,8 @@ import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
 import '../dialogs/new_update_dialog.dart';
-import '../dialogs/place_picker_dialog.dart';
+import '../models/contact.dart';
+import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/group.dart';
 import '../models/place.dart';
@@ -19,11 +20,26 @@ import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
+import 'contact_picker_page.dart';
 import 'location_picker_page.dart';
+import 'place_picker_page.dart';
 
-/// Full-screen page for creating a new event
+/// Full-screen page for creating or editing an event
 class NewEventPage extends StatefulWidget {
-  const NewEventPage({Key? key}) : super(key: key);
+  /// If provided, the page is in edit mode for this event
+  final Event? event;
+
+  /// Required when editing an event
+  final String? collectionPath;
+
+  const NewEventPage({
+    Key? key,
+    this.event,
+    this.collectionPath,
+  }) : super(key: key);
+
+  /// Whether this page is in edit mode
+  bool get isEditMode => event != null;
 
   @override
   State<NewEventPage> createState() => _NewEventPageState();
@@ -101,11 +117,106 @@ class _NewEventPageState extends State<NewEventPage>
   final Set<String> _selectedGroups = {};
   bool _isLoadingGroups = true;
 
+  // Contacts - stored as map of callsign -> ContactPickerResult for display names
+  final Map<String, ContactPickerResult> _selectedContacts = {};
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _loadGroups();
+
+    // Populate fields from event when in edit mode
+    if (widget.isEditMode) {
+      _populateFromEvent(widget.event!);
+    }
+  }
+
+  void _populateFromEvent(Event event) {
+    _titleController.text = event.title;
+    _contentController.text = event.content;
+    _agendaController.text = event.agenda ?? '';
+    _locationNameController.text = event.locationName ?? '';
+
+    // Location type
+    if (event.isOnline) {
+      _locationType = 'online';
+    } else if (event.placePath != null && event.placePath!.isNotEmpty) {
+      _locationType = 'place';
+      // Note: Place object would need to be loaded separately if needed
+    } else {
+      _locationType = 'coordinates';
+      _locationController.text = event.location;
+    }
+
+    // Dates
+    _isMultiDay = event.isMultiDay;
+    if (event.isMultiDay) {
+      _startDate = _parseDate(event.startDate ?? '');
+      _endDate = _parseDate(event.endDate ?? '');
+    } else {
+      _eventDate = event.dateTime;
+      _eventTime = TimeOfDay.fromDateTime(event.dateTime);
+    }
+
+    // Visibility and access
+    _visibility = event.visibility;
+    _selectedGroups.addAll(event.groupAccess);
+    // Note: registrationEnabled not yet stored in Event model
+
+    // Links
+    _links.addAll(event.links);
+
+    // Contacts - create placeholder ContactPickerResult for each callsign
+    for (final callsign in event.contacts) {
+      _selectedContacts[callsign] = ContactPickerResult(
+        contact: Contact(
+          callsign: callsign,
+          displayName: callsign, // Will show callsign as display name
+          created: '',
+          firstSeen: '',
+        ),
+      );
+    }
+
+    // Load existing flyers/photos
+    if (widget.collectionPath != null && event.flyers.isNotEmpty) {
+      final year = event.id.substring(0, 4);
+      final eventFolderPath = '${widget.collectionPath}/$year/${event.id}';
+      for (final flyerName in event.flyers) {
+        final flyerPath = '$eventFolderPath/$flyerName';
+        if (File(flyerPath).existsSync()) {
+          _flyers.add(_PendingFile(
+            path: flyerPath,
+            name: flyerName,
+            targetName: flyerName,
+          ));
+        }
+      }
+    }
+
+    // Load existing trailer
+    if (widget.collectionPath != null && event.trailer != null) {
+      final year = event.id.substring(0, 4);
+      final eventFolderPath = '${widget.collectionPath}/$year/${event.id}';
+      final trailerPath = '$eventFolderPath/${event.trailer}';
+      if (File(trailerPath).existsSync()) {
+        _trailer = _PendingFile(
+          path: trailerPath,
+          name: event.trailer!,
+          targetName: event.trailer!,
+        );
+      }
+    }
+  }
+
+  DateTime? _parseDate(String dateStr) {
+    try {
+      if (dateStr.isEmpty) return null;
+      return DateTime.parse(dateStr);
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
@@ -269,13 +380,15 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _openPlacePicker() async {
-    final selection = await showDialog<PlaceSelection>(
-      context: context,
-      builder: (context) => PlacePickerDialog(i18n: _i18n),
+    final result = await Navigator.push<PlacePickerResult>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PlacePickerPage(i18n: _i18n),
+      ),
     );
 
-    if (selection != null) {
-      final place = selection.place;
+    if (result != null) {
+      final place = result.place;
       final langCode = _i18n.currentLanguage.split('_').first.toUpperCase();
       final placeName = place.getName(langCode);
       setState(() {
@@ -494,6 +607,29 @@ class _NewEventPageState extends State<NewEventPage>
     });
   }
 
+  Future<void> _openContactPicker() async {
+    final results = await Navigator.push<List<ContactPickerResult>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactPickerPage(
+          i18n: _i18n,
+          multiSelect: true,
+          initialSelection: _selectedContacts.keys.toSet(),
+          sortByEvents: true,
+        ),
+      ),
+    );
+
+    if (results != null && mounted) {
+      setState(() {
+        _selectedContacts.clear();
+        for (final result in results) {
+          _selectedContacts[result.contact.callsign] = result;
+        }
+      });
+    }
+  }
+
   String _groupLabel(_GroupOption option) {
     if (option.group.title.isNotEmpty) {
       return option.group.title;
@@ -568,6 +704,7 @@ class _NewEventPageState extends State<NewEventPage>
     final result = <String, dynamic>{
       'title': _titleController.text.trim(),
       'eventDate': eventDateTime,
+      'eventDateTime': eventDateTime, // Alias for edit mode compatibility
       'startDate': _isMultiDay ? _formatDate(_startDate!) : null,
       'endDate': _isMultiDay ? _formatDate(_endDate!) : null,
       'location': location,
@@ -584,6 +721,7 @@ class _NewEventPageState extends State<NewEventPage>
       'trailer': _trailer?.toMap(),
       'mediaFiles': _mediaFiles.map((file) => file.toMap()).toList(),
       'registrationEnabled': _registrationEnabled,
+      'contacts': _selectedContacts.keys.toList(),
     };
     final placePath = _selectedPlace?.folderPath;
     if (placePath != null && placePath.isNotEmpty) {
@@ -598,7 +736,7 @@ class _NewEventPageState extends State<NewEventPage>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('create_event')),
+        title: Text(_i18n.t(widget.isEditMode ? 'edit_event' : 'create_event')),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -610,18 +748,6 @@ class _NewEventPageState extends State<NewEventPage>
             Tab(text: _i18n.t('access_control')),
           ],
         ),
-        actions: [
-          FilledButton.icon(
-            onPressed: _create,
-            icon: const Icon(Icons.check, size: 18),
-            label: Text(_i18n.t('create')),
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.onPrimary,
-              foregroundColor: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(width: 16),
-        ],
       ),
       body: Form(
         key: _formKey,
@@ -635,6 +761,11 @@ class _NewEventPageState extends State<NewEventPage>
             _buildAccessTab(theme),
           ],
         ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _create,
+        icon: Icon(widget.isEditMode ? Icons.save : Icons.check),
+        label: Text(_i18n.t(widget.isEditMode ? 'save' : 'create')),
       ),
     );
   }
@@ -870,6 +1001,77 @@ class _NewEventPageState extends State<NewEventPage>
           ),
           textCapitalization: TextCapitalization.sentences,
         ),
+
+        // Contacts section
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Text(
+              _i18n.t('contacts'),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            if (_selectedContacts.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _selectedContacts.clear();
+                  });
+                },
+                child: Text(_i18n.t('clear_all')),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _i18n.t('contacts_with_event_hint'),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Selected contacts (pinned at top)
+        if (_selectedContacts.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _selectedContacts.values.map((result) {
+              return Chip(
+                avatar: CircleAvatar(
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                  child: Text(
+                    result.contact.displayName.isNotEmpty
+                        ? result.contact.displayName[0].toUpperCase()
+                        : '?',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+                label: Text(result.contact.displayName),
+                deleteIcon: const Icon(Icons.close, size: 18),
+                onDeleted: () {
+                  setState(() {
+                    _selectedContacts.remove(result.contact.callsign);
+                  });
+                },
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+        ],
+        // Button to add contacts
+        OutlinedButton.icon(
+          onPressed: _openContactPicker,
+          icon: const Icon(Icons.person_add_outlined, size: 18),
+          label: Text(_selectedContacts.isEmpty
+              ? _i18n.t('select_contacts')
+              : _i18n.t('add_more_contacts')),
+        ),
+
         // Photos section
         const SizedBox(height: 24),
         Row(
@@ -1102,33 +1304,41 @@ class _NewEventPageState extends State<NewEventPage>
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        // Files & Photos section (first)
         Text(
-          _i18n.t('trailer'),
+          _i18n.t('event_files'),
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 12),
-        if (_trailer != null) ...[
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.movie),
-              title: Text(_trailer!.targetName),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: _removeTrailer,
-              ),
-            ),
+        const SizedBox(height: 8),
+        Text(
+          _i18n.t('event_files_info'),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
+        ),
+        const SizedBox(height: 12),
+        if (_mediaFiles.isNotEmpty) ...[
+          ..._mediaFiles.map((file) => Card(
+                child: ListTile(
+                  leading: const Icon(Icons.insert_drive_file),
+                  title: Text(file.targetName),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete),
+                    onPressed: () => _removeMediaFile(file),
+                  ),
+                ),
+              )),
           const SizedBox(height: 12),
         ],
         OutlinedButton.icon(
-          onPressed: _selectTrailer,
-          icon: const Icon(Icons.upload_file),
-          label: Text(_trailer == null
-              ? _i18n.t('select_trailer_video')
-              : _i18n.t('change_trailer_video')),
+          onPressed: _selectMediaFiles,
+          icon: const Icon(Icons.add),
+          label: Text(_i18n.t('add_files')),
         ),
+
+        // Flyers section
         const SizedBox(height: 32),
         Text(
           _i18n.t('flyers'),
@@ -1164,38 +1374,35 @@ class _NewEventPageState extends State<NewEventPage>
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
+
+        // Trailer section
         const SizedBox(height: 32),
         Text(
-          _i18n.t('event_files'),
+          _i18n.t('trailer'),
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          _i18n.t('event_files_info'),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
         const SizedBox(height: 12),
-        if (_mediaFiles.isNotEmpty) ...[
-          ..._mediaFiles.map((file) => Card(
-                child: ListTile(
-                  leading: const Icon(Icons.insert_drive_file),
-                  title: Text(file.targetName),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: () => _removeMediaFile(file),
-                  ),
-                ),
-              )),
+        if (_trailer != null) ...[
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.movie),
+              title: Text(_trailer!.targetName),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: _removeTrailer,
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
         ],
         OutlinedButton.icon(
-          onPressed: _selectMediaFiles,
-          icon: const Icon(Icons.add),
-          label: Text(_i18n.t('add_files')),
+          onPressed: _selectTrailer,
+          icon: const Icon(Icons.upload_file),
+          label: Text(_trailer == null
+              ? _i18n.t('select_trailer_video')
+              : _i18n.t('change_trailer_video')),
         ),
       ],
     );

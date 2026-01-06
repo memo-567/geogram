@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../services/i18n_service.dart';
@@ -182,7 +182,6 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
   QrSizeStatus _sizeStatus = QrSizeStatus.ok;
 
   // Scanner state
-  MobileScannerController? _scannerController;
   bool _isScanning = false;
   bool _hasScanned = false;
   bool _permissionDenied = false;
@@ -208,7 +207,6 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
   void dispose() {
     _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
-    _scannerController?.dispose();
     super.dispose();
   }
 
@@ -339,9 +337,9 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
 
   // Scanner methods
   Future<void> _startScanner() async {
-    // mobile_scanner supports: Android, iOS, macOS, Web
-    // Only Windows and Linux desktop don't have camera support
-    if (!kIsWeb && !Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS) {
+    // flutter_zxing supports: Android, iOS, macOS
+    // Web and Linux/Windows desktop don't have camera support via ZXing
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS)) {
       setState(() {
         _scanError = widget.i18n.t('camera_not_supported');
       });
@@ -371,11 +369,6 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
   }
 
   void _initScanner() {
-    _scannerController = MobileScannerController(
-      detectionSpeed: DetectionSpeed.normal,
-      facing: CameraFacing.back,
-      torchEnabled: false,
-    );
     setState(() {
       _isScanning = true;
       _hasScanned = false;
@@ -384,7 +377,6 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
   }
 
   void _stopScanner() {
-    _scannerController?.stop();
     setState(() {
       _isScanning = false;
     });
@@ -395,25 +387,21 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
       _hasScanned = false;
       _scanError = null;
     });
-    _scannerController?.start();
   }
 
-  void _onDetect(BarcodeCapture capture) {
+  void _onScan(Code code) {
     if (_hasScanned) return;
+    if (!code.isValid) return;
 
-    for (final barcode in capture.barcodes) {
-      final value = barcode.rawValue;
-      if (value == null) continue;
+    final value = code.text;
+    if (value == null) return;
 
-      final result = widget.config.decode(value);
-      if (result.isSuccess) {
-        setState(() {
-          _hasScanned = true;
-        });
-        _scannerController?.stop();
-        _handleScannedData(result.data as T);
-        return;
-      }
+    final result = widget.config.decode(value);
+    if (result.isSuccess) {
+      setState(() {
+        _hasScanned = true;
+      });
+      _handleScannedData(result.data as T);
     }
   }
 
@@ -808,10 +796,15 @@ class _QrShareReceiveWidgetState<T> extends State<QrShareReceiveWidget<T>>
 
     return Stack(
       children: [
-        // Camera preview
-        MobileScanner(
-          controller: _scannerController!,
-          onDetect: _onDetect,
+        // Camera preview with ZXing scanner
+        ReaderWidget(
+          onScan: _onScan,
+          isMultiScan: false,
+          showFlashlight: false,
+          showToggleCamera: false,
+          showGallery: false,
+          tryHarder: true,
+          tryInverted: true,
         ),
 
         // Scanning overlay

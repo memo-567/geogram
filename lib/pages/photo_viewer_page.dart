@@ -109,6 +109,26 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
+  /// Handle double-tap to toggle zoom
+  void _handleDoubleTap(int index, TapDownDetails details) {
+    final controller = _getTransformationController(index);
+    final currentScale = controller.value.getMaxScaleOnAxis();
+
+    if (currentScale > 1.1) {
+      // Already zoomed in, reset to normal
+      controller.value = Matrix4.identity();
+    } else {
+      // Zoom in to 2.5x centered on tap position
+      final position = details.localPosition;
+      final scale = 2.5;
+      final x = -position.dx * (scale - 1);
+      final y = -position.dy * (scale - 1);
+      controller.value = Matrix4.identity()
+        ..translate(x, y)
+        ..scale(scale);
+    }
+  }
+
   /// Save the current media file to a user-selected location
   Future<void> _saveMedia() async {
     if (kIsWeb) return;
@@ -307,24 +327,35 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       return _buildVideoView(index, mediaPath);
     }
 
+    // Store tap position for double-tap zoom
+    TapDownDetails? doubleTapDetails;
+
     if (_isNetworkImage(mediaPath)) {
-      return InteractiveViewer(
-        transformationController: _getTransformationController(index),
-        minScale: 0.5,
-        maxScale: 4.0,
-        child: Center(
-          child: Image.network(
-            mediaPath,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return const Center(
-                child: Icon(
-                  Icons.broken_image,
-                  color: Colors.white54,
-                  size: 64,
-                ),
-              );
-            },
+      return GestureDetector(
+        onDoubleTapDown: (details) => doubleTapDetails = details,
+        onDoubleTap: () {
+          if (doubleTapDetails != null) {
+            _handleDoubleTap(index, doubleTapDetails!);
+          }
+        },
+        child: InteractiveViewer(
+          transformationController: _getTransformationController(index),
+          minScale: 0.5,
+          maxScale: 4.0,
+          child: Center(
+            child: Image.network(
+              mediaPath,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Center(
+                  child: Icon(
+                    Icons.broken_image,
+                    color: Colors.white54,
+                    size: 64,
+                  ),
+                );
+              },
+            ),
           ),
         ),
       );
@@ -342,23 +373,31 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       );
     }
 
-    return InteractiveViewer(
-      transformationController: _getTransformationController(index),
-      minScale: 0.5,
-      maxScale: 4.0,
-      child: Center(
-        child: Image(
-          image: imageProvider,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            return const Center(
-              child: Icon(
-                Icons.broken_image,
-                color: Colors.white54,
-                size: 64,
-              ),
-            );
-          },
+    return GestureDetector(
+      onDoubleTapDown: (details) => doubleTapDetails = details,
+      onDoubleTap: () {
+        if (doubleTapDetails != null) {
+          _handleDoubleTap(index, doubleTapDetails!);
+        }
+      },
+      child: InteractiveViewer(
+        transformationController: _getTransformationController(index),
+        minScale: 0.5,
+        maxScale: 4.0,
+        child: Center(
+          child: Image(
+            image: imageProvider,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              return const Center(
+                child: Icon(
+                  Icons.broken_image,
+                  color: Colors.white54,
+                  size: 64,
+                ),
+              );
+            },
+          ),
         ),
       ),
     );

@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
@@ -58,6 +59,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   bool _profileImageCleared = false;
 
   bool _isSaving = false;
+  bool _advancedOptionsExpanded = false;
 
   // Supported languages for multilingual content
   static const List<String> _supportedLanguages = ['EN', 'PT', 'ES', 'FR', 'DE', 'IT'];
@@ -82,6 +84,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'grocery',
     'hospital',
     'hotel',
+    'house',
     'landmark',
     'library',
     'market',
@@ -346,6 +349,39 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error picking images: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  /// Take photo with camera (mobile only)
+  Future<void> _takePhoto() async {
+    if (kIsWeb) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    try {
+      final picker = ImagePicker();
+      final photo = await picker.pickImage(source: ImageSource.camera);
+
+      if (photo != null) {
+        setState(() {
+          _imageFilePaths.add(photo.path);
+
+          // Auto-select first image as profile picture if none selected yet
+          if (_profileImageSelection == null && !_profileImageCleared) {
+            if (_existingImages.isNotEmpty) {
+              _profileImageSelection = _existingImages.first;
+            } else if (_imageFilePaths.isNotEmpty) {
+              _profileImageSelection = _imageFilePaths.first;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      LogService().log('Error taking photo: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error taking photo: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -791,39 +827,14 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
             ...requiredFields,
 
-            // Radius and Type on same row
+            // Type and Language selector on same row
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Radius
-                Expanded(
-                  flex: 1,
-                  child: TextFormField(
-                    controller: _radiusController,
-                    decoration: InputDecoration(
-                      labelText: '${_i18n.t('radius_meters')} *',
-                      border: const OutlineInputBorder(),
-                      hintText: '5',
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return _i18n.t('field_required');
-                      }
-                      final radius = int.tryParse(value.trim());
-                      if (radius == null || radius < 1 || radius > 1000) {
-                        return _i18n.t('radius_range_error');
-                      }
-                      return null;
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
                 // Type (with suggestions)
                 Expanded(
-                  flex: 2,
                   child: DropdownButtonFormField<String>(
-                    value: currentType.isNotEmpty ? currentType : null,
+                    initialValue: currentType.isNotEmpty ? currentType : null,
                     decoration: InputDecoration(
                       labelText: '${_i18n.t('place_type')} *',
                       border: const OutlineInputBorder(),
@@ -849,27 +860,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                     isExpanded: true,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // Description (optional) with language selector
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _descriptionController,
-                    decoration: InputDecoration(
-                      labelText: _i18n.t('description'),
-                      border: const OutlineInputBorder(),
-                      helperText: _i18n.t('place_description_help'),
-                    ),
-                    maxLines: 4,
-                    textCapitalization: TextCapitalization.sentences,
-                  ),
-                ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
+                // Language selector for description
                 Column(
                   children: [
                     PopupMenuButton<String>(
@@ -877,10 +869,10 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                       onSelected: _switchDescriptionLanguage,
                       tooltip: _i18n.t('select_language'),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                         decoration: BoxDecoration(
                           border: Border.all(color: Theme.of(context).colorScheme.outline),
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(4),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -924,6 +916,20 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+
+            // Description (optional)
+            TextFormField(
+              controller: _descriptionController,
+              decoration: InputDecoration(
+                labelText: _i18n.t('description'),
+                border: const OutlineInputBorder(),
+                helperText: _i18n.t('place_description_help'),
+                helperMaxLines: 2,
+              ),
+              maxLines: 4,
+              textCapitalization: TextCapitalization.sentences,
+            ),
             const SizedBox(height: 24),
 
             // Photos Section
@@ -935,19 +941,34 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 ),
               ),
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _pickImages,
-                icon: const Icon(Icons.add_photo_alternate),
-                label: Text(_i18n.t('add_photos')),
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _pickImages,
+                    icon: const Icon(Icons.add_photo_alternate),
+                    label: Text(_i18n.t('add_photos')),
+                  ),
+                  if (Platform.isAndroid || Platform.isIOS) ...[
+                    const SizedBox(width: 8),
+                    IconButton.outlined(
+                      onPressed: _takePhoto,
+                      icon: const Icon(Icons.camera_alt),
+                      tooltip: _i18n.t('take_photo'),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 8),
-              Text(
-                _i18n.t('select_profile_picture'),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 12),
+              // Only show profile picture hint when there are photos
+              if (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty) ...[
+                Text(
+                  _i18n.t('select_profile_picture'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 12),
+              ],
               if (_existingImages.isNotEmpty || _imageFilePaths.isNotEmpty)
                 Wrap(
                   spacing: 8,
@@ -1078,121 +1099,155 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
               const SizedBox(height: 24),
             ],
 
-            // Optional Fields Section
-            Text(
-              _i18n.t('optional_fields'),
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 16),
-
-            // Address
-            TextFormField(
-              controller: _addressController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('address'),
-                border: const OutlineInputBorder(),
-                hintText: '123 Main Street, Lisbon, Portugal',
-              ),
-              maxLines: 2,
-              textCapitalization: TextCapitalization.words,
-            ),
-            const SizedBox(height: 16),
-
-            // Founded
-            TextFormField(
-              controller: _foundedController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('founded'),
-                border: const OutlineInputBorder(),
-                hintText: '1782, 12th century, circa 1500, Roman era',
-              ),
-              textCapitalization: TextCapitalization.sentences,
-            ),
-            const SizedBox(height: 16),
-
-            // Hours
-            TextFormField(
-              controller: _hoursController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('hours'),
-                border: const OutlineInputBorder(),
-                hintText: 'Mon-Fri 9:00-17:00, Sat-Sun 10:00-16:00',
-              ),
-              maxLines: 2,
-              textCapitalization: TextCapitalization.sentences,
-            ),
-            const SizedBox(height: 16),
-
-            // History with language selector
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _historyController,
+            // Advanced Options Section (expandable, closed by default)
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                initiallyExpanded: _advancedOptionsExpanded,
+                onExpansionChanged: (expanded) {
+                  setState(() => _advancedOptionsExpanded = expanded);
+                },
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(top: 8),
+                title: Text(
+                  _i18n.t('advanced_options'),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                children: [
+                  // Radius
+                  TextFormField(
+                    controller: _radiusController,
                     decoration: InputDecoration(
-                      labelText: _i18n.t('history'),
+                      labelText: '${_i18n.t('radius_meters')} *',
                       border: const OutlineInputBorder(),
-                      helperText: _i18n.t('place_history_help'),
+                      hintText: '5',
                     ),
-                    maxLines: 6,
+                    keyboardType: TextInputType.number,
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return _i18n.t('field_required');
+                      }
+                      final radius = int.tryParse(value.trim());
+                      if (radius == null || radius < 1 || radius > 1000) {
+                        return _i18n.t('radius_range_error');
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Address
+                  TextFormField(
+                    controller: _addressController,
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('address'),
+                      border: const OutlineInputBorder(),
+                      hintText: '123 Main Street, Lisbon, Portugal',
+                    ),
+                    maxLines: 2,
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Founded
+                  TextFormField(
+                    controller: _foundedController,
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('founded'),
+                      border: const OutlineInputBorder(),
+                      hintText: '1782, 12th century, circa 1500, Roman era',
+                    ),
                     textCapitalization: TextCapitalization.sentences,
                   ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  children: [
-                    PopupMenuButton<String>(
-                      initialValue: _historyLanguage,
-                      onSelected: _switchHistoryLanguage,
-                      tooltip: _i18n.t('select_language'),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Theme.of(context).colorScheme.outline),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _historyLanguage,
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(Icons.arrow_drop_down, size: 20),
-                          ],
+                  const SizedBox(height: 16),
+
+                  // Hours
+                  TextFormField(
+                    controller: _hoursController,
+                    decoration: InputDecoration(
+                      labelText: _i18n.t('hours'),
+                      border: const OutlineInputBorder(),
+                      hintText: 'Mon-Fri 9:00-17:00, Sat-Sun 10:00-16:00',
+                    ),
+                    maxLines: 2,
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // History with language selector
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _historyController,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('history'),
+                            border: const OutlineInputBorder(),
+                            helperText: _i18n.t('place_history_help'),
+                            helperMaxLines: 2,
+                          ),
+                          maxLines: 6,
+                          textCapitalization: TextCapitalization.sentences,
                         ),
                       ),
-                      itemBuilder: (context) => _supportedLanguages.map((lang) {
-                        final hasContent = _histories[lang]?.isNotEmpty ?? false;
-                        return PopupMenuItem<String>(
-                          value: lang,
-                          child: Row(
-                            children: [
-                              Text(lang),
-                              if (hasContent) ...[
-                                const SizedBox(width: 8),
-                                Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
-                              ],
-                            ],
+                      const SizedBox(width: 8),
+                      Column(
+                        children: [
+                          PopupMenuButton<String>(
+                            initialValue: _historyLanguage,
+                            onSelected: _switchHistoryLanguage,
+                            tooltip: _i18n.t('select_language'),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Theme.of(context).colorScheme.outline),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _historyLanguage,
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.arrow_drop_down, size: 20),
+                                ],
+                              ),
+                            ),
+                            itemBuilder: (context) => _supportedLanguages.map((lang) {
+                              final hasContent = _histories[lang]?.isNotEmpty ?? false;
+                              return PopupMenuItem<String>(
+                                value: lang,
+                                child: Row(
+                                  children: [
+                                    Text(lang),
+                                    if (hasContent) ...[
+                                      const SizedBox(width: 8),
+                                      Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+                                    ],
+                                  ],
+                                ),
+                              );
+                            }).toList(),
                           ),
-                        );
-                      }).toList(),
-                    ),
-                    // Show languages with content
-                    if (widget.place != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        '${_getHistoryLanguagesWithContent().length}/${_supportedLanguages.length}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
+                          // Show languages with content
+                          if (widget.place != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '${_getHistoryLanguagesWithContent().length}/${_supportedLanguages.length}',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 32),

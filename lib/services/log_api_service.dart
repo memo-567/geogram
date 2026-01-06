@@ -1235,6 +1235,11 @@ class LogApiService {
         return await _handleDeviceAction(action.toLowerCase(), params, headers);
       }
 
+      // Handle contact debug actions
+      if (action.toLowerCase().startsWith('contact_')) {
+        return await _handleContactDebugAction(action.toLowerCase(), params, headers);
+      }
+
       final debugController = DebugController();
       final result = await debugController.executeAction(action, params);
 
@@ -8383,6 +8388,110 @@ class LogApiService {
         headers: headers,
       );
     }
+  }
+
+  // ============================================================
+  // Debug API - Contact Debug Actions
+  // ============================================================
+
+  /// Handle contact debug actions
+  Future<shelf.Response> _handleContactDebugAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    if (action == 'contact_debug') {
+      try {
+        // Get data directory from StorageConfig
+        String? dataDir;
+        try {
+          dataDir = StorageConfig().baseDir;
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({'error': 'Storage not initialized: $e'}),
+            headers: headers,
+          );
+        }
+
+        // Get callsign from profile
+        String callsign = 'unknown';
+        try {
+          final profile = ProfileService().getProfile();
+          callsign = profile.callsign;
+        } catch (e) {
+          // Profile not initialized
+        }
+
+        // Build collection path pattern
+        final collectionPath = '$dataDir/devices/$callsign';
+
+        final result = <String, dynamic>{
+          'action': 'contact_debug',
+          'dataDir': dataDir,
+          'callsign': callsign,
+          'collectionPath': collectionPath,
+        };
+
+        // Check fast.json
+        final fastJsonPath = '$collectionPath/contacts/fast.json';
+        final fastJsonFile = io.File(fastJsonPath);
+        result['fastJsonPath'] = fastJsonPath;
+        result['fastJsonExists'] = await fastJsonFile.exists();
+
+        if (await fastJsonFile.exists()) {
+          final content = await fastJsonFile.readAsString();
+          final jsonList = jsonDecode(content) as List<dynamic>;
+          result['fastJsonCount'] = jsonList.length;
+          result['fastJsonContacts'] = jsonList.take(5).map((c) => {
+            'callsign': c['callsign'],
+            'displayName': c['displayName'],
+            'filePath': c['filePath'],
+          }).toList();
+        }
+
+        // Check contacts directory
+        final contactsDir = io.Directory('$collectionPath/contacts');
+        result['contactsDirExists'] = await contactsDir.exists();
+
+        // List contact files if directory exists
+        if (await contactsDir.exists()) {
+          final entities = await contactsDir.list().toList();
+          final txtFiles = entities
+              .whereType<io.File>()
+              .where((f) => f.path.endsWith('.txt'))
+              .take(10)
+              .map((f) => path.basename(f.path))
+              .toList();
+          result['contactFiles'] = txtFiles;
+        }
+
+        // If callsign provided, check specific contact
+        final targetCallsign = params['callsign'] as String?;
+        if (targetCallsign != null) {
+          final contactFile = io.File('$collectionPath/contacts/$targetCallsign.txt');
+          result['targetCallsign'] = targetCallsign;
+          result['contactFilePath'] = contactFile.path;
+          result['contactFileExists'] = await contactFile.exists();
+          if (await contactFile.exists()) {
+            final fileContent = await contactFile.readAsString();
+            result['contactFileSize'] = fileContent.length;
+            result['contactFilePreview'] = fileContent.substring(0, fileContent.length > 200 ? 200 : fileContent.length);
+          }
+        }
+
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } catch (e, stack) {
+        return shelf.Response.ok(
+          jsonEncode({'error': e.toString(), 'stack': stack.toString()}),
+          headers: headers,
+        );
+      }
+    }
+
+    return shelf.Response.badRequest(
+      body: jsonEncode({'error': 'Unknown contact action: $action'}),
+      headers: headers,
+    );
   }
 
   // ============================================================

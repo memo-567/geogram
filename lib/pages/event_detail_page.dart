@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:file_picker/file_picker.dart';
@@ -12,12 +13,14 @@ import 'package:path/path.dart' as path;
 import '../dialogs/new_update_dialog.dart';
 import '../models/event.dart';
 import '../models/event_link.dart';
+import '../services/contact_service.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
 import '../util/place_parser.dart';
 import '../services/profile_service.dart';
 import '../widgets/event_detail_widget.dart';
-import 'event_settings_page.dart';
+import 'contacts_browser_page.dart';
+import 'new_event_page.dart';
 import 'place_detail_page.dart';
 
 /// Full-screen event detail page (shared by events browser and map).
@@ -75,7 +78,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
-        builder: (context) => EventSettingsPage(
+        builder: (context) => NewEventPage(
           event: _event,
           collectionPath: widget.collectionPath,
         ),
@@ -103,6 +106,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
             : null,
         links: result['links'] as List<EventLink>?,
         registrationEnabled: result['registrationEnabled'] as bool?,
+        contacts: result['contacts'] as List<String>?,
         metadata: metadata,
       );
 
@@ -235,6 +239,99 @@ class _EventDetailPageState extends State<EventDetailPage> {
     }
   }
 
+  /// Update contacts for the event
+  Future<void> _updateEventContacts(List<String> contacts) async {
+    if (widget.readOnly || widget.collectionPath.isEmpty) return;
+
+    final newEventId = await widget.eventService.updateEvent(
+      eventId: _event.id,
+      title: _event.title,
+      location: _event.location,
+      locationName: _event.locationName,
+      content: _event.content,
+      agenda: _event.agenda,
+      visibility: _event.visibility,
+      contacts: contacts,
+    );
+
+    if (newEventId != null && mounted) {
+      _hasChanges = true;
+      // Reload event to show updated contacts
+      final updatedEvent = await widget.eventService.loadEvent(newEventId);
+      if (updatedEvent != null) {
+        setState(() {
+          _event = updatedEvent;
+        });
+      }
+    }
+  }
+
+  Future<void> _openContact(String callsign) async {
+    if (widget.collectionPath.isEmpty) return;
+
+    // Events collectionPath is like: devices/X1DPDX/events
+    // Contacts are at: devices/X1DPDX/contacts/contacts/
+    final devicePath = path.dirname(widget.collectionPath);
+    final contactsCollectionPath = '$devicePath/contacts';
+    final fastJsonPath = '$contactsCollectionPath/contacts/fast.json';
+
+    // First try to find the contact's file path from fast.json
+    String? contactFilePath;
+    try {
+      final fastFile = File(fastJsonPath);
+      if (await fastFile.exists()) {
+        final content = await fastFile.readAsString();
+        final List<dynamic> jsonList = jsonDecode(content);
+        for (final item in jsonList) {
+          if (item['callsign'] == callsign) {
+            contactFilePath = item['filePath'] as String?;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      // Fall through to error handling
+    }
+
+    if (contactFilePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('contact_not_found')),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Parse the contact file
+    final contactService = ContactService();
+    final contact = await contactService.loadContactFromFile(contactFilePath);
+
+    if (contact != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ContactDetailPage(
+            contact: contact,
+            contactService: ContactService(),
+            profileService: widget.profileService,
+            i18n: widget.i18n,
+            collectionPath: contactsCollectionPath,
+          ),
+        ),
+      );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.i18n.t('contact_not_found')),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
   Future<void> _openPlace(String placePath) async {
     if (widget.collectionPath.isEmpty) return;
 
@@ -323,6 +420,8 @@ class _EventDetailPageState extends State<EventDetailPage> {
           ? () => _refreshEvent(markChanged: true)
           : null,
       onPlaceOpen: _openPlace,
+      onContactsUpdated: canEdit ? _updateEventContacts : null,
+      onContactOpen: _openContact,
     );
 
     return PopScope(

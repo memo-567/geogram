@@ -2,6 +2,51 @@
 
 This document catalogs reusable UI components available in the Geogram codebase. These widgets are designed to be used across multiple features and pages.
 
+## Index
+
+### Picker Widgets
+- [UserPickerWidget](#userpickerwidget) - Select users from devices
+- [CurrencyPickerWidget](#currencypickerwidget) - Select currencies
+- [TypeSelectorWidget](#typeselectorwidget) - Select inventory types
+
+### Notification Helpers
+- [BackupNotificationService](#backupnotificationservice) - Backup event notifications
+- [Notification Tap Handling Pattern](#notification-tap-handling-pattern) - Handle notification taps
+
+### Viewer Pages
+- [PhotoViewerPage](#photoviewerpage) - Image & video gallery
+- [LocationPickerPage](#locationpickerpage) - Map location selection
+- [PlacePickerPage](#placepickerpage) - Place selection with sorting
+- [ContactPickerPage](#contactpickerpage) - Contact selection with sorting
+- [DocumentViewerEditorPage](#documentviewereditorpage) - PDF, text, markdown viewer
+- [ContractDocumentPage](#contractdocumentpage) - Markdown document viewer
+
+### Player Widgets
+- [VoicePlayerWidget](#voiceplayerwidget) - Voice messages
+- [MusicPlayerWidget](#musicplayerwidget) - Music tracks
+- [VoiceRecorderWidget](#voicerecorderwidget) - Record voice
+
+### Dialog Widgets
+- [NewChannelDialog](#newchanneldialog) - Create chat channels
+- [NewThreadDialog](#newthreaddialog) - Create forum threads
+
+### Selector Widgets
+- [CallsignSelectorWidget](#callsignselectorwidget) - Profile switching
+- [ProfileSwitcher](#profileswitcher) - App bar profile
+
+### Tree Widgets
+- [FolderTreeWidget](#foldertreewidget) - Folder navigation
+
+### Message Widgets
+- [MessageBubbleWidget](#messagebubblewidget) - Chat bubbles
+- [MessageInputWidget](#messageinputwidget) - Message composer
+
+### Services
+- [LocationService](#locationservice) - City lookup from coordinates
+
+### QR Widgets
+- [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
+
 ---
 
 ## Picker Widgets
@@ -358,6 +403,181 @@ if (position != null) {
 - Reset north compass
 - Tile caching for offline use
 - 6 decimal precision coordinates
+
+---
+
+### PlacePickerPage
+
+**File:** `lib/pages/place_picker_page.dart`
+
+Full-screen place picker with sortable results. Shows all places from the user's place collections with distance calculation and flexible sorting options.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `i18n` | I18nService | Yes | Localization service |
+| `initialPosition` | Position? | No | Override GPS position for distance calculation |
+
+**Returns:** `PlacePickerResult` with `place`, `collectionTitle`, and `distance`
+
+**Usage:**
+```dart
+final result = await Navigator.push<PlacePickerResult>(
+  context,
+  MaterialPageRoute(
+    builder: (context) => PlacePickerPage(i18n: widget.i18n),
+  ),
+);
+
+if (result != null) {
+  print('Selected: ${result.place.getName('EN')}');
+  print('Distance: ${result.distance?.toStringAsFixed(1)} km');
+  print('Collection: ${result.collectionTitle}');
+}
+```
+
+**Features:**
+- **Sort toggle:** Switch between sorting by distance or by time (newest first)
+- **GPS-based sorting:** Places sorted by distance from user's current position
+- **Time-based sorting:** Places sorted by creation date (newest first)
+- **Distance display:** Shows formatted distance next to each place (e.g., "2.2km", "350m")
+- **Fallback location:** Uses IP-based geolocation on desktop/web or when GPS is unavailable
+- **Full-text search:** Filter places by name, address, description, type, history, region, and collection name (searches all language variants)
+- **Location status:** Visual indicators for GPS status (loading, available, unavailable)
+- **Multiple collections:** Loads places from all configured place collections
+
+**Sort Modes:**
+| Mode | Description |
+|------|-------------|
+| Distance | Places sorted by proximity to user (closest first) |
+| Time | Places sorted by creation date (newest first) |
+
+**Search Fields:**
+The search box filters across all of these fields:
+- Place name (all language variants)
+- Address
+- Description (all language variants)
+- Type/category
+- History
+- Region path
+- Collection name
+
+**Location Detection Priority:**
+1. GPS (mobile with permission)
+2. Browser Geolocation API (web)
+3. IP-based geolocation (fallback)
+4. Alphabetical sort (when location unavailable)
+
+**PlacePickerResult Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `place` | Place | The selected place object |
+| `collectionTitle` | String? | Name of the collection the place belongs to |
+| `distance` | double? | Distance from user in kilometers (null if location unavailable) |
+
+**Dependencies:**
+- `geolocator: ^13.0.2` - GPS location access
+- `LocationService` - Distance calculation and IP geolocation
+
+**Required i18n Keys:**
+- `choose_place` - Page title
+- `search_places` - Search hint
+- `no_places_found` - Empty state message
+- `sorted_by_distance` - Status text when sorting by distance
+- `sorted_by_time` - Status text when sorting by time
+- `location_unavailable` - Status when GPS unavailable
+
+---
+
+### ContactPickerPage
+
+**File:** `lib/pages/contact_picker_page.dart`
+
+Full-screen contact picker with search and sorting. Shows all contacts from the user's contact collections with flexible sorting options.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `i18n` | I18nService | Yes | Localization service |
+| `multiSelect` | bool | No | Enable multiple selection (default: false) |
+| `initialSelection` | Set\<String\>? | No | Pre-selected callsigns for multi-select mode |
+
+**Returns:**
+- Single select: `ContactPickerResult` with `contact` and `collectionTitle`
+- Multi-select: `List<ContactPickerResult>`
+
+**Usage (Single Select):**
+```dart
+final result = await Navigator.push<ContactPickerResult>(
+  context,
+  MaterialPageRoute(
+    builder: (context) => ContactPickerPage(i18n: widget.i18n),
+  ),
+);
+
+if (result != null) {
+  print('Selected: ${result.contact.displayName}');
+  print('Callsign: ${result.contact.callsign}');
+  print('Collection: ${result.collectionTitle}');
+}
+```
+
+**Usage (Multi-Select):**
+```dart
+final results = await Navigator.push<List<ContactPickerResult>>(
+  context,
+  MaterialPageRoute(
+    builder: (context) => ContactPickerPage(
+      i18n: widget.i18n,
+      multiSelect: true,
+      initialSelection: {'ALPHA1', 'BRAVO2'},
+    ),
+  ),
+);
+
+if (results != null) {
+  for (final result in results) {
+    print('Selected: ${result.contact.callsign}');
+  }
+}
+```
+
+**Features:**
+- **Sort toggle:** Switch between alphabetical (A-Z) and recent (newest first)
+- **Full-text search:** Filter contacts by name, callsign, group path, collection, emails, phones, tags, notes
+- **Multi-select mode:** Optional checkbox selection for multiple contacts
+- **Multiple collections:** Loads contacts from all configured contact collections
+- **Visual feedback:** Avatar initials, selected state indicators
+
+**Sort Modes:**
+| Mode | Description |
+|------|-------------|
+| Alphabetical | Contacts sorted A-Z by display name |
+| Recent | Contacts sorted by firstSeen date (newest first) |
+
+**Search Fields:**
+The search box filters across:
+- Display name
+- Callsign
+- Group path
+- Collection name
+- Emails
+- Phones
+- Tags
+- Notes
+
+**ContactPickerResult Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `contact` | Contact | The selected contact object |
+| `collectionTitle` | String? | Name of the collection the contact belongs to |
+
+**Required i18n Keys:**
+- `select_contact` - Page title
+- `search_contacts` - Search hint
+- `no_contacts_found` - Empty state message
+- `sorted_alphabetically` - Status text when sorting A-Z
+- `sorted_by_recent` - Status text when sorting by recent
 
 ---
 
@@ -1082,6 +1302,8 @@ Navigator.push(
 | PhotoViewerPage | pages/ | Viewer | Image & video gallery |
 | DocumentViewerEditorPage | pages/ | Viewer | PDF, text, markdown |
 | LocationPickerPage | pages/ | Picker | Map location selection |
+| PlacePickerPage | pages/ | Picker | Place selection with distance/time sorting |
+| ContactPickerPage | pages/ | Picker | Contact selection with A-Z/recent sorting |
 | ContractDocumentPage | pages/ | Viewer | Markdown document |
 | VoicePlayerWidget | widgets/ | Player | Voice messages |
 | MusicPlayerWidget | widgets/ | Player | Music tracks |

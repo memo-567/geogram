@@ -50,6 +50,7 @@
   "place_type_grocery": "Mercearia",
   "place_type_hospital": "Hospital",
   "place_type_hotel": "Hotel",
+  "place_type_house": "Casa",
   "place_type_landmark": "Marco",
   "place_type_library": "Biblioteca",
   "place_type_market": "Mercado",
@@ -67,5 +68,7 @@
   "place_type_veterinary": "Veterinário",
   "place_type_viewpoint": "Miradouro",
   "see_in_map": "Ver no mapa",
-  "fit_to_view": "Ajustar ambas localizações"
+  "fit_to_view": "Ajustar ambas localizações",
+  "advanced_options": "Opções Avançadas",
+  "take_photo": "Tirar Foto"
 }

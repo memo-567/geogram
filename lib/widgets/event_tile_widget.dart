@@ -15,6 +15,8 @@ class EventTileWidget extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
   final String? collectionPath;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   const EventTileWidget({
     Key? key,
@@ -22,6 +24,8 @@ class EventTileWidget extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     this.collectionPath,
+    this.onEdit,
+    this.onDelete,
   }) : super(key: key);
 
   String? _getThumbnailPath() {
@@ -116,22 +120,24 @@ class EventTileWidget extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    // Author and date
+                    // Author and date (only show author if not empty)
                     Row(
                       children: [
-                        Icon(
-                          Icons.person_outline,
-                          size: 14,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          event.author,
-                          style: theme.textTheme.bodySmall?.copyWith(
+                        if (event.author.trim().isNotEmpty) ...[
+                          Icon(
+                            Icons.person_outline,
+                            size: 14,
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        ),
-                        const SizedBox(width: 8),
+                          const SizedBox(width: 4),
+                          Text(
+                            event.author,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         Icon(
                           Icons.calendar_today,
                           size: 14,
@@ -226,6 +232,47 @@ class EventTileWidget extends StatelessWidget {
                   ],
                 ),
               ),
+              // Three-dot menu for edit/delete
+              if (onEdit != null || onDelete != null)
+                PopupMenuButton<String>(
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 20,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onSelected: (value) {
+                    if (value == 'edit' && onEdit != null) {
+                      onEdit!();
+                    } else if (value == 'delete' && onDelete != null) {
+                      onDelete!();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    if (onEdit != null)
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            const Icon(Icons.edit, size: 20),
+                            const SizedBox(width: 12),
+                            Text(i18n.t('edit')),
+                          ],
+                        ),
+                      ),
+                    if (onDelete != null)
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete, size: 20, color: theme.colorScheme.error),
+                            const SizedBox(width: 12),
+                            Text(i18n.t('delete'), style: TextStyle(color: theme.colorScheme.error)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
             ],
           ),
         ),

@@ -98,7 +98,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Future<void> _loadTopContacts() async {
-    final topContacts = await _contactService.getTopContacts(10);
+    final topContacts = await _contactService.getTopContacts(30);
     setState(() {
       _topContacts = topContacts;
     });
@@ -521,7 +521,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     // Navigate to full-screen detail view
     final result = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(
-        builder: (context) => _ContactDetailPage(
+        builder: (context) => ContactDetailPage(
           contact: contactToShow,
           contactService: _contactService,
           profileService: _profileService,
@@ -741,46 +741,30 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     }
   }
 
-  Widget _buildQuickAccessChip(Contact contact, bool isMobileView) {
-    final profilePicturePath = _contactService.getProfilePicturePath(contact.callsign);
-    final hasProfilePicture = !kIsWeb && profilePicturePath != null && file_helper.fileExists(profilePicturePath);
-    final profileImage = hasProfilePicture ? file_helper.getFileImageProvider(profilePicturePath) : null;
-
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ActionChip(
-        avatar: CircleAvatar(
-          radius: 16,
-          backgroundColor: contact.revoked ? Colors.red : Colors.blue,
-          backgroundImage: profileImage,
-          child: profileImage == null
-              ? Text(
-                  _getContactInitials(contact.displayName),
-                  style: const TextStyle(color: Colors.white, fontSize: 10),
-                )
-              : null,
-        ),
-        label: Text(contact.displayName),
-        onPressed: () => isMobileView
-            ? _selectContactMobile(contact)
-            : _selectContact(contact),
-      ),
-    );
-  }
-
   Widget _buildEmptyStateWithQuickAccess(bool isMobileView) {
     // Show top contacts when no root contacts exist but contacts are in folders
     if (_topContacts.isEmpty) {
-      // No top contacts available - just show the hint message
+      // No popular contacts yet - guide the user
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text(
-            _i18n.t('no_root_contacts'),
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey,
-                ),
-            textAlign: TextAlign.center,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.star_outline,
+                size: 64,
+                color: Colors.grey.shade400,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _i18n.t('no_popular_contacts'),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.grey,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
         ),
       );
@@ -810,23 +794,12 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 150,
-              childAspectRatio: 0.85,
+              childAspectRatio: 0.70,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
             ),
             itemCount: _topContacts.length,
             itemBuilder: (context, index) => _buildQuickAccessCard(_topContacts[index], isMobileView),
-          ),
-        ),
-        // Hint text below
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            _i18n.t('no_root_contacts'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey,
-                ),
-            textAlign: TextAlign.center,
           ),
         ),
       ],
@@ -846,12 +819,13 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             : _selectContact(contact),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(8),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               CircleAvatar(
-                radius: 28,
+                radius: 24,
                 backgroundColor: contact.revoked ? Colors.red : Colors.blue,
                 backgroundImage: profileImage,
                 child: profileImage == null
@@ -860,20 +834,22 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                          fontSize: 14,
                         ),
                       )
                     : null,
               ),
-              const SizedBox(height: 8),
-              Text(
-                contact.displayName,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w500,
-                    ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              const SizedBox(height: 6),
+              Flexible(
+                child: Text(
+                  contact.displayName,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -1414,33 +1390,6 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 ),
 
                 const Divider(height: 1),
-
-                // Quick Access (Top 10) - only at root level
-                if (_topContacts.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.star, size: 16, color: Colors.amber),
-                        const SizedBox(width: 4),
-                        Text(
-                          _i18n.t('quick_access'),
-                          style: Theme.of(context).textTheme.labelMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(
-                    height: 60,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      itemCount: _topContacts.length,
-                      itemBuilder: (context, index) => _buildQuickAccessChip(_topContacts[index], isMobileView),
-                    ),
-                  ),
-                  const Divider(height: 1),
-                ],
 
                 // Groups as folder items - only show at root level
                 if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
@@ -2319,7 +2268,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 }
 
 /// Full-screen contact detail page for mobile view
-class _ContactDetailPage extends StatefulWidget {
+class ContactDetailPage extends StatefulWidget {
   final Contact contact;
   final ContactService contactService;
   final ProfileService profileService;
@@ -2327,7 +2276,7 @@ class _ContactDetailPage extends StatefulWidget {
   final String collectionPath;
   final void Function(String eventId)? onEventSearch;
 
-  const _ContactDetailPage({
+  const ContactDetailPage({
     Key? key,
     required this.contact,
     required this.contactService,
@@ -2338,10 +2287,10 @@ class _ContactDetailPage extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<_ContactDetailPage> createState() => _ContactDetailPageState();
+  State<ContactDetailPage> createState() => _ContactDetailPageState();
 }
 
-class _ContactDetailPageState extends State<_ContactDetailPage> {
+class _ContactDetailPageState extends State<ContactDetailPage> {
   ContactCallsignMetrics? _metrics;
   List<_PhoneWithMetrics>? _sortedPhones;
   List<_EmailWithMetrics>? _sortedEmails;

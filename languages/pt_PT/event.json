@@ -20,5 +20,13 @@
   "event_title": "Título do Evento",
   "event_title_required": "O título do evento é obrigatório",
   "event_updated": "Evento atualizado com sucesso",
-  "event_year": "Ano"
+  "event_year": "Ano",
+  "event_contacts": "Pessoas",
+  "no_event_contacts": "Nenhum contacto associado a este evento",
+  "add_contact": "Adicionar Contacto",
+  "remove_contact": "Remover Contacto",
+  "remove_contact_confirm": "Remover {0} deste evento?",
+  "contact_already_added": "Este contacto já foi adicionado",
+  "callsign_required": "Indicativo é obrigatório",
+  "enter_callsign": "Introduza o nome ou indicativo do contacto"
 }

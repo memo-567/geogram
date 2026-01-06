@@ -1,5 +1,6 @@
 {
   "quick_access": "Quick Access",
+  "no_popular_contacts": "View or interact with contacts to see your favorites here.",
   "history_log": "History Log",
   "add_history_entry": "Add Entry",
   "edit_history_entry": "Edit Entry",
@@ -22,6 +23,7 @@
   "add_tag": "Add Tag",
   "tag_name": "Tag Name",
   "select_photo": "Select Photo",
+  "take_photo": "Take Photo",
   "remove_photo": "Remove Photo",
   "profile_picture": "Profile Picture",
   "npub_optional": "NPUB (optional)",
@@ -187,5 +189,11 @@
   "send_email": "Send email",
   "copy": "Copy",
   "copied_to_clipboard": "Copied to clipboard",
-  "interaction_message": "Short message"
+  "interaction_message": "Short message",
+  "contacts_with_event_hint": "Select contacts who were with you at this event",
+  "no_contacts_available": "No contacts available. Add contacts to your collection first.",
+  "select_contacts": "Select Contacts",
+  "add_more_contacts": "Add More Contacts",
+  "contact_not_found": "Contact not found",
+  "contact_details": "Contact Details"
 }

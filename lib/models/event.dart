@@ -34,6 +34,7 @@ class Event {
   final List<EventUpdate> updates; // Event updates
   final EventRegistration? registration; // Going/Interested lists
   final List<EventLink> links; // Relevant links
+  final List<String> contacts; // List of contact callsigns associated with event
 
   Event({
     required this.id,
@@ -59,6 +60,7 @@ class Event {
     this.updates = const [],
     this.registration,
     this.links = const [],
+    this.contacts = const [],
   });
 
   /// Create Event from API JSON (from toApiJson output)
@@ -165,6 +167,7 @@ class Event {
       updates: updates,
       registration: registration,
       links: links,
+      contacts: (json['contacts'] as List<dynamic>?)?.cast<String>() ?? [],
       metadata: metadata,
     );
   }
@@ -357,6 +360,11 @@ class Event {
       buffer.writeln('VISIBILITY: $visibility');
     }
 
+    // Contacts (optional)
+    if (contacts.isNotEmpty) {
+      buffer.writeln('CONTACTS: ${contacts.join(', ')}');
+    }
+
     buffer.writeln();
 
     // Content
@@ -417,6 +425,7 @@ class Event {
     List<String> admins = [];
     List<String> moderators = [];
     List<String> groupAccess = [];
+    List<String> contacts = [];
     String? location;
     String? locationName;
     String? agenda;
@@ -453,6 +462,9 @@ class Event {
         agenda = line.substring(8).trim();
       } else if (line.startsWith('VISIBILITY: ')) {
         visibility = line.substring(12).trim();
+      } else if (line.startsWith('CONTACTS: ')) {
+        final contactsStr = line.substring(10).trim();
+        contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
       }
 
       currentLine++;
@@ -512,9 +524,16 @@ class Event {
       content: content,
       agenda: agenda,
       visibility: visibility,
+      contacts: contacts,
       metadata: metadata,
     );
   }
+
+  /// Whether this event has contacts associated
+  bool get hasContacts => contacts.isNotEmpty;
+
+  /// Get contact count
+  int get contactCount => contacts.length;
 
   /// Get primary flyer filename
   String? get primaryFlyer {
@@ -568,6 +587,7 @@ class Event {
     List<EventUpdate>? updates,
     EventRegistration? registration,
     List<EventLink>? links,
+    List<String>? contacts,
   }) {
     return Event(
       id: id ?? this.id,
@@ -592,6 +612,7 @@ class Event {
       updates: updates ?? this.updates,
       registration: registration ?? this.registration,
       links: links ?? this.links,
+      contacts: contacts ?? this.contacts,
     );
   }
 
@@ -672,6 +693,7 @@ class Event {
         'description': l.description,
         'password': l.password,
       }).toList(),
+      'contacts': contacts,
       'npub': npub,
       'signature': signature,
       if (placePath != null) 'place_path': placePath,

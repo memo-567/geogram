@@ -1,7 +1,7 @@
 # Contacts Format Specification
 
-**Version**: 1.0
-**Last Updated**: 2025-11-21
+**Version**: 1.1
+**Last Updated**: 2026-01-06
 **Status**: Active
 
 ## Table of Contents
@@ -15,6 +15,7 @@
 - [Location Tracking](#location-tracking)
 - [Duplicate Prevention](#duplicate-prevention)
 - [Reactions System](#reactions-system)
+- [Contact Metrics](#contact-metrics)
 - [Permissions and Roles](#permissions-and-roles)
 - [NOSTR Integration](#nostr-integration)
 - [Complete Examples](#complete-examples)
@@ -64,6 +65,9 @@ collection_name/
     ├── CR7BBQ.txt                      # Contact file (root level)
     ├── X135AS.txt
     ├── BRAVO2.txt
+    ├── fast.json                       # Contact summaries cache (all contacts)
+    ├── .contact_metrics.txt            # Usage metrics (hidden)
+    ├── .favorites.json                 # Quick Access favorites (hidden)
     ├── family/                         # Group folder
     │   ├── ALICE1.txt
     │   ├── BOB42.txt
@@ -635,6 +639,240 @@ Helped me deliver important postcard.
 - File: `.reactions/{folder-name}.txt`
 - Path: `contacts/.reactions/family.txt`
 
+## Contact Metrics
+
+### Purpose
+
+The contact metrics system tracks usage patterns to identify frequently accessed and interacted contacts. This enables features like:
+
+- **Quick Access**: Show most popular contacts at the top of lists
+- **Favorites**: Automatically identify favorite contacts without manual curation
+- **Smart Sorting**: Sort contact pickers by relevance (most used first)
+- **Event Suggestions**: Prioritize contacts frequently associated with events
+
+### File Location
+
+**Path**: `contacts/.contact_metrics.txt`
+
+**Characteristics**:
+- Hidden file (starts with `.`)
+- Plain text format
+- One contact per line
+- Auto-generated and maintained by the application
+- Safe to delete (will be rebuilt from usage)
+
+### File Format
+
+```
+# CONTACT METRICS
+# Format: CALLSIGN|views|total_interactions|last_accessed|method_interactions|events
+
+CR7BBQ|15|8|2025-11-21 14:30_00|phone:0=3,email:0=5|4
+ALICE1|10|5|2025-11-20 09:15_00|phone:0=2,phone:1=1,email:0=2|2
+BOB42|3|1|2025-11-19 16:45_00|email:bob@work.com=1|0
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `CALLSIGN` | string | Contact identifier (matches filename) |
+| `views` | int | Number of times contact detail was viewed |
+| `total_interactions` | int | Total count of all interactions |
+| `last_accessed` | timestamp | When contact was last viewed or interacted with |
+| `method_interactions` | map | Interaction counts per communication method |
+| `events` | int | Number of times contact was added to events |
+
+### Method Interactions Format
+
+The `method_interactions` field tracks how often each communication method was used:
+
+**Format**: `type:index=count,type:value=count,...`
+
+**Examples**:
+```
+phone:0=5              # First phone number used 5 times
+phone:+1-555-0123=5    # Same phone tracked by value
+email:0=3              # First email used 3 times
+email:alice@ex.com=3   # Same email tracked by value
+```
+
+**Tracked Types**:
+- `phone` - Phone calls or SMS
+- `email` - Email sent
+- `message` - Short messages
+- `website` - Website visited
+
+### Popularity Score Calculation
+
+The **totalScore** determines contact ranking:
+
+```
+totalScore = views + (totalInteractions × 2) + (events × 3)
+```
+
+**Weights**:
+- Views: ×1 (passive engagement)
+- Interactions: ×2 (active engagement)
+- Events: ×3 (strong association indicator)
+
+**Example**:
+```
+Contact with: 10 views, 5 interactions, 2 events
+Score = 10 + (5 × 2) + (2 × 3) = 10 + 10 + 6 = 26
+```
+
+### When Metrics Are Recorded
+
+| Action | Metric Updated |
+|--------|----------------|
+| Open contact detail page | `views++`, `lastAccessed` |
+| Tap phone number | `totalInteractions++`, `methodInteractions[phone:N]++` |
+| Tap email address | `totalInteractions++`, `methodInteractions[email:N]++` |
+| Send short message | `totalInteractions++`, `methodInteractions[message:N]++` |
+| Add contact to event | `events++`, `lastAccessed` |
+
+### Contact Summaries Cache (fast.json)
+
+For instant contact list loading, a summaries cache is maintained:
+
+**Path**: `contacts/fast.json`
+
+**Purpose**: Pre-computed summaries of all contacts for instant UI rendering
+
+**Format**:
+```json
+[
+  {
+    "callsign": "CR7BBQ",
+    "displayName": "Carlos Rodriguez",
+    "profilePicture": "CR7BBQ.jpg",
+    "groupPath": "family",
+    "filePath": "/path/to/contacts/family/CR7BBQ.txt",
+    "popularityScore": 26
+  },
+  {
+    "callsign": "ALICE1",
+    "displayName": "Alice Smith",
+    "profilePicture": "ALICE1.png",
+    "filePath": "/path/to/contacts/ALICE1.txt",
+    "popularityScore": 20
+  }
+]
+```
+
+**Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `callsign` | string | Contact identifier |
+| `displayName` | string | Human-readable name |
+| `profilePicture` | string? | Profile picture filename (optional) |
+| `groupPath` | string? | Group folder path (optional) |
+| `filePath` | string | Full path to contact file |
+| `popularityScore` | int | Calculated from metrics |
+
+**Characteristics**:
+- JSON array of contact summaries
+- Sorted by popularity score (descending), then alphabetically
+- Contains essential display data only
+- Rebuilt when contacts are added, modified, or deleted
+- Enables instant UI rendering without parsing all contact files
+
+**When Rebuilt**:
+- Contact created
+- Contact updated
+- Contact deleted
+- Contact moved between groups
+- On first load if file missing
+
+### Favorites Cache (.favorites.json)
+
+For Quick Access feature, a favorites cache is maintained:
+
+**Path**: `contacts/.favorites.json`
+
+**Purpose**: Pre-computed list of top contacts for Quick Access panel
+
+**Format**:
+```json
+[
+  {"callsign": "CR7BBQ", "displayName": "Carlos", "popularityScore": 26},
+  {"callsign": "ALICE1", "displayName": "Alice", "popularityScore": 20}
+]
+```
+
+**Characteristics**:
+- JSON array of contact summaries
+- Sorted by popularity score (descending)
+- Limited to top 30 contacts by default
+- Only includes contacts with score > 0
+- Rebuilt automatically when metrics change
+
+### Quick Access Feature
+
+The Quick Access panel displays frequently used contacts for one-tap access.
+
+**Display Location**: Top of Contacts browser page
+
+**Data Source**: `contacts/.favorites.json`
+
+**Behavior**:
+1. Loads favorites from `.favorites.json` (instant)
+2. Displays contacts as clickable cards/avatars
+3. Shows display name and profile picture
+4. Tapping opens contact detail page
+5. Updates automatically as usage patterns change
+
+**When Empty**:
+- Shows hint: "View or interact with contacts to see your favorites here"
+- Encourages users to use the app to build their favorites
+
+**Update Triggers**:
+- Contact viewed → metrics updated → favorites rebuilt
+- Contact interaction (call, email, message) → metrics updated → favorites rebuilt
+- Contact added to event → metrics updated → favorites rebuilt
+
+### Usage in Contact Picker
+
+When selecting contacts for events, the picker can use metrics for smart sorting:
+
+**Default Sort** (sortByEvents: false):
+1. Favorites first (from `.favorites.json`)
+2. Then alphabetically
+
+**Event Sort** (sortByEvents: true):
+1. Contacts with highest `events` count first
+2. Then favorites
+3. Then alphabetically
+
+### File Operations
+
+**Rebuild Metrics**:
+```
+1. Scan all contact files
+2. Load existing metrics (if any)
+3. Preserve existing counts
+4. Remove metrics for deleted contacts
+5. Save updated metrics file
+```
+
+**Rebuild Favorites Cache**:
+```
+1. Load metrics file
+2. Filter contacts with score > 0
+3. Sort by totalScore descending
+4. Take top N contacts (default: 30)
+5. Load display names from contact files
+6. Save to .favorites.json
+```
+
+### Best Practices
+
+1. **Don't Edit Manually**: Let the application manage metrics
+2. **Safe to Delete**: Both files can be deleted; they'll rebuild over time
+3. **Privacy**: Metrics reveal usage patterns; keep contacts collection private
+4. **Performance**: Use `.favorites.json` for instant access to top contacts
+
 ## Permissions and Roles
 
 ### Collection Owner
@@ -1070,6 +1308,17 @@ HAM radio operator, emergency frequency monitor.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.1 (2026-01-06)
+
+**Contact Metrics System**:
+- Added usage metrics tracking (`.contact_metrics.txt`)
+- Fields: views, totalInteractions, events, lastAccessed, methodInteractions
+- Popularity score calculation: `views + (interactions × 2) + (events × 3)`
+- Contact summaries cache (`fast.json`) for instant UI loading
+- Favorites cache (`.favorites.json`) for Quick Access feature
+- Quick Access panel documentation
+- Smart sorting in Contact Picker based on event associations
 
 ### Version 1.0 (2025-11-21)
 

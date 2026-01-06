@@ -84,7 +84,7 @@ dependencies:
   flutter_pty: ^0.4.1            # PTY support for Linux terminal
   flutter_contacts: ^1.1.9       # Device contacts access for import feature (Android)
   qr_flutter: ^4.1.0             # QR code generation for contact sharing
-  mobile_scanner: ^7.1.4         # QR code scanning (Android, iOS, macOS, Web)
+  flutter_zxing: ^1.8.0          # QR code scanning using ZXing (F-Droid compatible, no Google deps)
 
 dev_dependencies:
   flutter_test:

@@ -6,7 +6,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/contact.dart';
 import '../services/contact_qr_service.dart';
@@ -30,12 +30,12 @@ class ContactQrScanPage extends StatefulWidget {
 
 class _ContactQrScanPageState extends State<ContactQrScanPage> {
   final ContactQrService _qrService = ContactQrService();
-  MobileScannerController? _controller;
   bool _isLoading = true;
   bool _permissionDenied = false;
   bool _permissionPermanentlyDenied = false;
   bool _hasScanned = false;
   String? _errorMessage;
+  bool _flashOn = false;
 
   @override
   void initState() {
@@ -45,14 +45,13 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
 
   @override
   void dispose() {
-    _controller?.dispose();
     super.dispose();
   }
 
   Future<void> _checkPlatformAndPermission() async {
-    // mobile_scanner supports: Android, iOS, macOS, Web
-    // Only Windows and Linux desktop don't have camera support
-    if (!kIsWeb && !Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS) {
+    // flutter_zxing supports: Android, iOS, macOS
+    // Web and Linux/Windows desktop don't have camera support via ZXing
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS)) {
       setState(() {
         _isLoading = false;
         _errorMessage = widget.i18n.t('camera_not_supported');
@@ -99,30 +98,22 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
   }
 
   void _startScanner() {
-    _controller = MobileScannerController(
-      detectionSpeed: DetectionSpeed.normal,
-      facing: CameraFacing.back,
-      torchEnabled: false,
-    );
     setState(() {
       _isLoading = false;
     });
   }
 
-  void _onDetect(BarcodeCapture capture) {
+  void _onScan(Code code) {
     if (_hasScanned) return; // Prevent multiple scans
+    if (!code.isValid) return;
 
-    for (final barcode in capture.barcodes) {
-      final value = barcode.rawValue;
-      if (value == null) continue;
+    final value = code.text;
+    if (value == null) return;
 
-      // Try to parse as Geogram contact
-      if (_qrService.isValidGeogramContact(value)) {
-        _hasScanned = true;
-        _controller?.stop();
-        _handleScannedContact(value);
-        return;
-      }
+    // Try to parse as Geogram contact
+    if (_qrService.isValidGeogramContact(value)) {
+      _hasScanned = true;
+      _handleScannedContact(value);
     }
   }
 
@@ -149,7 +140,6 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
     setState(() {
       _hasScanned = false;
     });
-    _controller?.start();
   }
 
   Future<bool?> _showContactPreview(Contact contact) {
@@ -388,10 +378,14 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
       appBar: AppBar(
         title: Text(widget.i18n.t('scan_contact')),
         actions: [
-          if (_controller != null)
+          if (!_isLoading && !_permissionDenied && _errorMessage == null)
             IconButton(
-              icon: const Icon(Icons.flash_on),
-              onPressed: () => _controller?.toggleTorch(),
+              icon: Icon(_flashOn ? Icons.flash_off : Icons.flash_on),
+              onPressed: () {
+                setState(() {
+                  _flashOn = !_flashOn;
+                });
+              },
               tooltip: 'Toggle flash',
             ),
         ],
@@ -484,13 +478,18 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
   Widget _buildScannerView(ThemeData theme) {
     return Stack(
       children: [
-        // Camera preview
-        MobileScanner(
-          controller: _controller!,
-          onDetect: _onDetect,
+        // Camera preview with ZXing scanner
+        ReaderWidget(
+          onScan: _onScan,
+          isMultiScan: false,
+          showFlashlight: false,  // We handle flash in AppBar
+          showToggleCamera: false,
+          showGallery: false,
+          tryHarder: true,
+          tryInverted: true,
         ),
 
-        // Overlay
+        // Custom overlay
         Container(
           decoration: BoxDecoration(
             color: Colors.black.withOpacity(0.5),
@@ -504,38 +503,18 @@ class _ContactQrScanPageState extends State<ContactQrScanPage> {
                 borderRadius: BorderRadius.circular(16),
                 color: Colors.transparent,
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13),
-                child: ColorFiltered(
-                  colorFilter: const ColorFilter.mode(
-                    Colors.transparent,
-                    BlendMode.srcOut,
-                  ),
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
             ),
           ),
         ),
 
-        // Remove the overlay inside the scanning frame
+        // Clear the overlay inside the scanning frame
         Center(
           child: Container(
             width: 274,
             height: 274,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(13),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(13),
-              child: MobileScanner(
-                controller: _controller!,
-                onDetect: _onDetect,
-              ),
+              color: Colors.transparent,
             ),
           ),
         ),

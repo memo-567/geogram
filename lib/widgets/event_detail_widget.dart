@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io' as io;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -30,6 +31,8 @@ class EventDetailWidget extends StatelessWidget {
   final VoidCallback? onCreateUpdate;
   final Future<void> Function()? onFeedbackUpdated;
   final void Function(String placePath)? onPlaceOpen;
+  final void Function(List<String> contacts)? onContactsUpdated;
+  final void Function(String callsign)? onContactOpen;
 
   const EventDetailWidget({
     Key? key,
@@ -43,6 +46,8 @@ class EventDetailWidget extends StatelessWidget {
     this.onCreateUpdate,
     this.onFeedbackUpdated,
     this.onPlaceOpen,
+    this.onContactsUpdated,
+    this.onContactOpen,
   }) : super(key: key);
 
   @override
@@ -102,6 +107,18 @@ class EventDetailWidget extends StatelessWidget {
           // Links section
           if (event.hasLinks) ...[
             _buildLinks(context, theme, i18n),
+            const SizedBox(height: 24),
+          ],
+
+          // Contacts section - only show if has contacts or can add contacts
+          if (event.hasContacts || (canEdit && onContactsUpdated != null)) ...[
+            EventContactsSection(
+              event: event,
+              collectionPath: collectionPath,
+              canEdit: canEdit,
+              onContactsUpdated: onContactsUpdated,
+              onContactTap: onContactOpen,
+            ),
             const SizedBox(height: 24),
           ],
 
@@ -330,59 +347,47 @@ class EventDetailWidget extends StatelessWidget {
         .toList();
     final canOpen = !kIsWeb && flyerPaths.isNotEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          i18n.t('flyer'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        GestureDetector(
-          onTap: canOpen
-              ? () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => PhotoViewerPage(
-                        imagePaths: flyerPaths,
-                        initialIndex: 0,
-                      ),
-                    ),
-                  );
-                }
-              : null,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: kIsWeb
-                ? Container(
+    return GestureDetector(
+      onTap: canOpen
+          ? () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => PhotoViewerPage(
+                    imagePaths: flyerPaths,
+                    initialIndex: 0,
+                  ),
+                ),
+              );
+            }
+          : null,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: kIsWeb
+            ? Container(
+                height: 200,
+                color: theme.colorScheme.surfaceVariant,
+                child: Center(
+                  child: Text(i18n.t('image_not_available_on_web')),
+                ),
+              )
+            : Image.file(
+                io.File(flyerPath),
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
                     height: 200,
                     color: theme.colorScheme.surfaceVariant,
                     child: Center(
-                      child: Text(i18n.t('image_not_available_on_web')),
+                      child: Icon(
+                        Icons.broken_image,
+                        size: 48,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  )
-                : Image.file(
-                    io.File(flyerPath),
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        height: 200,
-                        color: theme.colorScheme.surfaceVariant,
-                        child: Center(
-                          child: Icon(
-                            Icons.broken_image,
-                            size: 48,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ),
-      ],
+                  );
+                },
+              ),
+      ),
     );
   }
 
@@ -424,21 +429,9 @@ class EventDetailWidget extends StatelessWidget {
   }
 
   Widget _buildContent(ThemeData theme, I18nService i18n) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          i18n.t('description'),
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        SelectableText(
-          event.content,
-          style: theme.textTheme.bodyLarge?.copyWith(height: 1.6),
-        ),
-      ],
+    return SelectableText(
+      event.content,
+      style: theme.textTheme.bodyLarge?.copyWith(height: 1.6),
     );
   }
 
@@ -1115,11 +1108,6 @@ class _EventFilesSectionState extends State<EventFilesSection> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.refresh, size: 20),
-              onPressed: _loadFiles,
-              tooltip: i18n.t('refresh'),
-            ),
-            IconButton(
               icon: const Icon(Icons.add_photo_alternate),
               onPressed: widget.onUploadFiles,
               tooltip: i18n.t('add_files'),
@@ -1278,4 +1266,323 @@ class _EventFilesSectionState extends State<EventFilesSection> {
       ],
     );
   }
+}
+
+/// Section for displaying and managing contacts associated with an event
+class EventContactsSection extends StatefulWidget {
+  final Event event;
+  final String collectionPath;
+  final bool canEdit;
+  final void Function(List<String> contacts)? onContactsUpdated;
+  final void Function(String callsign)? onContactTap;
+
+  const EventContactsSection({
+    Key? key,
+    required this.event,
+    required this.collectionPath,
+    this.canEdit = false,
+    this.onContactsUpdated,
+    this.onContactTap,
+  }) : super(key: key);
+
+  @override
+  State<EventContactsSection> createState() => _EventContactsSectionState();
+}
+
+class _EventContactsSectionState extends State<EventContactsSection> {
+  final I18nService _i18n = I18nService();
+  Map<String, _ContactInfo> _contactInfoMap = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContactInfo();
+  }
+
+  @override
+  void didUpdateWidget(EventContactsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.contacts != widget.event.contacts) {
+      _loadContactInfo();
+    }
+  }
+
+  /// Load contact info directly from fast.json file
+  Future<void> _loadContactInfo() async {
+    if (widget.collectionPath.isEmpty || widget.event.contacts.isEmpty) return;
+
+    final infoMap = <String, _ContactInfo>{};
+
+    // Events collectionPath is like: devices/X1DPDX/events
+    // Contacts are at: devices/X1DPDX/contacts/contacts/fast.json
+    // So we go up one level and then into contacts/contacts/
+    final devicePath = path.dirname(widget.collectionPath);
+    final fastJsonPath = '$devicePath/contacts/contacts/fast.json';
+
+    try {
+      final file = io.File(fastJsonPath);
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final List<dynamic> jsonList = json.decode(content);
+
+        // Build lookup map from callsign to contact info
+        for (final item in jsonList) {
+          final callsign = item['callsign'] as String?;
+          if (callsign != null && widget.event.contacts.contains(callsign)) {
+            final displayName = item['displayName'] as String? ?? callsign;
+            final profilePic = item['profilePicture'] as String?;
+            // fast.json has absolute filePath, use its directory for profile pics
+            final filePath = item['filePath'] as String?;
+            String? profilePicPath;
+            if (profilePic != null && filePath != null) {
+              final contactsDir = path.dirname(path.dirname(filePath));
+              profilePicPath = '$contactsDir/profile-pictures/$profilePic';
+            }
+            infoMap[callsign] = _ContactInfo(
+              displayName: displayName,
+              profilePicPath: profilePicPath,
+            );
+          }
+        }
+      }
+    } catch (e) {
+      // Silently fail - will just show callsigns
+    }
+
+    if (mounted) {
+      setState(() {
+        _contactInfoMap = infoMap;
+      });
+    }
+  }
+
+  String _getContactLabel(String callsign) {
+    final info = _contactInfoMap[callsign];
+    if (info != null && info.displayName.isNotEmpty && info.displayName != callsign) {
+      return '${info.displayName} ($callsign)';
+    }
+    return callsign;
+  }
+
+  Widget? _buildContactAvatar(String callsign) {
+    final info = _contactInfoMap[callsign];
+    if (info?.profilePicPath != null) {
+      final file = io.File(info!.profilePicPath!);
+      if (file.existsSync()) {
+        return CircleAvatar(
+          radius: 12,
+          backgroundImage: FileImage(file),
+        );
+      }
+    }
+    return null;
+  }
+
+  Future<void> _addContact() async {
+    // Show a dialog to add a contact by callsign
+    final callsign = await showDialog<String>(
+      context: context,
+      builder: (context) => _AddContactDialog(
+        existingContacts: widget.event.contacts,
+        i18n: _i18n,
+      ),
+    );
+
+    if (callsign != null && callsign.isNotEmpty) {
+      final updatedContacts = [...widget.event.contacts, callsign];
+      widget.onContactsUpdated?.call(updatedContacts);
+    }
+  }
+
+  Future<void> _removeContact(String callsign) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('remove_contact')),
+        content: Text(_i18n.t('remove_contact_confirm', params: [callsign])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('remove')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final updatedContacts = widget.event.contacts.where((c) => c != callsign).toList();
+      widget.onContactsUpdated?.call(updatedContacts);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isReadOnly = widget.collectionPath.isEmpty || !widget.canEdit;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                _i18n.t('event_contacts'),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            if (!isReadOnly && widget.onContactsUpdated != null)
+              IconButton(
+                icon: const Icon(Icons.person_add),
+                onPressed: _addContact,
+                tooltip: _i18n.t('add_contact'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        if (widget.event.contacts.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.people_outline,
+                  size: 24,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _i18n.t('no_event_contacts'),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: widget.event.contacts.map((callsign) {
+              final chip = Chip(
+                avatar: _buildContactAvatar(callsign),
+                label: Text(_getContactLabel(callsign)),
+                deleteIcon: !isReadOnly && widget.onContactsUpdated != null
+                    ? const Icon(Icons.close, size: 18)
+                    : null,
+                onDeleted: !isReadOnly && widget.onContactsUpdated != null
+                    ? () => _removeContact(callsign)
+                    : null,
+              );
+              if (widget.onContactTap != null) {
+                return InkWell(
+                  onTap: () => widget.onContactTap!(callsign),
+                  borderRadius: BorderRadius.circular(16),
+                  child: chip,
+                );
+              }
+              return chip;
+            }).toList(),
+          ),
+      ],
+    );
+  }
+}
+
+/// Dialog for adding a contact to an event
+class _AddContactDialog extends StatefulWidget {
+  final List<String> existingContacts;
+  final I18nService i18n;
+
+  const _AddContactDialog({
+    required this.existingContacts,
+    required this.i18n,
+  });
+
+  @override
+  State<_AddContactDialog> createState() => _AddContactDialogState();
+}
+
+class _AddContactDialogState extends State<_AddContactDialog> {
+  final _controller = TextEditingController();
+  String? _error;
+
+  void _submit() {
+    final callsign = _controller.text.trim();
+    if (callsign.isEmpty) {
+      setState(() => _error = widget.i18n.t('callsign_required'));
+      return;
+    }
+    if (widget.existingContacts.contains(callsign)) {
+      setState(() => _error = widget.i18n.t('contact_already_added'));
+      return;
+    }
+    Navigator.pop(context, callsign);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.i18n.t('add_contact')),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _controller,
+            decoration: InputDecoration(
+              labelText: widget.i18n.t('callsign'),
+              hintText: widget.i18n.t('enter_callsign'),
+              errorText: _error,
+              border: const OutlineInputBorder(),
+            ),
+            textCapitalization: TextCapitalization.words,
+            autofocus: true,
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(widget.i18n.t('cancel')),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.i18n.t('add')),
+        ),
+      ],
+    );
+  }
+}
+
+/// Helper class to store contact info for display
+class _ContactInfo {
+  final String displayName;
+  final String? profilePicPath;
+
+  _ContactInfo({
+    required this.displayName,
+    this.profilePicPath,
+  });
 }

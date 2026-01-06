@@ -476,6 +476,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
     // Subscribe to DM notification tap events for deep linking (foreground only)
     _dmNotificationSubscription = EventBus().on<DMNotificationTappedEvent>((event) {
+      print('NOTIFICATION_DEBUG: *** DMNotificationTappedEvent received for ${event.targetCallsign} ***');
       LogService().log('GeogramApp: DM notification tapped for ${event.targetCallsign}');
       _navigateToDMChat(event.targetCallsign);
     });
@@ -496,22 +497,36 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    print('NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state');
     if (state == AppLifecycleState.resumed) {
-      _checkPendingNotification();
+      // Delay check to allow SharedPreferences write to complete in background isolate
+      Future.delayed(const Duration(milliseconds: 500), () {
+        print('NOTIFICATION_DEBUG: ${DateTime.now()} delayed _checkPendingNotification');
+        _checkPendingNotification();
+      });
     }
   }
 
   /// Check for pending notification action and navigate accordingly
-  void _checkPendingNotification() {
-    final action = DMNotificationService.pendingAction;
+  /// Uses SharedPreferences for cross-isolate communication (background notification tap)
+  Future<void> _checkPendingNotification() async {
+    print('NOTIFICATION_DEBUG: _checkPendingNotification called');
+    final action = await DMNotificationService().consumePendingAction();
+    print('NOTIFICATION_DEBUG: consumePendingAction returned: $action');
     if (action == null) return;
-    DMNotificationService.pendingAction = null; // Clear it
 
+    print('NOTIFICATION_DEBUG: Processing ${action.type}:${action.data}');
     LogService().log('GeogramApp: Processing pending notification: ${action.type}:${action.data}');
 
     switch (action.type) {
       case 'dm':
-        DebugController().triggerOpenDM(callsign: action.data);
+        // Follow test script pattern: navigate to devices panel first, wait, then open DM
+        print('NOTIFICATION_DEBUG: Calling navigateToPanel(2)');
+        DebugController().navigateToPanel(2); // Devices panel
+        Future.delayed(const Duration(seconds: 2), () {
+          print('NOTIFICATION_DEBUG: Calling triggerOpenDM(${action.data})');
+          DebugController().triggerOpenDM(callsign: action.data);
+        });
         break;
       case 'chat':
         // Future: navigate to chat room
@@ -525,8 +540,11 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
   /// Navigate to DM chat, waiting for navigator if needed (handles cold start timing)
   void _navigateToDMChat(String callsign) {
+    print('NOTIFICATION_DEBUG: _navigateToDMChat called for $callsign');
+    print('NOTIFICATION_DEBUG: _navigatorKey.currentState = ${_navigatorKey.currentState}');
     // If navigator is ready, navigate immediately
     if (_navigatorKey.currentState != null) {
+      print('NOTIFICATION_DEBUG: Navigator ready, pushing DMChatPage');
       _navigatorKey.currentState!.push(
         MaterialPageRoute(
           builder: (context) => DMChatPage(
@@ -684,6 +702,16 @@ class _HomePageState extends State<HomePage> {
   void _onDebugAction(DebugActionEvent event) {
     if (event.action == DebugAction.openStationChat) {
       _handleOpenStationChat();
+    } else if (event.action == DebugAction.openDM) {
+      final callsign = event.params['callsign'] as String?;
+      if (callsign != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DMChatPage(otherCallsign: callsign.toUpperCase()),
+          ),
+        );
+      }
     }
   }
 

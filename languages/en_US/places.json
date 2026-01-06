@@ -50,6 +50,7 @@
   "place_type_grocery": "Grocery",
   "place_type_hospital": "Hospital",
   "place_type_hotel": "Hotel",
+  "place_type_house": "House",
   "place_type_landmark": "Landmark",
   "place_type_library": "Library",
   "place_type_market": "Market",
@@ -67,5 +68,7 @@
   "place_type_veterinary": "Veterinary",
   "place_type_viewpoint": "Viewpoint",
   "see_in_map": "See in map",
-  "fit_to_view": "Fit both locations"
+  "fit_to_view": "Fit both locations",
+  "advanced_options": "Advanced Options",
+  "take_photo": "Take Photo"
 }

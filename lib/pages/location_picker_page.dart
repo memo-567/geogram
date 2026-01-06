@@ -55,23 +55,34 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     // Don't restore saved zoom - users need precision when selecting locations
     _currentZoom = 18.0;
 
-    // Priority: 1) provided initialPosition, 2) auto-detect current location, 3) last saved, 4) default
+    // Priority: 1) provided initialPosition, 2) last saved position, 3) auto-detect current location, 4) default
     if (widget.initialPosition != null) {
       _selectedPosition = widget.initialPosition!;
       _initializeControllers();
     } else {
-      // Start with default position, then try to auto-detect
-      _selectedPosition = _defaultPosition;
-      _initializeControllers();
+      // Check for last saved position first
+      final lastLat = _configService.get('lastLocationPickerLat');
+      final lastLon = _configService.get('lastLocationPickerLon');
 
-      // Automatically try to detect the user's current location (only if not in view-only mode)
-      if (!widget.viewOnly) {
-        _autoDetectLocationOnStart();
+      if (lastLat != null && lastLon != null) {
+        // Use last saved position - don't auto-detect GPS
+        _selectedPosition = LatLng(lastLat as double, lastLon as double);
+        _initializeControllers();
+        LogService().log('Using last saved picker position: $lastLat, $lastLon');
+      } else {
+        // No saved position - start with default and try to auto-detect
+        _selectedPosition = _defaultPosition;
+        _initializeControllers();
+
+        // Automatically try to detect the user's current location (only if not in view-only mode)
+        if (!widget.viewOnly) {
+          _autoDetectLocationOnStart();
+        }
       }
     }
   }
 
-  /// Automatically detect location when the picker opens
+  /// Automatically detect location when the picker opens (only when no saved position exists)
   /// Uses GeolocationUtils for unified location detection
   /// On mobile, explicitly requests GPS permission for accurate location
   Future<void> _autoDetectLocationOnStart() async {
@@ -97,15 +108,6 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       if (result != null && result.isValid && mounted) {
         _setLocation(result.latitude, result.longitude);
         LogService().log('Auto-detected location via ${result.source}: ${result.latitude}, ${result.longitude}');
-      } else {
-        // Fallback: Try last saved position
-        final lastLat = _configService.get('lastLocationPickerLat');
-        final lastLon = _configService.get('lastLocationPickerLon');
-
-        if (lastLat != null && lastLon != null && mounted) {
-          _setLocation(lastLat as double, lastLon as double);
-          LogService().log('Fallback: Using last saved position');
-        }
       }
     } catch (e) {
       LogService().log('Auto-detect failed: $e');

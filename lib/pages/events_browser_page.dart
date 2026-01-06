@@ -21,7 +21,6 @@ import '../widgets/event_detail_widget.dart';
 import 'event_detail_page.dart';
 import 'new_event_page.dart';
 import '../dialogs/new_update_dialog.dart';
-import 'event_settings_page.dart';
 
 /// Events browser page with 2-panel layout
 /// Supports both local collection viewing and remote device viewing via API
@@ -307,6 +306,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         admins: result['admins'] as List<String>?,
         moderators: result['moderators'] as List<String>?,
         groupAccess: result['groupAccess'] as List<String>?,
+        contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         npub: profile.npub,
         metadata: metadata,
       );
@@ -478,7 +478,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
-        builder: (context) => EventSettingsPage(
+        builder: (context) => NewEventPage(
           event: _selectedEvent!,
           collectionPath: widget.collectionPath ?? '',
         ),
@@ -508,6 +508,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
             : null,  // key not present means don't update trailer
         links: result['links'] as List<EventLink>?,
         registrationEnabled: result['registrationEnabled'] as bool?,
+        contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         metadata: metadata,
       );
 
@@ -524,6 +525,115 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           _selectedEvent = updatedEvent;
         });
         await _loadEvents();
+      }
+    }
+  }
+
+  /// Edit event from the tile's three-dot menu
+  Future<void> _editEventFromTile(Event event) async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => NewEventPage(
+          event: event,
+          collectionPath: widget.collectionPath ?? '',
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      final metadata = _buildEventMetadata(result);
+      final newEventId = await _eventService.updateEvent(
+        eventId: event.id,
+        title: result['title'] as String,
+        location: result['location'] as String,
+        locationName: result['locationName'] as String?,
+        content: result['content'] as String,
+        agenda: result['agenda'] as String?,
+        visibility: result['visibility'] as String?,
+        admins: result['admins'] as List<String>?,
+        moderators: result['moderators'] as List<String>?,
+        groupAccess: result['groupAccess'] as List<String>?,
+        eventDateTime: result['eventDateTime'] as DateTime?,
+        startDate: result['startDate'] as String?,
+        endDate: result['endDate'] as String?,
+        trailerFileName: result.containsKey('trailer')
+            ? (result['trailer'] as String? ?? '')
+            : null,
+        links: result['links'] as List<EventLink>?,
+        registrationEnabled: result['registrationEnabled'] as bool?,
+        contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
+        metadata: metadata,
+      );
+
+      if (newEventId != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('event_updated')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Reload events list
+        await _loadEvents();
+        // Update selected event if it was the one edited
+        if (_selectedEvent?.id == event.id) {
+          final updatedEvent = await _eventService.loadEvent(newEventId);
+          setState(() {
+            _selectedEvent = updatedEvent;
+          });
+        }
+      }
+    }
+  }
+
+  /// Delete event from the tile's three-dot menu
+  Future<void> _deleteEventFromTile(Event event) async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_event')),
+        content: Text(_i18n.t('delete_event_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final success = await _eventService.deleteEvent(event.id);
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('event_deleted')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Clear selection if this was the selected event
+        if (_selectedEvent?.id == event.id) {
+          setState(() {
+            _selectedEvent = null;
+          });
+        }
+        // Reload events list
+        await _loadEvents();
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('delete_failed')),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -631,7 +741,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           : FloatingActionButton.extended(
               onPressed: _createNewEvent,
               icon: const Icon(Icons.add),
-              label: Text(_i18n.t('add')),
+              label: Text(_i18n.t('create')),
             ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -833,20 +943,27 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
             ),
             // Events for this year
             if (isExpanded)
-              ...events.map((event) => EventTileWidget(
-                    event: event,
-                    isSelected: _selectedEvent?.id == event.id,
-                    collectionPath: widget.collectionPath,
-                    onTap: () {
-                      if (widget.isRemoteDevice) {
-                        _selectRemoteEvent(event);
-                      } else if (isMobileView) {
-                        _selectEventMobile(event);
-                      } else {
-                        _selectEvent(event);
-                      }
-                    },
-                  )),
+              ...events.map((event) {
+                // Local events are always editable by the user (they own them)
+                // Remote events require author/admin check
+                final canModify = !widget.isRemoteDevice;
+                return EventTileWidget(
+                  event: event,
+                  isSelected: _selectedEvent?.id == event.id,
+                  collectionPath: widget.collectionPath,
+                  onTap: () {
+                    if (widget.isRemoteDevice) {
+                      _selectRemoteEvent(event);
+                    } else if (isMobileView) {
+                      _selectEventMobile(event);
+                    } else {
+                      _selectEvent(event);
+                    }
+                  },
+                  onEdit: canModify ? () => _editEventFromTile(event) : null,
+                  onDelete: canModify ? () => _deleteEventFromTile(event) : null,
+                );
+              }),
           ],
         );
       },
@@ -919,6 +1036,31 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       onUploadFiles: widget.isRemoteDevice ? null : _uploadFiles,
       onCreateUpdate: widget.isRemoteDevice ? null : _createUpdate,
       onFeedbackUpdated: widget.isRemoteDevice ? null : _refreshSelectedEvent,
+      onContactsUpdated: widget.isRemoteDevice ? null : _updateEventContacts,
     );
+  }
+
+  /// Update contacts for the selected event
+  Future<void> _updateEventContacts(List<String> contacts) async {
+    if (_selectedEvent == null) return;
+
+    final newEventId = await _eventService.updateEvent(
+      eventId: _selectedEvent!.id,
+      title: _selectedEvent!.title,
+      location: _selectedEvent!.location,
+      locationName: _selectedEvent!.locationName,
+      content: _selectedEvent!.content,
+      agenda: _selectedEvent!.agenda,
+      visibility: _selectedEvent!.visibility,
+      contacts: contacts,
+    );
+
+    if (newEventId != null && mounted) {
+      // Reload event to show updated contacts
+      final updatedEvent = await _eventService.loadEvent(newEventId);
+      setState(() {
+        _selectedEvent = updatedEvent;
+      });
+    }
   }
 }

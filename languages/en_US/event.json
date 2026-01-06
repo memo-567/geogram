@@ -20,5 +20,13 @@
   "event_title": "Event Title",
   "event_title_required": "Event title is required",
   "event_updated": "Event updated successfully",
-  "event_year": "Year"
+  "event_year": "Year",
+  "event_contacts": "People",
+  "no_event_contacts": "No contacts associated with this event",
+  "add_contact": "Add Contact",
+  "remove_contact": "Remove Contact",
+  "remove_contact_confirm": "Remove {0} from this event?",
+  "contact_already_added": "This contact is already added",
+  "callsign_required": "Callsign is required",
+  "enter_callsign": "Enter contact name or callsign"
 }

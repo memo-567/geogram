@@ -1,5 +1,6 @@
 {
   "quick_access": "Acesso Rápido",
+  "no_popular_contacts": "Visualize ou interaja com contactos para ver os seus favoritos aqui.",
   "history_log": "Histórico",
   "add_history_entry": "Adicionar Entrada",
   "edit_history_entry": "Editar Entrada",
@@ -22,6 +23,7 @@
   "add_tag": "Adicionar Etiqueta",
   "tag_name": "Nome da Etiqueta",
   "select_photo": "Selecionar Foto",
+  "take_photo": "Tirar Foto",
   "remove_photo": "Remover Foto",
   "profile_picture": "Foto de Perfil",
   "npub_optional": "NPUB (opcional)",
@@ -187,5 +189,11 @@
   "send_email": "Enviar email",
   "copy": "Copiar",
   "copied_to_clipboard": "Copiado para a área de transferência",
-  "interaction_message": "Mensagem curta"
+  "interaction_message": "Mensagem curta",
+  "contacts_with_event_hint": "Selecione contactos que estiveram consigo neste evento",
+  "no_contacts_available": "Sem contactos disponíveis. Adicione contactos à sua coleção primeiro.",
+  "select_contacts": "Selecionar Contactos",
+  "add_more_contacts": "Adicionar Mais Contactos",
+  "contact_not_found": "Contacto não encontrado",
+  "contact_details": "Detalhes do Contacto"
 }

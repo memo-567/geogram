@@ -14,6 +14,7 @@ import '../models/event_registration.dart';
 import '../models/event_link.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import 'contact_service.dart';
 
 /// Service for managing events, files, and reactions
 class EventService {
@@ -256,6 +257,7 @@ class EventService {
     List<String>? admins,
     List<String>? moderators,
     List<String>? groupAccess,
+    List<String>? contacts,
     String? npub,
     Map<String, String>? metadata,
   }) async {
@@ -312,6 +314,7 @@ class EventService {
         admins: admins ?? [],
         moderators: moderators ?? [],
         groupAccess: groupAccess ?? [],
+        contacts: contacts ?? [],
         location: location,
         locationName: locationName,
         content: content,
@@ -326,6 +329,11 @@ class EventService {
       // Write event.txt
       final eventFile = File('${eventDir.path}/event.txt');
       await eventFile.writeAsString(event.exportAsText(), flush: true);
+
+      // Record event associations in contact metrics
+      if (contacts != null && contacts.isNotEmpty) {
+        await ContactService().recordEventAssociations(contacts);
+      }
 
       print('EventService: Created event: $folderName');
       return event;
@@ -968,6 +976,7 @@ class EventService {
     List<EventLink>? links,
     bool? registrationEnabled,
     Map<String, String>? metadata,
+    List<String>? contacts,
   }) async {
     if (_collectionPath == null) return null;
 
@@ -1024,6 +1033,7 @@ class EventService {
         timestamp: newTimestamp,
         startDate: startDate,
         endDate: endDate,
+        contacts: contacts,
         metadata: mergedMetadata,
       );
 
@@ -1065,6 +1075,17 @@ class EventService {
       // Write updated event file
       final finalEventFile = File('${workingDir.path}/event.txt');
       await finalEventFile.writeAsString(updatedEvent.exportAsText(), flush: true);
+
+      // Record event associations for any new contacts
+      if (contacts != null && contacts.isNotEmpty) {
+        // Only record metrics for contacts that weren't already in the event
+        final newContacts = contacts
+            .where((c) => !existingEvent.contacts.contains(c))
+            .toList();
+        if (newContacts.isNotEmpty) {
+          await ContactService().recordEventAssociations(newContacts);
+        }
+      }
 
       // Handle trailer
       // Empty string means "remove trailer", null means "don't change", non-empty means "use this file"
@@ -1128,6 +1149,32 @@ class EventService {
     } catch (e) {
       print('EventService: Error updating event: $e');
       return null;
+    }
+  }
+
+  /// Delete an event by ID
+  ///
+  /// Returns true if successfully deleted, false otherwise.
+  Future<bool> deleteEvent(String eventId) async {
+    if (_collectionPath == null) return false;
+
+    try {
+      final year = eventId.substring(0, 4);
+      final eventDir = Directory('$_collectionPath/$year/$eventId');
+
+      if (!await eventDir.exists()) {
+        print('EventService: Event directory not found: ${eventDir.path}');
+        return false;
+      }
+
+      // Delete the entire event directory
+      await eventDir.delete(recursive: true);
+      print('EventService: Deleted event: $eventId');
+
+      return true;
+    } catch (e) {
+      print('EventService: Error deleting event: $e');
+      return false;
     }
   }
 
