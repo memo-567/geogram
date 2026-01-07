@@ -116,5 +116,6 @@
   "transcribing_audio": "Transcribing audio...",
   "transcription_failed": "Transcription failed",
   "unknown_error": "Unknown error",
+  "up_to_seconds": "Up to {0} seconds",
   "voice_to_text": "Voice to text"
 }

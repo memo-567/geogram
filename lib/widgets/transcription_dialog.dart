@@ -110,10 +110,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       _modelId = await _modelManager.getPreferredModel();
 
       if (await _modelManager.isDownloaded(_modelId!)) {
-        // Model available, load it
+        // Model available, load it and start recording immediately
         await _sttService.loadModel(_modelId!);
         if (mounted) {
-          setState(() => _state = _DialogState.idle);
+          _startRecording();
         }
       } else {
         // Need to download model
@@ -142,10 +142,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         }
       },
       onDone: () async {
-        // Model downloaded, load it
+        // Model downloaded, load it and start recording immediately
         await _sttService.loadModel(_modelId!);
         if (mounted) {
-          setState(() => _state = _DialogState.idle);
+          _startRecording();
         }
       },
       onError: (e) {
@@ -530,22 +530,11 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
               Theme.of(context).colorScheme.surfaceContainerHighest,
         ),
         const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.fiber_manual_record,
-              color: Theme.of(context).colorScheme.error,
-              size: 12,
-            ),
-            const SizedBox(width: 4),
-            Text(
-              widget.i18n.t('recording'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-            ),
-          ],
+        Text(
+          widget.i18n.t('up_to_seconds', params: ['${widget.maxRecordingDuration.inSeconds}']),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
         ),
       ],
     );
