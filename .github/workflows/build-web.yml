@@ -43,6 +43,8 @@ jobs:
       run: |
         # Remove FFI dependency (native libopus bindings, not available on web)
         sed -i '/^  ffi:/d' pubspec.yaml
+        # Delete lock file to ensure clean resolution without ffi
+        rm -f pubspec.lock
 
     - name: Install dependencies
       run: flutter pub get
