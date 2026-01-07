@@ -45,6 +45,8 @@ jobs:
         sed -i '/^  ffi:/d' pubspec.yaml
         # Delete lock file to ensure clean resolution without ffi
         rm -f pubspec.lock
+        # Clear pub cache to remove cached ffi package
+        flutter pub cache clean --force
 
     - name: Install dependencies
       run: flutter pub get
