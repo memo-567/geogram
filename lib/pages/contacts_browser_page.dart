@@ -1769,43 +1769,45 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             const SizedBox(height: 16),
           ],
 
-          // NPUB
+          // NPUB (compact display)
           if (contact.npub != null)
-            _buildInfoSection(_i18n.t('nostr_identity'), [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const SizedBox(
-                      width: 120,
-                      child: Text(
-                        'npub',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    'NPUB',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
-                    Expanded(
-                      child: SelectableText(
-                        contact.npub!,
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                      ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SelectableText(
+                      contact.npub!,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.copy, size: 18),
-                      tooltip: _i18n.t('copy'),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: contact.npub!));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(_i18n.t('copied_to_clipboard'))),
-                        );
-                      },
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 16),
+                    tooltip: _i18n.t('copy'),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: contact.npub!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(_i18n.t('copied_to_clipboard'))),
+                      );
+                    },
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
               ),
-            ]),
+            ),
 
           // Contact Information
           if (contact.emails.isNotEmpty ||
@@ -3157,7 +3159,43 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
           // Details
           if (contact.npub != null)
-            _buildCopyableRow(context, 'NPUB', contact.npub!),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    'NPUB',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SelectableText(
+                      contact.npub!,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 16),
+                    tooltip: i18n.t('copy'),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: contact.npub!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(i18n.t('copied_to_clipboard'))),
+                      );
+                    },
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+            ),
           _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
 
           // Contact Information - Emails
@@ -3283,37 +3321,39 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
     final timestamp = entry.timestamp.substring(0, 16).replaceAll('_', ':');
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Timeline dot and line
-          Column(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  _getEntryTypeIcon(entry.type),
-                  size: 16,
-                  color: theme.colorScheme.onPrimaryContainer,
-                ),
-              ),
-              if (!isLast)
+      padding: const EdgeInsets.only(bottom: 0),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Timeline dot and line
+            Column(
+              children: [
                 Container(
-                  width: 2,
-                  height: 40,
-                  color: theme.colorScheme.outlineVariant,
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(
+                    _getEntryTypeIcon(entry.type),
+                    size: 16,
+                    color: theme.colorScheme.onPrimaryContainer,
+                  ),
                 ),
-            ],
-          ),
-          const SizedBox(width: 12),
-          // Entry content
-          Expanded(
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      color: theme.colorScheme.outlineVariant,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            // Entry content
+            Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -3409,7 +3449,8 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ],
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
