@@ -608,33 +608,33 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
   Widget _buildLocationRow() {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              _i18n.t('coordinates'),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
+          Row(
+            children: [
+              Text(
+                _i18n.t('coordinates'),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.copy, size: 18),
+                onPressed: _copyCoordinates,
+                tooltip: _i18n.t('copy_coordinates'),
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                icon: const Icon(Icons.map, size: 18),
+                onPressed: _viewOnMap,
+                tooltip: _i18n.t('view_on_map'),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
           ),
-          Expanded(
-            child: SelectableText(
-              _place.coordinatesString,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 18),
-            onPressed: _copyCoordinates,
-            tooltip: _i18n.t('copy_coordinates'),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            icon: const Icon(Icons.map, size: 18),
-            onPressed: _viewOnMap,
-            tooltip: _i18n.t('view_on_map'),
-            visualDensity: VisualDensity.compact,
+          SelectableText(
+            _place.coordinatesString,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
         ],
       ),
