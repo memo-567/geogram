@@ -150,7 +150,8 @@ class SpeechToTextService {
   /// Returns true if model was loaded successfully
   Future<bool> loadModel(String modelId) async {
     if (_loadedModelId == modelId && _whisper != null) {
-      return true; // Already loaded
+      LogService().log('SpeechToTextService: Model $modelId already loaded, skipping reload');
+      return true; // Already loaded - instant
     }
 
     // Unload current model first

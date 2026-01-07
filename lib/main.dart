@@ -38,6 +38,8 @@ import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
 import 'services/group_sync_service.dart';
 import 'services/map_tile_service.dart';
+import 'bot/services/speech_to_text_service.dart';
+import 'bot/services/whisper_model_manager.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -448,6 +450,24 @@ void main() async {
               'GroupSyncService: Error verifying chat rooms: $e',
             );
           });
+
+      // Preload speech-to-text model in background (if downloaded)
+      // This ensures transcription is fast when user first uses it
+      if (!kIsWeb) {
+        SpeechToTextService().initialize().then((_) async {
+          final modelManager = WhisperModelManager();
+          await modelManager.initialize();
+
+          final preferredModel = await modelManager.getPreferredModel();
+
+          if (await modelManager.isDownloaded(preferredModel)) {
+            await SpeechToTextService().loadModel(preferredModel);
+            LogService().log('SpeechToTextService: Preloaded model $preferredModel (deferred)');
+          }
+        }).catchError((e) {
+          LogService().log('SpeechToTextService: Background preload failed: $e');
+        });
+      }
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
