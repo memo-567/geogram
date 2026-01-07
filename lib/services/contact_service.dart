@@ -17,6 +17,7 @@ class ContactSummary {
   final String? groupPath;
   final String filePath;
   final int popularityScore;
+  final String? secondaryInfo; // Phone, email, or other relevant info for display
 
   ContactSummary({
     required this.callsign,
@@ -25,6 +26,7 @@ class ContactSummary {
     this.groupPath,
     required this.filePath,
     this.popularityScore = 0,
+    this.secondaryInfo,
   });
 
   Map<String, dynamic> toJson() => {
@@ -34,6 +36,7 @@ class ContactSummary {
     if (groupPath != null && groupPath!.isNotEmpty) 'groupPath': groupPath,
     'filePath': filePath,
     if (popularityScore > 0) 'popularityScore': popularityScore,
+    if (secondaryInfo != null && secondaryInfo!.isNotEmpty) 'secondaryInfo': secondaryInfo,
   };
 
   factory ContactSummary.fromJson(Map<String, dynamic> json) {
@@ -44,6 +47,7 @@ class ContactSummary {
       groupPath: json['groupPath'] as String?,
       filePath: json['filePath'] as String,
       popularityScore: json['popularityScore'] as int? ?? 0,
+      secondaryInfo: json['secondaryInfo'] as String?,
     );
   }
 
@@ -56,8 +60,50 @@ class ContactSummary {
       groupPath: contact.groupPath,
       filePath: contact.filePath ?? '',
       popularityScore: popularityScore,
+      secondaryInfo: _getSecondaryInfo(contact),
     );
   }
+
+  /// Get the most relevant secondary info (phone > email > website > address)
+  static String? _getSecondaryInfo(Contact contact) {
+    if (contact.phones.isNotEmpty) return contact.phones.first;
+    if (contact.emails.isNotEmpty) return contact.emails.first;
+    if (contact.websites.isNotEmpty) return contact.websites.first;
+    if (contact.addresses.isNotEmpty) return contact.addresses.first;
+    if (contact.radioCallsigns.isNotEmpty) return contact.radioCallsigns.first;
+    return null;
+  }
+}
+
+/// Sanitize a string by removing invalid UTF-16 characters (unpaired surrogates)
+/// This prevents Flutter from crashing when rendering malformed text
+String _sanitizeUtf16(String input) {
+  final buffer = StringBuffer();
+  for (int i = 0; i < input.length; i++) {
+    final codeUnit = input.codeUnitAt(i);
+    // Check for unpaired surrogates (high surrogate: 0xD800-0xDBFF, low surrogate: 0xDC00-0xDFFF)
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+      // High surrogate - check if next character is a valid low surrogate
+      if (i + 1 < input.length) {
+        final nextCodeUnit = input.codeUnitAt(i + 1);
+        if (nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF) {
+          // Valid surrogate pair - keep both
+          buffer.write(input[i]);
+          buffer.write(input[i + 1]);
+          i++; // Skip next character as we've processed it
+          continue;
+        }
+      }
+      // Unpaired high surrogate - replace with replacement character
+      buffer.write('\uFFFD');
+    } else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
+      // Unpaired low surrogate - replace with replacement character
+      buffer.write('\uFFFD');
+    } else {
+      buffer.write(input[i]);
+    }
+  }
+  return buffer.toString();
 }
 
 /// Service for managing contacts collection (people and machines)
@@ -205,7 +251,7 @@ class ContactService {
     }
 
     try {
-      final content = await file.readAsString();
+      final content = _sanitizeUtf16(await file.readAsString());
       final List<dynamic> jsonList = json.decode(content);
       final summaries = jsonList
           .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))
@@ -286,16 +332,20 @@ class ContactService {
     if (!await file.exists()) return null;
 
     try {
-      final content = await file.readAsString();
+      final content = _sanitizeUtf16(await file.readAsString());
       final lines = content.split('\n');
 
       String? displayName;
       String? callsign;
       String? profilePicture;
+      String? firstPhone;
+      String? firstEmail;
+      String? firstWebsite;
+      String? firstAddress;
+      String? firstRadioCallsign;
 
-      // Only parse the first ~20 lines for speed
-      final maxLines = lines.length > 20 ? 20 : lines.length;
-      for (int i = 0; i < maxLines; i++) {
+      // Parse the file to extract essential fields and secondary info
+      for (int i = 0; i < lines.length; i++) {
         final trimmed = lines[i].trim();
 
         if (trimmed.startsWith('# CONTACT:')) {
@@ -304,13 +354,26 @@ class ContactService {
           callsign = trimmed.substring('CALLSIGN:'.length).trim();
         } else if (trimmed.startsWith('PROFILE_PICTURE:')) {
           profilePicture = trimmed.substring('PROFILE_PICTURE:'.length).trim();
+        } else if (trimmed.startsWith('PHONE:') && firstPhone == null) {
+          firstPhone = trimmed.substring('PHONE:'.length).trim();
+        } else if (trimmed.startsWith('EMAIL:') && firstEmail == null) {
+          firstEmail = trimmed.substring('EMAIL:'.length).trim();
+        } else if (trimmed.startsWith('WEBSITE:') && firstWebsite == null) {
+          firstWebsite = trimmed.substring('WEBSITE:'.length).trim();
+        } else if (trimmed.startsWith('ADDRESS:') && firstAddress == null) {
+          firstAddress = trimmed.substring('ADDRESS:'.length).trim();
+        } else if (trimmed.startsWith('RADIO_CALLSIGN:') && firstRadioCallsign == null) {
+          firstRadioCallsign = trimmed.substring('RADIO_CALLSIGN:'.length).trim();
         }
 
-        // Stop early if we have all we need
-        if (displayName != null && callsign != null) break;
+        // Stop early if we have all essential fields and at least one secondary info
+        if (displayName != null && callsign != null && firstPhone != null) break;
       }
 
       if (displayName == null || callsign == null) return null;
+
+      // Determine secondary info (priority: phone > email > website > address > radio callsign)
+      final secondaryInfo = firstPhone ?? firstEmail ?? firstWebsite ?? firstAddress ?? firstRadioCallsign;
 
       // Determine group path from file path
       String? groupPath;
@@ -334,6 +397,7 @@ class ContactService {
         groupPath: groupPath,
         filePath: filePath,
         popularityScore: popularityScore,
+        secondaryInfo: secondaryInfo,
       );
     } catch (e) {
       LogService().log('ContactService: Error parsing summary $filePath: $e');
@@ -374,6 +438,10 @@ class ContactService {
         '${now.minute.toString().padLeft(2, '0')}_'
         '${now.second.toString().padLeft(2, '0')}';
 
+    // Include secondary info as a phone number so Contact.secondaryInfo returns it
+    // (This is a temporary placeholder - full contact details will be loaded later)
+    final phones = summary.secondaryInfo != null ? [summary.secondaryInfo!] : <String>[];
+
     return Contact(
       displayName: summary.displayName,
       callsign: summary.callsign,
@@ -382,6 +450,7 @@ class ContactService {
       profilePicture: summary.profilePicture,
       groupPath: summary.groupPath,
       filePath: summary.filePath,
+      phones: phones,
     );
   }
 
@@ -518,7 +587,7 @@ class ContactService {
     if (!await file.exists()) return null;
 
     try {
-      final content = await file.readAsString();
+      final content = _sanitizeUtf16(await file.readAsString());
       final contact = await parseContactFile(content, filePath);
       return contact;
     } catch (e) {
@@ -563,6 +632,7 @@ class ContactService {
     final tags = <String>[];
     final radioCallsigns = <String>[];
     final socialHandles = <String, String>{};
+    final dateReminders = <ContactDateReminder>[];
     bool isTemporaryIdentity = false;
     String? temporaryNsec;
 
@@ -690,6 +760,12 @@ class ContactService {
         previousIdentity = trimmed.substring('PREVIOUS_IDENTITY:'.length).trim();
       } else if (trimmed.startsWith('PREVIOUS_IDENTITY_SINCE:')) {
         previousIdentitySince = trimmed.substring('PREVIOUS_IDENTITY_SINCE:'.length).trim();
+      } else if (trimmed.startsWith('DATE_REMINDER:')) {
+        final reminderStr = trimmed.substring('DATE_REMINDER:'.length).trim();
+        final reminder = ContactDateReminder.fromFileFormat(reminderStr);
+        if (reminder != null) {
+          dateReminders.add(reminder);
+        }
       } else if (!inMetadata && !trimmed.startsWith('#') && !trimmed.startsWith('##')) {
         // This is notes content (legacy format without history log)
         inNotes = true;
@@ -733,6 +809,7 @@ class ContactService {
       profilePicture: profilePicture,
       tags: tags,
       radioCallsigns: radioCallsigns,
+      dateReminders: dateReminders,
       isTemporaryIdentity: isTemporaryIdentity,
       temporaryNsec: temporaryNsec,
       revoked: revoked,
@@ -908,11 +985,16 @@ class ContactService {
       buffer.writeln('SOCIAL_${entry.key.toUpperCase()}: ${entry.value}');
     }
 
+    // Date reminders
+    for (var reminder in contact.dateReminders) {
+      buffer.writeln('DATE_REMINDER: ${reminder.toFileFormat()}');
+    }
+
     if (contact.emails.isNotEmpty || contact.phones.isNotEmpty ||
         contact.addresses.isNotEmpty || contact.websites.isNotEmpty ||
         contact.locations.isNotEmpty || contact.profilePicture != null ||
         contact.tags.isNotEmpty || contact.radioCallsigns.isNotEmpty ||
-        contact.socialHandles.isNotEmpty) {
+        contact.socialHandles.isNotEmpty || contact.dateReminders.isNotEmpty) {
       buffer.writeln();
     }
 
@@ -1006,10 +1088,9 @@ class ContactService {
         }
       }
 
-      // Invalidate and rebuild fast.json cache
+      // Invalidate and rebuild fast.json cache (await to ensure UI sees updated data)
       invalidateSummaryCache();
-      // Rebuild in background (don't await)
-      rebuildFastJson();
+      await rebuildFastJson();
 
       return null; // Success
     } catch (e) {
@@ -1088,7 +1169,9 @@ class ContactService {
   }
 
   /// Delete contact
-  Future<bool> deleteContact(String callsign, {String? groupPath}) async {
+  /// Set [skipFastJsonRebuild] to true when doing batch operations (e.g., merge)
+  /// and you'll manually call rebuildFastJson() at the end
+  Future<bool> deleteContact(String callsign, {String? groupPath, bool skipFastJsonRebuild = false}) async {
     if (_collectionPath == null) return false;
 
     final deletePath = groupPath != null && groupPath.isNotEmpty
@@ -1105,9 +1188,11 @@ class ContactService {
       // Also delete profile picture if exists
       await _deleteProfilePicture(callsign);
 
-      // Invalidate and rebuild fast.json cache
-      invalidateSummaryCache();
-      rebuildFastJson();
+      // Invalidate and rebuild fast.json cache (await to ensure UI sees updated data)
+      if (!skipFastJsonRebuild) {
+        invalidateSummaryCache();
+        await rebuildFastJson();
+      }
 
       return true;
     } catch (e) {
@@ -1145,13 +1230,19 @@ class ContactService {
     if (contactFile.path == newFilePath) return true;
 
     try {
-      // Move the file
-      await contactFile.rename(newFilePath);
+      // Move the file (try rename first, fall back to copy+delete for cross-filesystem moves)
+      try {
+        await contactFile.rename(newFilePath);
+      } catch (e) {
+        // Rename failed (possibly cross-filesystem), use copy+delete
+        await contactFile.copy(newFilePath);
+        await contactFile.delete();
+      }
       LogService().log('ContactService: Moved contact $callsign to ${newGroupPath ?? 'root'}');
 
-      // Invalidate and rebuild fast.json cache
+      // Invalidate and rebuild fast.json cache (await to ensure UI sees updated data)
       invalidateSummaryCache();
-      rebuildFastJson();
+      await rebuildFastJson();
 
       return true;
     } catch (e) {
@@ -1200,44 +1291,6 @@ class ContactService {
         LogService().log('ContactService: Deleted profile picture for $callsign');
         break;
       }
-    }
-  }
-
-  /// Move contact to different group
-  Future<bool> moveContact(
-    String callsign,
-    String? fromGroupPath,
-    String? toGroupPath,
-  ) async {
-    if (_collectionPath == null) return false;
-
-    final fromPath = fromGroupPath != null && fromGroupPath.isNotEmpty
-        ? '$_collectionPath/$fromGroupPath'
-        : '$_collectionPath';
-
-    final toPath = toGroupPath != null && toGroupPath.isNotEmpty
-        ? '$_collectionPath/$toGroupPath'
-        : '$_collectionPath';
-
-    final fromFile = File('$fromPath/$callsign.txt');
-    if (!await fromFile.exists()) return false;
-
-    // Ensure destination directory exists
-    final toDir = Directory(toPath);
-    if (!await toDir.exists()) {
-      await toDir.create(recursive: true);
-    }
-
-    final toFile = File('$toPath/$callsign.txt');
-
-    try {
-      await fromFile.copy(toFile.path);
-      await fromFile.delete();
-      LogService().log('ContactService: Moved contact $callsign from $fromPath to $toPath');
-      return true;
-    } catch (e) {
-      LogService().log('ContactService: Error moving contact: $e');
-      return false;
     }
   }
 
@@ -1739,7 +1792,7 @@ class ContactService {
     }
 
     try {
-      final content = await file.readAsString();
+      final content = _sanitizeUtf16(await file.readAsString());
       final List<dynamic> jsonList = json.decode(content);
       _favoritesCache = jsonList
           .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))

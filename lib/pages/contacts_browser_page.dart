@@ -306,6 +306,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             labelText: _i18n.t('folder_name'),
           ),
           autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
           onSubmitted: (value) => Navigator.pop(context, value.trim()),
         ),
         actions: [
@@ -404,6 +405,24 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     setState(() {
       _groups = groups;
     });
+  }
+
+  /// Get groups that are direct children of the current level
+  List<ContactGroup> _getGroupsAtCurrentLevel() {
+    if (_viewMode == 'all') {
+      // At root level, show groups without '/' in their path (root-level groups)
+      return _groups.where((g) => !g.path.contains('/')).toList();
+    } else if (_viewMode == 'group' && _selectedGroupPath != null) {
+      // Inside a group, show direct subgroups
+      final prefix = '$_selectedGroupPath/';
+      return _groups.where((g) {
+        if (!g.path.startsWith(prefix)) return false;
+        // Check it's a direct child (no additional '/' after the prefix)
+        final remainder = g.path.substring(prefix.length);
+        return !remainder.contains('/');
+      }).toList();
+    }
+    return [];
   }
 
   void _filterContacts() {
@@ -667,6 +686,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 labelText: _i18n.t('group_name'),
                 hintText: _i18n.t('group_name_hint'),
               ),
+              textCapitalization: TextCapitalization.sentences,
             ),
             const SizedBox(height: 16),
             TextField(
@@ -675,6 +695,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 labelText: _i18n.t('description_optional'),
               ),
               maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ],
         ),
@@ -693,8 +714,13 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
     if (result == true && nameController.text.isNotEmpty) {
       final profile = _profileService.getProfile();
+      // If we're inside a group, create the new group as a subgroup
+      final groupPath = _selectedGroupPath != null && _selectedGroupPath!.isNotEmpty
+          ? '$_selectedGroupPath/${nameController.text}'
+          : nameController.text;
+
       final success = await _contactService.createGroup(
-        nameController.text,
+        groupPath,
         description: descController.text.isNotEmpty ? descController.text : null,
         author: profile.callsign,
       );
@@ -872,6 +898,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             labelText: _i18n.t('folder_name'),
           ),
           autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
           onSubmitted: (value) => Navigator.pop(context, value.trim()),
         ),
         actions: [
@@ -1159,18 +1186,38 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   AppBar _buildNormalAppBar() {
+    // Show folder name in title when inside a folder
+    final title = _viewMode == 'group' && _selectedGroupPath != null
+        ? _getTranslatedGroupNameFromPath(_selectedGroupPath!)
+        : _viewMode == 'revoked'
+            ? _i18n.t('revoked')
+            : _i18n.t('contacts');
+
     return AppBar(
-      title: Text(_i18n.t('contacts')),
+      // Show back button when inside a folder
+      leading: _viewMode == 'group' && _selectedGroupPath != null
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => _selectGroup(null),
+              tooltip: _i18n.t('back'),
+            )
+          : null,
+      title: Text(title),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.add),
-          onPressed: _createNewContact,
-          tooltip: _i18n.t('new_contact'),
-        ),
         PopupMenuButton<String>(
-          icon: const Icon(Icons.menu),
+          icon: const Icon(Icons.more_vert),
           tooltip: _i18n.t('menu'),
           itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'new_contact',
+              child: Row(
+                children: [
+                  const Icon(Icons.person_add),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('new_contact')),
+                ],
+              ),
+            ),
             PopupMenuItem(
               value: 'create_group',
               child: Row(
@@ -1214,7 +1261,9 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             ),
           ],
           onSelected: (value) {
-            if (value == 'create_group') {
+            if (value == 'new_contact') {
+              _createNewContact();
+            } else if (value == 'create_group') {
               _createNewGroup();
             } else if (value == 'import_contacts') {
               _importFromDevice();
@@ -1239,26 +1288,69 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       ),
       title: Text(_i18n.t('x_selected').replaceAll('{count}', count.toString())),
       actions: [
-        if (count >= 2)
-          IconButton(
-            icon: const Icon(Icons.merge),
-            onPressed: _mergeSelectedContacts,
-            tooltip: _i18n.t('merge_selected'),
-          ),
-        IconButton(
-          icon: const Icon(Icons.drive_file_move),
-          onPressed: count > 0 ? _moveSelectedContacts : null,
-          tooltip: _i18n.t('move_selected'),
-        ),
-        IconButton(
-          icon: const Icon(Icons.delete),
-          onPressed: count > 0 ? _deleteSelectedContacts : null,
-          tooltip: _i18n.t('delete_selected'),
-        ),
-        IconButton(
-          icon: const Icon(Icons.select_all),
-          onPressed: _selectAllContacts,
-          tooltip: _i18n.t('select_all'),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          onSelected: (value) {
+            switch (value) {
+              case 'select_all':
+                _selectAllContacts();
+                break;
+              case 'move':
+                if (count > 0) _moveSelectedContacts();
+                break;
+              case 'merge':
+                if (count >= 2) _mergeSelectedContacts();
+                break;
+              case 'delete':
+                if (count > 0) _deleteSelectedContacts();
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem<String>(
+              value: 'select_all',
+              child: Row(
+                children: [
+                  const Icon(Icons.select_all),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('select_all')),
+                ],
+              ),
+            ),
+            PopupMenuItem<String>(
+              value: 'move',
+              enabled: count > 0,
+              child: Row(
+                children: [
+                  const Icon(Icons.drive_file_move),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('move_selected')),
+                ],
+              ),
+            ),
+            if (count >= 2)
+              PopupMenuItem<String>(
+                value: 'merge',
+                child: Row(
+                  children: [
+                    const Icon(Icons.merge),
+                    const SizedBox(width: 12),
+                    Text(_i18n.t('merge_selected')),
+                  ],
+                ),
+              ),
+            PopupMenuItem<String>(
+              value: 'delete',
+              enabled: count > 0,
+              child: Row(
+                children: [
+                  const Icon(Icons.delete),
+                  const SizedBox(width: 12),
+                  Text(_i18n.t('delete_selected')),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1355,72 +1447,30 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                   ),
                 ),
 
-                // Navigation breadcrumb / folder path
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                  child: Row(
-                    children: [
-                      // Back button when inside a group
-                      if (_viewMode == 'group' && _selectedGroupPath != null)
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back),
-                          onPressed: () => _selectGroup(null),
-                          tooltip: _i18n.t('back'),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      // Current location
-                      Expanded(
-                        child: InkWell(
-                          onTap: _viewMode != 'all' ? () => _selectGroup(null) : null,
-                          child: Row(
-                            children: [
-                              Icon(
-                                _viewMode == 'group' ? Icons.folder_open : Icons.home,
-                                size: 20,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _viewMode == 'group' && _selectedGroupPath != null
-                                      ? _getTranslatedGroupNameFromPath(_selectedGroupPath!)
-                                      : _viewMode == 'revoked'
-                                          ? _i18n.t('revoked')
-                                          : _i18n.t('contacts'),
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      // Revoked filter chip
-                      if (_allContacts.any((c) => c.revoked))
-                        FilterChip(
-                          label: Text(_i18n.t('revoked')),
-                          selected: _viewMode == 'revoked',
-                          onSelected: (_) {
-                            if (_viewMode == 'revoked') {
-                              _selectGroup(null);
-                            } else {
-                              setState(() => _viewMode = 'revoked');
-                              _filterContacts();
-                            }
-                          },
-                          visualDensity: VisualDensity.compact,
-                        ),
-                    ],
+                // Revoked filter chip (only show if there are revoked contacts)
+                if (_allContacts.any((c) => c.revoked))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
+                    child: FilterChip(
+                      label: Text(_i18n.t('revoked')),
+                      selected: _viewMode == 'revoked',
+                      onSelected: (_) {
+                        if (_viewMode == 'revoked') {
+                          _selectGroup(null);
+                        } else {
+                          setState(() => _viewMode = 'revoked');
+                          _filterContacts();
+                        }
+                      },
+                      visualDensity: VisualDensity.compact,
+                    ),
                   ),
-                ),
 
                 const Divider(height: 1),
 
-                // Groups as folder items - only show at root level
-                if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
-                  for (final group in _groups) ListTile(
+                // Groups as folder items - show at current level
+                if (_groups.isNotEmpty && _viewMode != 'revoked' && _searchController.text.isEmpty)
+                  for (final group in _getGroupsAtCurrentLevel()) ListTile(
                     leading: const Icon(Icons.folder, color: Colors.amber),
                     title: Text(_getTranslatedGroupName(group)),
                     subtitle: Text('${group.contactCount} ${_i18n.t('contacts').toLowerCase()}'),
@@ -1462,7 +1512,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                     onTap: () => _selectGroup(group.path),
                   ),
 
-                if (_groups.isNotEmpty && _viewMode == 'all' && _searchController.text.isEmpty)
+                if (_getGroupsAtCurrentLevel().isNotEmpty && _searchController.text.isEmpty)
                   const Divider(height: 1),
 
                 // Contact list
@@ -1613,7 +1663,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             ),
         ],
       ),
-      subtitle: Text(contact.callsign),
+      subtitle: Text(contact.secondaryInfo ?? contact.callsign),
       selected: _isSelectionMode ? isSelected : _selectedContact?.callsign == contact.callsign,
       onTap: () {
         if (_isSelectionMode) {
@@ -1839,6 +1889,17 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                     loc.longitude,
                   )),
             ]),
+
+          // Date Reminders
+          if (contact.dateReminders.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              _i18n.t('date_reminders'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            ...contact.dateReminders.map((reminder) => _buildDateReminderCard(reminder)),
+          ],
 
           // Timestamps
           _buildInfoSection(_i18n.t('metadata'), [
@@ -2110,6 +2171,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                         border: const OutlineInputBorder(),
                       ),
                       maxLines: 3,
+                      textCapitalization: TextCapitalization.sentences,
                     ),
                   ],
                 ),
@@ -2173,6 +2235,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                 border: const OutlineInputBorder(),
               ),
               maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ),
           actions: [
@@ -2249,6 +2312,90 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         setState(() => _selectedContact = updatedContact);
       }
     }
+  }
+
+  Widget _buildDateReminderCard(ContactDateReminder reminder) {
+    final now = DateTime.now();
+    final thisYear = now.year;
+
+    // Calculate next occurrence
+    var nextOccurrence = DateTime(thisYear, reminder.month, reminder.day);
+    if (nextOccurrence.isBefore(now) || nextOccurrence.isAtSameMomentAs(now)) {
+      // If the date has passed this year, use next year
+      nextOccurrence = DateTime(thisYear + 1, reminder.month, reminder.day);
+    }
+
+    final daysRemaining = nextOccurrence.difference(now).inDays;
+
+    // Choose icon based on type
+    IconData icon;
+    Color iconColor;
+    switch (reminder.type) {
+      case ContactDateReminderType.birthday:
+        icon = Icons.cake;
+        iconColor = Colors.pink;
+        break;
+      case ContactDateReminderType.deceased:
+        icon = Icons.favorite;
+        iconColor = Colors.grey;
+        break;
+      case ContactDateReminderType.married:
+        icon = Icons.favorite;
+        iconColor = Colors.red;
+        break;
+      case ContactDateReminderType.relationStart:
+        icon = Icons.people;
+        iconColor = Colors.green;
+        break;
+      case ContactDateReminderType.relationEnd:
+        icon = Icons.people_outline;
+        iconColor = Colors.orange;
+        break;
+      case ContactDateReminderType.other:
+        icon = Icons.event;
+        iconColor = Colors.blue;
+        break;
+    }
+
+    // Format days remaining text
+    String daysText;
+    if (daysRemaining == 0) {
+      daysText = _i18n.t('today');
+    } else if (daysRemaining == 1) {
+      daysText = _i18n.t('tomorrow');
+    } else {
+      daysText = _i18n.t('days_remaining', params: [daysRemaining.toString()]);
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: iconColor.withValues(alpha: 0.15),
+          child: Icon(icon, color: iconColor),
+        ),
+        title: Text(reminder.displayType),
+        subtitle: Text(reminder.displayDate),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: daysRemaining <= 7
+                ? Colors.orange.withValues(alpha: 0.15)
+                : Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            daysText,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: daysRemaining <= 7
+                  ? Colors.orange.shade800
+                  : Theme.of(context).colorScheme.onPrimaryContainer,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildLocationRow(String label, double? latitude, double? longitude) {
@@ -2702,6 +2849,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
               maxLines: 3,
               autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ],
         ),
@@ -2793,6 +2941,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
               maxLines: 3,
               autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ],
         ),
@@ -2902,6 +3051,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
               maxLines: 3,
               autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ],
         ),
@@ -3259,6 +3409,21 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             ...contact.websites.map((w) => _buildDetailRow(i18n.t('website'), w)),
           ],
 
+          // Date Reminders
+          if (contact.dateReminders.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              i18n.t('date_reminders'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            ...contact.dateReminders.map((reminder) => _buildDateReminderCardMobile(reminder)),
+          ],
+
           // Notes (static notes, not history)
           if (contact.notes.isNotEmpty && contact.historyEntries.isEmpty) ...[
             const SizedBox(height: 16),
@@ -3493,6 +3658,89 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDateReminderCardMobile(ContactDateReminder reminder) {
+    final now = DateTime.now();
+    final thisYear = now.year;
+
+    // Calculate next occurrence
+    var nextOccurrence = DateTime(thisYear, reminder.month, reminder.day);
+    if (nextOccurrence.isBefore(now) || nextOccurrence.isAtSameMomentAs(now)) {
+      nextOccurrence = DateTime(thisYear + 1, reminder.month, reminder.day);
+    }
+
+    final daysRemaining = nextOccurrence.difference(now).inDays;
+
+    // Choose icon based on type
+    IconData icon;
+    Color iconColor;
+    switch (reminder.type) {
+      case ContactDateReminderType.birthday:
+        icon = Icons.cake;
+        iconColor = Colors.pink;
+        break;
+      case ContactDateReminderType.deceased:
+        icon = Icons.favorite;
+        iconColor = Colors.grey;
+        break;
+      case ContactDateReminderType.married:
+        icon = Icons.favorite;
+        iconColor = Colors.red;
+        break;
+      case ContactDateReminderType.relationStart:
+        icon = Icons.people;
+        iconColor = Colors.green;
+        break;
+      case ContactDateReminderType.relationEnd:
+        icon = Icons.people_outline;
+        iconColor = Colors.orange;
+        break;
+      case ContactDateReminderType.other:
+        icon = Icons.event;
+        iconColor = Colors.blue;
+        break;
+    }
+
+    // Format days remaining text
+    String daysText;
+    if (daysRemaining == 0) {
+      daysText = i18n.t('today');
+    } else if (daysRemaining == 1) {
+      daysText = i18n.t('tomorrow');
+    } else {
+      daysText = i18n.t('days_remaining', params: [daysRemaining.toString()]);
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: iconColor.withValues(alpha: 0.15),
+          child: Icon(icon, color: iconColor),
+        ),
+        title: Text(reminder.displayType),
+        subtitle: Text(reminder.displayDate),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: daysRemaining <= 7
+                ? Colors.orange.withValues(alpha: 0.15)
+                : Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            daysText,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: daysRemaining <= 7
+                  ? Colors.orange.shade800
+                  : Theme.of(context).colorScheme.onPrimaryContainer,
+            ),
+          ),
+        ),
       ),
     );
   }

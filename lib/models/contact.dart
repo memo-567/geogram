@@ -306,6 +306,186 @@ class ContactLocation {
   }
 }
 
+/// Types of date reminders for contacts
+enum ContactDateReminderType {
+  birthday,
+  deceased,
+  married,
+  relationStart,
+  relationEnd,
+  other,
+}
+
+/// Model representing a date reminder for a contact (birthday, anniversary, etc.)
+class ContactDateReminder {
+  final ContactDateReminderType type;
+  final String? label; // Custom label for "other" type
+  final int month; // 1-12
+  final int day; // 1-31
+  final int? year; // Optional year
+
+  ContactDateReminder({
+    required this.type,
+    this.label,
+    required this.month,
+    required this.day,
+    this.year,
+  });
+
+  /// Get type as string for file format
+  String get typeString {
+    switch (type) {
+      case ContactDateReminderType.birthday:
+        return 'birthday';
+      case ContactDateReminderType.deceased:
+        return 'deceased';
+      case ContactDateReminderType.married:
+        return 'married';
+      case ContactDateReminderType.relationStart:
+        return 'relation_start';
+      case ContactDateReminderType.relationEnd:
+        return 'relation_end';
+      case ContactDateReminderType.other:
+        return 'other';
+    }
+  }
+
+  /// Parse type from string
+  static ContactDateReminderType parseType(String typeStr) {
+    // Handle "other:label" format
+    final baseType = typeStr.contains(':') ? typeStr.split(':').first : typeStr;
+    switch (baseType) {
+      case 'birthday':
+        return ContactDateReminderType.birthday;
+      case 'deceased':
+        return ContactDateReminderType.deceased;
+      case 'married':
+        return ContactDateReminderType.married;
+      case 'relation_start':
+        return ContactDateReminderType.relationStart;
+      case 'relation_end':
+        return ContactDateReminderType.relationEnd;
+      case 'other':
+      default:
+        return ContactDateReminderType.other;
+    }
+  }
+
+  /// Get display date (e.g., "December 25" or "December 25, 1990")
+  String get displayDate {
+    final monthNames = [
+      '', 'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    final monthName = month >= 1 && month <= 12 ? monthNames[month] : 'Unknown';
+    if (year != null) {
+      return '$monthName $day, $year';
+    }
+    return '$monthName $day';
+  }
+
+  /// Get display type name for UI
+  String get displayType {
+    switch (type) {
+      case ContactDateReminderType.birthday:
+        return 'Birthday';
+      case ContactDateReminderType.deceased:
+        return 'Deceased';
+      case ContactDateReminderType.married:
+        return 'Wedding Anniversary';
+      case ContactDateReminderType.relationStart:
+        return 'Relationship Start';
+      case ContactDateReminderType.relationEnd:
+        return 'Relationship End';
+      case ContactDateReminderType.other:
+        return label ?? 'Other';
+    }
+  }
+
+  /// Convert to file format: TYPE|MM-DD|YEAR or TYPE:LABEL|MM-DD|YEAR
+  String toFileFormat() {
+    final typeStr = type == ContactDateReminderType.other && label != null
+        ? 'other:$label'
+        : typeString;
+    final dateStr = '${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+    if (year != null) {
+      return '$typeStr|$dateStr|$year';
+    }
+    return '$typeStr|$dateStr';
+  }
+
+  /// Parse from file format: TYPE|MM-DD|YEAR or TYPE:LABEL|MM-DD|YEAR
+  static ContactDateReminder? fromFileFormat(String line) {
+    final parts = line.split('|');
+    if (parts.length < 2) return null;
+
+    final typeStr = parts[0];
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 2) return null;
+
+    final month = int.tryParse(dateParts[0]);
+    final day = int.tryParse(dateParts[1]);
+    if (month == null || day == null) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+    final type = parseType(typeStr);
+    String? label;
+    if (type == ContactDateReminderType.other && typeStr.contains(':')) {
+      label = typeStr.substring(typeStr.indexOf(':') + 1);
+    }
+
+    int? year;
+    if (parts.length >= 3 && parts[2].isNotEmpty) {
+      year = int.tryParse(parts[2]);
+    }
+
+    return ContactDateReminder(
+      type: type,
+      label: label,
+      month: month,
+      day: day,
+      year: year,
+    );
+  }
+
+  /// Convert to JSON
+  Map<String, dynamic> toJson() => {
+        'type': typeString,
+        if (label != null) 'label': label,
+        'month': month,
+        'day': day,
+        if (year != null) 'year': year,
+      };
+
+  /// Create from JSON
+  factory ContactDateReminder.fromJson(Map<String, dynamic> json) {
+    return ContactDateReminder(
+      type: parseType(json['type'] as String),
+      label: json['label'] as String?,
+      month: json['month'] as int,
+      day: json['day'] as int,
+      year: json['year'] as int?,
+    );
+  }
+
+  /// Copy with new values
+  ContactDateReminder copyWith({
+    ContactDateReminderType? type,
+    String? label,
+    int? month,
+    int? day,
+    int? year,
+  }) {
+    return ContactDateReminder(
+      type: type ?? this.type,
+      label: label ?? this.label,
+      month: month ?? this.month,
+      day: day ?? this.day,
+      year: year ?? this.year,
+    );
+  }
+}
+
 /// Model representing a contact (person or machine)
 class Contact {
   final String displayName;
@@ -328,6 +508,9 @@ class Contact {
 
   // Radio amateur callsigns (for different jurisdictions)
   final List<String> radioCallsigns;
+
+  // Date reminders (birthdays, anniversaries, etc.)
+  final List<ContactDateReminder> dateReminders;
 
   // Temporary identity (for imported contacts without NOSTR)
   final bool isTemporaryIdentity;
@@ -370,6 +553,7 @@ class Contact {
     this.profilePicture,
     this.tags = const [],
     this.radioCallsigns = const [],
+    this.dateReminders = const [],
     this.isTemporaryIdentity = false,
     this.temporaryNsec,
     this.revoked = false,
@@ -478,6 +662,16 @@ class Contact {
     return groupPath!.split('/').last;
   }
 
+  /// Get secondary info for display (phone > email > website > address > radio callsign)
+  String? get secondaryInfo {
+    if (phones.isNotEmpty) return phones.first;
+    if (emails.isNotEmpty) return emails.first;
+    if (websites.isNotEmpty) return websites.first;
+    if (addresses.isNotEmpty) return addresses.first;
+    if (radioCallsigns.isNotEmpty) return radioCallsigns.first;
+    return null;
+  }
+
   /// Convert to JSON
   Map<String, dynamic> toJson() => {
         'displayName': displayName,
@@ -494,6 +688,7 @@ class Contact {
         if (profilePicture != null) 'profilePicture': profilePicture,
         if (tags.isNotEmpty) 'tags': tags,
         if (radioCallsigns.isNotEmpty) 'radioCallsigns': radioCallsigns,
+        if (dateReminders.isNotEmpty) 'dateReminders': dateReminders.map((r) => r.toJson()).toList(),
         if (isTemporaryIdentity) 'isTemporaryIdentity': isTemporaryIdentity,
         if (temporaryNsec != null) 'temporaryNsec': temporaryNsec,
         'revoked': revoked,
@@ -531,6 +726,9 @@ class Contact {
       profilePicture: json['profilePicture'] as String?,
       tags: json['tags'] != null ? List<String>.from(json['tags'] as List) : const [],
       radioCallsigns: json['radioCallsigns'] != null ? List<String>.from(json['radioCallsigns'] as List) : const [],
+      dateReminders: json['dateReminders'] != null
+          ? (json['dateReminders'] as List).map((r) => ContactDateReminder.fromJson(r as Map<String, dynamic>)).toList()
+          : const [],
       isTemporaryIdentity: json['isTemporaryIdentity'] as bool? ?? false,
       temporaryNsec: json['temporaryNsec'] as String?,
       revoked: json['revoked'] as bool? ?? false,
@@ -566,6 +764,7 @@ class Contact {
     String? profilePicture,
     List<String>? tags,
     List<String>? radioCallsigns,
+    List<ContactDateReminder>? dateReminders,
     bool? isTemporaryIdentity,
     String? temporaryNsec,
     bool? revoked,
@@ -596,6 +795,7 @@ class Contact {
       profilePicture: profilePicture ?? this.profilePicture,
       tags: tags ?? this.tags,
       radioCallsigns: radioCallsigns ?? this.radioCallsigns,
+      dateReminders: dateReminders ?? this.dateReminders,
       isTemporaryIdentity: isTemporaryIdentity ?? this.isTemporaryIdentity,
       temporaryNsec: temporaryNsec ?? this.temporaryNsec,
       revoked: revoked ?? this.revoked,

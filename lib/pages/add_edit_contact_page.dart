@@ -56,6 +56,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
   List<TextEditingController> _radioCallsignControllers = [];
   List<Map<String, dynamic>> _locationControllers = []; // name, lat, long controllers + type + place
   List<Map<String, dynamic>> _socialHandleControllers = [];
+  List<Map<String, dynamic>> _dateReminderControllers = []; // type, label, month, day, year
 
   // Profile picture
   String? _selectedProfilePicturePath;
@@ -167,6 +168,19 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
           };
         }).toList();
       }
+
+      // Initialize date reminders from contact
+      if (contact.dateReminders.isNotEmpty) {
+        _dateReminderControllers = contact.dateReminders.map((reminder) {
+          return {
+            'type': reminder.type.name,
+            'label': TextEditingController(text: reminder.label ?? ''),
+            'month': reminder.month,
+            'day': reminder.day,
+            'year': TextEditingController(text: reminder.year?.toString() ?? ''),
+          };
+        }).toList();
+      }
     }
 
     // Add at least one empty field for each multi-value type
@@ -204,6 +218,10 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
     }
     for (var handle in _socialHandleControllers) {
       (handle['controller'] as TextEditingController).dispose();
+    }
+    for (var reminder in _dateReminderControllers) {
+      (reminder['label'] as TextEditingController?)?.dispose();
+      (reminder['year'] as TextEditingController?)?.dispose();
     }
 
     super.dispose();
@@ -317,6 +335,27 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
         }
       }
 
+      // Collect date reminders
+      final dateReminders = <ContactDateReminder>[];
+      for (final reminder in _dateReminderControllers) {
+        final typeStr = reminder['type'] as String;
+        final label = (reminder['label'] as TextEditingController).text.trim();
+        final month = reminder['month'] as int?;
+        final day = reminder['day'] as int?;
+        final yearText = (reminder['year'] as TextEditingController).text.trim();
+        final year = yearText.isNotEmpty ? int.tryParse(yearText) : null;
+
+        if (month != null && day != null) {
+          dateReminders.add(ContactDateReminder(
+            type: ContactDateReminder.parseType(typeStr),
+            label: label.isNotEmpty ? label : null,
+            month: month,
+            day: day,
+            year: year,
+          ));
+        }
+      }
+
       // Create timestamp for new contacts, preserve for edits
       final now = DateTime.now();
       final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
@@ -369,6 +408,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
         profilePicture: profilePicture,
         tags: _tags,
         radioCallsigns: radioCallsigns,
+        dateReminders: dateReminders,
         isTemporaryIdentity: finalIsTemporaryIdentity,
         temporaryNsec: finalTemporaryNsec,
         historyEntries: widget.contact?.historyEntries ?? [],
@@ -457,6 +497,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                       labelText: '${_i18n.t('display_name')} *',
                       border: const OutlineInputBorder(),
                     ),
+                    textCapitalization: TextCapitalization.words,
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return _i18n.t('field_required');
@@ -526,6 +567,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                     Icons.home,
                     TextInputType.streetAddress,
                     '123 Main St, City, Country',
+                    textCapitalization: TextCapitalization.words,
                   ),
 
                   // Websites
@@ -546,6 +588,9 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                   // Locations
                   _buildLocationsSection(),
 
+                  // Date Reminders
+                  _buildDateRemindersSection(),
+
                   const SizedBox(height: 16),
 
                   // Notes
@@ -556,6 +601,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                       border: const OutlineInputBorder(),
                     ),
                     maxLines: 5,
+                    textCapitalization: TextCapitalization.sentences,
                   ),
 
                   const SizedBox(height: 32),
@@ -586,8 +632,9 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
     List<TextEditingController> controllers,
     IconData icon,
     TextInputType keyboardType,
-    String hint,
-  ) {
+    String hint, {
+    TextCapitalization textCapitalization = TextCapitalization.none,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -618,6 +665,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
                       hintText: hint,
                     ),
                     keyboardType: keyboardType,
+                    textCapitalization: textCapitalization,
                   ),
                 ),
                 IconButton(
@@ -1002,6 +1050,218 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
         const SizedBox(height: 16),
       ],
     );
+  }
+
+  Widget _buildDateRemindersSection() {
+    final monthNames = [
+      '', 'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Icon(Icons.cake, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _i18n.t('date_reminders'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              tooltip: _i18n.t('add_date_reminder'),
+              onPressed: _addDateReminder,
+            ),
+          ],
+        ),
+        if (_dateReminderControllers.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Text(
+              _i18n.t('no_date_reminders'),
+              style: TextStyle(color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+            ),
+          ),
+        ...List.generate(_dateReminderControllers.length, (index) {
+          final reminder = _dateReminderControllers[index];
+          final typeStr = reminder['type'] as String;
+          final isOther = typeStr == 'other';
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Type selector and remove button
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: typeStr,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('reminder_type'),
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          items: [
+                            DropdownMenuItem(value: 'birthday', child: Text(_i18n.t('reminder_birthday'), overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'deceased', child: Text(_i18n.t('reminder_deceased'), overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'married', child: Text(_i18n.t('reminder_married'), overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'relationStart', child: Text(_i18n.t('reminder_relation_start'), overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'relationEnd', child: Text(_i18n.t('reminder_relation_end'), overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'other', child: Text(_i18n.t('reminder_other'), overflow: TextOverflow.ellipsis)),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _dateReminderControllers[index]['type'] = value ?? 'birthday';
+                            });
+                          },
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                        onPressed: () => _removeDateReminder(index),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
+                  // Custom label for "other" type
+                  if (isOther) ...[
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: reminder['label'] as TextEditingController,
+                      decoration: InputDecoration(
+                        labelText: _i18n.t('reminder_label'),
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        hintText: 'e.g., First meeting',
+                      ),
+                      textCapitalization: TextCapitalization.sentences,
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  // Date selectors - Month and Day on first row
+                  Row(
+                    children: [
+                      // Month dropdown
+                      Expanded(
+                        flex: 3,
+                        child: DropdownButtonFormField<int>(
+                          value: reminder['month'] as int?,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('reminder_month'),
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          items: List.generate(12, (i) => i + 1)
+                              .map((m) => DropdownMenuItem(value: m, child: Text(monthNames[m], overflow: TextOverflow.ellipsis)))
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() {
+                              _dateReminderControllers[index]['month'] = value;
+                              // Reset day if it exceeds the new month's max days
+                              final currentDay = _dateReminderControllers[index]['day'] as int?;
+                              if (currentDay != null && value != null) {
+                                final maxDays = _getDaysInMonth(value);
+                                if (currentDay > maxDays) {
+                                  _dateReminderControllers[index]['day'] = maxDays;
+                                }
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Day dropdown
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<int>(
+                          value: reminder['day'] as int?,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('reminder_day'),
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          items: List.generate(
+                            _getDaysInMonth(reminder['month'] as int? ?? 12),
+                            (i) => i + 1,
+                          ).map((d) => DropdownMenuItem(value: d, child: Text(d.toString()))).toList(),
+                          onChanged: (value) {
+                            setState(() {
+                              _dateReminderControllers[index]['day'] = value;
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Year input (optional)
+                      Expanded(
+                        flex: 2,
+                        child: TextFormField(
+                          controller: reminder['year'] as TextEditingController,
+                          decoration: InputDecoration(
+                            labelText: _i18n.t('reminder_year'),
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  int _getDaysInMonth(int month) {
+    switch (month) {
+      case 2:
+        return 29; // Allow leap year dates
+      case 4:
+      case 6:
+      case 9:
+      case 11:
+        return 30;
+      default:
+        return 31;
+    }
+  }
+
+  void _addDateReminder() {
+    setState(() {
+      _dateReminderControllers.add({
+        'type': 'birthday',
+        'label': TextEditingController(),
+        'month': null,
+        'day': null,
+        'year': TextEditingController(),
+      });
+    });
+  }
+
+  void _removeDateReminder(int index) {
+    setState(() {
+      final reminder = _dateReminderControllers[index];
+      (reminder['label'] as TextEditingController?)?.dispose();
+      (reminder['year'] as TextEditingController?)?.dispose();
+      _dateReminderControllers.removeAt(index);
+    });
   }
 
   Future<void> _openMapPicker(int locationIndex) async {

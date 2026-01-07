@@ -1,7 +1,7 @@
 # Contacts Format Specification
 
-**Version**: 1.1
-**Last Updated**: 2026-01-06
+**Version**: 1.2
+**Last Updated**: 2026-01-07
 **Status**: Active
 
 ## Table of Contents
@@ -12,6 +12,7 @@
 - [Profile Pictures](#profile-pictures)
 - [Groups (Folders)](#groups-folders)
 - [Identity Management](#identity-management)
+- [Date Reminders](#date-reminders)
 - [Location Tracking](#location-tracking)
 - [Duplicate Prevention](#duplicate-prevention)
 - [Reactions System](#reactions-system)
@@ -248,40 +249,54 @@ All fields in this section are optional:
     - **Example**: `PROFILE_PICTURE: CR7BBQ.jpg`
     - **Path**: Relative to `profile-pictures/` folder
 
-14. **Blank Line** (required if identity section follows)
+14. **Date Reminders** (optional, multiple allowed)
+    - **Format**: `DATE_REMINDER: <type>|<MM-DD>|<year>` or `DATE_REMINDER: other:<label>|<MM-DD>|<year>`
+    - **Purpose**: Recurring annual dates to remember (birthdays, anniversaries, etc.)
+    - **Types**: `birthday`, `deceased`, `married`, `relation_start`, `relation_end`, `other`
+    - **Year**: Optional (omit for unknown/not applicable)
+    - **Examples**:
+      ```
+      DATE_REMINDER: birthday|12-25|1990
+      DATE_REMINDER: married|06-15|2010
+      DATE_REMINDER: deceased|01-20|2023
+      DATE_REMINDER: other:First meeting|03-10
+      DATE_REMINDER: relation_start|08-14
+      ```
+
+15. **Blank Line** (required if identity section follows)
 
 ### Identity Management Section
 
-15. **Revoked** (optional, default: false)
+16. **Revoked** (optional, default: false)
     - **Format**: `REVOKED: <true|false>`
     - **Example**: `REVOKED: true`
     - **Purpose**: Mark identity as compromised/invalid
 
-16. **Revocation Reason** (optional, required if revoked)
+17. **Revocation Reason** (optional, required if revoked)
     - **Format**: `REVOCATION_REASON: <explanation>`
     - **Example**: `REVOCATION_REASON: Private key leaked on 2025-10-15`
 
-17. **Successor** (optional)
+18. **Successor** (optional)
     - **Format**: `SUCCESSOR: <callsign or npub>`
     - **Example**: `SUCCESSOR: CR7BBQ2` or `SUCCESSOR: npub1xyz...`
     - **Purpose**: Link to new identity
 
-18. **Successor Since** (required if successor is set)
+19. **Successor Since** (required if successor is set)
     - **Format**: `SUCCESSOR_SINCE: YYYY-MM-DD HH:MM_ss`
     - **Example**: `SUCCESSOR_SINCE: 2025-10-16 12:00_00`
     - **Purpose**: Date when successor identity became valid
 
-19. **Previous Identity** (optional)
+20. **Previous Identity** (optional)
     - **Format**: `PREVIOUS_IDENTITY: <callsign or npub>`
     - **Example**: `PREVIOUS_IDENTITY: CR7BBQ` or `PREVIOUS_IDENTITY: npub1old...`
     - **Purpose**: Link to old/replaced identity
 
-20. **Previous Identity Since** (required if previous_identity is set)
+21. **Previous Identity Since** (required if previous_identity is set)
     - **Format**: `PREVIOUS_IDENTITY_SINCE: YYYY-MM-DD HH:MM_ss`
     - **Example**: `PREVIOUS_IDENTITY_SINCE: 2025-10-16 12:00_00`
     - **Purpose**: Date when this identity replaced the previous one
 
-21. **Blank Line** (required before notes)
+22. **Blank Line** (required before notes)
 
 ### Notes Section
 
@@ -488,6 +503,75 @@ PREVIOUS_IDENTITY_SINCE: 2025-10-16 12:00_00
 - Show link to successor if available
 - Gray out or mark as inactive
 - Warn before using revoked identity
+
+## Date Reminders
+
+### Purpose
+
+Store recurring annual dates associated with a contact (birthdays, anniversaries, memorial dates, etc.) for notification and calendar integration. These are dates that repeat yearly.
+
+### Format
+
+**Field**: `DATE_REMINDER:`
+
+**Pattern**: `<type>|<MM-DD>|<year>` or `<type>:<label>|<MM-DD>|<year>`
+
+Where:
+- `type`: One of `birthday`, `deceased`, `married`, `relation_start`, `relation_end`, `other`
+- `MM-DD`: Month and day (e.g., `12-25` for December 25)
+- `year`: Optional year (e.g., `1990`)
+- `label`: Custom label for `other` type
+
+### Reminder Types
+
+| Type | Purpose | Example Use |
+|------|---------|-------------|
+| `birthday` | Contact's birthday | Annual birthday celebration |
+| `deceased` | Memorial date | Annual remembrance |
+| `married` | Wedding anniversary | Annual anniversary |
+| `relation_start` | Relationship/friendship start | Anniversary of meeting |
+| `relation_end` | Relationship end | Memorial of past relationship |
+| `other` | Custom reminder | Any other annual event |
+
+### Examples
+
+```
+# Basic birthday (December 25, 1990)
+DATE_REMINDER: birthday|12-25|1990
+
+# Wedding anniversary (June 15, 2010)
+DATE_REMINDER: married|06-15|2010
+
+# Memorial date (January 20, 2023)
+DATE_REMINDER: deceased|01-20|2023
+
+# Custom reminder without year
+DATE_REMINDER: other:First meeting|03-10
+
+# Relationship start without year
+DATE_REMINDER: relation_start|08-14
+```
+
+### Parsing Rules
+
+1. Split line by `|` to get up to 3 parts: type, date, year
+2. Parse type - if contains `:`, extract custom label
+3. Parse date as `MM-DD` format
+4. Year is optional (may be empty or missing)
+5. Validate month is 1-12, day is 1-31
+
+### Integration Notes
+
+Date reminders are designed for integration with:
+- **Notification apps**: Query all contacts for upcoming reminders
+- **Calendar apps**: Sync reminders as recurring annual events
+- **Dashboard widgets**: Show "upcoming birthdays this week"
+
+To query all reminders programmatically:
+1. Read all contact files
+2. Extract all `DATE_REMINDER:` lines
+3. Parse and filter by upcoming dates
+4. Sort by next occurrence
 
 ## Location Tracking
 
@@ -1308,6 +1392,16 @@ HAM radio operator, emergency frequency monitor.
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.2 (2026-01-07)
+
+**Date Reminders Feature**:
+- Added `DATE_REMINDER:` field for recurring annual dates
+- Supported types: `birthday`, `deceased`, `married`, `relation_start`, `relation_end`, `other`
+- Custom labels supported for `other` type via `other:<label>` syntax
+- Optional year field for historical dates
+- Format: `TYPE|MM-DD|YEAR` (year optional)
+- Designed for integration with notification and calendar apps
 
 ### Version 1.1 (2026-01-06)
 
