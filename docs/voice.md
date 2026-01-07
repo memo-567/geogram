@@ -151,18 +151,30 @@ This avoids the need for audio format conversion (FFmpeg) which would add signif
 
 ## Performance
 
-### Startup Preloading
+### Current Implementation
 
-The app preloads the Whisper model in the background during startup (Phase 2 deferred initialization in `main.dart`). This ensures the first transcription is fast:
+The app attempts to preload the Whisper model in the background at startup:
 
-1. App starts → UI renders immediately
-2. Background: Model loads silently (~20-30s, non-blocking)
-3. User opens transcription dialog → Model already in memory
-4. Recording + transcription: **2-5 seconds**
+**Preload Flow** (`lib/main.dart`):
+1. `runApp()` is called → UI renders
+2. `_startWhisperPreload()` fires immediately (fire-and-forget)
+3. Model loads in background via `SpeechToTextService().preloadModel()`
+4. Dialog coordination via `Completer` in `SpeechToTextService`
 
-The preload only runs if:
-- Platform supports speech-to-text (Android, iOS, macOS)
-- The preferred model has already been downloaded
+**Dialog Flow** (`lib/widgets/transcription_dialog.dart`):
+1. `_checkModelStatus()` checks if preload is in progress
+2. If preloading: waits via `waitForPreload()`
+3. If model loaded: starts recording immediately
+4. If not loaded: loads model (blocking)
+
+### Known Limitation
+
+The model loading takes **~20-30 seconds** regardless of preloading strategy. This is due to:
+- FFI initialization in `whisper_flutter_new` native layer
+- Loading 145MB model file into memory
+- Cannot be optimized from Dart code
+
+The preload coordination ensures the model is only loaded once (not duplicated), but does not reduce the inherent ~20-30 second load time.
 
 ### CPU Optimization
 
@@ -175,16 +187,25 @@ Transcription uses multiple CPU threads for faster processing:
 
 | Scenario | Time |
 |----------|------|
-| First transcription (model preloaded) | 2-5 seconds |
-| First transcription (model not preloaded) | 20-30 seconds |
+| Model already loaded | 2-5 seconds |
+| Model not loaded (first use) | 20-30 seconds |
 | Subsequent transcriptions | 2-5 seconds |
 | 10s audio with whisper-base | ~0.6 seconds transcription |
 
 ### Model Size vs Speed
 
-- **Smaller models** (tiny, base): Faster transcription, lower accuracy
-- **Larger models** (small, medium, large): Better accuracy, slower processing
-- **Default (whisper-base)**: Best balance of speed and accuracy for mobile devices
+- **whisper-tiny** (39MB): 32x realtime, lowest accuracy
+- **whisper-base** (145MB): 16x realtime, good accuracy (default)
+- **whisper-small** (465MB): 6x realtime, better accuracy
+- **whisper-medium** (1.5GB): 2x realtime, high accuracy
+- **whisper-large-v2** (3GB): 1x realtime, best accuracy
+
+### Future Improvements
+
+Potential optimizations (not yet implemented):
+- Use `whisper-tiny` for faster load time (~10-15s reduction)
+- Show "Loading Model..." progress indicator in dialog
+- Two-tier strategy: tiny for speed, base for re-transcription
 
 ## Changing the Default Model
 
