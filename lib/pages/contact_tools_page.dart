@@ -14,6 +14,7 @@ class ContactToolsPage extends StatelessWidget {
   final I18nService i18n;
   final String collectionPath;
   final VoidCallback? onDeleteAll;
+  final VoidCallback? onRefresh;
 
   const ContactToolsPage({
     super.key,
@@ -21,6 +22,7 @@ class ContactToolsPage extends StatelessWidget {
     required this.i18n,
     required this.collectionPath,
     this.onDeleteAll,
+    this.onRefresh,
   });
 
   @override
@@ -40,6 +42,16 @@ class ContactToolsPage extends StatelessWidget {
             onTap: () => _openMergeTool(context),
           ),
           const Divider(),
+          // Delete All Cache/Metrics
+          _buildToolTile(
+            context,
+            icon: Icons.cleaning_services,
+            iconColor: Colors.orange,
+            title: i18n.t('delete_all_cache'),
+            subtitle: i18n.t('delete_all_cache_description'),
+            onTap: () => _confirmDeleteCache(context),
+          ),
+          const Divider(),
           // Delete All Contacts (dangerous)
           _buildToolTile(
             context,
@@ -56,6 +68,41 @@ class ContactToolsPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _confirmDeleteCache(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(i18n.t('delete_all_cache')),
+        content: Text(i18n.t('delete_all_cache_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(i18n.t('cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: Text(i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      final count = await contactService.deleteAllCacheFiles();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(i18n.t('cache_deleted', params: [count.toString()])),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+        onRefresh?.call();
+      }
+    }
   }
 
   Widget _buildToolTile(

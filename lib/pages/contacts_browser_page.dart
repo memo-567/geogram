@@ -361,6 +361,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           i18n: _i18n,
           collectionPath: widget.collectionPath,
           onDeleteAll: _deleteAllContactsAndGroups,
+          onRefresh: _loadContacts,
         ),
       ),
     );

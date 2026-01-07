@@ -391,6 +391,39 @@ class ContactService {
     _summaryCacheTime = null;
   }
 
+  /// Delete all cache and metrics files to reset the contacts app state
+  /// This removes: fast.json, .contact_metrics.txt, .click_stats.txt, .favorites.json
+  Future<int> deleteAllCacheFiles() async {
+    if (_collectionPath == null) return 0;
+
+    int deletedCount = 0;
+    final filesToDelete = [
+      _fastJsonPath,
+      '$_collectionPath/.contact_metrics.txt',
+      '$_collectionPath/.click_stats.txt',
+      '$_collectionPath/.favorites.json',
+    ];
+
+    for (final path in filesToDelete) {
+      try {
+        final file = File(path);
+        if (await file.exists()) {
+          await file.delete();
+          deletedCount++;
+          LogService().log('ContactService: Deleted cache file: $path');
+        }
+      } catch (e) {
+        LogService().log('ContactService: Error deleting $path: $e');
+      }
+    }
+
+    // Clear in-memory cache
+    invalidateSummaryCache();
+
+    LogService().log('ContactService: Deleted $deletedCount cache files');
+    return deletedCount;
+  }
+
   /// Collect all contact file paths without loading contacts (fast scan)
   Future<void> _collectContactFilePaths(Directory dir, List<String> paths, [bool isRoot = true]) async {
     final entities = await dir.list().toList();
