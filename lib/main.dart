@@ -85,6 +85,22 @@ import 'pages/theme_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
+/// Start whisper model preload immediately (fire-and-forget)
+/// This runs in parallel with Phase 2 services to minimize wait time
+void _startWhisperPreload() {
+  SpeechToTextService().initialize().then((_) async {
+    final modelManager = WhisperModelManager();
+    await modelManager.initialize();
+    final preferredModel = await modelManager.getPreferredModel();
+
+    if (await modelManager.isDownloaded(preferredModel)) {
+      await SpeechToTextService().preloadModel(preferredModel);
+    }
+  }).catchError((e) {
+    LogService().log('SpeechToTextService: Background preload failed: $e');
+  });
+}
+
 void main() async {
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
 
@@ -314,6 +330,12 @@ void main() async {
   print('MAIN: Starting app (deferred services will initialize in background)');
   runApp(const GeogramApp());
 
+  // Start whisper preload IMMEDIATELY (fire-and-forget, parallel with Phase 2)
+  // This starts ~15 seconds earlier than waiting for Phase 2 services
+  if (!kIsWeb) {
+    _startWhisperPreload();
+  }
+
   // PHASE 2: Deferred services (initialize after first frame)
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -450,23 +472,6 @@ void main() async {
               'GroupSyncService: Error verifying chat rooms: $e',
             );
           });
-
-      // Preload speech-to-text model in background (if downloaded)
-      // This ensures transcription is fast when user first uses it
-      if (!kIsWeb) {
-        SpeechToTextService().initialize().then((_) async {
-          final modelManager = WhisperModelManager();
-          await modelManager.initialize();
-
-          final preferredModel = await modelManager.getPreferredModel();
-
-          if (await modelManager.isDownloaded(preferredModel)) {
-            await SpeechToTextService().preloadModel(preferredModel);
-          }
-        }).catchError((e) {
-          LogService().log('SpeechToTextService: Background preload failed: $e');
-        });
-      }
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
