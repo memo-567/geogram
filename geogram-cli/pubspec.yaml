@@ -21,5 +21,4 @@ dependencies:
   bech32: ^0.2.2
   mime: ^1.0.5
   archive: ^3.6.1
-  # Note: shared_preferences removed - CLI uses file-based config
-  ensemble_ts_interpreter: ^1.0.3
+  # Note: shared_preferences and ensemble_ts_interpreter removed - they depend on Flutter
