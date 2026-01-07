@@ -102,9 +102,9 @@ Models are downloaded from HuggingFace on first use.
 | Model ID | Size | Speed | Quality | Default |
 |----------|------|-------|---------|---------|
 | `whisper-tiny` | ~39 MB | 32x realtime | Low | |
-| `whisper-base` | ~145 MB | 16x realtime | Fair | |
-| `whisper-small` | ~465 MB | 6x realtime | Good | **Yes** |
-| `whisper-medium` | ~1.5 GB | 2x realtime | Better | |
+| `whisper-base` | ~145 MB | 16x realtime | Good | **Yes** |
+| `whisper-small` | ~465 MB | 6x realtime | Better | |
+| `whisper-medium` | ~1.5 GB | 2x realtime | High | |
 | `whisper-large-v2` | ~3 GB | 1x realtime | Best | |
 
 ### Download Source
@@ -121,8 +121,8 @@ https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{model}.bin
 ```
 {app-data}/geogram/bot/models/whisper/
 ├── ggml-tiny.bin      # ~39 MB
-├── ggml-base.bin      # ~145 MB
-├── ggml-small.bin     # ~465 MB (default)
+├── ggml-base.bin      # ~145 MB (default)
+├── ggml-small.bin     # ~465 MB
 ├── ggml-medium.bin    # ~1.5 GB
 └── ggml-large-v2.bin  # ~3 GB
 ```
@@ -149,12 +149,42 @@ The transcription dialog records directly in WAV format for Whisper compatibilit
 
 This avoids the need for audio format conversion (FFmpeg) which would add significant app size.
 
-## Performance Notes
+## Performance
 
-1. **First Transcription**: Slow (30s - 2+ minutes) because the model must be loaded into memory
-2. **Subsequent Transcriptions**: Faster since the model is cached in memory
-3. **Model Size vs Speed**: Smaller models (tiny, base) are faster but less accurate
-4. **Audio Length**: Longer recordings take proportionally longer to process
+### Startup Preloading
+
+The app preloads the Whisper model in the background during startup (Phase 2 deferred initialization in `main.dart`). This ensures the first transcription is fast:
+
+1. App starts → UI renders immediately
+2. Background: Model loads silently (~20-30s, non-blocking)
+3. User opens transcription dialog → Model already in memory
+4. Recording + transcription: **2-5 seconds**
+
+The preload only runs if:
+- Platform supports speech-to-text (Android, iOS, macOS)
+- The preferred model has already been downloaded
+
+### CPU Optimization
+
+Transcription uses multiple CPU threads for faster processing:
+- Uses `Platform.numberOfProcessors` to detect available cores
+- Reserves 2 cores for system tasks (if more than 4 cores available)
+- Falls back to all cores on devices with 4 or fewer
+
+### Performance Expectations
+
+| Scenario | Time |
+|----------|------|
+| First transcription (model preloaded) | 2-5 seconds |
+| First transcription (model not preloaded) | 20-30 seconds |
+| Subsequent transcriptions | 2-5 seconds |
+| 10s audio with whisper-base | ~0.6 seconds transcription |
+
+### Model Size vs Speed
+
+- **Smaller models** (tiny, base): Faster transcription, lower accuracy
+- **Larger models** (small, medium, large): Better accuracy, slower processing
+- **Default (whisper-base)**: Best balance of speed and accuracy for mobile devices
 
 ## Changing the Default Model
 
@@ -164,11 +194,11 @@ lib/bot/models/whisper_model_info.dart
 ```
 
 ```dart
-static const String defaultModelId = 'whisper-tiny'; // Faster, less accurate
+static const String defaultModelId = 'whisper-tiny'; // Fastest, lowest accuracy
 // or
-static const String defaultModelId = 'whisper-small'; // Balanced (default)
+static const String defaultModelId = 'whisper-base'; // Fast with good accuracy (default)
 // or
-static const String defaultModelId = 'whisper-medium'; // Slower, more accurate
+static const String defaultModelId = 'whisper-small'; // Slower, better accuracy
 ```
 
 ## i18n Keys
