@@ -1696,11 +1696,6 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                       contact.callsign,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    if (contact.groupPath != null && contact.groupPath!.isNotEmpty)
-                      Text(
-                        '${_i18n.t('group')}: ${contact.groupDisplayName}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
                   ],
                 ),
               ),
@@ -3075,11 +3070,6 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                       contact.callsign,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    if (contact.groupPath != null && contact.groupPath!.isNotEmpty)
-                      Text(
-                        '${i18n.t('group')}: ${contact.groupDisplayName}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
                   ],
                 ),
               ),
@@ -3117,11 +3107,16 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             _buildDetailRow('NPUB', contact.npub!, monospace: true),
           _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
 
-          // Contact Information
+          // Contact Information - Emails
           if (contact.emails.isNotEmpty) ...[
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
+            Text(
+              i18n.t('email'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
             // Use sorted emails if available, otherwise use original order
             if (_sortedEmails != null)
               ..._sortedEmails!.map((e) => _buildEmailRowWithMetrics(e))
@@ -3513,62 +3508,54 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
   Widget _buildEmailRowWithMetrics(_EmailWithMetrics emailData) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              i18n.t('email'),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(emailData.email),
-                if (emailData.interactionCount > 0)
-                  Text(
-                    i18n.t('times_emailed', params: [emailData.interactionCount.toString()]),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey[600],
-                      fontStyle: FontStyle.italic,
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(emailData.email),
+              ),
+              // Show "most used" badge for the first one if it has interactions
+              if (emailData.interactionCount > 0 && _sortedEmails?.first == emailData)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Chip(
+                    label: Text(
+                      i18n.t('most_used'),
+                      style: const TextStyle(fontSize: 10),
                     ),
+                    padding: EdgeInsets.zero,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: Colors.green.withAlpha(30),
                   ),
-              ],
-            ),
-          ),
-          // Show "most used" badge for the first one if it has interactions
-          if (emailData.interactionCount > 0 && _sortedEmails?.first == emailData)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Chip(
-                label: Text(
-                  i18n.t('most_used'),
-                  style: const TextStyle(fontSize: 10),
                 ),
+              IconButton(
+                icon: const Icon(Icons.copy, size: 20),
+                tooltip: i18n.t('copy'),
+                onPressed: () => _copyEmail(emailData.email),
                 padding: EdgeInsets.zero,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                backgroundColor: Colors.green.withAlpha(30),
+                constraints: const BoxConstraints(),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.email, size: 20),
+                tooltip: i18n.t('send_email'),
+                onPressed: () => _launchEmail(emailData.email, emailData.index),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+          if (emailData.interactionCount > 0)
+            Text(
+              i18n.t('times_emailed', params: [emailData.interactionCount.toString()]),
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[600],
+                fontStyle: FontStyle.italic,
               ),
             ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 20),
-            tooltip: i18n.t('copy'),
-            onPressed: () => _copyEmail(emailData.email),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.email, size: 20),
-            tooltip: i18n.t('send_email'),
-            onPressed: () => _launchEmail(emailData.email, emailData.index),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
         ],
       ),
     );
