@@ -207,5 +207,6 @@
   "select_contacts": "Selecionar Contactos",
   "add_more_contacts": "Adicionar Mais Contactos",
   "contact_not_found": "Contacto não encontrado",
-  "contact_details": "Detalhes do Contacto"
+  "contact_details": "Detalhes do Contacto",
+  "details": "Detalhes"
 }

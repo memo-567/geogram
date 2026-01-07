@@ -1769,45 +1769,54 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             const SizedBox(height: 16),
           ],
 
-          // NPUB (compact display)
-          if (contact.npub != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 4),
-              child: Row(
-                children: [
-                  Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 6),
-                  Text(
-                    'NPUB',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+          // Details (collapsible)
+          ExpansionTile(
+            title: Text(_i18n.t('details')),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 8),
+            initiallyExpanded: false,
+            children: [
+              if (contact.npub != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        'NPUB',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: SelectableText(
+                          contact.npub!,
+                          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 16),
+                        tooltip: _i18n.t('copy'),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: contact.npub!));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(_i18n.t('copied_to_clipboard'))),
+                          );
+                        },
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SelectableText(
-                      contact.npub!,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy, size: 16),
-                    tooltip: _i18n.t('copy'),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: contact.npub!));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(_i18n.t('copied_to_clipboard'))),
-                      );
-                    },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-              ),
-            ),
+                ),
+              _buildInfoRow(_i18n.t('callsign'), contact.callsign),
+            ],
+          ),
 
           // Contact Information
           if (contact.emails.isNotEmpty ||
@@ -3155,48 +3164,55 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
           const SizedBox(height: 24),
           const Divider(),
-          const SizedBox(height: 16),
 
-          // Details
-          if (contact.npub != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Row(
-                children: [
-                  Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 6),
-                  Text(
-                    'NPUB',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+          // Details (collapsible)
+          ExpansionTile(
+            title: Text(i18n.t('details')),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 8),
+            initiallyExpanded: false,
+            children: [
+              if (contact.npub != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.key, size: 14, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        'NPUB',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: SelectableText(
+                          contact.npub!,
+                          style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 16),
+                        tooltip: i18n.t('copy'),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: contact.npub!));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(i18n.t('copied_to_clipboard'))),
+                          );
+                        },
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SelectableText(
-                      contact.npub!,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 10),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy, size: 16),
-                    tooltip: i18n.t('copy'),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: contact.npub!));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(i18n.t('copied_to_clipboard'))),
-                      );
-                    },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-              ),
-            ),
-          _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
+                ),
+              _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
+            ],
+          ),
 
           // Contact Information - Emails
           if (contact.emails.isNotEmpty) ...[
