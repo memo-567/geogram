@@ -1263,11 +1263,36 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
     );
   }
 
+  /// Handle back navigation - go up one level in folder hierarchy
+  void _navigateBack() {
+    if (_selectedGroupPath != null && _selectedGroupPath!.isNotEmpty) {
+      // Check if we're in a nested group (has /)
+      final lastSlash = _selectedGroupPath!.lastIndexOf('/');
+      if (lastSlash > 0) {
+        // Go up one level
+        _selectGroup(_selectedGroupPath!.substring(0, lastSlash));
+      } else {
+        // At top level of a group, go back to all contacts
+        _selectGroup(null);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _isSelectionMode ? _buildSelectionAppBar() : _buildNormalAppBar(),
-      body: LayoutBuilder(
+    // Intercept back button when inside a group folder
+    final canPop = _viewMode != 'group' || _selectedGroupPath == null;
+
+    return PopScope(
+      canPop: canPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !canPop) {
+          _navigateBack();
+        }
+      },
+      child: Scaffold(
+        appBar: _isSelectionMode ? _buildSelectionAppBar() : _buildNormalAppBar(),
+        body: LayoutBuilder(
         builder: (context, constraints) {
           // Use two-panel layout for wide screens, single panel for narrow
           final isWideScreen = constraints.maxWidth >= 600;
@@ -1298,6 +1323,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
             return _buildContactList(context, isMobileView: true);
           }
         },
+      ),
       ),
     );
   }
