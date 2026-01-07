@@ -99,5 +99,22 @@
   "bot_vision_storage": "Armazenamento de visão",
   "bot_voice_input": "Entrada de Voz",
   "bot_which_one": "Qual pretende?",
-  "bot_whisper_model": "Modelo Whisper"
+  "bot_whisper_model": "Modelo Whisper",
+  "checking_speech_model": "A verificar modelo de voz...",
+  "downloading_speech_model": "A descarregar modelo de voz",
+  "first_time_download": "Configuração inicial - isto só acontece uma vez",
+  "listening": "A ouvir...",
+  "max_duration_seconds": "Máximo {0} segundos",
+  "microphone_permission_required": "Permissão do microfone necessária",
+  "no_audio_recorded": "Nenhum áudio gravado",
+  "no_speech_detected": "Nenhuma voz detetada",
+  "please_wait": "Por favor aguarde...",
+  "processing_speech": "A processar voz",
+  "recording": "A gravar",
+  "recording_failed": "Gravação falhou",
+  "tap_to_start_recording": "Toque em Iniciar para começar a gravar",
+  "transcribing_audio": "A transcrever áudio...",
+  "transcription_failed": "Transcrição falhou",
+  "unknown_error": "Erro desconhecido",
+  "voice_to_text": "Voz para texto"
 }

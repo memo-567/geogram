@@ -27,6 +27,9 @@ class ContactMergePage extends StatefulWidget {
 
 class _ContactMergePageState extends State<ContactMergePage> {
   List<DuplicateGroup> _duplicateGroups = [];
+  List<Contact> _phonesOnlyContacts = []; // Contacts with phone but no name
+  Set<int> _selectedGroups = {}; // Selected duplicate groups for merging
+  Set<String> _selectedPhoneOnlyCallsigns = {}; // Selected phone-only contacts for deletion
   bool _isLoading = true;
   bool _isManualMode = false;
 
@@ -58,18 +61,28 @@ class _ContactMergePageState extends State<ContactMergePage> {
     }
 
     final groups = <DuplicateGroup>[];
+    final phonesOnly = <Contact>[];
     final processed = <String>{};
 
     for (var i = 0; i < allContacts.length; i++) {
-      if (processed.contains(allContacts[i].callsign)) continue;
+      final contact = allContacts[i];
 
-      final duplicates = <Contact>[allContacts[i]];
+      // Check for phone-only contacts (no name but has phone)
+      if (_isPhoneOnlyContact(contact)) {
+        phonesOnly.add(contact);
+        continue;
+      }
+
+      if (processed.contains(contact.callsign)) continue;
+
+      final duplicates = <Contact>[contact];
       String? matchReason;
 
       for (var j = i + 1; j < allContacts.length; j++) {
         if (processed.contains(allContacts[j].callsign)) continue;
+        if (_isPhoneOnlyContact(allContacts[j])) continue;
 
-        final reason = _checkDuplicate(allContacts[i], allContacts[j]);
+        final reason = _checkDuplicate(contact, allContacts[j]);
         if (reason != null) {
           duplicates.add(allContacts[j]);
           matchReason ??= reason;
@@ -89,8 +102,20 @@ class _ContactMergePageState extends State<ContactMergePage> {
 
     setState(() {
       _duplicateGroups = groups;
+      _phonesOnlyContacts = phonesOnly;
+      _selectedGroups = {};
+      _selectedPhoneOnlyCallsigns = {};
       _isLoading = false;
     });
+  }
+
+  bool _isPhoneOnlyContact(Contact contact) {
+    final name = contact.displayName.trim();
+    // Consider phone-only if name is empty or looks like a phone number
+    final hasNoName = name.isEmpty ||
+        name == contact.callsign ||
+        RegExp(r'^[\d\s\-\+\(\)]+$').hasMatch(name);
+    return hasNoName && contact.phones.isNotEmpty;
   }
 
   String? _checkDuplicate(Contact a, Contact b) {
@@ -130,9 +155,11 @@ class _ContactMergePageState extends State<ContactMergePage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasIssues = _duplicateGroups.isNotEmpty || _phonesOnlyContacts.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.i18n.t('merge_contacts')),
+        title: Text(widget.i18n.t('merge_duplicates')),
         actions: [
           if (!_isManualMode && !_isLoading)
             IconButton(
@@ -144,7 +171,7 @@ class _ContactMergePageState extends State<ContactMergePage> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _duplicateGroups.isEmpty
+          : !hasIssues
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -169,16 +196,145 @@ class _ContactMergePageState extends State<ContactMergePage> {
                     ],
                   ),
                 )
-              : ListView.builder(
-                  itemCount: _duplicateGroups.length,
-                  itemBuilder: (context, index) {
-                    return _buildDuplicateGroupCard(_duplicateGroups[index], index);
-                  },
+              : ListView(
+                  children: [
+                    // Phone-only contacts section
+                    if (_phonesOnlyContacts.isNotEmpty) ...[
+                      _buildPhoneOnlySection(),
+                      const Divider(height: 32),
+                    ],
+                    // Duplicate groups
+                    ...List.generate(_duplicateGroups.length, (index) {
+                      return _buildDuplicateGroupCard(_duplicateGroups[index], index);
+                    }),
+                  ],
                 ),
     );
   }
 
+  Widget _buildPhoneOnlySection() {
+    return Card(
+      margin: const EdgeInsets.all(8),
+      color: Colors.amber.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.phone, color: Colors.amber.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.i18n.t('phone_only_contacts'),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ),
+                Text(
+                  '${_phonesOnlyContacts.length}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.amber.shade700,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.i18n.t('phone_only_description'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.grey.shade700,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            ..._phonesOnlyContacts.map((contact) => CheckboxListTile(
+                  dense: true,
+                  value: _selectedPhoneOnlyCallsigns.contains(contact.callsign),
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        _selectedPhoneOnlyCallsigns.add(contact.callsign);
+                      } else {
+                        _selectedPhoneOnlyCallsigns.remove(contact.callsign);
+                      }
+                    });
+                  },
+                  secondary: CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Colors.amber.shade200,
+                    child: const Icon(Icons.phone, size: 18, color: Colors.black54),
+                  ),
+                  title: Text(
+                    contact.phones.isNotEmpty ? contact.phones.first : contact.callsign,
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                  subtitle: Text(contact.callsign),
+                )),
+            if (_selectedPhoneOnlyCallsigns.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  onPressed: _deleteSelectedPhoneOnly,
+                  icon: const Icon(Icons.delete, size: 18),
+                  label: Text(widget.i18n.t('delete_selected_count',
+                      params: [_selectedPhoneOnlyCallsigns.length.toString()])),
+                  style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteSelectedPhoneOnly() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('delete_contacts')),
+        content: Text(widget.i18n.t('delete_phone_only_confirm',
+            params: [_selectedPhoneOnlyCallsigns.length.toString()])),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(widget.i18n.t('cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text(widget.i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      for (final callsign in _selectedPhoneOnlyCallsigns) {
+        final contact = _phonesOnlyContacts.firstWhere((c) => c.callsign == callsign);
+        await widget.contactService.deleteContact(callsign, groupPath: contact.groupPath);
+      }
+      setState(() {
+        _phonesOnlyContacts.removeWhere((c) => _selectedPhoneOnlyCallsigns.contains(c.callsign));
+        _selectedPhoneOnlyCallsigns.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.i18n.t('contacts_deleted')),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildDuplicateGroupCard(DuplicateGroup group, int index) {
+    final isSelected = _selectedGroups.contains(index);
+
     return Card(
       margin: const EdgeInsets.all(8),
       child: Padding(
@@ -186,9 +342,21 @@ class _ContactMergePageState extends State<ContactMergePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with match reason
+            // Header with checkbox and match reason
             Row(
               children: [
+                Checkbox(
+                  value: isSelected,
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        _selectedGroups.add(index);
+                      } else {
+                        _selectedGroups.remove(index);
+                      }
+                    });
+                  },
+                ),
                 Icon(Icons.people, color: Colors.orange.shade400),
                 const SizedBox(width: 8),
                 Expanded(
@@ -202,7 +370,7 @@ class _ContactMergePageState extends State<ContactMergePage> {
                 Chip(
                   label: Text(
                     group.matchReason,
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(fontSize: 12, color: Colors.black87),
                   ),
                   backgroundColor: Colors.orange.shade100,
                 ),

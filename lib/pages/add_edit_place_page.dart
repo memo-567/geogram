@@ -18,6 +18,7 @@ import '../services/log_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
+import '../widgets/transcribe_button_widget.dart';
 
 /// Full-page form for adding or editing a place
 class AddEditPlacePage extends StatefulWidget {
@@ -926,6 +927,17 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 border: const OutlineInputBorder(),
                 helperText: _i18n.t('place_description_help'),
                 helperMaxLines: 2,
+                suffixIcon: TranscribeButtonWidget(
+                  i18n: _i18n,
+                  onTranscribed: (text) {
+                    // Append transcribed text to description
+                    if (_descriptionController.text.isEmpty) {
+                      _descriptionController.text = text;
+                    } else {
+                      _descriptionController.text += ' $text';
+                    }
+                  },
+                ),
               ),
               maxLines: 4,
               textCapitalization: TextCapitalization.sentences,

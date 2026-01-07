@@ -47,6 +47,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
 
+### Speech Input Widgets
+- [TranscribeButtonWidget](#transcribebuttonwidget) - Voice-to-text for text fields
+
 ---
 
 ## Picker Widgets
@@ -1292,6 +1295,92 @@ Navigator.push(
 
 ---
 
+## Speech Input Widgets
+
+### TranscribeButtonWidget
+
+**File:** `lib/widgets/transcribe_button_widget.dart`
+
+Voice-to-text button for text fields. Shows an audio waveform icon that opens a recording/transcription dialog.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `i18n` | I18nService | Yes | Localization service |
+| `onTranscribed` | void Function(String) | Yes | Callback with transcribed text |
+| `enabled` | bool | No | Enable/disable button (default: true) |
+| `iconSize` | double | No | Icon size (default: 24) |
+
+**Usage:**
+```dart
+TextFormField(
+  controller: _descriptionController,
+  decoration: InputDecoration(
+    labelText: 'Description',
+    suffixIcon: TranscribeButtonWidget(
+      i18n: widget.i18n,
+      onTranscribed: (text) {
+        if (_descriptionController.text.isEmpty) {
+          _descriptionController.text = text;
+        } else {
+          _descriptionController.text += ' $text';
+        }
+      },
+    ),
+  ),
+)
+```
+
+**Features:**
+- Auto-downloads Whisper model on first use (~465 MB)
+- 30-second maximum recording duration
+- Offline processing (no internet required after model download)
+- Progress indicators for download and transcription
+- Automatic platform detection (hides on unsupported platforms)
+- Resume support for interrupted downloads
+
+**Platform Support:**
+| Platform | Supported | Notes |
+|----------|-----------|-------|
+| Android 5.0+ | Yes | |
+| iOS 13+ | Yes | |
+| macOS 11+ | Yes | |
+| Windows | No | Icon hidden |
+| Linux | No | Icon hidden |
+| Web | No | Icon hidden |
+
+**Dialog States:**
+1. **Checking model** - Verifies if speech model is downloaded
+2. **Downloading** - Auto-downloads Whisper Small model with progress bar
+3. **Idle** - Ready to record, tap Start button
+4. **Recording** - Animated waveform, timer, max 30 seconds
+5. **Processing** - Transcribing audio (runs in background)
+6. **Error** - Shows error with retry option
+
+**Dependencies:**
+- `whisper_flutter_new: ^1.3.0` - Offline speech recognition
+
+**Model Storage:**
+- Location: `{data-root}/bot/models/whisper/`
+- Default model: Whisper Small (~465 MB)
+- Downloaded from HuggingFace (ggerganov/whisper.cpp)
+
+**Required i18n Keys:**
+- `voice_to_text` - Tooltip
+- `tap_to_start_recording` - Idle state hint
+- `listening` - Recording title
+- `recording` - Recording state label
+- `processing_speech` - Processing title
+- `transcribing_audio` - Processing state
+- `downloading_speech_model` - Download title
+- `first_time_download` - First-time hint
+- `max_duration_seconds` - Duration hint with placeholder
+- `microphone_permission_required` - Permission error
+- `transcription_failed` - Error message
+- `no_speech_detected` - Empty result message
+
+---
+
 ## Summary Table
 
 | Component | Location | Type | Main Use |
@@ -1317,3 +1406,4 @@ Navigator.push(
 | MessageInputWidget | widgets/ | Input | Message composer |
 | LocationService | services/ | Service | City lookup from coordinates |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
+| TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |

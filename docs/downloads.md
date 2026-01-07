@@ -98,7 +98,33 @@ Multi-file ONNX packages.
 
 ---
 
-### 5. Music Tracks (Generated)
+### 5. Whisper Speech Models
+
+**Service:** `lib/bot/services/whisper_model_manager.dart`
+
+Speech-to-text models using OpenAI's Whisper via whisper.cpp.
+
+| Model ID | Filename | Size | Speed |
+|----------|----------|------|-------|
+| `whisper-tiny` | `ggml-tiny.bin` | ~39 MB | 32x realtime |
+| `whisper-base` | `ggml-base.bin` | ~145 MB | 16x realtime |
+| `whisper-small` | `ggml-small.bin` | ~465 MB | 6x realtime |
+| `whisper-medium` | `ggml-medium.bin` | ~1.5 GB | 2x realtime |
+| `whisper-large-v2` | `ggml-large-v2.bin` | ~3 GB | 1x realtime |
+
+**Default:** `whisper-small` (~465 MB) - best balance of speed and accuracy
+
+**Sources:**
+1. `http(s)://{station}/bot/models/whisper/{filename}`
+2. HuggingFace: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{filename}`
+
+**Storage:** `{data-root}/bot/models/whisper/{filename}`
+
+**Platform Support:** Android 5.0+, iOS 13+, macOS 11+
+
+---
+
+### 6. Music Tracks (Generated)
 
 **Service:** `lib/bot/services/music_storage_service.dart`
 
@@ -106,7 +132,7 @@ Multi-file ONNX packages.
 
 ---
 
-### 6. Vision Cache
+### 7. Vision Cache
 
 **Service:** `lib/bot/services/vision_service.dart`
 

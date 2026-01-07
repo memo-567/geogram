@@ -99,5 +99,22 @@
   "bot_vision_storage": "Vision storage",
   "bot_voice_input": "Voice Input",
   "bot_which_one": "Which one would you like?",
-  "bot_whisper_model": "Whisper Model"
+  "bot_whisper_model": "Whisper Model",
+  "checking_speech_model": "Checking speech model...",
+  "downloading_speech_model": "Downloading speech model",
+  "first_time_download": "First time setup - this only happens once",
+  "listening": "Listening...",
+  "max_duration_seconds": "Maximum {0} seconds",
+  "microphone_permission_required": "Microphone permission required",
+  "no_audio_recorded": "No audio recorded",
+  "no_speech_detected": "No speech detected",
+  "please_wait": "Please wait...",
+  "processing_speech": "Processing speech",
+  "recording": "Recording",
+  "recording_failed": "Recording failed",
+  "tap_to_start_recording": "Tap Start to begin recording",
+  "transcribing_audio": "Transcribing audio...",
+  "transcription_failed": "Transcription failed",
+  "unknown_error": "Unknown error",
+  "voice_to_text": "Voice to text"
 }

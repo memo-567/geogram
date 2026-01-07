@@ -37,7 +37,7 @@ class ContactToolsPage extends StatelessWidget {
           _buildToolTile(
             context,
             icon: Icons.merge,
-            title: i18n.t('merge_contacts'),
+            title: i18n.t('merge_duplicates'),
             subtitle: i18n.t('merge_contacts_description'),
             onTap: () => _openMergeTool(context),
           ),
