@@ -1772,7 +1772,39 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           // NPUB
           if (contact.npub != null)
             _buildInfoSection(_i18n.t('nostr_identity'), [
-              _buildInfoRow('npub', contact.npub!, monospace: true),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 120,
+                      child: Text(
+                        'npub',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Expanded(
+                      child: SelectableText(
+                        contact.npub!,
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: 18),
+                      tooltip: _i18n.t('copy'),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: contact.npub!));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(_i18n.t('copied_to_clipboard'))),
+                        );
+                      },
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
             ]),
 
           // Contact Information
@@ -2476,81 +2508,96 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
   void _showAddInteractionMenu() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                i18n.t('add_interaction'),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.7,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  i18n.t('add_interaction'),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
               ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.note_add),
-              title: Text(i18n.t('interaction_note')),
-              onTap: () {
-                Navigator.pop(context);
-                _addHistoryEntry(ContactHistoryEntryType.note);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.phone),
-              title: Text(i18n.t('interaction_call')),
-              onTap: () {
-                Navigator.pop(context);
-                _addHistoryEntry(ContactHistoryEntryType.call);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.sms),
-              title: Text(i18n.t('interaction_message')),
-              onTap: () {
-                Navigator.pop(context);
-                _addHistoryEntry(ContactHistoryEntryType.message);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.handshake),
-              title: Text(i18n.t('interaction_meeting')),
-              onTap: () {
-                Navigator.pop(context);
-                _addHistoryEntry(ContactHistoryEntryType.meeting);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.location_on),
-              title: Text(i18n.t('interaction_location')),
-              subtitle: Text(i18n.t('select_location_on_map')),
-              onTap: () {
-                Navigator.pop(context);
-                _addLocationFromMap();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.place_outlined),
-              title: Text(i18n.t('interaction_place')),
-              subtitle: Text(i18n.t('choose_saved_place')),
-              onTap: () {
-                Navigator.pop(context);
-                _addPlaceEntry();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.event),
-              title: Text(i18n.t('interaction_event')),
-              subtitle: Text(i18n.t('associate_with_event')),
-              onTap: () {
-                Navigator.pop(context);
-                _addEventEntry();
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.note_add),
+                        title: Text(i18n.t('interaction_note')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addHistoryEntry(ContactHistoryEntryType.note);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.phone),
+                        title: Text(i18n.t('interaction_call')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addHistoryEntry(ContactHistoryEntryType.call);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.sms),
+                        title: Text(i18n.t('interaction_message')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addHistoryEntry(ContactHistoryEntryType.message);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.handshake),
+                        title: Text(i18n.t('interaction_meeting')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addHistoryEntry(ContactHistoryEntryType.meeting);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.location_on),
+                        title: Text(i18n.t('interaction_location')),
+                        subtitle: Text(i18n.t('select_location_on_map')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addLocationFromMap();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.place_outlined),
+                        title: Text(i18n.t('interaction_place')),
+                        subtitle: Text(i18n.t('choose_saved_place')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addPlaceEntry();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.event),
+                        title: Text(i18n.t('interaction_event')),
+                        subtitle: Text(i18n.t('associate_with_event')),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _addEventEntry();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3104,7 +3151,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
           // Details
           if (contact.npub != null)
-            _buildDetailRow('NPUB', contact.npub!, monospace: true),
+            _buildCopyableRow(context, 'NPUB', contact.npub!),
           _buildCopyableRow(context, i18n.t('callsign'), contact.callsign),
 
           // Contact Information - Emails
@@ -3507,10 +3554,11 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
   Widget _buildEmailRowWithMetrics(_EmailWithMetrics emailData) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Email address on its own line
           Row(
             children: [
               Expanded(
@@ -3518,18 +3566,30 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
               // Show "most used" badge for the first one if it has interactions
               if (emailData.interactionCount > 0 && _sortedEmails?.first == emailData)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Chip(
-                    label: Text(
-                      i18n.t('most_used'),
-                      style: const TextStyle(fontSize: 10),
-                    ),
-                    padding: EdgeInsets.zero,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    backgroundColor: Colors.green.withAlpha(30),
+                Chip(
+                  label: Text(
+                    i18n.t('most_used'),
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                  padding: EdgeInsets.zero,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  backgroundColor: Colors.green.withAlpha(30),
+                ),
+            ],
+          ),
+          // Actions row below
+          Row(
+            children: [
+              if (emailData.interactionCount > 0)
+                Text(
+                  i18n.t('times_emailed', params: [emailData.interactionCount.toString()]),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                    fontStyle: FontStyle.italic,
                   ),
                 ),
+              const Spacer(),
               IconButton(
                 icon: const Icon(Icons.copy, size: 20),
                 tooltip: i18n.t('copy'),
@@ -3547,15 +3607,6 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
             ],
           ),
-          if (emailData.interactionCount > 0)
-            Text(
-              i18n.t('times_emailed', params: [emailData.interactionCount.toString()]),
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey[600],
-                fontStyle: FontStyle.italic,
-              ),
-            ),
         ],
       ),
     );
