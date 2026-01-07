@@ -39,6 +39,11 @@ jobs:
         sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
         echo "Building version $VERSION+$BUILD_NUMBER"
 
+    - name: Remove native-only dependencies
+      run: |
+        # Remove FFI dependency (native libopus bindings, not available on web)
+        sed -i '/^  ffi:/d' pubspec.yaml
+
     - name: Install dependencies
       run: flutter pub get
 

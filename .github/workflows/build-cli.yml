@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   build:
+    # Disabled: CLI requires separation into pure-Dart package (Flutter's dart:ui unavailable for AOT)
+    if: false
     runs-on: ubuntu-latest
 
     steps:
