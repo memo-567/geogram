@@ -22,6 +22,8 @@ import '../services/station_place_service.dart';
 import '../services/user_location_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../widgets/place_feedback_section.dart';
+import '../widgets/place_coordinates_row.dart';
+import 'package:latlong2/latlong.dart';
 import 'add_edit_place_page.dart';
 import 'photo_viewer_page.dart';
 import 'place_map_view_page.dart';
@@ -1254,7 +1256,18 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
           // Basic info
           _buildInfoSection(_i18n.t('basic_information'), [
-            _buildLocationRow(place),
+            PlaceCoordinatesRow(
+              place: place,
+              userLocation: _userLocationService.currentLocation != null
+                  ? LatLng(_userLocationService.currentLocation!.latitude,
+                      _userLocationService.currentLocation!.longitude)
+                  : null,
+              showNavigateButton: true,
+              onCopy: () => _copyCoordinates(place),
+              onViewMap: () => _showPlaceOnMap(place),
+              onNavigate: () => _openInNavigator(place),
+              t: _i18n.t,
+            ),
             _buildInfoRow(_i18n.t('radius'), '${place.radius} ${_i18n.t('meters')}'),
             if (place.address != null)
               _buildInfoRow(_i18n.t('address'), place.address!),
@@ -1370,63 +1383,6 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     );
   }
 
-  Widget _buildLocationRow(Place place) {
-    final userLocation = _userLocationService.currentLocation;
-    String coordsText = place.coordinatesString;
-
-    if (userLocation != null && userLocation.isValid) {
-      final distance = _calculateDistance(
-        userLocation.latitude,
-        userLocation.longitude,
-        place.latitude,
-        place.longitude,
-      );
-      final distanceStr = distance < 1
-          ? '${(distance * 1000).toStringAsFixed(0)} m'
-          : '${distance.toStringAsFixed(1)} km';
-      coordsText = '${place.coordinatesString} ($distanceStr)';
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              _i18n.t('coordinates'),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              coordsText,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 18),
-            onPressed: () => _copyCoordinates(place),
-            tooltip: _i18n.t('copy_coordinates'),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            icon: const Icon(Icons.map, size: 18),
-            onPressed: () => _showPlaceOnMap(place),
-            tooltip: _i18n.t('see_in_map'),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            icon: const Icon(Icons.navigation, size: 18),
-            onPressed: () => _openInNavigator(place),
-            tooltip: _i18n.t('open_in_navigator'),
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
-    );
-  }
 
   void _copyCoordinates(Place place) {
     Clipboard.setData(ClipboardData(text: place.coordinatesString));
@@ -1707,63 +1663,6 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
     );
   }
 
-  Widget _buildLocationRow() {
-    final userLocation = _userLocationService.currentLocation;
-    String coordsText = widget.place.coordinatesString;
-
-    if (userLocation != null && userLocation.isValid) {
-      final distance = _calculateDistance(
-        userLocation.latitude,
-        userLocation.longitude,
-        widget.place.latitude,
-        widget.place.longitude,
-      );
-      final distanceStr = distance < 1
-          ? '${(distance * 1000).toStringAsFixed(0)} m'
-          : '${distance.toStringAsFixed(1)} km';
-      coordsText = '${widget.place.coordinatesString} ($distanceStr)';
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              widget.i18n.t('coordinates'),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              coordsText,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 18),
-            onPressed: _copyCoordinates,
-            tooltip: widget.i18n.t('copy_coordinates'),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            icon: const Icon(Icons.map, size: 18),
-            onPressed: _showPlaceOnMap,
-            tooltip: widget.i18n.t('see_in_map'),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            icon: const Icon(Icons.navigation, size: 18),
-            onPressed: _openInNavigator,
-            tooltip: widget.i18n.t('open_in_navigator'),
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
-    );
-  }
 
   void _showPlaceOnMap() {
     Navigator.of(context).push(
@@ -1915,7 +1814,18 @@ class _PlaceDetailPageState extends State<_PlaceDetailPage> {
 
               // Basic info
               _buildInfoSection(widget.i18n.t('basic_information'), [
-                _buildLocationRow(),
+                PlaceCoordinatesRow(
+                  place: widget.place,
+                  userLocation: _userLocationService.currentLocation != null
+                      ? LatLng(_userLocationService.currentLocation!.latitude,
+                          _userLocationService.currentLocation!.longitude)
+                      : null,
+                  showNavigateButton: true,
+                  onCopy: _copyCoordinates,
+                  onViewMap: _showPlaceOnMap,
+                  onNavigate: _openInNavigator,
+                  t: widget.i18n.t,
+                ),
                 _buildInfoRow(widget.i18n.t('radius'), '${widget.place.radius} ${widget.i18n.t('meters')}'),
                 if (widget.place.address != null)
                   _buildInfoRow(widget.i18n.t('address'), widget.place.address!),

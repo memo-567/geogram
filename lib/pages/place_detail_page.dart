@@ -20,6 +20,7 @@ import 'add_edit_place_page.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 import '../widgets/place_feedback_section.dart';
+import '../widgets/place_coordinates_row.dart';
 
 /// Full-screen place detail page
 /// Can be used from the map, places browser, or anywhere else
@@ -472,7 +473,12 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
 
                     // Basic info
                     _buildInfoSection(_i18n.t('basic_information'), [
-                      _buildLocationRow(),
+                      PlaceCoordinatesRow(
+                        place: _place,
+                        onCopy: _copyCoordinates,
+                        onViewMap: _viewOnMap,
+                        t: _i18n.t,
+                      ),
                       _buildInfoRow(_i18n.t('radius'), '${_place.radius} ${_i18n.t('meters')}'),
                       if (_place.address != null)
                         _buildInfoRow(_i18n.t('address'), _place.address!),
@@ -605,39 +611,4 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
     );
   }
 
-  Widget _buildLocationRow() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                _i18n.t('coordinates'),
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.copy, size: 18),
-                onPressed: _copyCoordinates,
-                tooltip: _i18n.t('copy_coordinates'),
-                visualDensity: VisualDensity.compact,
-              ),
-              IconButton(
-                icon: const Icon(Icons.map, size: 18),
-                onPressed: _viewOnMap,
-                tooltip: _i18n.t('view_on_map'),
-                visualDensity: VisualDensity.compact,
-              ),
-            ],
-          ),
-          SelectableText(
-            _place.coordinatesString,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
 }
