@@ -18,3 +18,6 @@
 # Keep TFLite Flutter plugin
 -keep class com.tfliteflutter.** { *; }
 -dontwarn com.tfliteflutter.**
+
+# Ignore missing Play Core classes (not needed for F-Droid builds)
+-dontwarn com.google.android.play.core.**
