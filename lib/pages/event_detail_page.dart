@@ -270,10 +270,10 @@ class _EventDetailPageState extends State<EventDetailPage> {
     if (widget.collectionPath.isEmpty) return;
 
     // Events collectionPath is like: devices/X1DPDX/events
-    // Contacts are at: devices/X1DPDX/contacts/contacts/
+    // Contacts are at: devices/X1DPDX/contacts/
     final devicePath = path.dirname(widget.collectionPath);
     final contactsCollectionPath = '$devicePath/contacts';
-    final fastJsonPath = '$contactsCollectionPath/contacts/fast.json';
+    final fastJsonPath = '$contactsCollectionPath/fast.json';
 
     // First try to find the contact's file path from fast.json
     String? contactFilePath;

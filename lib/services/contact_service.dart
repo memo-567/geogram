@@ -76,18 +76,18 @@ class ContactService {
   DateTime? _summaryCacheTime;
 
   /// Get fast.json path
-  String get _fastJsonPath => '$_collectionPath/contacts/fast.json';
+  String get _fastJsonPath => '$_collectionPath/fast.json';
 
   /// Initialize contact service for a collection
   Future<void> initializeCollection(String collectionPath) async {
     LogService().log('ContactService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure contacts directory exists
-    final contactsDir = Directory('$collectionPath/contacts');
-    if (!await contactsDir.exists()) {
-      await contactsDir.create(recursive: true);
-      LogService().log('ContactService: Created contacts directory');
+    // Ensure collection directory exists
+    final collectionDir = Directory(collectionPath);
+    if (!await collectionDir.exists()) {
+      await collectionDir.create(recursive: true);
+      LogService().log('ContactService: Created collection directory');
     }
 
     // Ensure media directory exists (for profile pictures)
@@ -104,8 +104,8 @@ class ContactService {
 
     final contacts = <Contact>[];
     final searchPath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$groupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$groupPath'
+        : '$_collectionPath';
 
     final searchDir = Directory(searchPath);
     if (!await searchDir.exists()) return [];
@@ -141,7 +141,7 @@ class ContactService {
     if (_collectionPath == null) return [];
 
     final contacts = <Contact>[];
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return [];
 
     await _loadContactsRecursive(contactsDir, '', contacts);
@@ -157,7 +157,7 @@ class ContactService {
   Stream<Contact> loadAllContactsStream() async* {
     if (_collectionPath == null) return;
 
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return;
 
     // First, load metrics to identify popular contacts
@@ -253,7 +253,7 @@ class ContactService {
 
     LogService().log('ContactService: Rebuilding fast.json...');
 
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return;
 
     // Load metrics for popularity scores
@@ -490,8 +490,8 @@ class ContactService {
     if (_collectionPath == null) return null;
 
     final searchPath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$groupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$groupPath'
+        : '$_collectionPath';
 
     final file = File('$searchPath/$callsign.txt');
     if (!await file.exists()) return null;
@@ -939,8 +939,8 @@ class ContactService {
     }
 
     final savePath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$groupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$groupPath'
+        : '$_collectionPath';
 
     // Ensure directory exists
     final dir = Directory(savePath);
@@ -1050,8 +1050,8 @@ class ContactService {
     if (_collectionPath == null) return false;
 
     final deletePath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$groupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$groupPath'
+        : '$_collectionPath';
 
     final file = File('$deletePath/$callsign.txt');
     if (!await file.exists()) return false;
@@ -1088,8 +1088,8 @@ class ContactService {
 
     // Determine new path
     final newBasePath = newGroupPath != null && newGroupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$newGroupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$newGroupPath'
+        : '$_collectionPath';
 
     // Create new group directory if needed
     final newDir = Directory(newBasePath);
@@ -1122,7 +1122,7 @@ class ContactService {
   Future<File?> _findContactFile(String callsign) async {
     if (_collectionPath == null) return null;
 
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return null;
 
     return await _findContactFileRecursive(contactsDir, callsign);
@@ -1170,12 +1170,12 @@ class ContactService {
     if (_collectionPath == null) return false;
 
     final fromPath = fromGroupPath != null && fromGroupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$fromGroupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$fromGroupPath'
+        : '$_collectionPath';
 
     final toPath = toGroupPath != null && toGroupPath.isNotEmpty
-        ? '$_collectionPath/contacts/$toGroupPath'
-        : '$_collectionPath/contacts';
+        ? '$_collectionPath/$toGroupPath'
+        : '$_collectionPath';
 
     final fromFile = File('$fromPath/$callsign.txt');
     if (!await fromFile.exists()) return false;
@@ -1204,7 +1204,7 @@ class ContactService {
     if (_collectionPath == null) return [];
 
     final groups = <ContactGroup>[];
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return [];
 
     await _loadGroupsRecursive(contactsDir, '', groups);
@@ -1317,7 +1317,7 @@ class ContactService {
   }) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/contacts/$groupPath');
+    final dir = Directory('$_collectionPath/$groupPath');
     if (await dir.exists()) {
       LogService().log('ContactService: Group already exists: $groupPath');
       return false;
@@ -1368,7 +1368,7 @@ class ContactService {
   Future<bool> deleteGroup(String groupPath) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/contacts/$groupPath');
+    final dir = Directory('$_collectionPath/$groupPath');
     if (!await dir.exists()) return false;
 
     // Check if group has any contacts
@@ -1406,7 +1406,7 @@ class ContactService {
   Future<bool> deleteGroupWithContacts(String groupPath) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/contacts/$groupPath');
+    final dir = Directory('$_collectionPath/$groupPath');
     if (!await dir.exists()) return false;
 
     try {
@@ -1460,7 +1460,7 @@ class ContactService {
   Future<bool> deleteAllContactsAndGroups() async {
     if (_collectionPath == null) return false;
 
-    final contactsDir = Directory('$_collectionPath/contacts');
+    final contactsDir = Directory('$_collectionPath');
     if (!await contactsDir.exists()) return false;
 
     try {
@@ -1569,7 +1569,7 @@ class ContactService {
   // ============ Click Tracking ============
 
   /// Get click stats file path
-  String get _clickStatsPath => '$_collectionPath/contacts/.click_stats.txt';
+  String get _clickStatsPath => '$_collectionPath/.click_stats.txt';
 
   /// Load click statistics
   Future<Map<String, int>> loadClickStats() async {
@@ -1670,7 +1670,7 @@ class ContactService {
   // ============ Favorites Cache ============
 
   /// Get favorites cache file path
-  String get _favoritesPath => '$_collectionPath/contacts/.favorites.json';
+  String get _favoritesPath => '$_collectionPath/.favorites.json';
 
   /// In-memory favorites cache
   List<ContactSummary>? _favoritesCache;
@@ -1789,7 +1789,7 @@ class ContactService {
   // ============ Contact Metrics ============
 
   /// Get metrics file path
-  String get _metricsPath => '$_collectionPath/contacts/.contact_metrics.txt';
+  String get _metricsPath => '$_collectionPath/.contact_metrics.txt';
 
   /// Model for contact metrics
   ContactMetrics? _metricsCache;
@@ -1945,7 +1945,7 @@ class ContactService {
   Future<bool> renameGroup(String oldPath, String newName) async {
     if (_collectionPath == null) return false;
 
-    final oldDir = Directory('$_collectionPath/contacts/$oldPath');
+    final oldDir = Directory('$_collectionPath/$oldPath');
     if (!await oldDir.exists()) return false;
 
     // Build new path (same parent, new name)
@@ -1953,7 +1953,7 @@ class ContactService {
     pathParts[pathParts.length - 1] = newName;
     final newPath = pathParts.join('/');
 
-    final newDir = Directory('$_collectionPath/contacts/$newPath');
+    final newDir = Directory('$_collectionPath/$newPath');
     if (await newDir.exists()) {
       LogService().log('ContactService: Cannot rename - destination already exists: $newPath');
       return false;

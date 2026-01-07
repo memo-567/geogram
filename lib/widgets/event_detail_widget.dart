@@ -1314,10 +1314,9 @@ class _EventContactsSectionState extends State<EventContactsSection> {
     final infoMap = <String, _ContactInfo>{};
 
     // Events collectionPath is like: devices/X1DPDX/events
-    // Contacts are at: devices/X1DPDX/contacts/contacts/fast.json
-    // So we go up one level and then into contacts/contacts/
+    // Contacts are at: devices/X1DPDX/contacts/fast.json
     final devicePath = path.dirname(widget.collectionPath);
-    final fastJsonPath = '$devicePath/contacts/contacts/fast.json';
+    final fastJsonPath = '$devicePath/contacts/fast.json';
 
     try {
       final file = io.File(fastJsonPath);
@@ -1335,8 +1334,8 @@ class _EventContactsSectionState extends State<EventContactsSection> {
             final filePath = item['filePath'] as String?;
             String? profilePicPath;
             if (profilePic != null && filePath != null) {
-              final contactsDir = path.dirname(path.dirname(filePath));
-              profilePicPath = '$contactsDir/profile-pictures/$profilePic';
+              final contactsDir = path.dirname(filePath);
+              profilePicPath = '$contactsDir/media/$profilePic';
             }
             infoMap[callsign] = _ContactInfo(
               displayName: displayName,

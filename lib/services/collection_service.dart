@@ -1155,13 +1155,9 @@ class CollectionService {
 
   /// Initialize contacts collection with directory structure
   Future<void> _initializeContactsCollection(Directory collectionFolder) async {
-    // Create contacts directory
-    final contactsDir = Directory('${collectionFolder.path}/contacts');
-    await contactsDir.create();
-
-    // Create profile-pictures directory
-    final profilePicturesDir = Directory('${collectionFolder.path}/contacts/profile-pictures');
-    await profilePicturesDir.create();
+    // Create media directory for profile pictures
+    final mediaDir = Directory('${collectionFolder.path}/media');
+    await mediaDir.create();
 
     // Create security.json with current user as admin
     final profileService = ProfileService();
