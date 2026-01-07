@@ -78,3 +78,8 @@ third_party/tinyemu-*.tar.gz
 # Windows redistributable DLLs
 windows/dlls/
 android/build/
+
+# CLI build outputs
+geogram-cli/.dart_tool/
+geogram-cli/.packages
+geogram-cli/pubspec.lock

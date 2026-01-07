@@ -22,11 +22,10 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
+    - name: Setup Dart
+      uses: dart-lang/setup-dart@v1
       with:
-        channel: 'stable'
-        cache: true
+        sdk: stable
 
     - name: Update version from git
       run: |
@@ -36,19 +35,26 @@ jobs:
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
         fi
         BUILD_NUMBER=$(git rev-list --count HEAD)
+        # Update both main and CLI pubspec versions
         sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
+        sed -i "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" geogram-cli/pubspec.yaml
         echo "Building version $VERSION+$BUILD_NUMBER"
 
-    - name: Install dependencies
-      run: flutter pub get
+    - name: Setup CLI package
+      working-directory: geogram-cli
+      run: |
+        # Create symlink to main lib (may already exist)
+        ln -sf ../lib lib 2>/dev/null || true
+        dart pub get
 
     - name: Generate embedded games
       run: dart run bin/generate_embedded_games.dart
 
     - name: Compile CLI binary
+      working-directory: geogram-cli
       run: |
-        mkdir -p build
-        dart compile exe bin/cli.dart -o build/geogram-cli
+        mkdir -p ../build
+        dart compile exe bin/cli.dart -o ../build/geogram-cli
 
     - name: Create archive with games
       run: |

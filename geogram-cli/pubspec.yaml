@@ -1,0 +1,25 @@
+name: geogram_cli
+description: Geogram CLI - standalone command-line interface
+version: 1.6.98+1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  # Pure Dart packages only - no Flutter
+  crypto: ^3.0.6
+  dart_console: ^4.1.2
+  http: ^1.2.0
+  markdown: ^7.2.2
+  path: ^1.9.0
+  web_socket_channel: ^3.0.1
+  shelf: ^1.4.0
+  async: ^2.11.0
+  pointycastle: ^3.9.1
+  hex: ^0.2.0
+  bech32: ^0.2.2
+  mime: ^1.0.5
+  archive: ^3.6.1
+  # Note: shared_preferences removed - CLI uses file-based config
+  ensemble_ts_interpreter: ^1.0.3
