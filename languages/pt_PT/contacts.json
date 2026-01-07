@@ -72,6 +72,7 @@
   "add_note": "Adicionar Nota",
   "add_interaction": "Adicionar Interação",
   "note_placeholder": "Escrever uma nota sobre este contacto...",
+  "mandatory": "Obrigatório",
   "interaction_note": "Nota",
   "interaction_meeting": "Reunião",
   "interaction_call": "Chamada Telefónica",

@@ -2348,10 +2348,12 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
   ContactCallsignMetrics? _metrics;
   List<_PhoneWithMetrics>? _sortedPhones;
   List<_EmailWithMetrics>? _sortedEmails;
+  late Contact _contact;
 
   @override
   void initState() {
     super.initState();
+    _contact = widget.contact;
     _recordViewAndLoadMetrics();
   }
 
@@ -2401,7 +2403,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
     return phones;
   }
 
-  Contact get contact => widget.contact;
+  Contact get contact => _contact;
   ContactService get contactService => widget.contactService;
   ProfileService get profileService => widget.profileService;
   I18nService get i18n => widget.i18n;
@@ -2613,8 +2615,9 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
         content: TextField(
           controller: noteController,
           decoration: InputDecoration(
-            labelText: i18n.t('content'),
+            labelText: '${i18n.t('content')} *',
             hintText: i18n.t('note_placeholder'),
+            helperText: i18n.t('mandatory'),
             border: const OutlineInputBorder(),
           ),
           maxLines: 4,
@@ -2946,14 +2949,15 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
     );
 
     if (error == null && mounted) {
+      setState(() {
+        _contact = updatedContact;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(i18n.t('interaction_added')),
           backgroundColor: Colors.green,
         ),
       );
-      // Return to browser with refresh signal
-      Navigator.pop(context, true);
     }
   }
 
@@ -2979,14 +2983,15 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
     );
 
     if (error == null && mounted) {
+      setState(() {
+        _contact = updatedContact;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(i18n.t('interaction_added')),
           backgroundColor: Colors.green,
         ),
       );
-      // Return to browser with refresh signal
-      Navigator.pop(context, true);
     }
   }
 
@@ -3021,14 +3026,15 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
     );
 
     if (error == null && mounted) {
+      setState(() {
+        _contact = updatedContact;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(i18n.t('interaction_added')),
           backgroundColor: Colors.green,
         ),
       );
-      // Return to browser with refresh signal
-      Navigator.pop(context, true);
     }
   }
 
@@ -3260,9 +3266,9 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
             )
           else
-            // Timeline display (most recent first)
-            ...contact.historyEntries.reversed.toList().asMap().entries.map(
-              (mapEntry) => _buildHistoryEntryItem(context, mapEntry.value, mapEntry.key == 0),
+            // Timeline display (oldest first)
+            ...contact.historyEntries.asMap().entries.map(
+              (mapEntry) => _buildHistoryEntryItem(context, mapEntry.value, mapEntry.key == contact.historyEntries.length - 1),
             ),
 
           // Extra space for FAB
