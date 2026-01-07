@@ -109,14 +109,30 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       // Get preferred model
       _modelId = await _modelManager.getPreferredModel();
 
+      // Wait for any in-progress preload first
+      if (_sttService.isPreloading) {
+        LogService().log('TranscriptionDialog: Waiting for background preload...');
+        await _sttService.waitForPreload();
+      }
+
+      // Check if model is already loaded (from preload or previous use)
+      if (_sttService.isModelLoaded && _sttService.loadedModelId == _modelId) {
+        LogService().log('TranscriptionDialog: Model already loaded, starting recording');
+        if (mounted) {
+          _startRecording();
+        }
+        return;
+      }
+
+      // Model not loaded yet - check if downloaded
       if (await _modelManager.isDownloaded(_modelId!)) {
-        // Model available, load it and start recording immediately
+        // Model available on disk, load it
         await _sttService.loadModel(_modelId!);
         if (mounted) {
           _startRecording();
         }
       } else {
-        // Need to download model
+        // Need to download model first
         if (mounted) {
           setState(() => _state = _DialogState.downloadingModel);
         }

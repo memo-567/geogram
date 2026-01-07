@@ -461,8 +461,7 @@ void main() async {
           final preferredModel = await modelManager.getPreferredModel();
 
           if (await modelManager.isDownloaded(preferredModel)) {
-            await SpeechToTextService().loadModel(preferredModel);
-            LogService().log('SpeechToTextService: Preloaded model $preferredModel (deferred)');
+            await SpeechToTextService().preloadModel(preferredModel);
           }
         }).catchError((e) {
           LogService().log('SpeechToTextService: Background preload failed: $e');

@@ -93,6 +93,7 @@ class SpeechToTextService {
   Whisper? _whisper;
   String? _loadedModelId;
   SpeechToTextState _state = SpeechToTextState.idle;
+  Completer<bool>? _preloadCompleter;
 
   final StreamController<SpeechToTextState> _stateController =
       StreamController<SpeechToTextState>.broadcast();
@@ -114,6 +115,38 @@ class SpeechToTextService {
     if (kIsWeb) return false;
     // whisper_flutter_new supports: Android 5.0+, iOS 13+, macOS 11+
     return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
+
+  /// Check if preload is in progress
+  bool get isPreloading =>
+      _preloadCompleter != null && !_preloadCompleter!.isCompleted;
+
+  /// Wait for any in-progress preload to complete
+  Future<bool> waitForPreload() async {
+    if (_preloadCompleter != null) {
+      return _preloadCompleter!.future;
+    }
+    return isModelLoaded;
+  }
+
+  /// Preload model in background (called from main.dart)
+  /// Sets up completer so dialog can wait for completion
+  Future<void> preloadModel(String modelId) async {
+    if (_preloadCompleter != null) return; // Already preloading
+
+    _preloadCompleter = Completer<bool>();
+    final stopwatch = Stopwatch()..start();
+
+    try {
+      final success = await loadModel(modelId);
+      stopwatch.stop();
+      LogService().log(
+          'SpeechToTextService: Preload completed in ${stopwatch.elapsedMilliseconds}ms');
+      _preloadCompleter!.complete(success);
+    } catch (e) {
+      LogService().log('SpeechToTextService: Preload failed: $e');
+      _preloadCompleter!.completeError(e);
+    }
   }
 
   void _setState(SpeechToTextState state) {
