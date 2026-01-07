@@ -624,7 +624,22 @@ class CollectionService {
         // Check if this type already exists
         final collectionFolder = Directory('$rootPath/$folderName');
         if (await collectionFolder.exists()) {
-          throw Exception('A $type collection already exists');
+          // Check if the folder is essentially empty (only hidden/system files)
+          // This can happen if the collection was "deleted" but folder remained
+          final entities = await collectionFolder.list().toList();
+          final hasUserContent = entities.any((e) {
+            final name = e.path.split('/').last;
+            // Hidden files/folders (starting with .) and system folders are not user content
+            return !name.startsWith('.') && name != 'extra' && name != 'media';
+          });
+
+          if (hasUserContent) {
+            throw Exception('A $type collection already exists');
+          }
+
+          // Folder exists but is empty - delete it and recreate fresh
+          stderr.writeln('Found empty $type folder, recreating...');
+          await collectionFolder.delete(recursive: true);
         }
       } else {
         // For files type, sanitize the title as folder name
@@ -751,7 +766,20 @@ class CollectionService {
     } else {
       // For non-files types, check if already exists
       if (await fs.exists(collectionPath)) {
-        throw Exception('A $type collection already exists');
+        // Check if the folder is essentially empty (can be recreated)
+        final entities = await fs.list(collectionPath);
+        final hasUserContent = entities.any((entity) {
+          return !entity.name.startsWith('.') &&
+              entity.name != 'extra' &&
+              entity.name != 'media';
+        });
+
+        if (hasUserContent) {
+          throw Exception('A $type collection already exists');
+        }
+
+        // Folder exists but is empty - delete it and recreate fresh
+        await fs.delete(collectionPath, recursive: true);
       }
     }
 
