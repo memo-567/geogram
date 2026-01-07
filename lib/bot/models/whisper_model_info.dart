@@ -130,7 +130,7 @@ class WhisperModels {
       realtimeFactor: 32.0,
     ),
 
-    // Base - good balance
+    // Base - good balance (DEFAULT)
     WhisperModelInfo(
       id: 'whisper-base',
       name: 'Whisper Base',
@@ -138,12 +138,12 @@ class WhisperModels {
       size: 145 * 1024 * 1024, // ~145 MB
       url: '$huggingFaceBaseUrl/ggml-base.bin',
       filename: 'ggml-base.bin',
-      description: 'Good balance of speed and accuracy',
+      description: 'Good balance of speed and accuracy, recommended for most uses',
       minRamMb: 400,
       realtimeFactor: 16.0,
     ),
 
-    // Small - better accuracy (DEFAULT)
+    // Small - better accuracy
     WhisperModelInfo(
       id: 'whisper-small',
       name: 'Whisper Small',
@@ -151,7 +151,7 @@ class WhisperModels {
       size: 465 * 1024 * 1024, // ~465 MB
       url: '$huggingFaceBaseUrl/ggml-small.bin',
       filename: 'ggml-small.bin',
-      description: 'Better accuracy, recommended for most uses',
+      description: 'Better accuracy, slower processing',
       minRamMb: 800,
       realtimeFactor: 6.0,
     ),
@@ -184,7 +184,7 @@ class WhisperModels {
   ];
 
   /// Default model ID
-  static const String defaultModelId = 'whisper-small';
+  static const String defaultModelId = 'whisper-base';
 
   /// Get the default model
   static WhisperModelInfo get defaultModel =>

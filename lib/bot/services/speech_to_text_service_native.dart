@@ -228,12 +228,15 @@ class SpeechToTextService {
 
       // Transcribe the audio
       // whisper_flutter_new handles isolate/background processing internally
+      // Use available CPU cores for faster processing (default is 6)
+      final cpuCores = Platform.numberOfProcessors;
       final result = await _whisper!.transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioFilePath,
           isTranslate: false,
           isNoTimestamps: true,
           splitOnWord: true,
+          threads: cpuCores > 4 ? cpuCores - 2 : cpuCores, // Leave 2 cores for system
         ),
       );
 
