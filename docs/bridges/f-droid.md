@@ -35,6 +35,9 @@ cd /home/brito/code/geograms/geogram
 # Update version in pubspec.yaml
 # version: X.Y.Z+BUILD
 
+# Update .flutter-version if Flutter version changed
+echo "3.38.5" > .flutter-version
+
 # Commit changes
 git add -A
 git commit -m "Release vX.Y.Z"
@@ -42,6 +45,9 @@ git commit -m "Release vX.Y.Z"
 # Create and push tag
 git tag vX.Y.Z
 git push origin main --tags
+
+# Get the commit hash for F-Droid (use hash, not tag name)
+git rev-parse vX.Y.Z
 ```
 
 ### Step 2: Update F-Droid Metadata
@@ -57,12 +63,12 @@ git rebase upstream/master
 
 Edit `metadata/dev.geogram.yml`:
 
-1. Add new build entry under `Builds:`:
+1. Add new build entry under `Builds:` (use **commit hash**, not tag):
    ```yaml
    Builds:
      - versionName: X.Y.Z
        versionCode: N  # Increment from previous
-       commit: vX.Y.Z
+       commit: abc123def456...  # Full commit hash from git rev-parse
        # ... rest of build config
    ```
 
@@ -71,6 +77,8 @@ Edit `metadata/dev.geogram.yml`:
    CurrentVersion: X.Y.Z
    CurrentVersionCode: N
    ```
+
+**Important**: Always use the full commit hash, not the tag name (e.g., `commit: a38826fa245fe6e4c0be2e9a39169b170027b93b` instead of `commit: v1.6.101`).
 
 ### Step 3: Push and Create/Update MR
 
@@ -189,3 +197,53 @@ Update `srclibs` in metadata to match required Flutter version:
 srclibs:
   - flutter@3.38.5
 ```
+
+Also update `.flutter-version` in the geogram repo to keep versions in sync.
+
+### Google Play Core Classes in DEX
+If the build fails with Play Core class errors, the issue is usually in ProGuard rules keeping classes that reference Play Core. R8 should strip them automatically.
+
+**Fix**: Simplify `android/app/proguard-rules.pro` - remove unnecessary Flutter/Dart rules:
+```proguard
+# Suppress warnings for Play Core classes (not included in F-Droid builds)
+-dontwarn com.google.android.play.core.**
+
+# TensorFlow Lite rules
+-keep class org.tensorflow.** { *; }
+-keep interface org.tensorflow.** { *; }
+-dontwarn org.tensorflow.**
+-dontwarn org.tensorflow.lite.gpu.GpuDelegateFactory$Options
+
+# ONNX Runtime rules
+-keep class ai.onnxruntime.** { *; }
+
+# Keep TFLite Flutter plugin
+-keep class com.tfliteflutter.** { *; }
+-dontwarn com.tfliteflutter.**
+```
+
+**Important**: Do NOT add `-keep class io.flutter.**` or similar Flutter rules - this prevents R8 from stripping unused Play Core references.
+
+## Auto Update Configuration
+
+The metadata supports automatic version updates:
+```yaml
+AutoUpdateMode: Version %v
+UpdateCheckMode: Tags .*
+```
+
+This tells F-Droid to:
+- Check for new tags matching `.*` pattern
+- Auto-generate build entries for new versions using `%v` as version placeholder
+
+## Files to Maintain
+
+### In Geogram Repo
+- `.flutter-version` - Pin Flutter version (e.g., `3.38.5`)
+- `android/app/proguard-rules.pro` - Keep minimal, let R8 strip unused code
+- `android/app/build.gradle.kts` - Include `dependenciesInfo { includeInApk = false }`
+
+### In F-Droid Metadata
+- Use commit hashes, not tags
+- Keep prebuild scripts to patch GMS dependencies
+- Enable auto update for future versions
