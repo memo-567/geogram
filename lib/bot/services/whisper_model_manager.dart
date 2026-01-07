@@ -6,7 +6,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -134,32 +133,11 @@ class WhisperModelManager {
     }
 
     final localPath = await getModelPath(modelId);
-    final remotePath = '/bot/models/whisper/${model.filename}';
 
-    // Get station info for the transfer
-    final preferredStation = StationService().getPreferredStation();
-    final resolvedStationUrl = stationUrl ?? preferredStation?.url;
-    final resolvedCallsign = stationCallsign ?? preferredStation?.callsign;
-
-    // Try station download first if available
-    if (resolvedStationUrl != null &&
-        resolvedStationUrl.isNotEmpty &&
-        resolvedCallsign != null &&
-        resolvedCallsign.isNotEmpty) {
-      yield* _downloadViaTransferService(
-        modelId: modelId,
-        model: model,
-        localPath: localPath,
-        remotePath: remotePath,
-        stationUrl: resolvedStationUrl,
-        callsign: resolvedCallsign,
-      );
-      return;
-    }
-
-    // Fall back to direct HuggingFace download
+    // Always download directly from HuggingFace for whisper models
+    // (stations typically don't host these large model files)
     LogService().log(
-        'WhisperModelManager: No station configured, downloading directly from HuggingFace');
+        'WhisperModelManager: Downloading $modelId directly from HuggingFace');
     yield* _downloadDirectly(modelId, model, localPath);
   }
 
@@ -317,15 +295,23 @@ class WhisperModelManager {
             'WhisperModelManager: Resuming download from $downloadedBytes bytes');
       }
 
-      // Create HTTP request with range header for resume
-      final request = http.Request('GET', Uri.parse(model.url));
-      if (downloadedBytes > 0) {
-        request.headers['Range'] = 'bytes=$downloadedBytes-';
-      }
+      // Use HttpClient which follows redirects automatically
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 30);
 
-      final client = http.Client();
       try {
-        final response = await client.send(request);
+        LogService().log('WhisperModelManager: Downloading from ${model.url}');
+
+        final request = await client.getUrl(Uri.parse(model.url));
+
+        // Add range header for resume support
+        if (downloadedBytes > 0) {
+          request.headers.set('Range', 'bytes=$downloadedBytes-');
+        }
+
+        final response = await request.close();
+
+        LogService().log('WhisperModelManager: Response status ${response.statusCode}');
 
         if (response.statusCode != 200 && response.statusCode != 206) {
           throw Exception(
@@ -333,15 +319,18 @@ class WhisperModelManager {
         }
 
         // Get total size
-        final totalBytes = response.contentLength != null
-            ? response.contentLength! + downloadedBytes
+        final contentLength = response.contentLength;
+        final totalBytes = contentLength > 0
+            ? contentLength + downloadedBytes
             : model.size;
+
+        LogService().log('WhisperModelManager: Expected total bytes: $totalBytes');
 
         // Open file for writing (append mode if resuming)
         final sink = tempFile.openWrite(
             mode: downloadedBytes > 0 ? FileMode.append : FileMode.write);
 
-        await for (final chunk in response.stream) {
+        await for (final chunk in response) {
           sink.add(chunk);
           downloadedBytes += chunk.length;
 

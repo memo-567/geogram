@@ -5,9 +5,11 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 import '../bot/models/whisper_model_info.dart';
 import '../bot/services/speech_to_text_service.dart';
@@ -60,6 +62,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   final SpeechToTextService _sttService = SpeechToTextService();
   final WhisperModelManager _modelManager = WhisperModelManager();
   final AudioService _audioService = AudioService();
+  final AudioRecorder _wavRecorder = AudioRecorder();
 
   _DialogState _state = _DialogState.checkingModel;
   Duration _recordingDuration = Duration.zero;
@@ -67,9 +70,12 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   String? _errorMessage;
   String? _recordedFilePath;
   String? _modelId;
+  bool _isRecording = false;
+  String? _wavRecordingPath;
 
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<double>? _downloadSubscription;
+  Timer? _recordingTimer;
 
   late AnimationController _animationController;
   late Animation<double> _pulseAnimation;
@@ -156,10 +162,8 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
 
   Future<void> _startRecording() async {
     try {
-      await _audioService.initialize();
-
-      // Check permission
-      if (!await _audioService.hasPermission()) {
+      // Check permission using the recorder directly
+      if (!await _wavRecorder.hasPermission()) {
         if (mounted) {
           setState(() {
             _state = _DialogState.error;
@@ -169,31 +173,46 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         return;
       }
 
-      // Setup duration listener
-      _durationSubscription?.cancel();
-      _durationSubscription =
-          _audioService.recordingDurationStream.listen((duration) {
-        if (!mounted) return;
-        setState(() => _recordingDuration = duration);
+      // Get temp directory for WAV file
+      final tempDir = await getTemporaryDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      _wavRecordingPath = '${tempDir.path}/transcription_$timestamp.wav';
+
+      LogService().log('TranscriptionDialog: Starting WAV recording to $_wavRecordingPath');
+
+      // Start recording in WAV format (16kHz mono for Whisper)
+      await _wavRecorder.start(
+        RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+        path: _wavRecordingPath!,
+      );
+
+      _isRecording = true;
+      _recordingDuration = Duration.zero;
+
+      // Start duration timer
+      _recordingTimer?.cancel();
+      _recordingTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        setState(() {
+          _recordingDuration += const Duration(milliseconds: 100);
+        });
 
         // Auto-stop at max duration
-        if (duration >= widget.maxRecordingDuration) {
+        if (_recordingDuration >= widget.maxRecordingDuration) {
           _stopRecording();
         }
       });
 
-      // Start recording
-      final path = await _audioService.startRecording();
-      if (path != null && mounted) {
+      if (mounted) {
         setState(() {
           _state = _DialogState.recording;
-          _recordingDuration = Duration.zero;
-        });
-      } else if (mounted) {
-        setState(() {
-          _state = _DialogState.error;
-          _errorMessage =
-              _audioService.lastError ?? widget.i18n.t('recording_failed');
         });
       }
     } catch (e) {
@@ -208,18 +227,31 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   }
 
   Future<void> _stopRecording() async {
-    _durationSubscription?.cancel();
+    _recordingTimer?.cancel();
+    _isRecording = false;
 
-    final path = await _audioService.stopRecording();
-    if (path != null && mounted) {
-      _recordedFilePath = path;
-      setState(() => _state = _DialogState.processing);
-      _transcribeAudio();
-    } else if (mounted) {
-      setState(() {
-        _state = _DialogState.error;
-        _errorMessage = widget.i18n.t('recording_failed');
-      });
+    try {
+      final path = await _wavRecorder.stop();
+      LogService().log('TranscriptionDialog: Recording stopped, path: $path');
+
+      if (path != null && mounted) {
+        _recordedFilePath = path;
+        setState(() => _state = _DialogState.processing);
+        _transcribeAudio();
+      } else if (mounted) {
+        setState(() {
+          _state = _DialogState.error;
+          _errorMessage = widget.i18n.t('recording_failed');
+        });
+      }
+    } catch (e) {
+      LogService().log('TranscriptionDialog: Error stopping recording: $e');
+      if (mounted) {
+        setState(() {
+          _state = _DialogState.error;
+          _errorMessage = e.toString();
+        });
+      }
     }
   }
 
@@ -262,10 +294,17 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   }
 
   /// Convert audio file to WAV format for Whisper
+  /// Note: Currently returns the original file and relies on Whisper to handle it
+  /// If Whisper can't handle it, we need to add FFmpeg support
   Future<String> _convertToWav(String inputPath) async {
-    // For now, return the original path
-    // whisper_flutter_new should handle various audio formats
-    // If issues arise, we can add FFmpeg conversion here
+    // If already WAV, return as-is
+    if (inputPath.toLowerCase().endsWith('.wav')) {
+      return inputPath;
+    }
+
+    // For now, whisper_flutter_new should handle common formats
+    // If it fails, the error will be caught and shown to user
+    LogService().log('TranscriptionDialog: Using audio file directly: ${inputPath.split('/').last}');
     return inputPath;
   }
 
@@ -326,6 +365,8 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
     _animationController.dispose();
     _durationSubscription?.cancel();
     _downloadSubscription?.cancel();
+    _recordingTimer?.cancel();
+    _wavRecorder.dispose();
     super.dispose();
   }
 
@@ -448,7 +489,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         const SizedBox(height: 8),
         Text(
           widget.i18n.t('max_duration_seconds',
-              [widget.maxRecordingDuration.inSeconds.toString()]),
+              params: [widget.maxRecordingDuration.inSeconds.toString()]),
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),

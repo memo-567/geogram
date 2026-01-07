@@ -140,7 +140,7 @@ Speech-to-text models using OpenAI's Whisper via whisper.cpp.
 
 ---
 
-### 7. Station Places (Downloaded)
+### 8. Station Places (Downloaded)
 
 **Service:** `lib/services/station_place_service.dart`
 
@@ -155,7 +155,7 @@ Files: `place.txt`, `images/*.jpg`
 
 ---
 
-### 8. IP Geolocation
+### 9. IP Geolocation
 
 **Service:** `lib/util/geolocation_utils.dart`
 
@@ -168,7 +168,7 @@ JSON responses (not stored).
 
 ---
 
-### 9. Console VM Files
+### 10. Console VM Files
 
 **Service:** `lib/services/console_vm_manager.dart`
 
@@ -220,6 +220,7 @@ The station server caches and serves content for offline/LAN operation.
 | `GET /tiles/{callsign}/{z}/{x}/{y}.png` | Map tiles |
 | `GET /bot/models/vision/{model_id}.{ext}` | Vision models |
 | `GET /bot/models/music/{model_id}/{path}` | Music models |
+| `GET /bot/models/whisper/{filename}` | Whisper speech models |
 | `GET /api/places` | Station places list |
 | `GET /{callsign}/api/places/{folder}` | Place details |
 | `GET /{callsign}/api/places/{folder}/files/{path}` | Place files |
@@ -236,6 +237,7 @@ All station server storage uses `StorageConfig` for consistency with client:
 | Tiles | `{data-root}/tiles/{layer}/{z}/{x}/{y}.png` |
 | Vision models | `{data-root}/bot/models/vision/{model_id}/` |
 | Music models | `{data-root}/bot/models/music/{model_id}/` |
+| Whisper models | `{data-root}/bot/models/whisper/` |
 | Places | `{data-root}/devices/{callsign}/places/` |
 | Console VM | `{data-root}/console/vm/` |
 
@@ -251,6 +253,7 @@ Since the station server can also act as a client, using the same paths ensures 
 | Updates (mirror) | GitHub | `{data-root}/updates/` | 50-100 MB |
 | Tiles | Station > OSM/Esri | `{data-root}/tiles/` | Up to 500 MB |
 | Vision Models | Station > TFHub/HF | `{data-root}/bot/models/vision/` | 2 MB - 5 GB |
+| Whisper Models | Station > HF | `{data-root}/bot/models/whisper/` | 39 MB - 3 GB |
 | Music Models | Station only | `{data-root}/bot/models/music/` | Variable |
 | Music Tracks | Local only | `{data-root}/bot/music/tracks/` | Up to 500 MB |
 | Vision Cache | Local only | `{data-root}/bot/cache/vision/` | Variable |

@@ -5,6 +5,18 @@ allprojects {
     }
 }
 
+// Override NDK version for plugins that require specific versions
+subprojects {
+    afterEvaluate {
+        if (project.hasProperty("android")) {
+            val android = project.extensions.getByName("android") as com.android.build.gradle.BaseExtension
+            if (project.name == "whisper_flutter_new") {
+                android.ndkVersion = "27.0.12077973"
+            }
+        }
+    }
+}
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")

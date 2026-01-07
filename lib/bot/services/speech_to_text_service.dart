@@ -127,6 +127,24 @@ class SpeechToTextService {
     LogService().log('SpeechToTextService: Initialized');
   }
 
+  /// Convert our model ID to whisper_flutter_new's WhisperModel enum
+  WhisperModel _getWhisperModel(String modelId) {
+    switch (modelId) {
+      case 'whisper-tiny':
+        return WhisperModel.tiny;
+      case 'whisper-base':
+        return WhisperModel.base;
+      case 'whisper-small':
+        return WhisperModel.small;
+      case 'whisper-medium':
+        return WhisperModel.medium;
+      case 'whisper-large-v2':
+        return WhisperModel.largeV2;
+      default:
+        return WhisperModel.small; // Default to small
+    }
+  }
+
   /// Load a Whisper model
   ///
   /// Returns true if model was loaded successfully
@@ -144,22 +162,18 @@ class SpeechToTextService {
       return false;
     }
 
-    // Check if model is downloaded
-    if (!await _modelManager.isDownloaded(modelId)) {
-      LogService()
-          .log('SpeechToTextService: Model $modelId not downloaded');
-      return false;
-    }
-
     _setState(SpeechToTextState.loadingModel);
 
     try {
-      final modelPath = await _modelManager.getModelPath(modelId);
+      final modelDir = await _modelManager.modelsPath;
+      final whisperModel = _getWhisperModel(modelId);
 
-      LogService().log('SpeechToTextService: Loading model from $modelPath');
+      LogService().log('SpeechToTextService: Loading model $modelId from $modelDir');
 
+      // Create Whisper instance with our custom model directory
       _whisper = Whisper(
-        model: WhisperModel.custom(modelPath),
+        model: whisperModel,
+        modelDir: modelDir,
       );
 
       _loadedModelId = modelId;
