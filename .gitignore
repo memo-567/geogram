@@ -77,3 +77,4 @@ third_party/tinyemu-*.tar.gz
 
 # Windows redistributable DLLs
 windows/dlls/
+android/build/
