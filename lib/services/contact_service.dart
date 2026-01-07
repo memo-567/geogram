@@ -392,19 +392,24 @@ class ContactService {
   }
 
   /// Collect all contact file paths without loading contacts (fast scan)
-  Future<void> _collectContactFilePaths(Directory dir, List<String> paths) async {
+  Future<void> _collectContactFilePaths(Directory dir, List<String> paths, [bool isRoot = true]) async {
     final entities = await dir.list().toList();
 
     for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
         final filename = entity.path.split('/').last;
         if (filename == 'group.txt' || filename.startsWith('.')) continue;
-        if (entity.path.contains('/profile-pictures/')) continue;
         paths.add(entity.path);
       } else if (entity is Directory) {
         final dirname = entity.path.split('/').last;
-        if (dirname == 'profile-pictures' || dirname.startsWith('.')) continue;
-        await _collectContactFilePaths(entity, paths);
+
+        // Skip hidden directories
+        if (dirname.startsWith('.')) continue;
+
+        // Skip system folders at root level only
+        if (isRoot && _ignoredRootFolders.contains(dirname.toLowerCase())) continue;
+
+        await _collectContactFilePaths(entity, paths, false);
       }
     }
   }
@@ -441,13 +446,13 @@ class ContactService {
     List<Contact> contacts,
   ) async {
     final entities = await dir.list().toList();
+    final isRootLevel = relativePath.isEmpty;
 
     for (var entity in entities) {
       if (entity is File && entity.path.endsWith('.txt')) {
-        // Skip group.txt, hidden files, and profile-pictures
+        // Skip group.txt and hidden files
         final filename = entity.path.split('/').last;
         if (filename == 'group.txt' || filename.startsWith('.')) continue;
-        if (entity.path.contains('/profile-pictures/')) continue;
 
         try {
           final contact = await loadContactFromFile(entity.path);
@@ -458,9 +463,13 @@ class ContactService {
           LogService().log('ContactService: Error loading contact ${entity.path}: $e');
         }
       } else if (entity is Directory) {
-        // Skip profile-pictures and hidden directories
         final dirname = entity.path.split('/').last;
-        if (dirname == 'profile-pictures' || dirname.startsWith('.')) continue;
+
+        // Skip hidden directories
+        if (dirname.startsWith('.')) continue;
+
+        // Skip system folders at root level only
+        if (isRootLevel && _ignoredRootFolders.contains(dirname.toLowerCase())) continue;
 
         final newRelativePath = relativePath.isEmpty
             ? dirname
@@ -1212,6 +1221,9 @@ class ContactService {
     return groups;
   }
 
+  /// System folders to ignore at root level (not contact groups)
+  static const _ignoredRootFolders = {'media', 'extra', 'profile-pictures'};
+
   /// Recursively load groups from directory
   Future<void> _loadGroupsRecursive(
     Directory dir,
@@ -1219,13 +1231,17 @@ class ContactService {
     List<ContactGroup> groups,
   ) async {
     final entities = await dir.list().toList();
+    final isRootLevel = relativePath.isEmpty;
 
     for (var entity in entities) {
       if (entity is Directory) {
         final dirname = entity.path.split('/').last;
 
-        // Skip profile-pictures and hidden directories
-        if (dirname == 'profile-pictures' || dirname.startsWith('.')) continue;
+        // Skip hidden directories
+        if (dirname.startsWith('.')) continue;
+
+        // Skip system folders at root level only
+        if (isRootLevel && _ignoredRootFolders.contains(dirname.toLowerCase())) continue;
 
         final groupPath = relativePath.isEmpty ? dirname : '$relativePath/$dirname';
 
