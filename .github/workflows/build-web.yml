@@ -14,9 +14,6 @@ permissions:
 
 jobs:
   build:
-    # Disabled: whisper_flutter_new uses dart:ffi which is unavailable on web
-    # Re-enable after making transcription features platform-conditional
-    if: false
     runs-on: ubuntu-latest
 
     steps:
