@@ -1609,6 +1609,9 @@
   "ble_plus_pairing_info": "This will show a Bluetooth pairing dialog. Both devices must accept the pairing PIN.",
   "upgrade": "Upgrade",
   "ble_plus_upgrade_initiated": "BLE+ upgrade initiated for {0}. Please accept the pairing on both devices.",
+  "ble_plus_device_not_found": "BLE device not found for {0}. Make sure it's nearby and visible over BLE.",
+  "ble_plus_handshake_failed": "BLE handshake failed for {0}. Try again while the device is nearby.",
+  "ble_plus_pairing_failed": "BLE+ pairing failed for {0}. Please try again.",
 
   "room_management": "Room Management",
   "restricted_room": "Restricted Room",

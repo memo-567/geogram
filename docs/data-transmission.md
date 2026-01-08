@@ -367,6 +367,11 @@ Bluetooth Classic (SPP/RFCOMM) for faster offline data transfers. When a device 
 4. **Storage**: Pairing info stored locally (callsign → classic_mac mapping)
 5. **Routing**: Large transfers (>10KB) automatically use Bluetooth Classic
 
+**Implementation notes:**
+- BLE HELLO_ACK includes `classic_mac` and `bluetooth_classic:spp` capability when the local Classic MAC is available.
+- BLE HELLO_ACK updates the BLE device record with `classicMac` (stored in `BLEDiscoveryService`).
+- The BLE+ upgrade UI triggers a HELLO if needed, then calls `BluetoothClassicPairingService.initiatePairingFromBLE(...)`.
+
 **Architecture:**
 
 ```

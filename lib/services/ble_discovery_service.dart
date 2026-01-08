@@ -26,6 +26,7 @@ class BLEDevice {
   String? nickname;            // From HELLO handshake
   double? latitude;            // From HELLO handshake
   double? longitude;           // From HELLO handshake
+  String? classicMac;          // From HELLO_ACK for BLE+ pairing
   int rssi;                    // Signal strength
   String proximity;            // "Very close", "Nearby", etc.
   DateTime lastSeen;
@@ -39,6 +40,7 @@ class BLEDevice {
     this.nickname,
     this.latitude,
     this.longitude,
+    this.classicMac,
     required this.rssi,
     required this.proximity,
     required this.lastSeen,
@@ -826,6 +828,15 @@ class BLEDiscoveryService {
   /// Notify listeners of changes
   void _notifyListeners() {
     _devicesController.add(getAllDevices());
+  }
+
+  /// Update the Bluetooth Classic MAC for a discovered device
+  void updateClassicMac(String deviceId, String classicMac) {
+    final device = _discoveredDevices[deviceId];
+    if (device == null) return;
+    if (device.classicMac == classicMac) return;
+    device.classicMac = classicMac;
+    _notifyListeners();
   }
 
   // ============================================

@@ -21,6 +21,7 @@ import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
 import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
+import '../services/ble_discovery_service.dart';
 import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
 import '../services/group_sync_service.dart';
@@ -2221,22 +2222,82 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
     if (confirmed != true) return;
 
-    // TODO: Get the classic_mac from the BLE HELLO_ACK response
-    // For now, we need to have received this during the BLE handshake
-    // This will be implemented when the BLE message service stores the classic_mac
+    final bleDevices = BLEDiscoveryService().getAllDevices();
+    final targetCallsign = device.callsign.toUpperCase();
+    final bleDevice = bleDevices
+        .where((d) => d.callsign?.toUpperCase() == targetCallsign)
+        .firstOrNull;
+
+    if (bleDevice == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _i18n.t('ble_plus_device_not_found', params: [device.callsign]),
+            ),
+            backgroundColor: theme.colorScheme.error,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (bleDevice.classicMac == null) {
+      final helloSuccess = await _devicesService.sendBLEHello(bleDevice);
+      if (!helloSuccess) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                _i18n.t('ble_plus_handshake_failed', params: [device.callsign]),
+              ),
+              backgroundColor: theme.colorScheme.error,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    final classicMac = bleDevice.classicMac;
+    if (classicMac == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _i18n.t('ble_plus_handshake_failed', params: [device.callsign]),
+            ),
+            backgroundColor: theme.colorScheme.error,
+          ),
+        );
+      }
+      return;
+    }
+
+    final pairingService = BluetoothClassicPairingService();
+    await pairingService.initialize();
+    final success = await pairingService.initiatePairingFromBLE(
+      callsign: targetCallsign,
+      classicMac: classicMac,
+      bleMac: bleDevice.deviceId,
+    );
+
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          _i18n.t('ble_plus_upgrade_initiated', params: [device.callsign]),
+          _i18n.t(
+            success ? 'ble_plus_upgrade_initiated' : 'ble_plus_pairing_failed',
+            params: [device.callsign],
+          ),
         ),
-        backgroundColor: Colors.blue,
+        backgroundColor: success ? Colors.blue : theme.colorScheme.error,
       ),
     );
 
-    // The actual pairing will be triggered when we have the classic_mac
-    // from the BLE HELLO handshake
     LogService().log(
-      'DevicesBrowserPage: BLE+ upgrade initiated for ${device.callsign}',
+      'DevicesBrowserPage: BLE+ upgrade ${success ? "completed" : "failed"} for ${device.callsign}',
     );
   }
 

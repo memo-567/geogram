@@ -15,6 +15,7 @@ import 'ble_discovery_service.dart';
 import 'ble_gatt_server_service.dart';
 import 'ble_identity_service.dart';
 import 'ble_queue_service.dart';
+import 'bluetooth_classic_service.dart';
 import 'log_service.dart';
 
 /// Incoming chat message from BLE
@@ -61,11 +62,24 @@ class BLEMessageService {
   /// Peer capabilities per device (from HELLO handshake)
   final Map<String, Set<String>> _peerCapabilities = {};
 
+  /// Local Bluetooth Classic MAC for BLE+ support (Android only)
+  String? _localClassicMac;
+
   /// Our supported capabilities
-  static const List<String> _ourCapabilities = [
+  static const List<String> _baseCapabilities = [
     'chat',
     'compression:deflate',
   ];
+
+  static final RegExp _macPattern = RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$');
+
+  List<String> get _ourCapabilities {
+    final capabilities = [..._baseCapabilities];
+    if (_localClassicMac != null) {
+      capabilities.add('bluetooth_classic:spp');
+    }
+    return capabilities;
+  }
 
   /// Stream controllers
   final _incomingChatsController = StreamController<BLEChatMessage>.broadcast();
@@ -113,6 +127,17 @@ class BLEMessageService {
       // Initialize identity service (generates device ID on first run)
       await _identityService.initialize();
       LogService().log('BLEMessageService: Identity service initialized (device: ${_identityService.deviceId})');
+
+      if (BluetoothClassicService.isAvailable) {
+        final btClassic = BluetoothClassicService();
+        await btClassic.initialize();
+        _localClassicMac = _sanitizeClassicMac(await btClassic.getLocalMacAddress());
+        if (_localClassicMac != null) {
+          LogService().log('BLEMessageService: Bluetooth Classic available (mac: $_localClassicMac)');
+        } else {
+          LogService().log('BLEMessageService: Bluetooth Classic MAC unavailable, BLE+ disabled');
+        }
+      }
 
       // Initialize GATT server on Android/iOS
       if (canBeServer) {
@@ -193,6 +218,7 @@ class BLEMessageService {
       success: true,
       event: _ourEvent,
       capabilities: _ourCapabilities,
+      classicMac: _localClassicMac,
     ).toJson();
 
     LogService().log('BLEMessageService: Sending HELLO_ACK to $deviceId (${json.encode(response).length} bytes)');
@@ -254,6 +280,12 @@ class BLEMessageService {
           // Store peer capabilities from HELLO_ACK
           final peerCaps = ack.capabilities;
           _peerCapabilities[device.deviceId] = peerCaps.toSet();
+          if (ack.classicMac != null) {
+            _discoveryService.updateClassicMac(device.deviceId, ack.classicMac!);
+            LogService().log(
+              'BLEMessageService: Stored BLE+ MAC for ${device.callsign ?? device.deviceId} (${ack.classicMac})',
+            );
+          }
           LogService().log('BLEMessageService: HELLO handshake successful with ${device.callsign ?? device.deviceId}');
           LogService().log('BLEMessageService: Peer ${device.deviceId} capabilities: $peerCaps');
           return true;
@@ -429,6 +461,14 @@ class BLEMessageService {
   /// Check if a peer supports compression
   bool peerSupportsCompression(String deviceId) {
     return _peerCapabilities[deviceId]?.contains('compression:deflate') ?? false;
+  }
+
+  String? _sanitizeClassicMac(String? mac) {
+    if (mac == null) return null;
+    final trimmed = mac.trim();
+    if (trimmed == '02:00:00:00:00:00') return null;
+    if (!_macPattern.hasMatch(trimmed)) return null;
+    return trimmed;
   }
 
   /// Send raw data to a device using the parcel protocol

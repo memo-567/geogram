@@ -1520,6 +1520,9 @@
   "ble_plus_pairing_info": "Isto irá mostrar uma janela de emparelhamento Bluetooth. Ambos os dispositivos devem aceitar o PIN de emparelhamento.",
   "upgrade": "Atualizar",
   "ble_plus_upgrade_initiated": "Atualização BLE+ iniciada para {0}. Por favor aceite o emparelhamento em ambos os dispositivos.",
+  "ble_plus_device_not_found": "Dispositivo BLE não encontrado para {0}. Certifique-se de que está próximo e visível via BLE.",
+  "ble_plus_handshake_failed": "Falha no handshake BLE para {0}. Tente novamente quando o dispositivo estiver próximo.",
+  "ble_plus_pairing_failed": "Emparelhamento BLE+ falhou para {0}. Por favor tente novamente.",
 
   "connected_together": "Conectados, juntos",
   "about_tagline": "Conectar pessoas com ou sem Internet",
