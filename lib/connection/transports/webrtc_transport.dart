@@ -131,6 +131,18 @@ class WebRTCTransport extends Transport with TransportMixin {
     try {
       final callsign = message.targetCallsign.toUpperCase();
 
+      // Avoid signaling when offline (no station connection and no active peer)
+      if (!_peerManager.hasActiveConnection(callsign) &&
+          _stationService.getConnectedRelay() == null) {
+        stopwatch.stop();
+        final result = TransportResult.failure(
+          error: 'WebRTC signaling unavailable (no station connection)',
+          transportUsed: id,
+        );
+        recordMetrics(result);
+        return result;
+      }
+
       // Ensure we have a WebRTC connection
       final connected = await _peerManager.ensureConnection(callsign).timeout(
         connectionTimeout,

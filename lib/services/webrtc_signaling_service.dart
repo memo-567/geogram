@@ -186,7 +186,10 @@ class WebRTCSignalingService {
   /// Send a signal via WebSocket
   Future<void> _sendSignal(WebRTCSignal signal) async {
     if (!_wsService.isConnected) {
-      throw StateError('WebSocket not connected');
+      LogService().log(
+        'WebRTCSignaling: Dropping ${signal.type.name} to ${signal.toCallsign} (WebSocket not connected)',
+      );
+      return;
     }
 
     // Use WebSocketService to send the signaling message

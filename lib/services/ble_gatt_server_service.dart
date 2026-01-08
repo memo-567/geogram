@@ -330,6 +330,11 @@ class BLEGattServerService {
       () => ConnectedBLEClient(deviceId: deviceId, connectedAt: DateTime.now()),
     );
 
+    if (!client.isSubscribed) {
+      client.isSubscribed = true;
+      LogService().log('BLEGattServer: Client $deviceId implicitly subscribed via write');
+    }
+
     // Accumulate data in buffer
     client.receiveBuffer.addAll(value);
     LogService().log('BLEGattServer: Buffer now ${client.receiveBuffer.length} bytes');

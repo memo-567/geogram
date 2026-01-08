@@ -16,6 +16,7 @@ import 'ble_gatt_server_service.dart';
 import 'ble_identity_service.dart';
 import 'ble_queue_service.dart';
 import 'bluetooth_classic_service.dart';
+import 'bluetooth_classic_pairing_service.dart';
 import 'log_service.dart';
 
 /// Incoming chat message from BLE
@@ -64,12 +65,15 @@ class BLEMessageService {
 
   /// Local Bluetooth Classic MAC for BLE+ support (Android only)
   String? _localClassicMac;
+  String? get localClassicMac => _localClassicMac;
 
   /// Our supported capabilities
   static const List<String> _baseCapabilities = [
     'chat',
     'compression:deflate',
   ];
+
+  static const String _blePlusPairChannel = '_ble_plus';
 
   static final RegExp _macPattern = RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$');
 
@@ -229,6 +233,13 @@ class BLEMessageService {
   Map<String, dynamic> _handleChat(String deviceId, BLEMessage message) {
     final payload = BLEChatPayload.fromJson(message.payload);
 
+    if (_handleBlePlusPairRequest(deviceId, payload)) {
+      return BLEMessageBuilder.chatAck(
+        requestId: message.id,
+        success: true,
+      ).toJson();
+    }
+
     // Emit chat to stream
     _incomingChatsController.add(BLEChatMessage(
       deviceId: deviceId,
@@ -247,6 +258,35 @@ class BLEMessageService {
       requestId: message.id,
       success: true,
     ).toJson();
+  }
+
+  bool _handleBlePlusPairRequest(String deviceId, BLEChatPayload payload) {
+    if (payload.channel != _blePlusPairChannel) return false;
+
+    try {
+      final data = json.decode(payload.content);
+      if (data is! Map<String, dynamic>) return false;
+      if (data['type'] != 'pair_request') return false;
+      final classicMac = data['classic_mac'] as String?;
+      if (classicMac == null || classicMac.isEmpty) return false;
+
+      final pairingService = BluetoothClassicPairingService();
+      pairingService.initialize().then((_) {
+        pairingService.initiatePairingFromBLE(
+          callsign: payload.author.toUpperCase(),
+          classicMac: classicMac,
+          bleMac: deviceId,
+        );
+      });
+
+      LogService().log(
+        'BLEMessageService: Received BLE+ pairing request from ${payload.author} ($classicMac)',
+      );
+      return true;
+    } catch (e) {
+      LogService().log('BLEMessageService: Invalid BLE+ pairing request: $e');
+      return false;
+    }
   }
 
   /// Send HELLO to a discovered device (client mode)
@@ -280,6 +320,12 @@ class BLEMessageService {
           // Store peer capabilities from HELLO_ACK
           final peerCaps = ack.capabilities;
           _peerCapabilities[device.deviceId] = peerCaps.toSet();
+          if (ack.event != null) {
+            _discoveryService.updateFromHelloEvent(
+              device.deviceId,
+              ack.event!,
+            );
+          }
           if (ack.classicMac != null) {
             _discoveryService.updateClassicMac(device.deviceId, ack.classicMac!);
             LogService().log(
@@ -348,6 +394,21 @@ class BLEMessageService {
       LogService().log('BLEMessageService: Chat send error: $e');
       return false;
     }
+  }
+
+  Future<bool> sendBlePlusPairRequest({
+    required BLEDevice device,
+    required String classicMac,
+  }) async {
+    final payload = jsonEncode({
+      'type': 'pair_request',
+      'classic_mac': classicMac,
+    });
+    return sendChat(
+      device: device,
+      content: payload,
+      channel: _blePlusPairChannel,
+    );
   }
 
   /// Send chat to a device by callsign (finds device first)

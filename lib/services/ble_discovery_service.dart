@@ -701,6 +701,11 @@ class BLEDiscoveryService {
 
   /// Parse HELLO event and update device info
   void _parseHelloEvent(BLEDevice device, Map<String, dynamic> event) {
+    _applyHelloEvent(device, event);
+    _notifyListeners();
+  }
+
+  void _applyHelloEvent(BLEDevice device, Map<String, dynamic> event) {
     final tags = event['tags'] as List<dynamic>?;
     if (tags == null) return;
 
@@ -731,7 +736,12 @@ class BLEDiscoveryService {
     if (pubkey != null) {
       device.npub = pubkey; // Store hex pubkey, can be converted to npub later
     }
+  }
 
+  void updateFromHelloEvent(String deviceId, Map<String, dynamic> event) {
+    final device = _discoveredDevices[deviceId];
+    if (device == null) return;
+    _applyHelloEvent(device, event);
     _notifyListeners();
   }
 
@@ -1170,7 +1180,7 @@ class _BLEConnection {
           final chunk = bytes.sublist(i, end);
 
           try {
-            await writeChar.write(chunk, withoutResponse: true);
+            await writeChar.write(chunk, withoutResponse: false);
             // Small delay between chunks within a parcel
             await Future.delayed(const Duration(milliseconds: 30));
           } catch (e) {

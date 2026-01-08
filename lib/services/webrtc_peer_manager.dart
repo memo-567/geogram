@@ -402,6 +402,12 @@ class WebRTCPeerManager {
     // ICE candidates - send to peer via signaling
     pc.onIceCandidate = (candidate) {
       if (candidate.candidate != null) {
+        if (!_signalingService.isConnected) {
+          LogService().log(
+            'WebRTCPeerManager: Skipping ICE candidate for ${peer.callsign} (signaling offline)',
+          );
+          return;
+        }
         _signalingService.sendIceCandidate(
           toCallsign: peer.callsign,
           sessionId: peer.sessionId,

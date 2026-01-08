@@ -149,6 +149,7 @@ class BluetoothClassicPairingService {
     String? bleMac,
   }) async {
     final btService = BluetoothClassicService();
+    await btService.initialize();
 
     // Check if already paired at system level
     final alreadyPaired = await btService.isPaired(classicMac);

@@ -24,6 +24,7 @@ import '../services/network_monitor_service.dart';
 import '../services/ble_discovery_service.dart';
 import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
+import '../services/ble_message_service.dart';
 import '../services/group_sync_service.dart';
 import '../services/collection_service.dart';
 import '../services/debug_controller.dart';
@@ -2272,6 +2273,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
         );
       }
       return;
+    }
+
+    final localClassicMac = BLEMessageService().localClassicMac;
+    if (localClassicMac != null) {
+      await BLEMessageService().sendBlePlusPairRequest(
+        device: bleDevice,
+        classicMac: localClassicMac,
+      );
+      LogService().log(
+        'DevicesBrowserPage: Sent BLE+ pairing request to ${bleDevice.callsign ?? bleDevice.deviceId}',
+      );
+    } else {
+      LogService().log(
+        'DevicesBrowserPage: Local Classic MAC unavailable, skipping remote BLE+ prompt',
+      );
     }
 
     final pairingService = BluetoothClassicPairingService();
