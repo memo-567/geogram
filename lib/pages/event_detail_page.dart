@@ -53,6 +53,7 @@ class EventDetailPage extends StatefulWidget {
 class _EventDetailPageState extends State<EventDetailPage> {
   late Event _event;
   bool _hasChanges = false;
+  int _filesRefreshKey = 0;
 
   @override
   void initState() {
@@ -186,7 +187,10 @@ class _EventDetailPageState extends State<EventDetailPage> {
               backgroundColor: Colors.green,
             ),
           );
-          // Refresh event to show uploaded files immediately
+          // Refresh event and files section to show uploaded files immediately
+          setState(() {
+            _filesRefreshKey++;
+          });
           await _refreshEvent();
         }
       }
@@ -422,6 +426,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
       onPlaceOpen: _openPlace,
       onContactsUpdated: canEdit ? _updateEventContacts : null,
       onContactOpen: _openContact,
+      filesRefreshKey: _filesRefreshKey,
     );
 
     return PopScope(

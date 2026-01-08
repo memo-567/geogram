@@ -33,6 +33,7 @@ class EventDetailWidget extends StatelessWidget {
   final void Function(String placePath)? onPlaceOpen;
   final void Function(List<String> contacts)? onContactsUpdated;
   final void Function(String callsign)? onContactOpen;
+  final int filesRefreshKey;
 
   const EventDetailWidget({
     Key? key,
@@ -48,6 +49,7 @@ class EventDetailWidget extends StatelessWidget {
     this.onPlaceOpen,
     this.onContactsUpdated,
     this.onContactOpen,
+    this.filesRefreshKey = 0,
   }) : super(key: key);
 
   @override
@@ -133,6 +135,7 @@ class EventDetailWidget extends StatelessWidget {
             event: event,
             collectionPath: collectionPath,
             onUploadFiles: onUploadFiles,
+            refreshKey: filesRefreshKey,
           ),
           const SizedBox(height: 24),
 
@@ -956,12 +959,14 @@ class EventFilesSection extends StatefulWidget {
   final Event event;
   final String collectionPath;
   final VoidCallback? onUploadFiles;
+  final int refreshKey;
 
   const EventFilesSection({
     Key? key,
     required this.event,
     required this.collectionPath,
     this.onUploadFiles,
+    this.refreshKey = 0,
   }) : super(key: key);
 
   @override
@@ -981,8 +986,9 @@ class _EventFilesSectionState extends State<EventFilesSection> {
   @override
   void didUpdateWidget(EventFilesSection oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Reload files if event changed
-    if (oldWidget.event.id != widget.event.id) {
+    // Reload files if event changed or refresh requested
+    if (oldWidget.event.id != widget.event.id ||
+        oldWidget.refreshKey != widget.refreshKey) {
       _loadFiles();
     }
   }
