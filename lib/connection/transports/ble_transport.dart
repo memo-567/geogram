@@ -377,14 +377,37 @@ class BleTransport extends Transport with TransportMixin {
         // Not JSON, use raw content
       }
 
-      final message = TransportMessage(
-        id: 'ble-${bleMessage.timestamp.millisecondsSinceEpoch}-${bleMessage.deviceId}',
-        targetCallsign: bleMessage.author,
-        type: type,
-        path: bleMessage.channel,
-        payload: payload,
-        signedEvent: signedEvent,
-      );
+      TransportMessage message;
+      if (type == TransportMessageType.apiRequest &&
+          payload is Map &&
+          payload['type'] == 'api_request') {
+        final headers = <String, String>{};
+        if (payload['headers'] is Map) {
+          (payload['headers'] as Map).forEach((key, value) {
+            if (key == null || value == null) return;
+            headers[key.toString()] = value.toString();
+          });
+        }
+        message = TransportMessage(
+          id: payload['id']?.toString() ??
+              'ble-${bleMessage.timestamp.millisecondsSinceEpoch}-${bleMessage.deviceId}',
+          targetCallsign: bleMessage.author,
+          type: TransportMessageType.apiRequest,
+          method: payload['method']?.toString(),
+          path: payload['path']?.toString(),
+          headers: headers.isEmpty ? null : headers,
+          payload: payload['body'],
+        );
+      } else {
+        message = TransportMessage(
+          id: 'ble-${bleMessage.timestamp.millisecondsSinceEpoch}-${bleMessage.deviceId}',
+          targetCallsign: bleMessage.author,
+          type: type,
+          path: bleMessage.channel,
+          payload: payload,
+          signedEvent: signedEvent,
+        );
+      }
 
       emitIncomingMessage(message);
 

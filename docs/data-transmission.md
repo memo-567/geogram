@@ -511,6 +511,7 @@ Bluetooth Low Energy for offline, short-range communication. Works without any n
 2. **Connection**: GATT client connects to GATT server
 3. **Communication**: Messages sent via GATT characteristics
 4. **Parceling**: Large messages split into 280-byte parcels
+5. **API Bridging**: API-style requests are encoded as JSON on the `_api` channel and decoded back into `TransportMessage.apiRequest` on the receiver, then forwarded by `ConnectionManager` to the local API handlers.
 
 **Android-Android Peer Discovery:**
 
@@ -632,10 +633,12 @@ App                ConnectionManager         LAN        WebRTC       Station
  │                       │── send() ────────────────────────────────────►│
  │                       │◄── success ──────────────────────────────────│
  │                       │                    │            │            │
- │◄── TransportResult ───│                    │            │            │
- │   (transportUsed:     │                    │            │            │
- │    'station')         │                    │            │            │
+│◄── TransportResult ───│                    │            │            │
+│   (transportUsed:     │                    │            │            │
+│    'station')         │                    │            │            │
 ```
+
+**Receiver note:** For WebRTC and BLE, the incoming `TransportMessage.apiRequest` is forwarded to the local HTTP API (`LogApiService`) because the API handlers live there. If the HTTP API is disabled, P2P API requests will fail on the receiving device.
 
 ### Direct Message Flow
 
@@ -647,7 +650,11 @@ final result = await ConnectionManager().sendDM(
 );
 ```
 
-The flow is similar, but uses WebSocket relay for Station transport instead of HTTP proxy.
+**Notes:**
+- `ConnectionManager.sendDM` uses `TransportMessage.directMessage`. Station transport relays via WebSocket; WebRTC and BLE carry the signed event directly.
+- The in-app `DirectMessageService` currently sends DMs as API requests to `/api/chat/{myCallsign}/messages`, so BLE/WebRTC deliver them through the API request path and the receiver handles them via the local HTTP API.
+
+**Future expansion idea:** Add an in-process API router so `ConnectionManager` can dispatch `/api/*` requests directly without requiring the local HTTP server, and optionally handle `TransportMessage.directMessage` with a direct call into `DirectMessageService`.
 
 ---
 

@@ -24,6 +24,7 @@ import 'chat_service.dart';
 import 'storage_config.dart';
 import 'devices_service.dart';
 import 'station_service.dart';
+import '../connection/connection_manager.dart';
 
 /// Exception thrown when trying to send a DM to an unreachable device
 class DMMustBeReachableException implements Exception {
@@ -443,6 +444,31 @@ class DirectMessageService {
     _conversations[otherCallsign] = conversation;
   }
 
+  Future<bool> _canReachDevice(String callsign) async {
+    final normalizedCallsign = callsign.toUpperCase();
+    final connectionManager = ConnectionManager();
+    if (connectionManager.isInitialized) {
+      try {
+        final reachable = await connectionManager.isReachable(normalizedCallsign);
+        if (reachable) return true;
+      } catch (_) {
+        // Fall back to legacy checks
+      }
+    }
+
+    final devicesService = DevicesService();
+    final device = devicesService.getDevice(normalizedCallsign);
+    final station = StationService().getConnectedRelay();
+    final hasStationProxy = station != null;
+    final hasDirectConnection = device != null && device.isOnline && device.url != null;
+    final hasBleConnection = device != null &&
+        device.isOnline &&
+        (device.connectionMethods.contains('bluetooth') ||
+            device.connectionMethods.contains('bluetooth_plus'));
+
+    return hasDirectConnection || hasStationProxy || hasBleConnection;
+  }
+
   /// Send a message in a DM conversation
   /// Throws [DMMustBeReachableException] if the remote device is not reachable
   Future<void> sendMessage(
@@ -456,16 +482,8 @@ class DirectMessageService {
     final profile = _myProfile;
 
     // 1. Check reachability FIRST - must be reachable to send
-    // Device is reachable if:
-    // a) It's online with a direct URL, OR
-    // b) We're connected to a station (can use station proxy)
-    final devicesService = DevicesService();
-    final device = devicesService.getDevice(normalizedCallsign);
-    final station = StationService().getConnectedRelay();
-    final hasStationProxy = station != null;
-    final hasDirectConnection = device != null && device.isOnline && device.url != null;
-
-    if (!hasDirectConnection && !hasStationProxy) {
+    final canReach = await _canReachDevice(normalizedCallsign);
+    if (!canReach) {
       throw DMMustBeReachableException(
         'Cannot send message: device $normalizedCallsign is not reachable',
       );
@@ -520,7 +538,7 @@ class DirectMessageService {
     // 5. Push to remote device's chat API FIRST
     // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
     final delivered = await _pushToRemoteChatAPI(
-      device,
+      normalizedCallsign,
       signedEvent,
       profile.callsign,
       metadata: metadata,
@@ -557,13 +575,8 @@ class DirectMessageService {
     final profile = _myProfile;
 
     // 1. Check reachability FIRST - must be reachable to send
-    final devicesService = DevicesService();
-    final device = devicesService.getDevice(normalizedCallsign);
-    final station = StationService().getConnectedRelay();
-    final hasStationProxy = station != null;
-    final hasDirectConnection = device != null && device.isOnline && device.url != null;
-
-    if (!hasDirectConnection && !hasStationProxy) {
+    final canReach = await _canReachDevice(normalizedCallsign);
+    if (!canReach) {
       throw DMMustBeReachableException(
         'Cannot send voice message: device $normalizedCallsign is not reachable',
       );
@@ -625,7 +638,11 @@ class DirectMessageService {
     }
 
     // 6. Push to remote device's chat API FIRST
-    final delivered = await _pushToRemoteChatAPI(device, signedEvent, profile.callsign);
+    final delivered = await _pushToRemoteChatAPI(
+      normalizedCallsign,
+      signedEvent,
+      profile.callsign,
+    );
 
     // 7. Only save locally if delivered successfully
     if (!delivered) {
@@ -662,13 +679,8 @@ class DirectMessageService {
     LogService().log('DM FILE SEND: Starting file transfer to $normalizedCallsign: $filePath');
 
     // 1. Check reachability FIRST - must be reachable to send
-    final devicesService = DevicesService();
-    final device = devicesService.getDevice(normalizedCallsign);
-    final station = StationService().getConnectedRelay();
-    final hasStationProxy = station != null;
-    final hasDirectConnection = device != null && device.isOnline && device.url != null;
-
-    if (!hasDirectConnection && !hasStationProxy) {
+    final canReach = await _canReachDevice(normalizedCallsign);
+    if (!canReach) {
       throw DMMustBeReachableException(
         'Cannot send file: device $normalizedCallsign is not reachable',
       );
@@ -751,7 +763,7 @@ class DirectMessageService {
 
     // 8. Push message to remote device's chat API (include file metadata)
     final delivered = await _pushToRemoteChatAPI(
-      device,
+      normalizedCallsign,
       signedEvent,
       profile.callsign,
       metadata: message.metadata,
@@ -1263,7 +1275,7 @@ class DirectMessageService {
   /// Uses station proxy if direct connection is not available
   /// Returns true if HTTP 200/201 (delivered), false otherwise
   Future<bool> _pushToRemoteChatAPI(
-    dynamic device,
+    String targetCallsign,
     NostrEvent? signedEvent,
     String myCallsign, {
     Map<String, String>? metadata,
@@ -1284,11 +1296,11 @@ class DirectMessageService {
         if (extraMetadata.isNotEmpty) 'metadata': extraMetadata,
       });
 
-      LogService().log('DM: Pushing signed event via chat API to ${device.callsign} path: $path');
+      LogService().log('DM: Pushing signed event via chat API to $targetCallsign path: $path');
 
       // Use DevicesService helper which tries direct connection first, then falls back to station proxy
       final response = await DevicesService().makeDeviceApiRequest(
-        callsign: device.callsign,
+        callsign: targetCallsign,
         method: 'POST',
         path: path,
         headers: {'Content-Type': 'application/json'},
@@ -1296,7 +1308,7 @@ class DirectMessageService {
       );
 
       if (response == null) {
-        LogService().log('DM: No route to device ${device.callsign} (no direct or station proxy)');
+        LogService().log('DM: No route to device $targetCallsign (no direct or station proxy)');
         return false;
       }
 

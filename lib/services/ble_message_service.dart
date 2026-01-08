@@ -328,7 +328,10 @@ class BLEMessageService {
   }) async {
     // Find device by callsign
     final devices = _discoveryService.getAllDevices();
-    final device = devices.where((d) => d.callsign == targetCallsign).firstOrNull;
+    final target = targetCallsign.toUpperCase();
+    final device = devices
+        .where((d) => d.callsign?.toUpperCase() == target)
+        .firstOrNull;
 
     if (device == null) {
       LogService().log('BLEMessageService: Device with callsign $targetCallsign not found');
