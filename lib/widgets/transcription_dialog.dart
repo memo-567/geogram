@@ -642,11 +642,6 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         ),
         const SizedBox(height: 24),
         Text(
-          widget.i18n.t('transcribing_audio'),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 6),
-        Text(
           widget.i18n.t('transcription_wait_notice'),
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(

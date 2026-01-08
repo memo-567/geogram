@@ -12,6 +12,7 @@ import '../widgets/active_recording_banner.dart';
 import 'exercise_detail_page.dart';
 import 'measurement_detail_page.dart';
 import '../../services/i18n_service.dart';
+import '../../services/config_service.dart';
 
 /// Tab type for the tracker browser
 enum TrackerTab {
@@ -47,14 +48,19 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     with SingleTickerProviderStateMixin {
   final TrackerService _service = TrackerService();
   final PathRecordingService _recordingService = PathRecordingService();
+  final ConfigService _configService = ConfigService();
 
   late TabController _tabController;
   bool _loading = true;
   StreamSubscription? _changesSub;
 
+  /// User-selected exercises to show in the exercises tab
+  List<String> _visibleExercises = [];
+
   // Data for each tab
   List<TrackerPath> _paths = [];
   List<String> _exerciseTypes = [];
+  Map<String, int> _weeklyTotals = {};
   List<String> _measurementTypes = [];
   List<TrackerPlan> _activePlans = [];
   List<DateTime> _proximityDates = [];
@@ -70,7 +76,35 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     super.initState();
     _tabController = TabController(length: TrackerTab.values.length, vsync: this);
     _tabController.addListener(_onTabChanged);
+    _loadVisibleExercises();
     _initializeService();
+  }
+
+  void _loadVisibleExercises() {
+    final saved = _configService.getNestedValue('tracker.visibleExercises');
+    if (saved is List) {
+      _visibleExercises = saved.cast<String>().toList();
+    }
+  }
+
+  void _saveVisibleExercises() {
+    _configService.setNestedValue('tracker.visibleExercises', _visibleExercises);
+  }
+
+  void _addExerciseToVisible(String exerciseId) {
+    if (!_visibleExercises.contains(exerciseId)) {
+      setState(() {
+        _visibleExercises.add(exerciseId);
+      });
+      _saveVisibleExercises();
+    }
+  }
+
+  void _removeExerciseFromVisible(String exerciseId) {
+    setState(() {
+      _visibleExercises.remove(exerciseId);
+    });
+    _saveVisibleExercises();
   }
 
   @override
@@ -122,6 +156,14 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           break;
         case TrackerTab.exercises:
           _exerciseTypes = await _service.listExerciseTypes(year: _selectedYear);
+          // Load weekly totals for all visible exercises
+          _weeklyTotals = {};
+          for (final exerciseId in _visibleExercises) {
+            _weeklyTotals[exerciseId] = await _service.getExerciseWeekCount(
+              exerciseId,
+              year: _selectedYear,
+            );
+          }
           break;
         case TrackerTab.measurements:
           _measurementTypes = await _service.listMeasurementTypes(year: _selectedYear);
@@ -223,8 +265,8 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   bool get _showYearSelector {
     // Note: paths tab has its own recording flow, no year selector needed
-    return _currentTab == TrackerTab.exercises ||
-        _currentTab == TrackerTab.measurements ||
+    // Note: exercises tab now uses user-selected list, no year filter needed
+    return _currentTab == TrackerTab.measurements ||
         _currentTab == TrackerTab.proximity ||
         _currentTab == TrackerTab.visits;
   }
@@ -240,7 +282,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         break;
       case TrackerTab.exercises:
         icon = Icons.add;
-        onPressed = _onAddExercise;
+        onPressed = _showAddExerciseToListDialog;
         break;
       case TrackerTab.measurements:
         icon = Icons.add;
@@ -335,15 +377,37 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       return const Center(child: CircularProgressIndicator());
     }
 
-    // Show all built-in exercise types, mark those with data
-    final allTypes = ExerciseTypeConfig.builtInTypes.keys.toList();
+    // Show only user-selected exercises (clean slate by default)
+    if (_visibleExercises.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.fitness_center, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              widget.i18n.t('tracker_no_visible_exercises'),
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _showAddExerciseToListDialog,
+              icon: const Icon(Icons.add),
+              label: Text(widget.i18n.t('tracker_add_exercise_to_list')),
+            ),
+          ],
+        ),
+      );
+    }
 
     return ListView.builder(
       padding: const EdgeInsets.all(8),
-      itemCount: allTypes.length,
+      itemCount: _visibleExercises.length,
       itemBuilder: (context, index) {
-        final exerciseId = allTypes[index];
-        final config = ExerciseTypeConfig.builtInTypes[exerciseId]!;
+        final exerciseId = _visibleExercises[index];
+        final config = ExerciseTypeConfig.builtInTypes[exerciseId];
+        if (config == null) return const SizedBox.shrink();
+
         final hasData = _exerciseTypes.contains(exerciseId);
 
         return Card(
@@ -353,14 +417,87 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
               color: hasData ? Theme.of(context).primaryColor : Colors.grey,
             ),
             title: Text(widget.i18n.t('tracker_exercise_$exerciseId')),
-            subtitle: Text('${widget.i18n.t('tracker_unit_${config.unit}')} - ${widget.i18n.t('tracker_category_${config.category.name}')}'),
-            trailing: hasData
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : null,
+            subtitle: Text('${_weeklyTotals[exerciseId] ?? 0} ${widget.i18n.t('tracker_this_week')}'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: widget.i18n.t('tracker_log_entry'),
+                  onPressed: () => _onAddExerciseEntry(exerciseId),
+                ),
+                PopupMenuButton<String>(
+                  onSelected: (action) {
+                    if (action == 'remove') {
+                      _removeExerciseFromVisible(exerciseId);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'remove',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.visibility_off),
+                          const SizedBox(width: 8),
+                          Text(widget.i18n.t('tracker_hide_exercise')),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
             onTap: () => _onExerciseTapped(exerciseId),
           ),
         );
       },
+    );
+  }
+
+  void _showAddExerciseToListDialog() {
+    // Get exercises not yet in the visible list
+    final availableExercises = ExerciseTypeConfig.builtInTypes.keys
+        .where((id) => !_visibleExercises.contains(id))
+        .toList();
+
+    if (availableExercises.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.i18n.t('tracker_all_exercises_added'))),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('tracker_add_exercise_to_list')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: availableExercises.length,
+            itemBuilder: (context, index) {
+              final exerciseId = availableExercises[index];
+              final config = ExerciseTypeConfig.builtInTypes[exerciseId]!;
+
+              return ListTile(
+                leading: Icon(_getExerciseIcon(config.category)),
+                title: Text(widget.i18n.t('tracker_exercise_$exerciseId')),
+                onTap: () {
+                  _addExerciseToVisible(exerciseId);
+                  Navigator.of(context).pop();
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(widget.i18n.t('cancel')),
+          ),
+        ],
+      ),
     );
   }
 
@@ -686,6 +823,20 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       context,
       service: _service,
       i18n: widget.i18n,
+      year: _selectedYear,
+    );
+
+    if (result == true) {
+      _loadCurrentTab();
+    }
+  }
+
+  Future<void> _onAddExerciseEntry(String exerciseId) async {
+    final result = await AddExerciseDialog.show(
+      context,
+      service: _service,
+      i18n: widget.i18n,
+      preselectedExerciseId: exerciseId,
       year: _selectedYear,
     );
 

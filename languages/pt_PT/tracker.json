@@ -148,5 +148,12 @@
   "tracker_evening": "Fim de tarde",
   "tracker_night": "Noite",
   "tracker_start_recording": "Iniciar",
-  "tracker_error_starting_path": "Falha ao iniciar gravação de percurso"
+  "tracker_error_starting_path": "Falha ao iniciar gravação de percurso",
+
+  "tracker_no_visible_exercises": "Nenhum exercício na sua lista ainda",
+  "tracker_add_exercise_to_list": "Adicionar Exercício",
+  "tracker_hide_exercise": "Ocultar",
+  "tracker_all_exercises_added": "Todos os exercícios já estão na sua lista",
+  "tracker_log_entry": "Registar",
+  "tracker_this_week": "esta semana"
 }

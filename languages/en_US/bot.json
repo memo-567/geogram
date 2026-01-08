@@ -109,7 +109,7 @@
   "no_audio_recorded": "No audio recorded",
   "no_speech_detected": "No speech detected",
   "please_wait": "Please wait...",
-  "processing_speech": "Processing speech",
+  "processing_speech": "Converting to text",
   "recording": "Recording",
   "recording_failed": "Recording failed",
   "tap_to_start_recording": "Tap Start to begin recording",

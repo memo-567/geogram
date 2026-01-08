@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../models/tracker_models.dart';
 import '../services/tracker_service.dart';
 import '../../services/i18n_service.dart';
+import '../../services/config_service.dart';
+import '../../widgets/transcribe_button_widget.dart';
 
 /// Dialog for adding a new exercise entry
 class AddExerciseDialog extends StatefulWidget {
@@ -44,11 +46,12 @@ class AddExerciseDialog extends StatefulWidget {
 
 class _AddExerciseDialogState extends State<AddExerciseDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _countController = TextEditingController();
   final _notesController = TextEditingController();
   final _durationController = TextEditingController();
+  final _configService = ConfigService();
 
   late String _selectedExerciseId;
+  int _selectedCount = 10;
   bool _saving = false;
 
   @override
@@ -56,11 +59,29 @@ class _AddExerciseDialogState extends State<AddExerciseDialog> {
     super.initState();
     _selectedExerciseId = widget.preselectedExerciseId ??
         ExerciseTypeConfig.builtInTypes.keys.first;
+    _loadLastCount();
+  }
+
+  void _loadLastCount() {
+    final lastCount = _configService.getNestedValue(
+      'tracker.exerciseLastCount.$_selectedExerciseId',
+    );
+    if (lastCount is int && lastCount >= 1 && lastCount <= 100) {
+      _selectedCount = lastCount;
+    } else {
+      _selectedCount = 10; // Default
+    }
+  }
+
+  void _saveLastCount() {
+    _configService.setNestedValue(
+      'tracker.exerciseLastCount.$_selectedExerciseId',
+      _selectedCount,
+    );
   }
 
   @override
   void dispose() {
-    _countController.dispose();
     _notesController.dispose();
     _durationController.dispose();
     super.dispose();
@@ -82,30 +103,35 @@ class _AddExerciseDialogState extends State<AddExerciseDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Exercise type dropdown
-              DropdownButtonFormField<String>(
-                initialValue: _selectedExerciseId,
-                decoration: InputDecoration(
-                  labelText: widget.i18n.t('tracker_exercise_type'),
-                  border: const OutlineInputBorder(),
+              // Exercise type dropdown (only show if not preselected)
+              if (widget.preselectedExerciseId == null) ...[
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedExerciseId,
+                  decoration: InputDecoration(
+                    labelText: widget.i18n.t('tracker_exercise_type'),
+                    border: const OutlineInputBorder(),
+                  ),
+                  items: ExerciseTypeConfig.builtInTypes.entries
+                      .map((e) => DropdownMenuItem(
+                            value: e.key,
+                            child: Text(widget.i18n.t('tracker_exercise_${e.key}')),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedExerciseId = value;
+                        _loadLastCount();
+                      });
+                    }
+                  },
                 ),
-                items: ExerciseTypeConfig.builtInTypes.entries
-                    .map((e) => DropdownMenuItem(
-                          value: e.key,
-                          child: Text(widget.i18n.t('tracker_exercise_${e.key}')),
-                        ))
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() => _selectedExerciseId = value);
-                  }
-                },
-              ),
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
+              ],
 
-              // Count field
-              TextFormField(
-                controller: _countController,
+              // Count dropdown (1-100)
+              DropdownButtonFormField<int>(
+                value: _selectedCount,
                 decoration: InputDecoration(
                   labelText: _isCardio
                       ? widget.i18n.t('tracker_distance_meters')
@@ -113,17 +139,16 @@ class _AddExerciseDialogState extends State<AddExerciseDialog> {
                   suffixText: _selectedConfig.unit,
                   border: const OutlineInputBorder(),
                 ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: false),
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return widget.i18n.t('tracker_required_field');
+                items: List.generate(100, (i) => i + 1)
+                    .map((n) => DropdownMenuItem(
+                          value: n,
+                          child: Text('$n'),
+                        ))
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _selectedCount = value);
                   }
-                  final count = int.tryParse(value);
-                  if (count == null || count <= 0) {
-                    return widget.i18n.t('tracker_invalid_number');
-                  }
-                  return null;
                 },
               ),
               const SizedBox(height: 16),
@@ -149,6 +174,16 @@ class _AddExerciseDialogState extends State<AddExerciseDialog> {
                 decoration: InputDecoration(
                   labelText: widget.i18n.t('tracker_notes'),
                   border: const OutlineInputBorder(),
+                  suffixIcon: TranscribeButtonWidget(
+                    i18n: widget.i18n,
+                    onTranscribed: (text) {
+                      if (_notesController.text.isEmpty) {
+                        _notesController.text = text;
+                      } else {
+                        _notesController.text += ' $text';
+                      }
+                    },
+                  ),
                 ),
                 maxLines: 2,
               ),
@@ -181,18 +216,20 @@ class _AddExerciseDialogState extends State<AddExerciseDialog> {
     setState(() => _saving = true);
 
     try {
-      final count = int.parse(_countController.text);
       final duration = _durationController.text.isNotEmpty
           ? int.parse(_durationController.text) * 60 // Convert to seconds
           : null;
 
       await widget.service.addExerciseEntry(
         exerciseId: _selectedExerciseId,
-        count: count,
+        count: _selectedCount,
         durationSeconds: duration,
         notes: _notesController.text.isNotEmpty ? _notesController.text : null,
         year: widget.year,
       );
+
+      // Remember the selected count for this exercise
+      _saveLastCount();
 
       if (mounted) {
         Navigator.of(context).pop(true);

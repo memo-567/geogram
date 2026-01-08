@@ -32,6 +32,7 @@ import '../services/collection_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 import 'event_detail_page.dart';
+import 'map_cache_settings_page.dart';
 
 /// Maps browser page showing geo-located items
 class MapsBrowserPage extends StatefulWidget {
@@ -831,6 +832,37 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     );
   }
 
+  void _openCacheSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const MapCacheSettingsPage()),
+    );
+  }
+
+  Widget _buildMenuButton() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.menu),
+      tooltip: _i18n.t('menu'),
+      onSelected: (value) {
+        if (value == 'cache') {
+          _openCacheSettings();
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          value: 'cache',
+          child: Row(
+            children: [
+              const Icon(Icons.download_for_offline),
+              const SizedBox(width: 12),
+              Text(_i18n.t('cache')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildTopBar() {
     // Get safe area padding for status bar
     final topPadding = MediaQuery.of(context).padding.top;
@@ -840,39 +872,52 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         final isNarrow = constraints.maxWidth < 550;
 
         if (isNarrow) {
-          // Portrait/narrow mode: just tabs
+          // Portrait/narrow mode: tabs with menu
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
             ),
             child: Padding(
-              padding: EdgeInsets.fromLTRB(16, topPadding + 8, 16, 8),
-              child: TabBar(
-                controller: _tabController,
-                tabs: [
-                  Tab(text: _i18n.t('map_view')),
-                  Tab(text: _i18n.t('list_view')),
+              padding: EdgeInsets.fromLTRB(16, topPadding + 8, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TabBar(
+                      controller: _tabController,
+                      tabs: [
+                        Tab(text: _i18n.t('map_view')),
+                        Tab(text: _i18n.t('list_view')),
+                      ],
+                    ),
+                  ),
+                  _buildMenuButton(),
                 ],
               ),
             ),
           );
         }
 
-        // Wide mode: just tabs
+        // Wide mode: tabs with menu on right
         return Container(
-          padding: EdgeInsets.fromLTRB(16, topPadding + 8, 16, 8),
+          padding: EdgeInsets.fromLTRB(16, topPadding + 8, 8, 8),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
           ),
-          child: SizedBox(
-            width: 200,
-            child: TabBar(
-              controller: _tabController,
-              tabs: [
-                Tab(text: _i18n.t('map_view')),
-                Tab(text: _i18n.t('list_view')),
-              ],
-            ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 200,
+                child: TabBar(
+                  controller: _tabController,
+                  tabs: [
+                    Tab(text: _i18n.t('map_view')),
+                    Tab(text: _i18n.t('list_view')),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              _buildMenuButton(),
+            ],
           ),
         );
       },

@@ -26,6 +26,13 @@ enum MapLayerType {
   satellite, // Esri World Imagery
 }
 
+/// Result of tile download operation
+enum _TileDownloadResult {
+  downloaded, // Tile was downloaded from network
+  skipped,    // Tile was fresh in cache, skipped
+  failed,     // Download failed
+}
+
 /// Status of tile loading operations
 class TileLoadingStatus {
   final int loadingCount;
@@ -976,6 +983,8 @@ class MapTileService {
     int maxZoom = 12,
     List<MapLayerType> layers = const [MapLayerType.standard, MapLayerType.satellite],
     void Function(int downloaded, int total)? onProgress,
+    void Function(int downloaded, int total, int skipped)? onProgressWithSkipped,
+    int? maxAgeDays,
   }) async {
     if (!_initialized) await initialize();
     if (kIsWeb) return 0; // No caching on web
@@ -991,6 +1000,7 @@ class MapTileService {
     }
 
     int downloaded = 0;
+    int skipped = 0;
     final tilesToDownload = <({int z, int x, int y, MapLayerType layer})>[];
 
     // Calculate tiles for each zoom level
@@ -1009,17 +1019,56 @@ class MapTileService {
     // Download tiles sequentially to avoid overwhelming the network
     for (final tile in tilesToDownload) {
       try {
-        final success = await _downloadAndCacheTile(tile.z, tile.x, tile.y, tile.layer);
-        if (success) downloaded++;
-        onProgress?.call(downloaded, total);
+        final result = await _downloadAndCacheTileWithAge(
+          tile.z,
+          tile.x,
+          tile.y,
+          tile.layer,
+          maxAgeDays: maxAgeDays,
+        );
+        if (result == _TileDownloadResult.downloaded) {
+          downloaded++;
+        } else if (result == _TileDownloadResult.skipped) {
+          skipped++;
+        }
+        onProgress?.call(downloaded + skipped, total);
+        onProgressWithSkipped?.call(downloaded + skipped, total, skipped);
       } catch (e) {
         // Log but continue - non-critical
         LogService().log('MapTileService: Failed to cache tile ${tile.z}/${tile.x}/${tile.y}: $e');
       }
     }
 
-    LogService().log('MapTileService: Pre-download complete: $downloaded/$total tiles');
+    LogService().log('MapTileService: Pre-download complete: $downloaded downloaded, $skipped skipped, total $total');
     return downloaded;
+  }
+
+  /// Get cache statistics (size in bytes and tile count)
+  Future<Map<String, int>> getCacheStatistics() async {
+    if (!_initialized) await initialize();
+    if (_tilesPath == null || kIsWeb) {
+      return {'sizeBytes': 0, 'tileCount': 0};
+    }
+
+    int totalSize = 0;
+    int tileCount = 0;
+
+    final cacheDir = Directory('$_tilesPath/cache');
+    if (await cacheDir.exists()) {
+      await for (final entity in cacheDir.list(recursive: true)) {
+        if (entity is File && entity.path.endsWith('.png')) {
+          try {
+            final stat = await entity.stat();
+            totalSize += stat.size;
+            tileCount++;
+          } catch (e) {
+            // Skip files we can't stat
+          }
+        }
+      }
+    }
+
+    return {'sizeBytes': totalSize, 'tileCount': tileCount};
   }
 
   double _calculateDistanceKm(double lat1, double lon1, double lat2, double lon2) {
@@ -1073,6 +1122,104 @@ class MapTileService {
   String _getCachePath(int z, int x, int y, MapLayerType layer) {
     final layerFolder = layer == MapLayerType.satellite ? 'satellite' : 'standard';
     return '$_tilesPath/cache/$layerFolder/$z/$x/$y.png';
+  }
+
+  /// Download a single tile with age checking
+  /// Returns result indicating whether tile was downloaded, skipped (cached), or failed
+  Future<_TileDownloadResult> _downloadAndCacheTileWithAge(
+    int z,
+    int x,
+    int y,
+    MapLayerType layer, {
+    int? maxAgeDays,
+  }) async {
+    if (_tilesPath == null) return _TileDownloadResult.failed;
+
+    final cachePath = _getCachePath(z, x, y, layer);
+    final file = File(cachePath);
+
+    // Check if already cached and fresh
+    if (await file.exists()) {
+      if (maxAgeDays == null || maxAgeDays <= 0) {
+        // Force refresh - always re-download
+      } else {
+        // Check file age
+        try {
+          final stat = await file.stat();
+          final age = DateTime.now().difference(stat.modified);
+          if (age.inDays < maxAgeDays) {
+            return _TileDownloadResult.skipped; // Fresh enough, skip
+          }
+        } catch (e) {
+          // Can't check age, assume fresh
+          return _TileDownloadResult.skipped;
+        }
+      }
+    }
+
+    final allowStation = canUseStation;
+    final allowInternet = canUseInternet;
+    if (!allowStation && !allowInternet) {
+      return _TileDownloadResult.failed;
+    }
+
+    // Build tile URL based on layer
+    String directUrl;
+    if (layer == MapLayerType.satellite) {
+      // Esri uses z/y/x order
+      directUrl = satelliteTileUrl
+          .replaceAll('{z}', '$z')
+          .replaceAll('{y}', '$y')
+          .replaceAll('{x}', '$x');
+    } else {
+      // OSM uses z/x/y order
+      directUrl = osmTileUrl
+          .replaceAll('{z}', '$z')
+          .replaceAll('{x}', '$x')
+          .replaceAll('{y}', '$y');
+    }
+
+    // Try station first if available
+    if (allowStation) {
+      final stationUrl = getStationTileUrl(layer);
+      if (stationUrl != null) {
+        try {
+          final url = stationUrl
+              .replaceAll('{z}', '$z')
+              .replaceAll('{x}', '$x')
+              .replaceAll('{y}', '$y');
+          final response = await httpClient
+              .get(Uri.parse(url))
+              .timeout(const Duration(seconds: 5));
+          if (response.statusCode == 200 && response.bodyBytes.length > 100) {
+            await file.parent.create(recursive: true);
+            await file.writeAsBytes(response.bodyBytes);
+            return _TileDownloadResult.downloaded;
+          }
+        } catch (_) {
+          // Station failed, try direct internet
+        }
+      }
+    }
+
+    // Fallback to direct internet
+    if (allowInternet) {
+      try {
+        final response = await httpClient
+            .get(Uri.parse(directUrl), headers: {'User-Agent': 'dev.geogram'})
+            .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200 && response.bodyBytes.length > 100) {
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(response.bodyBytes);
+          return _TileDownloadResult.downloaded;
+        }
+      } catch (e) {
+        LogService().log('MapTileService: Direct download failed for $z/$x/$y: $e');
+      }
+    }
+
+    return _TileDownloadResult.failed;
   }
 
   /// Download a single tile and cache it to disk

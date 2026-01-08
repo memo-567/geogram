@@ -170,11 +170,17 @@ class LocationProviderService extends ChangeNotifier {
 
     // Start if not already running
     if (!_isRunning) {
-      await start(
+      final started = await start(
         intervalSeconds: intervalSeconds,
         notificationTitle: notificationTitle,
         notificationText: notificationText,
       );
+      if (!started) {
+        // Clean up and throw if start failed
+        subscription?.cancel();
+        _consumerCount--;
+        throw Exception('LocationProviderService: Failed to start - permission denied or services disabled');
+      }
     }
 
     // Return dispose function

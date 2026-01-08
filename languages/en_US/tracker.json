@@ -148,5 +148,12 @@
   "tracker_evening": "Evening",
   "tracker_night": "Night",
   "tracker_start_recording": "Start",
-  "tracker_error_starting_path": "Failed to start path recording"
+  "tracker_error_starting_path": "Failed to start path recording",
+
+  "tracker_no_visible_exercises": "No exercises in your list yet",
+  "tracker_add_exercise_to_list": "Add Exercise",
+  "tracker_hide_exercise": "Hide",
+  "tracker_all_exercises_added": "All exercises are already in your list",
+  "tracker_log_entry": "Log Entry",
+  "tracker_this_week": "this week"
 }
