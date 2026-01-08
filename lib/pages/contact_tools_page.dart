@@ -33,6 +33,15 @@ class ContactToolsPage extends StatelessWidget {
       ),
       body: ListView(
         children: [
+          // Refresh Contact Info
+          _buildToolTile(
+            context,
+            icon: Icons.refresh,
+            title: i18n.t('refresh_contact_info'),
+            subtitle: i18n.t('refresh_contact_info_description'),
+            onTap: () => _refreshContactInfo(context),
+          ),
+          const Divider(),
           // Merge Duplicate Contacts
           _buildToolTile(
             context,
@@ -142,5 +151,50 @@ class ContactToolsPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _refreshContactInfo(BuildContext context) async {
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Row(
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 16),
+            Text(i18n.t('refreshing')),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // Invalidate cache and rebuild fast.json
+      contactService.invalidateSummaryCache();
+      await contactService.rebuildFastJson();
+
+      if (context.mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(i18n.t('contact_info_refreshed')),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context); // Go back to contacts
+        onRefresh?.call();
+      }
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

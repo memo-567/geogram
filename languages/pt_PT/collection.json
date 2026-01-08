@@ -70,6 +70,9 @@
   "collection_type_forum": "Fórum",
   "collection_type_groups": "Grupos",
   "collection_type_inventory": "Inventário",
+  "collection_type_tracker": "Rastreador",
+  "collection_type_desc_tracker": "Registe a sua saúde, fitness e atividades pessoais. Grave percursos GPS, exercícios, medições e mais com design focado em privacidade.",
+  "collection_type_features_tracker": "Gravação de percursos GPS|Registo de exercícios|Medições de saúde|Planos de fitness|Partilha de localização|Check-ins em locais|Rastreamento de proximidade",
   "collection_type_log": "Registo",
   "collection_type_market": "Mercado",
   "collection_type_news": "Notícias",
@@ -81,5 +84,10 @@
   "collection_type_wallet": "Carteira",
   "collection_type_www": "Website",
   "collection_updates": "Atualizações de Coleções",
-  "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas"
+  "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas",
+
+  "location_notification_title": "Localização Ativa",
+  "location_notification_text": "A fornecer posição GPS",
+  "location_recording_title": "A Gravar Percurso",
+  "location_recording_text": "Rastreio GPS ativo"
 }

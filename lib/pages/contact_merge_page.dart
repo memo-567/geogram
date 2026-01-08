@@ -440,38 +440,40 @@ class _ContactMergePageState extends State<ContactMergePage> {
           title: Text(widget.i18n.t('select_primary_contact')),
           content: SizedBox(
             width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.i18n.t('primary_contact_kept'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey,
-                      ),
-                ),
-                const SizedBox(height: 12),
-                ...group.contacts.map((contact) => RadioListTile<Contact>(
-                      value: contact,
-                      groupValue: primaryContact,
-                      onChanged: (value) {
-                        setDialogState(() => primaryContact = value);
-                      },
-                      title: Text(contact.displayName),
-                      subtitle: Text(contact.callsign),
-                      dense: true,
-                    )),
-                const Divider(),
-                const SizedBox(height: 8),
-                Text(
-                  widget.i18n.t('merge_preview'),
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                _buildMergePreview(group, primaryContact!),
-              ],
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.i18n.t('primary_contact_kept'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  ...group.contacts.map((contact) => RadioListTile<Contact>(
+                        value: contact,
+                        groupValue: primaryContact,
+                        onChanged: (value) {
+                          setDialogState(() => primaryContact = value);
+                        },
+                        title: Text(contact.displayName),
+                        subtitle: Text(contact.callsign),
+                        dense: true,
+                      )),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.i18n.t('merge_preview'),
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildMergePreview(group, primaryContact!),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -505,10 +507,12 @@ class _ContactMergePageState extends State<ContactMergePage> {
       allTags.addAll(contact.tags);
     }
 
+    final theme = Theme.of(context);
+
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -554,7 +558,7 @@ class _ContactMergePageState extends State<ContactMergePage> {
     // Sort history by date
     allHistoryEntries.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-    // Create merged contact
+    // Create merged contact (include filePath so saveContact can exclude it from duplicate check)
     final mergedContact = Contact(
       displayName: primary.displayName,
       callsign: primary.callsign,
@@ -573,6 +577,8 @@ class _ContactMergePageState extends State<ContactMergePage> {
       socialHandles: allSocialHandles,
       historyEntries: allHistoryEntries,
       locations: primary.locations,
+      filePath: primary.filePath,
+      groupPath: primary.groupPath,
     );
 
     // Save merged contact
@@ -590,13 +596,21 @@ class _ContactMergePageState extends State<ContactMergePage> {
       return;
     }
 
-    // Delete secondary contacts
+    // Delete secondary contacts (skip individual fast.json rebuilds for efficiency)
     for (final contact in group.contacts) {
       if (contact.callsign == primary.callsign) continue;
       if (contact.filePath != null) {
-        await widget.contactService.deleteContact(contact.callsign, groupPath: contact.groupPath);
+        await widget.contactService.deleteContact(
+          contact.callsign,
+          groupPath: contact.groupPath,
+          skipFastJsonRebuild: true,
+        );
       }
     }
+
+    // Rebuild fast.json once after all deletions
+    widget.contactService.invalidateSummaryCache();
+    await widget.contactService.rebuildFastJson();
 
     // Remove this group from the list
     setState(() {

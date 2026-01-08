@@ -69,12 +69,19 @@ class MapTileService {
   String? _tilesPath;
   Future<void>? _offlineDownloadFuture;
 
-  static const double _offlineCacheRadiusKm = 100.0;
+  // Separate radii for different layer types (off-grid optimization)
+  static const double _offlineCacheRadiusKmStandard = 500.0; // Standard map: 500km
+  static const double _offlineCacheRadiusKmSatellite = 100.0; // Satellite + overlays: 100km
   static const int _offlineCacheMinZoom = 8;
   static const int _offlineCacheMaxZoom = 12;
   static const double _offlineCacheMinMoveKm = 10.0;
   static const Duration _offlineCacheMaxAge = Duration(days: 14);
   static const String _offlineCacheConfigRoot = 'offlineMapCache';
+
+  // High-zoom tile caching for immediate location (for LocationPickerPage at zoom 18)
+  static const double _highZoomCacheRadiusKm = 5.0; // 5km radius for high zoom tiles
+  static const int _highZoomMinZoom = 13;
+  static const int _highZoomMaxZoom = 18;
 
   /// Shared HTTP client for all tile fetches (prevents "too many open files")
   final http.Client httpClient = http.Client();
@@ -588,19 +595,26 @@ class MapTileService {
   // ============================================================
 
   /// Ensure offline tiles are cached for the current area (background-friendly).
+  /// Downloads different radii for different layer types:
+  /// - Standard map: 500km (for navigation/overview)
+  /// - Satellite + labels: 100km (for detailed location picking)
   Future<void> ensureOfflineTiles({
     required double lat,
     required double lng,
-    double radiusKm = _offlineCacheRadiusKm,
     int minZoom = _offlineCacheMinZoom,
     int maxZoom = _offlineCacheMaxZoom,
-    List<MapLayerType> layers = const [MapLayerType.standard, MapLayerType.satellite],
   }) async {
     if (kIsWeb) return;
     if (lat.isNaN || lng.isNaN) return;
 
     if (!_initialized) {
       await initialize();
+    }
+
+    try {
+      await _networkMonitor.checkNow();
+    } catch (e) {
+      LogService().log('MapTileService: Network check failed: $e');
     }
 
     final stationUrlAvailable =
@@ -613,63 +627,52 @@ class MapTileService {
       return;
     }
 
-    final config = ConfigService();
-    final lastLatValue = config.getNestedValue('$_offlineCacheConfigRoot.centerLat');
-    final lastLonValue = config.getNestedValue('$_offlineCacheConfigRoot.centerLon');
-    final lastRadiusValue = config.getNestedValue('$_offlineCacheConfigRoot.radiusKm');
-    final lastMinZoomValue = config.getNestedValue('$_offlineCacheConfigRoot.minZoom');
-    final lastMaxZoomValue = config.getNestedValue('$_offlineCacheConfigRoot.maxZoom');
-    final lastDownloadedRaw =
-        config.getNestedValue('$_offlineCacheConfigRoot.lastDownloaded') as String?;
-
-    final lastLat = lastLatValue is num ? lastLatValue.toDouble() : null;
-    final lastLon = lastLonValue is num ? lastLonValue.toDouble() : null;
-    final lastRadius = lastRadiusValue is num ? lastRadiusValue.toDouble() : null;
-    final lastMinZoom = lastMinZoomValue is num ? lastMinZoomValue.toInt() : null;
-    final lastMaxZoom = lastMaxZoomValue is num ? lastMaxZoomValue.toInt() : null;
-    final lastDownloaded =
-        lastDownloadedRaw != null ? DateTime.tryParse(lastDownloadedRaw) : null;
-
-    final distanceKm = (lastLat != null && lastLon != null)
-        ? _calculateDistanceKm(lat, lng, lastLat, lastLon)
-        : double.infinity;
-    final movedTooFar = distanceKm.isNaN || distanceKm > _offlineCacheMinMoveKm;
-    final radiusOk = (lastRadius ?? 0) >= radiusKm;
-    final zoomOk = (lastMinZoom ?? minZoom) <= minZoom && (lastMaxZoom ?? maxZoom) >= maxZoom;
-    final cacheFresh = lastDownloaded != null &&
-        DateTime.now().difference(lastDownloaded) <= _offlineCacheMaxAge;
-
-    if (!movedTooFar && radiusOk && zoomOk && cacheFresh) {
-      return;
-    }
-
     if (_offlineDownloadFuture != null) {
       return;
     }
 
     _offlineDownloadFuture = () async {
       try {
-        final downloaded = await downloadTilesForRadius(
+        int totalDownloaded = 0;
+
+        // Download standard tiles with 500km radius (zoom 8-12)
+        totalDownloaded += await _ensureLayerTiles(
           lat: lat,
           lng: lng,
-          radiusKm: radiusKm,
+          radiusKm: _offlineCacheRadiusKmStandard,
           minZoom: minZoom,
           maxZoom: maxZoom,
-          layers: layers,
+          layer: MapLayerType.standard,
         );
 
-        config.setNestedValue('$_offlineCacheConfigRoot.centerLat', lat);
-        config.setNestedValue('$_offlineCacheConfigRoot.centerLon', lng);
-        config.setNestedValue('$_offlineCacheConfigRoot.radiusKm', radiusKm);
-        config.setNestedValue('$_offlineCacheConfigRoot.minZoom', minZoom);
-        config.setNestedValue('$_offlineCacheConfigRoot.maxZoom', maxZoom);
-        config.setNestedValue(
-          '$_offlineCacheConfigRoot.lastDownloaded',
-          DateTime.now().toIso8601String(),
+        // Download satellite tiles with 100km radius (zoom 8-12)
+        totalDownloaded += await _ensureLayerTiles(
+          lat: lat,
+          lng: lng,
+          radiusKm: _offlineCacheRadiusKmSatellite,
+          minZoom: minZoom,
+          maxZoom: maxZoom,
+          layer: MapLayerType.satellite,
         );
-        config.set('offlineMapPreDownloaded', true);
 
-        LogService().log('MapTileService: Offline cache updated ($downloaded tiles)');
+        // Download labels overlays with 100km radius (zoom 8-12)
+        totalDownloaded += await _ensureOverlayTiles(
+          lat: lat,
+          lng: lng,
+          radiusKm: _offlineCacheRadiusKmSatellite,
+          minZoom: minZoom,
+          maxZoom: maxZoom,
+        );
+
+        // Download HIGH-ZOOM tiles for immediate area (zoom 13-18)
+        // This ensures LocationPickerPage (zoom 18) works offline
+        totalDownloaded += await _ensureHighZoomTiles(
+          lat: lat,
+          lng: lng,
+        );
+
+        ConfigService().set('offlineMapPreDownloaded', true);
+        LogService().log('MapTileService: Offline cache updated ($totalDownloaded tiles)');
       } catch (e) {
         LogService().log('MapTileService: Offline cache download failed: $e');
       }
@@ -680,6 +683,282 @@ class MapTileService {
     } finally {
       _offlineDownloadFuture = null;
     }
+  }
+
+  /// Helper: ensure tiles for a specific layer with its own cache tracking
+  Future<int> _ensureLayerTiles({
+    required double lat,
+    required double lng,
+    required double radiusKm,
+    required int minZoom,
+    required int maxZoom,
+    required MapLayerType layer,
+  }) async {
+    final layerName = layer == MapLayerType.satellite ? 'satellite' : 'standard';
+    final configRoot = '${_offlineCacheConfigRoot}_$layerName';
+    final config = ConfigService();
+
+    // Check if cache is still valid for this layer
+    final lastLatValue = config.getNestedValue('$configRoot.centerLat');
+    final lastLonValue = config.getNestedValue('$configRoot.centerLon');
+    final lastRadiusValue = config.getNestedValue('$configRoot.radiusKm');
+    final lastDownloadedRaw = config.getNestedValue('$configRoot.lastDownloaded') as String?;
+
+    final lastLat = lastLatValue is num ? lastLatValue.toDouble() : null;
+    final lastLon = lastLonValue is num ? lastLonValue.toDouble() : null;
+    final lastRadius = lastRadiusValue is num ? lastRadiusValue.toDouble() : null;
+    final lastDownloaded = lastDownloadedRaw != null ? DateTime.tryParse(lastDownloadedRaw) : null;
+
+    final distanceKm = (lastLat != null && lastLon != null)
+        ? _calculateDistanceKm(lat, lng, lastLat, lastLon)
+        : double.infinity;
+    final movedTooFar = distanceKm.isNaN || distanceKm > _offlineCacheMinMoveKm;
+    final radiusOk = (lastRadius ?? 0) >= radiusKm;
+    final cacheFresh = lastDownloaded != null &&
+        DateTime.now().difference(lastDownloaded) <= _offlineCacheMaxAge;
+
+    if (!movedTooFar && radiusOk && cacheFresh) {
+      LogService().log('MapTileService: $layerName cache still valid, skipping');
+      return 0;
+    }
+
+    LogService().log('MapTileService: Downloading $layerName tiles (${radiusKm}km radius)');
+
+    final downloaded = await downloadTilesForRadius(
+      lat: lat,
+      lng: lng,
+      radiusKm: radiusKm,
+      minZoom: minZoom,
+      maxZoom: maxZoom,
+      layers: [layer],
+    );
+
+    // Update config for this layer
+    config.setNestedValue('$configRoot.centerLat', lat);
+    config.setNestedValue('$configRoot.centerLon', lng);
+    config.setNestedValue('$configRoot.radiusKm', radiusKm);
+    config.setNestedValue('$configRoot.lastDownloaded', DateTime.now().toIso8601String());
+
+    return downloaded;
+  }
+
+  /// Helper: ensure overlay tiles (labels, transport) for satellite view
+  Future<int> _ensureOverlayTiles({
+    required double lat,
+    required double lng,
+    required double radiusKm,
+    required int minZoom,
+    required int maxZoom,
+  }) async {
+    final configRoot = '${_offlineCacheConfigRoot}_overlays';
+    final config = ConfigService();
+
+    // Check if overlay cache is still valid
+    final lastLatValue = config.getNestedValue('$configRoot.centerLat');
+    final lastLonValue = config.getNestedValue('$configRoot.centerLon');
+    final lastRadiusValue = config.getNestedValue('$configRoot.radiusKm');
+    final lastDownloadedRaw = config.getNestedValue('$configRoot.lastDownloaded') as String?;
+
+    final lastLat = lastLatValue is num ? lastLatValue.toDouble() : null;
+    final lastLon = lastLonValue is num ? lastLonValue.toDouble() : null;
+    final lastRadius = lastRadiusValue is num ? lastRadiusValue.toDouble() : null;
+    final lastDownloaded = lastDownloadedRaw != null ? DateTime.tryParse(lastDownloadedRaw) : null;
+
+    final distanceKm = (lastLat != null && lastLon != null)
+        ? _calculateDistanceKm(lat, lng, lastLat, lastLon)
+        : double.infinity;
+    final movedTooFar = distanceKm.isNaN || distanceKm > _offlineCacheMinMoveKm;
+    final radiusOk = (lastRadius ?? 0) >= radiusKm;
+    final cacheFresh = lastDownloaded != null &&
+        DateTime.now().difference(lastDownloaded) <= _offlineCacheMaxAge;
+
+    if (!movedTooFar && radiusOk && cacheFresh) {
+      LogService().log('MapTileService: overlay cache still valid, skipping');
+      return 0;
+    }
+
+    LogService().log('MapTileService: Downloading overlay tiles (${radiusKm}km radius)');
+
+    int downloaded = 0;
+
+    // Download labels overlay (place names, boundaries)
+    downloaded += await _downloadOverlayTilesForRadius(
+      lat: lat,
+      lng: lng,
+      radiusKm: radiusKm,
+      minZoom: minZoom,
+      maxZoom: maxZoom,
+      urlTemplate: labelsOnlyUrl,
+      cacheFolder: 'labels',
+    );
+
+    // Download transport labels (road names, route numbers)
+    downloaded += await _downloadOverlayTilesForRadius(
+      lat: lat,
+      lng: lng,
+      radiusKm: radiusKm,
+      minZoom: minZoom,
+      maxZoom: maxZoom,
+      urlTemplate: transportLabelsUrl,
+      cacheFolder: 'transport',
+    );
+
+    // Update config for overlays
+    config.setNestedValue('$configRoot.centerLat', lat);
+    config.setNestedValue('$configRoot.centerLon', lng);
+    config.setNestedValue('$configRoot.radiusKm', radiusKm);
+    config.setNestedValue('$configRoot.lastDownloaded', DateTime.now().toIso8601String());
+
+    return downloaded;
+  }
+
+  /// Ensure high-zoom tiles (13-18) are cached for immediate area
+  /// This is critical for LocationPickerPage which opens at zoom 18
+  Future<int> _ensureHighZoomTiles({
+    required double lat,
+    required double lng,
+  }) async {
+    final configRoot = '${_offlineCacheConfigRoot}_highzoom';
+    final config = ConfigService();
+
+    // Check if high-zoom cache is still valid for this location
+    final lastLatValue = config.getNestedValue('$configRoot.centerLat');
+    final lastLonValue = config.getNestedValue('$configRoot.centerLon');
+    final lastDownloadedRaw = config.getNestedValue('$configRoot.lastDownloaded') as String?;
+
+    final lastLat = lastLatValue is num ? lastLatValue.toDouble() : null;
+    final lastLon = lastLonValue is num ? lastLonValue.toDouble() : null;
+    final lastDownloaded = lastDownloadedRaw != null ? DateTime.tryParse(lastDownloadedRaw) : null;
+
+    // For high-zoom, we need to re-download if moved more than 1km (since radius is only 5km)
+    final distanceKm = (lastLat != null && lastLon != null)
+        ? _calculateDistanceKm(lat, lng, lastLat, lastLon)
+        : double.infinity;
+    final movedTooFar = distanceKm.isNaN || distanceKm > 1.0;
+    final cacheFresh = lastDownloaded != null &&
+        DateTime.now().difference(lastDownloaded) <= _offlineCacheMaxAge;
+
+    if (!movedTooFar && cacheFresh) {
+      LogService().log('MapTileService: high-zoom cache still valid, skipping');
+      return 0;
+    }
+
+    LogService().log('MapTileService: Downloading high-zoom tiles (zoom $_highZoomMinZoom-$_highZoomMaxZoom, ${_highZoomCacheRadiusKm}km radius)');
+
+    int downloaded = 0;
+
+    // Download both standard and satellite at high zoom for the immediate area
+    for (final layer in [MapLayerType.standard, MapLayerType.satellite]) {
+      downloaded += await downloadTilesForRadius(
+        lat: lat,
+        lng: lng,
+        radiusKm: _highZoomCacheRadiusKm,
+        minZoom: _highZoomMinZoom,
+        maxZoom: _highZoomMaxZoom,
+        layers: [layer],
+      );
+    }
+
+    // Also download overlay tiles (labels, transport) at high zoom
+    for (int z = _highZoomMinZoom; z <= _highZoomMaxZoom; z++) {
+      final tiles = _getTilesInRadius(lat, lng, _highZoomCacheRadiusKm, z);
+
+      for (final tile in tiles) {
+        // Labels
+        final labelsPath = '$_tilesPath/cache/labels/$z/${tile.x}/${tile.y}.png';
+        if (!await File(labelsPath).exists()) {
+          try {
+            final url = labelsOnlyUrl
+                .replaceAll('{z}', z.toString())
+                .replaceAll('{x}', tile.x.toString())
+                .replaceAll('{y}', tile.y.toString());
+            final response = await httpClient.get(Uri.parse(url)).timeout(
+              const Duration(seconds: 10),
+            );
+            if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+              await File(labelsPath).parent.create(recursive: true);
+              await File(labelsPath).writeAsBytes(response.bodyBytes);
+              downloaded++;
+            }
+          } catch (_) {}
+        }
+
+        // Transport labels
+        final transportPath = '$_tilesPath/cache/transport/$z/${tile.x}/${tile.y}.png';
+        if (!await File(transportPath).exists()) {
+          try {
+            final url = transportLabelsUrl
+                .replaceAll('{z}', z.toString())
+                .replaceAll('{x}', tile.x.toString())
+                .replaceAll('{y}', tile.y.toString());
+            final response = await httpClient.get(Uri.parse(url)).timeout(
+              const Duration(seconds: 10),
+            );
+            if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+              await File(transportPath).parent.create(recursive: true);
+              await File(transportPath).writeAsBytes(response.bodyBytes);
+              downloaded++;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // Update config for high-zoom cache
+    config.setNestedValue('$configRoot.centerLat', lat);
+    config.setNestedValue('$configRoot.centerLon', lng);
+    config.setNestedValue('$configRoot.lastDownloaded', DateTime.now().toIso8601String());
+
+    LogService().log('MapTileService: High-zoom tiles downloaded: $downloaded');
+    return downloaded;
+  }
+
+  /// Download overlay tiles for a radius (labels, transport, etc.)
+  Future<int> _downloadOverlayTilesForRadius({
+    required double lat,
+    required double lng,
+    required double radiusKm,
+    required int minZoom,
+    required int maxZoom,
+    required String urlTemplate,
+    required String cacheFolder,
+  }) async {
+    if (_tilesPath == null) return 0;
+
+    int downloaded = 0;
+
+    for (int z = minZoom; z <= maxZoom; z++) {
+      final tiles = _getTilesInRadius(lat, lng, radiusKm, z);
+
+      for (final tile in tiles) {
+        final cachePath = '$_tilesPath/cache/$cacheFolder/$z/${tile.x}/${tile.y}.png';
+        final cacheFile = File(cachePath);
+
+        // Skip if already cached
+        if (await cacheFile.exists()) continue;
+
+        try {
+          final url = urlTemplate
+              .replaceAll('{z}', z.toString())
+              .replaceAll('{x}', tile.x.toString())
+              .replaceAll('{y}', tile.y.toString());
+
+          final response = await httpClient.get(Uri.parse(url)).timeout(
+            const Duration(seconds: 10),
+          );
+
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            await cacheFile.parent.create(recursive: true);
+            await cacheFile.writeAsBytes(response.bodyBytes);
+            downloaded++;
+          }
+        } catch (e) {
+          // Skip failed tiles silently
+        }
+      }
+    }
+
+    return downloaded;
   }
 
   /// Pre-download tiles for offline use within a radius
@@ -966,8 +1245,8 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     return false;
   }
 
-  /// Load tile with priority: Cache -> Station (standard only) -> Internet
-  /// Retries failed tiles for up to 2 minutes with exponential backoff
+  /// Load tile with priority: Cache -> Station -> Internet
+  /// Fails fast on network errors for offline operation
   Future<ui.Codec> _loadTileWithFallback(ImageDecoderCallback decode) async {
     final z = coordinates.z.toInt();
     final x = coordinates.x.toInt();
@@ -976,28 +1255,20 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     bool needsNetworkFetch = true;
     Uint8List? tileData;
 
-    // 1. Try file cache first
+    // 1. Try file cache first (ALWAYS check cache before network)
     try {
       final cachePath = _getTileCachePath(z, x, y);
       final cacheFile = File(cachePath);
       if (await cacheFile.exists()) {
         final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
         if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
-          // Cache hit with valid image - try to decode
-          try {
-            needsNetworkFetch = false;
-            LogService().log('TILE [$z/$x/$y] SOURCE: LOCAL_CACHE (${cachedBytes.length} bytes)');
-            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
-            return decode(buffer);
-          } catch (e) {
-            // Cached tile is corrupted, delete it and re-fetch
-            LogService().log('TILE [$z/$x/$y] Cache corrupted, re-fetching');
-            await cacheFile.delete();
-            needsNetworkFetch = true;
-          }
+          // Cache hit with valid image - use it immediately
+          needsNetworkFetch = false;
+          // Don't log every cache hit to reduce log spam
+          final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+          return decode(buffer);
         } else {
           // Invalid cached data, delete it
-          LogService().log('TILE [$z/$x/$y] Invalid cache data, deleting');
           await cacheFile.delete();
         }
       }
@@ -1008,6 +1279,7 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     final allowStation = mapTileService.canUseStation;
     final allowInternet = mapTileService.canUseInternet;
 
+    // If offline and no cache, return transparent immediately
     if (needsNetworkFetch && !allowStation && !allowInternet) {
       final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
       return decode(buffer);
@@ -1019,107 +1291,86 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     }
 
     try {
-      // Retry logic: try for up to 2 minutes with exponential backoff
-      const maxRetryDuration = Duration(minutes: 2);
-      final startTime = DateTime.now();
-      int retryDelay = 2; // Start with 2 seconds
-      bool attemptedNetwork = false;
+      bool networkFailed = false; // Track if network is completely unavailable
 
-      while (tileData == null) {
-        // 2. Try station if available (supports both standard and satellite tiles)
-        String? stationUrl;
-        if (allowStation) {
-          stationUrl = mapTileService.getStationTileUrl(layerType);
-          if (stationUrl != null) {
-            final url = stationUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{x}', x.toString())
-                .replaceAll('{y}', y.toString());
-            LogService().log('TILE [$z/$x/$y] Trying RELAY: $url');
-            try {
-              attemptedNetwork = true;
-              final response = await httpClient
-                  .get(Uri.parse(url))
-                  .timeout(const Duration(seconds: 5));
-
-              if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-                tileData = response.bodyBytes;
-                LogService().log('TILE [$z/$x/$y] SOURCE: RELAY (${tileData.length} bytes)');
-                // Cache the tile for future use
-                await _cacheTile(z, x, y, tileData);
-                break;
-              } else {
-                LogService().log('TILE [$z/$x/$y] Station returned status ${response.statusCode}');
-              }
-            } catch (e) {
-              // Station failed, continue to internet
-              LogService().log('TILE [$z/$x/$y] Station FAILED: $e');
-            }
-          } else {
-            LogService().log('TILE [$z/$x/$y] No station URL available');
-          }
-        }
-
-        // 3. Try direct internet
-        if (allowInternet) {
+      // 2. Try station if available (supports both standard and satellite tiles)
+      if (allowStation && !networkFailed) {
+        final stationUrl = mapTileService.getStationTileUrl(layerType);
+        if (stationUrl != null) {
+          final url = stationUrl
+              .replaceAll('{z}', z.toString())
+              .replaceAll('{x}', x.toString())
+              .replaceAll('{y}', y.toString());
           try {
-            String url;
-            if (layerType == MapLayerType.satellite) {
-              // Esri satellite uses z/y/x order
-              url = MapTileService.satelliteTileUrl
-                  .replaceAll('{z}', z.toString())
-                  .replaceAll('{y}', y.toString())
-                  .replaceAll('{x}', x.toString());
-            } else {
-              // OSM uses z/x/y order
-              url = MapTileService.osmTileUrl
-                  .replaceAll('{z}', z.toString())
-                  .replaceAll('{x}', x.toString())
-                  .replaceAll('{y}', y.toString());
-            }
-            LogService().log('TILE [$z/$x/$y] Trying INTERNET: $url');
-
-            attemptedNetwork = true;
             final response = await httpClient
-                .get(
-                  Uri.parse(url),
-                  headers: {'User-Agent': 'dev.geogram'},
-                )
-                .timeout(const Duration(seconds: 10));
+                .get(Uri.parse(url))
+                .timeout(const Duration(seconds: 5));
 
             if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
               tileData = response.bodyBytes;
-              LogService().log('TILE [$z/$x/$y] SOURCE: INTERNET (${tileData.length} bytes)');
               // Cache the tile for future use
               await _cacheTile(z, x, y, tileData);
-              break;
-            } else {
-              LogService().log('TILE [$z/$x/$y] Internet returned status ${response.statusCode}');
             }
           } catch (e) {
-            // Network failed - will retry if within time limit
-            LogService().log('TILE [$z/$x/$y] Internet FAILED: $e');
+            // Check for DNS/network failures - fail fast
+            final errorStr = e.toString().toLowerCase();
+            if (errorStr.contains('socketexception') ||
+                errorStr.contains('failed host lookup') ||
+                errorStr.contains('network is unreachable') ||
+                errorStr.contains('no address associated')) {
+              networkFailed = true;
+              LogService().log('TILE [$z/$x/$y] Network unavailable, skipping');
+            }
           }
-        } else if (stationUrl == null) {
-          break;
         }
+      }
 
-        // Check if we should retry
-        final elapsed = DateTime.now().difference(startTime);
-        if (elapsed >= maxRetryDuration) {
-          break; // Give up after 2 minutes
+      // 3. Try direct internet if station failed and network seems available
+      if (tileData == null && allowInternet && !networkFailed) {
+        try {
+          String url;
+          if (layerType == MapLayerType.satellite) {
+            // Esri satellite uses z/y/x order
+            url = MapTileService.satelliteTileUrl
+                .replaceAll('{z}', z.toString())
+                .replaceAll('{y}', y.toString())
+                .replaceAll('{x}', x.toString());
+          } else {
+            // OSM uses z/x/y order
+            url = MapTileService.osmTileUrl
+                .replaceAll('{z}', z.toString())
+                .replaceAll('{x}', x.toString())
+                .replaceAll('{y}', y.toString());
+          }
+
+          final response = await httpClient
+              .get(
+                Uri.parse(url),
+                headers: {'User-Agent': 'dev.geogram'},
+              )
+              .timeout(const Duration(seconds: 10));
+
+          if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
+            tileData = response.bodyBytes;
+            // Cache the tile for future use
+            await _cacheTile(z, x, y, tileData);
+          }
+        } catch (e) {
+          // Network failed - don't retry, just fail fast
+          final errorStr = e.toString().toLowerCase();
+          if (errorStr.contains('socketexception') ||
+              errorStr.contains('failed host lookup') ||
+              errorStr.contains('network is unreachable') ||
+              errorStr.contains('no address associated')) {
+            // Network is completely unavailable - notify service
+            LogService().log('TILE [$z/$x/$y] Network unavailable');
+          }
         }
-
-        // Wait before retrying (exponential backoff, max 30 seconds)
-        await Future.delayed(Duration(seconds: retryDelay));
-        retryDelay = (retryDelay * 2).clamp(2, 30);
       }
 
       // Return fetched tile or transparent placeholder on failure
       if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-        if (attemptedNetwork) {
-          mapTileService._recordFailure();
-        }
+        mapTileService._recordFailure();
         // Return transparent placeholder instead of throwing
         final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
         return decode(buffer);

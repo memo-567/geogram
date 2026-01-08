@@ -1,0 +1,46 @@
+{
+  "buildFiles": [
+    "/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/src/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/brito/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/brito/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "whisper::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "whisper",
+      "output": "/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/x86/libwhisper.a"
+    },
+    "whisper_flutter::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "whisper_flutter",
+      "output": "/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/324pr5s6/obj/x86/libwhisper.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/home/brito/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/home/brito/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [
+    "c"
+  ],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}

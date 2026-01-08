@@ -114,6 +114,7 @@
   "recording_failed": "Recording failed",
   "tap_to_start_recording": "Tap Start to begin recording",
   "transcribing_audio": "Transcribing audio...",
+  "transcription_wait_notice": "This can take around 30 seconds. Please be patient.",
   "transcription_failed": "Transcription failed",
   "unknown_error": "Unknown error",
   "up_to_seconds": "Up to {0} seconds",

@@ -1,0 +1,4 @@
+/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/armeabi-v7a/CMakeFiles/whisper_flutter.dir
+/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/armeabi-v7a/CMakeFiles/whisper.dir
+/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/armeabi-v7a/CMakeFiles/edit_cache.dir
+/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/armeabi-v7a/CMakeFiles/rebuild_cache.dir

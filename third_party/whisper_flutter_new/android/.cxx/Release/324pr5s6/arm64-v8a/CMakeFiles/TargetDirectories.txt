@@ -1,0 +1,4 @@
+/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/arm64-v8a/CMakeFiles/whisper_flutter.dir
+/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/arm64-v8a/CMakeFiles/whisper.dir
+/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/arm64-v8a/CMakeFiles/edit_cache.dir
+/home/brito/code/geograms/geogram/third_party/whisper_flutter_new/android/.cxx/Release/324pr5s6/arm64-v8a/CMakeFiles/rebuild_cache.dir

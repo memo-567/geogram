@@ -36,6 +36,8 @@ import '../widgets/voice_recorder_widget.dart';
 import '../services/audio_service.dart';
 import '../services/audio_platform_stub.dart'
     if (dart.library.io) '../services/audio_platform_io.dart';
+import '../services/contact_service.dart';
+import '../models/contact.dart';
 import 'chat_settings_page.dart';
 import 'room_management_page.dart';
 import 'photo_viewer_page.dart';
@@ -584,7 +586,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     LogService().log('DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
 
     if (station != null && station.url.isNotEmpty && cacheKey != null) {
-      unawaited(_fetchRelayRoomsFromStation(cacheKey, station.url));
+      // Await the fetch so we know station online status before displaying
+      // This prevents the UI from "wiggling" as items reorder when status changes
+      await _fetchRelayRoomsFromStation(cacheKey, station.url);
       return;
     }
 
@@ -891,6 +895,98 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         roomId: _selectedStationRoom?.id,
         messageCount: trimmed.length,
       ));
+    }
+
+    // Ensure contacts exist for message authors (async, non-blocking)
+    unawaited(_ensureChatContactsForMessages(trimmed));
+  }
+
+  /// Group name for auto-created chat contacts
+  static const String _chatContactsGroup = 'chat_contacts';
+
+  /// Ensure contacts exist for all message authors in the chat_contacts group
+  Future<void> _ensureChatContactsForMessages(List<StationChatMessage> messages) async {
+    if (messages.isEmpty) return;
+
+    final contactService = ContactService();
+    if (contactService.collectionPath == null) {
+      // Contact service not initialized, skip
+      return;
+    }
+
+    try {
+      // Ensure the chat_contacts group exists
+      await contactService.createGroup(_chatContactsGroup);
+
+      // Load existing contacts for fast lookup
+      final existingSummaries = await contactService.loadContactSummaries();
+      final existingCallsigns = <String>{};
+      if (existingSummaries != null) {
+        for (final summary in existingSummaries) {
+          existingCallsigns.add(summary.callsign.toUpperCase());
+        }
+      }
+
+      // Get current profile to exclude self
+      final currentProfile = _profileService.getProfile();
+      final selfCallsign = currentProfile.callsign.toUpperCase();
+
+      // Collect unique authors with npub that don't exist yet
+      final authorsToCreate = <String, String?>{}; // callsign -> npub
+      for (final message in messages) {
+        final callsign = message.callsign.toUpperCase();
+        // Skip self and already existing contacts
+        if (callsign == selfCallsign || existingCallsigns.contains(callsign)) {
+          continue;
+        }
+        // Only add if not already in our list to create
+        if (!authorsToCreate.containsKey(callsign)) {
+          authorsToCreate[callsign] = message.npub;
+        }
+      }
+
+      if (authorsToCreate.isEmpty) return;
+
+      LogService().log('Creating ${authorsToCreate.length} chat contacts');
+
+      // Create contacts for new authors
+      final now = DateTime.now();
+      final timestamp = '${now.year.toString().padLeft(4, '0')}-'
+          '${now.month.toString().padLeft(2, '0')}-'
+          '${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:'
+          '${now.minute.toString().padLeft(2, '0')}_'
+          '${now.second.toString().padLeft(2, '0')}';
+
+      for (final entry in authorsToCreate.entries) {
+        final callsign = entry.key;
+        final npub = entry.value;
+
+        final contact = Contact(
+          displayName: callsign, // User can customize later
+          callsign: callsign,
+          npub: npub,
+          created: timestamp,
+          firstSeen: timestamp,
+          historyEntries: [
+            ContactHistoryEntry(
+              author: 'SYSTEM',
+              timestamp: timestamp,
+              content: 'Auto-created from chat room',
+              type: ContactHistoryEntryType.system,
+            ),
+          ],
+        );
+
+        final error = await contactService.saveContact(contact, groupPath: _chatContactsGroup);
+        if (error != null) {
+          LogService().log('Failed to create chat contact $callsign: $error');
+        } else {
+          LogService().log('Created chat contact: $callsign');
+        }
+      }
+    } catch (e) {
+      LogService().log('Error ensuring chat contacts: $e');
     }
   }
 
@@ -2577,17 +2673,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           if (!anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
           // Then external devices
           ...stationSection,
-          if (_loadingRelayRooms)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Center(
-                child: SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            ),
           ...cachedDevicesSection,
           // If devices are online, show local channels last
           if (anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
@@ -2987,58 +3072,56 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ),
           // Room list
           Expanded(
-            child: _loadingRelayRooms
-                ? const Center(child: CircularProgressIndicator())
-                : _stationRooms.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.forum_outlined,
-                              size: 64,
-                              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _i18n.t('no_rooms_found'),
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
+            child: _stationRooms.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.forum_outlined,
+                          size: 64,
+                          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
                         ),
-                      )
-                    : ListView.builder(
-                        itemCount: _stationRooms.length,
-                        itemBuilder: (context, index) {
-                          final room = _stationRooms[index];
-                          final unreadCount = _unreadCounts[room.id] ?? 0;
-                          return ListTile(
-                            leading: Badge(
-                              isLabelVisible: unreadCount > 0,
-                              label: Text('$unreadCount'),
-                              child: CircleAvatar(
-                                backgroundColor: theme.colorScheme.primaryContainer,
-                                child: Icon(
-                                  Icons.forum,
-                                  color: theme.colorScheme.onPrimaryContainer,
-                                  size: 20,
-                                ),
-                              ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _i18n.t('no_rooms_found'),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _stationRooms.length,
+                    itemBuilder: (context, index) {
+                      final room = _stationRooms[index];
+                      final unreadCount = _unreadCounts[room.id] ?? 0;
+                      return ListTile(
+                        leading: Badge(
+                          isLabelVisible: unreadCount > 0,
+                          label: Text('$unreadCount'),
+                          child: CircleAvatar(
+                            backgroundColor: theme.colorScheme.primaryContainer,
+                            child: Icon(
+                              Icons.forum,
+                              color: theme.colorScheme.onPrimaryContainer,
+                              size: 20,
                             ),
-                            title: Text(room.name),
-                            subtitle: room.description.isNotEmpty
-                                ? Text(
-                                    room.description,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  )
-                                : Text('${room.messageCount} ${_i18n.t("messages")}'),
-                            onTap: () => _selectRelayRoom(room),
-                          );
-                        },
-                      ),
+                          ),
+                        ),
+                        title: Text(room.name),
+                        subtitle: room.description.isNotEmpty
+                            ? Text(
+                                room.description,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : Text('${room.messageCount} ${_i18n.t("messages")}'),
+                        onTap: () => _selectRelayRoom(room),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

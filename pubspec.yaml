@@ -176,3 +176,5 @@ flutter:
 dependency_overrides:
   flutter_webrtc:
     path: third_party/flutter_webrtc
+  whisper_flutter_new:
+    path: third_party/whisper_flutter_new

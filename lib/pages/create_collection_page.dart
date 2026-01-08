@@ -66,12 +66,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     // _CollectionTypeInfo('market', Icons.storefront),  // Hidden: not ready
     _CollectionTypeInfo('groups', Icons.groups),
     _CollectionTypeInfo('console', Icons.terminal),
+    _CollectionTypeInfo('tracker', Icons.track_changes),
   ];
 
   // Single-instance types (all except 'files')
   static const Set<String> _singleInstanceTypes = {
     'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log', 'console'
+    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log', 'console', 'tracker'
   };
 
   @override

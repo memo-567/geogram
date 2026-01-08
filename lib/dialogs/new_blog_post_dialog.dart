@@ -11,6 +11,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/blog_post.dart';
 import '../services/i18n_service.dart';
 import '../pages/location_picker_page.dart';
+import '../widgets/transcribe_button_widget.dart';
 
 /// Alias for backwards compatibility
 typedef BlogPostPage = NewBlogPostDialog;
@@ -560,6 +561,21 @@ class _NewBlogPostDialogState extends State<NewBlogPostDialog> {
                 }
                 return null;
               },
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TranscribeButtonWidget(
+                i18n: _i18n,
+                iconSize: 22,
+                onTranscribed: (text) {
+                  if (_contentController.text.isEmpty) {
+                    _contentController.text = text;
+                  } else {
+                    _contentController.text += ' $text';
+                  }
+                },
+              ),
             ),
             // Add some padding at the bottom for the bottom bar
             const SizedBox(height: 80),

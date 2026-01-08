@@ -20,6 +20,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'map_tile_service.dart';
 
 /// User's current location with metadata
 class UserLocation {
@@ -313,6 +314,9 @@ class UserLocationService extends ChangeNotifier {
     );
 
     LogService().log('UserLocationService: Location updated to $lat, $lon (source: $source)');
+    if (source == 'gps' && !kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      unawaited(MapTileService().ensureOfflineTiles(lat: lat, lng: lon));
+    }
     notifyListeners();
   }
 

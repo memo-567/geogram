@@ -1,0 +1,547 @@
+I want to improve the performance of Whisper on mobile so that it be super fast converting voice into text
+  for the end users. At the moment a translation takes 30 seconds and I'd like to be at most 5 seconds. The
+  implementation is documented at /home/brito/code/geograms/geogram/docs/voice.md and a pre-loading when the
+  app starts was added but for some reason the result is always the same. Please do a deep investigation on the
+  topic let's test if your implementation solves this issue
+
+
+• I'm gathering initial context by reading docs/voice.md to inform a detailed plan for the investigation and
+  performance improvement tasks.
+
+• Explored
+  └ List ls
+    Read voice.md
+
+• I'm noting that initial load times are unexpectedly long despite preloading, so I'll inspect relevant code
+  like the whisper model manager to understand the cause before making a plan.
+
+• Ran rg "whisper" lib -g"*.dart"
+  └ Setting up EMSDK environment (suppress these messages with EMSDK_QUIET=1)
+    Setting environment variables:
+    … +48 lines
+    lib/pages/bot_settings_page.dart:      title: Text(_i18n.t('bot_whisper_model')),
+    lib/pages/bot_settings_page.dart:        title: Text(_i18n.t('bot_whisper_model')),
+
+• Explored
+  └ Read speech_to_text_service_native.dart
+
+• I determined the implementation requires a whisper model manager component for managing the whisper model
+  interactions.
+
+• Explored
+  └ Read whisper_model_manager.dart, transcription_dialog.dart
+
+• I'm evaluating whether to add a Transcribe button widget for each architecture but find it unnecessary;
+  focusing on implementing a main preload instead.
+
+• Explored
+  └ Read main.dart
+
+• I'm checking the transcribe button widget for where the transcribe service is invoked to understand its
+  integration and context.
+
+• Explored
+  └ Read transcribe_button_widget.dart
+
+• I'm investigating if the runtime uses a different speech-to-text service instead of the native one by opening
+  the generic speech-to-text service file.
+
+• Explored
+  └ Read speech_to_text_service.dart, speech_to_text_service_stub.dart
+
+• I'm confirming that preloading hasn't improved load times and planning to test optimized implementations like
+  using a smaller model and caching; next, I'll review model defaults and library parameters for threading or
+  performance options.
+
+• Explored
+  └ Read whisper_model_info.dart
+
+• I'm verifying whether the preload function is actually called despite being defined, to understand why load
+  time remains high even with preload.
+
+• Explored
+  └ Search _startWhisperPreload
+    Read main.dart
+
+• The preload runs after app start but doesn't reduce the 30-second initial load, likely because loading still
+  happens on first use and may not be properly awaited. Achieving 5-second loads might require switching to
+  smaller or quantized models or leveraging different package features; next, I'll check package docs and
+  versions to explore preload improvements.
+
+• Explored
+  └ Search whisper_flutter_new in pubspec*
+    Read pubspec.lock
+
+• I’m examining whether the model loads repeatedly on each transcribe call or if preloading via loadModel is
+  effective; the flow suggests the preload sets a loaded model flag, but actual loading timing and repeated
+  loads need confirmation from the package API and code.
+
+• The preload flow creates a completer and loads the model but unloads it right after, which may cause
+  concurrency or timing issues since the singleton service uses the same instance. The 30-second delay likely
+  stems from preloading not finishing before first transcription, possibly because model download isn't detected
+  completed or app initialization delays start of preload. Considering switching to a smaller quantized model
+  could reduce load time, but support and availability need confirmation. Pre-initializing and caching helps but
+  depends on preload finishing well before first use.
+
+• The user wants transcription under 5 seconds, but initial model loading takes 20-30 seconds with the base
+  model. Considering a two-tier approach with a tiny model for quick initial transcription while loading the
+  base model in the background aligns with documented plans and may meet this goal. Instrumenting detailed
+  timing for loading versus inference will clarify where delays occur and guide optimizations.
+
+• The preloading likely starts too late, after app launch and some heavy tasks, causing the long wait; also,
+  model download checks may fail due to size mismatches preventing preload, forcing repeated downloads or loads
+  at first use.
+
+• The 30-second delay likely comes from waiting on model preloading before recording starts, not from
+  transcription itself which is fast once loaded. Reducing this to 5 seconds may require a faster model or a
+  redesigned loading approach. Testing is limited due to native dependencies restricting environment support, so
+  instrumentation or integration tests on supported platforms might be necessary.
+
+• I'm considering a two-stage load: start with tiny model for speed, then swap to base model for accuracy, but
+  base model load time (30s) may be too slow. Using ggml-base.en or a quantized base model (74MB) could reduce
+  load size and improve startup, but support for these variants in the plugin needs verification by inspecting
+  whisper_flutter_new source.
+
+• Ran python - <<'PY'
+  │ import importlib.util, sys, pathlib, json, os
+  │ import pkgutil
+  │ … +5 lines
+  └ Setting up EMSDK environment (suppress these messages with EMSDK_QUIET=1)
+    Setting environment variables:
+    … +2 lines
+    sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+    /bin/bash: line 1: python: command not found
+
+• I'm considering verifying the Python executable path and trying "python3" if "python" is not found to ensure
+  compatibility across environments.
+
+• Ran python3 - <<'PY'
+  │ print('hello')
+  │ PY
+  └ Setting up EMSDK environment (suppress these messages with EMSDK_QUIET=1)
+    Setting environment variables:
+    … +2 lines
+    sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+    hello
+
+• Explored
+  └ List whisper_flutter_new-1.0.1
+    Read whisper_flutter_new.dart
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to
+report the issue.
+
+
+› don't change models, I just want this model to be used
+
+
+• Preloading creates the Whisper instance but likely doesn't load the model into memory until a transcribe call
+  happens, so preload itself doesn't reduce first transcribe latency; warming with a silent transcribe may be
+  needed to really load the model upfront.
+
+• Explored
+  └ Read main.cpp
+
+• The current plugin loads and frees the model on every transcription, causing 20–30 second delays, so
+  persistent model context caching is needed. Patching or vendoring the plugin to keep the model loaded
+  statically is possible but requires native code changes and rebuilds, which is nontrivial; a local patched
+  version with a keep-alive context would be ideal.
+
+• I'm designing plugin changes to keep the model context loaded persistently across requests, allowing warm-up
+  at app start to reduce per-transcription load times from 30 to under 5 seconds by avoiding repeated model
+  loading. This involves caching a static context pointer and reloading only if the model changes, with care to
+  free memory then and maintain thread safety assumptions.
+
+• I’m planning to add a new preloadModel method to the native plugin to load and cache the Whisper context at
+  startup without audio input, enabling a faster first transcript. This requires extending the native main.cpp
+  to manage a static context pointer and updating the Dart package to expose the new method via a new request
+  type. Next, I’ll inspect the Dart DTOs to integrate this request.
+
+• Explored
+  └ Read whisper_dto.dart, _models.dart, request_bean.dart, response_bean.dart
+
+• I'm outlining modifying the plugin to keep the model context persistent by storing it statically and avoiding
+  repeated frees, enabling fast subsequent transcriptions without changing the Dart API. To improve first-call
+  latency, I'll implement a warm-up step at app start that transcribes a short silent audio snippet to preload
+  the model in the background.
+
+• I'm clarifying that generating a short silent WAV file for preload is feasible via temp files with correct
+  format and sampling, ensuring native FFI access. To patch the plugin safely, it's better to vendor it locally
+  with dependency overrides rather than editing .pub-cache, keeping build reproducible and changes trackable.
+
+• The core issue is that the plugin reloads the model on every call, causing slow transcriptions. Fixing this
+  requires caching the model context in native code, which means modifying and rebuilding the plugin.
+  Patching .pub-cache isn't reliable for reproducibility, so the best approach is to vendor a modified copy of
+  the plugin within the repo and override the dependency path to ensure consistent builds despite increased repo
+  size.
+
+• Modifying .pub-cache directly is ephemeral and untracked, so I'll vendor the plugin by copying it into the
+  repo and overriding the dependency path, considering tools like rsync for efficient syncing without user
+  prompts.
+
+• Explored
+  └ List third_party
+
+• Considering patching the plugin source to add a global reusable context with thread-safe lazy initialization
+  to avoid reloading the model on every transcription call, improving performance and enabling a deep fix
+  instead of app-level workarounds.
+
+• Locking the entire function avoids concurrency issues even if it may block calls; warm-up can use a short
+  silent audio via transcribe call to avoid adding new request types or Dart changes.
+
+• Decided to vendor the plugin into third_party/whisper_flutter_new with dependency override to ensure
+  reproducibility of context caching fix. Next steps include copying plugin files, applying minimal code
+  modifications, updating the service preload logic with silent audio warm-up, and documenting the changes.
+
+• The repo uses a third_party/ folder for dependencies with local modifications, so adding third_party/
+  whisper_flutter_new fits the pattern. I'll copy the entire plugin folder to preserve necessary Dart and native
+  code, confirming plugin structure via its pubspec.yaml.
+
+• Explored
+  └ Read pubspec.yaml
+
+• I'm outlining a multi-step approach to replicate the plugin inside the repo via rsync into third_party/
+  whisper_flutter_new, override its dependency path in pubspec.yaml, and patch its source for needed concurrency
+  support while respecting sandbox write restrictions.
+
+• Considering adding a new request type to preload models that locks context and loads it without transcribing,
+  but this requires changes in the plugin and Dart side since the existing private request method expects a
+  typed DTO. To avoid complexity, preloading could be simulated by a silent transcribe call instead.
+
+• I'm planning to add a private warm-up method that creates a simple 16-bit PCM silent WAV in a temp directory
+  and calls transcribe once during preload to cut initial latency; this requires adding path_provider and path
+  for file handling and manually writing WAV headers and data.
+
+• The audio file is built with correct WAV headers using little-endian ByteData and BytesBuilder, requiring
+  dart:typed_data and path_provider imports. The model warmup must run once after confirming the model is
+  loaded, using a minimal transcribe call with single-threaded config to limit CPU, wrapped in try/catch for
+  safety.
+
+• I'm considering adding a set to track warmed models so warm-up runs once per model after loading, ensuring
+  faster first real transcription. The preload will await both model loading and warm-up, making startup longer
+  but readying the model ahead; this may cause waits if users open the dialog early, but improves readiness and
+  caching. Next, I'll implement this tracking and adjust the preload flow to reflect these changes.
+
+• I'm preparing to use a plan tool to outline steps including copying the plugin as a dependency, modifying it
+  to cache the model, implementing warm-up in the service, and updating documentation for preloading behavior.
+
+• Updated Plan
+  └ □ Copy whisper_flutter_new into repo and wire dependency override to use local patched plugin
+    □ Patch plugin native code to cache model context instead of reloading each transcription
+    □ Warm up Whisper model at startup via short silent transcription to make first use fast
+    □ Document investigation findings and new preload behavior
+
+• I'm preparing to copy the plugin to third_party/whisper_flutter_new using rsync with archive mode, ensuring
+  the target directory doesn't already exist.
+
+• Ran rsync -a ~/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/ third_party/whisper_flutter_new
+  └ Setting up EMSDK environment (suppress these messages with EMSDK_QUIET=1)
+    Setting environment variables:
+    PATH = /home/brito/dev/emsdk:/home/brito/dev/emsdk/upstream/emscripten:/home/brito/dev/emsdk/
+    node/20.18.0_64bit/bin:/tmp/.tmpZYg4TI:/usr/lib/apache-netbeans/jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/
+    sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+
+• Updated Plan
+  └ Copied upstream plugin into third_party/whisper_flutter_new for local patching.
+    ✔ Copy whisper_flutter_new into repo and wire dependency override to use local patched plugin
+    □ Patch plugin native code to cache model context instead of reloading each transcription
+    □ Warm up Whisper model at startup via short silent transcription to make first use fast
+    □ Document investigation findings and new preload behavior
+
+• Explored
+  └ Search dependency_overrides in pubspec.yaml
+    Read pubspec.yaml
+
+• Edited pubspec.yaml (+2 -0)
+    178      path: third_party/flutter_webrtc
+    179 +  whisper_flutter_new:
+    180 +    path: third_party/whisper_flutter_new
+
+• Updated Plan
+  └ Dependency override now points to third_party/whisper_flutter_new.
+    ✔ Copy whisper_flutter_new into repo and wire dependency override to use local patched plugin
+    □ Patch plugin native code to cache model context instead of reloading each transcription
+    □ Warm up Whisper model at startup via short silent transcription to make first use fast
+    □ Document investigation findings and new preload behavior
+
+• I'm focusing on editing the native code in third_party/whisper_flutter_new/src/main.cpp and reviewing the
+  relevant section to apply the patch.
+
+• Explored
+  └ Read main.cpp
+
+• I'm preparing to patch the code to add a static mutex and caching for the whisper context, guarding the entire
+  transcribe function to ensure thread safety by holding a lock during both context loading and inference, and
+  adjusting jsonResult error handling accordingly.
+
+• Edited third_party/whisper_flutter_new/src/main.cpp (+34 -5)
+     13  #include <stdio.h>
+     14 +#include <mutex>
+     15  #include "json/json.hpp"
+        ⋮
+     18
+     19 +// Cache the whisper context so we don't reload the model on every request
+     20 +static whisper_context *g_ctx = nullptr;
+     21 +static std::string g_model_path = "";
+     22 +static std::mutex g_ctx_mutex;
+     23 +
+     24  char *jsonToChar(json jsonData) noexcept
+        ⋮
+     81
+     82 +/// Load and cache whisper context for a given model path.
+     83 +/// Subsequent calls with the same model reuse the already-loaded context.
+     84 +static whisper_context *get_or_load_context(const std::string &model_path, json &jsonResult) {
+     85 +    if (g_ctx != nullptr && g_model_path == model_path) {
+     86 +        return g_ctx;
+     87 +    }
+     88 +
+     89 +    if (g_ctx != nullptr) {
+     90 +        whisper_free(g_ctx);
+     91 +        g_ctx = nullptr;
+     92 +    }
+     93 +
+     94 +    g_model_path = model_path;
+     95 +    g_ctx = whisper_init_from_file(model_path.c_str());
+     96 +    if (g_ctx == nullptr) {
+     97 +        jsonResult["@type"] = "error";
+     98 +        jsonResult["message"] = "failed to load model";
+     99 +    }
+    100 +    return g_ctx;
+    101 +}
+    102 +
+    103  json transcribe(json jsonBody) noexcept
+        ⋮
+    130
+    104 -    // whisper init
+    105 -    struct whisper_context *ctx = whisper_init_from_file(params.model.c_str());
+    131 +    // whisper init (cached between calls)
+    132 +    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    133 +    struct whisper_context *ctx = get_or_load_context(params.model, jsonResult);
+    134 +    if (ctx == nullptr) {
+    135 +        return jsonResult;
+    136 +    }
+    137      std::string text_result = "";
+        ⋮
+    268      jsonResult["text"] = text_result;
+    238 -
+    239 -    whisper_free(ctx);
+    269      return jsonResult;
+        ⋮
+    312      }
+    284 -}
+    313 +}
+
+• The transcription function holds the lock for its entire duration, ensuring thread safety but blocking
+  concurrent transcriptions. The error message for failed context loading is appropriately set to indicate model
+  load failure, and global context freeing is not required at exit. Step 2 adjustments and reliance on standard
+  mutex include are accepted, marking step 2 complete.
+
+• Updated Plan
+  └ Patched native plugin to keep a cached whisper context per model so model isn't reloaded each call.
+    ✔ Copy whisper_flutter_new into repo and wire dependency override to use local patched plugin
+    ✔ Patch plugin native code to cache model context instead of reloading each transcription
+    □ Warm up Whisper model at startup via short silent transcription to make first use fast
+    □ Document investigation findings and new preload behavior
+
+• Planning to add a set to track warmed-up models and implement a private method to perform warm-up by creating
+  a silent WAV within the speech-to-text service, with possible timing logs for measurement.
+
+• Keeping loadModel fast is important to avoid UI blocking, so warming up the model should happen after load
+  returns—likely triggered separately to avoid delaying dialog startup and recording initiation.
+
+• The warm-up should complete before signaling preload readiness to ensure the model is ready when first used,
+  but this may cause early users to wait up to 20 seconds. Starting warm-up asynchronously after loadModel
+  without blocking UI might trade off immediate responsiveness for later readiness, so adjusting preloadModel to
+  await warm-up offers clearer readiness guarantees at the cost of potential early wait.
+
+• The main delay is from the plugin loading the model at first transcription, not from loadModel. To avoid
+  blocking UI and ensure fast first transcription, warm-up should occur during app preload by calling and
+  awaiting it after loadModel. This matches user expectations and limits warm-up to the preload path only.
+
+• I'm preparing to track warmed-up models with a set and adjust preload logic to complete even if warm-up fails,
+  logging issues but preventing indefinite waiting. Next, I'll implement imports and patch the preloadModel
+  method accordingly.
+
+• Edited lib/bot/services/speech_to_text_service_native.dart (+4 -0)
+      7  import 'dart:io';
+      8 +import 'dart:typed_data';
+      9
+     10  import 'package:flutter/foundation.dart';
+     11 +import 'package:path/path.dart' as p;
+     12 +import 'package:path_provider/path_provider.dart';
+     13  import 'package:whisper_flutter_new/whisper_flutter_new.dart';
+        ⋮
+     99    Completer<bool>? _preloadCompleter;
+    100 +  final Set<String> _warmedModels = {};
+    101
+
+• I'm inserting an awaited warm-up call after loading the model in preloadModel to ensure the model is ready
+  before completing preload, keeping _whisper non-null after loadModel. I'll define the warm-up and silent wav
+  generator methods near the file's end next.
+
+• Edited lib/bot/services/speech_to_text_service_native.dart (+3 -0)
+    145        final success = await loadModel(modelId);
+    146 +      if (success) {
+    147 +        await _warmupModel(modelId);
+    148 +      }
+    149        stopwatch.stop();
+
+• Planning _warmupModel to check model state, create a temporary silent WAV, transcribe it for warmup, then
+  clean up the file; aiming to optimize temporary path usage and add a _createSilentWav method for generating
+  the silent audio.
+
+• Considering tracking warming models separately to prevent concurrent warmup calls, planning to add an
+  _warmupInProgress set to guard start/end of warmup distinctly from _warmedModels that mark completed warmups.
+
+• I'm adjusting warming to only add models to the warmed set on success, allowing retries on failure, and
+  considering but ultimately skipping a separate warming-in-progress set to keep it simple. Next, I'll ensure
+  the warm-up function fits cleanly after loadModel with proper null checks for the whisper instance.
+
+• Edited lib/bot/services/speech_to_text_service_native.dart (+87 -0)
+    238
+    239 +  /// Generate and transcribe a short silent WAV to fully load the model into memory.
+    240 +  Future<void> _warmupModel(String modelId) async {
+    241 +    if (_whisper == null || _loadedModelId != modelId) {
+    242 +      return;
+    243 +    }
+    244 +    if (_warmedModels.contains(modelId)) {
+    245 +      return;
+    246 +    }
+    247 +
+    248 +    final tempDir = await getTemporaryDirectory();
+    249 +    final warmupPath = p.join(tempDir.path, 'whisper_warmup.wav');
+    250 +
+    251 +    try {
+    252 +      await _createSilentWav(warmupPath);
+    253 +      final warmupStopwatch = Stopwatch()..start();
+    254 +
+    255 +      await _whisper!.transcribe(
+    256 +        transcribeRequest: TranscribeRequest(
+    257 +          audio: warmupPath,
+    258 +          isTranslate: false,
+    259 +          isNoTimestamps: true,
+    260 +          splitOnWord: false,
+    261 +          threads: 1,
+    262 +        ),
+    263 +      );
+    264 +
+    265 +      warmupStopwatch.stop();
+    266 +      _warmedModels.add(modelId);
+    267 +      LogService().log(
+    268 +          'SpeechToTextService: Warmed up model $modelId in ${warmupStopwatch.elapsedMilliseconds}ms');
+    269 +    } catch (e) {
+    270 +      _warmedModels.remove(modelId);
+    271 +      LogService().log('SpeechToTextService: Warmup failed for $modelId: $e');
+    272 +    } finally {
+    273 +      try {
+    274 +        final file = File(warmupPath);
+    275 +        if (await file.exists()) {
+    276 +          await file.delete();
+    277 +        }
+    278 +      } catch (_) {
+    279 +        // Ignore cleanup errors
+    280 +      }
+    281 +    }
+    282 +  }
+    283 +
+    284 +  Future<void> _createSilentWav(String path) async {
+    285 +    const sampleRate = 16000;
+    286 +    const channels = 1;
+    287 +    const bitsPerSample = 16;
+    288 +    const durationMs = 400;
+    289 +    final totalSamples = (sampleRate * durationMs) ~/ 1000;
+    290 +    final bytesPerSample = bitsPerSample ~/ 8;
+    291 +    final dataSize = totalSamples * channels * bytesPerSample;
+    292 +    final byteRate = sampleRate * channels * bytesPerSample;
+    293 +    final blockAlign = channels * bytesPerSample;
+    294 +
+    295 +    final builder = BytesBuilder();
+    296 +    void writeString(String value) => builder.add(value.codeUnits);
+    297 +    void writeUint32(int value) {
+    298 +      final buffer = ByteData(4)..setUint32(0, value, Endian.little);
+    299 +      builder.add(buffer.buffer.asUint8List());
+    300 +    }
+    301 +
+    302 +    void writeUint16(int value) {
+    303 +      final buffer = ByteData(2)..setUint16(0, value, Endian.little);
+    304 +      builder.add(buffer.buffer.asUint8List());
+    305 +    }
+    306 +
+    307 +    writeString('RIFF');
+    308 +    writeUint32(36 + dataSize);
+    309 +    writeString('WAVE');
+    310 +    writeString('fmt ');
+    311 +    writeUint32(16);
+    312 +    writeUint16(1); // PCM
+    313 +    writeUint16(channels);
+    314 +    writeUint32(sampleRate);
+    315 +    writeUint32(byteRate);
+    316 +    writeUint16(blockAlign);
+    317 +    writeUint16(bitsPerSample);
+    318 +    writeString('data');
+    319 +    writeUint32(dataSize);
+    320 +    builder.add(Uint8List(dataSize)); // Silence
+    321 +
+    322 +    final file = File(path);
+    323 +    await file.writeAsBytes(builder.toBytes(), flush: true);
+    324 +  }
+    325 +
+    326    /// Transcribe an audio file to text
+
+• The warm-up method tracks warmed models to avoid repeat work, and the plugin caches native context per model
+  path, enabling fast subsequent transcriptions. I need to ensure warm-up is triggered outside loadModel to
+  avoid UI delays and confirm BytesBuilder usage for silent WAV header creation without the 'fmt ' chunk.
+
+• The current preload skips if the model isn't downloaded, causing a slow first transcription after download. To
+  fix this, warm-up should be triggered after download completes—likely in the model download method—but we must
+  balance triggering warm-up without blocking the user's UI or recording start unexpectedly.
+
+• The key insight is that warming up the model right after download—before recording—shifts the unavoidable 20s
+  delay to a more predictable point, ensuring transcription latency stays under 5s after recording. This likely
+  improves user experience despite delaying recording start, but requires a new warm-up method since current
+  preload guards prevent re-warming after download.
+
+• Exploring replacing loadModel with preloadModel after download to include warm-up before recording, accepting
+  a possible 20s block upfront rather than during recording; this might delay dialog start but avoid mid-
+  recording lag and could be acceptable since startup preload handles later runs.
+
+• I'm planning to trigger warm-up automatically right after model download by replacing the post-download
+  loadModel call with preloadModel, then awaiting a separate waitForPreload to confirm readiness before starting
+  recording, ensuring first-time processing is fast without redundant loading.
+
+• Considering adding a separate processing state after model download to show a spinner during the 20-second
+  warm-up, since keeping "Downloading..." UI risks confusing the user; alternatively, warm-up could run in
+  background or at startup to avoid blocking recording start.
+
+• The approach is to run model warm-up immediately after download completes and block recording until warm-up
+  finishes, showing the existing progress indicator state to users. This prevents long delays during first
+  transcription by ensuring readiness before recording starts.
+
+• Planning to set state to checkingModel after download completes to show a "Checking speech model" spinner
+  during preload, improving UX by avoiding a static 100% download indicator before recording starts. The change
+  involves awaiting preloadModel and waitForPreload in onDone, updating state accordingly, and handling possible
+  errors gracefully.
+
+• Considering wrapping the onDone callback in try-catch to handle potential errors during preload completion.
+  Planning to adjust preloadModel so it completes with a boolean reflecting both load success and actual warm-up
+  completion by checking warmedModels after warm-up.
+
+• I'm adjusting _warmedModels to update only on successful warm-ups and considering logging failures. I'll patch
+  preloadModel to use a ready boolean and confirm that unloading doesn't prematurely clear warm-up states since
+  plugin contexts persist until model changes.
+
+• Edited lib/bot/services/speech_to_text_service_native.dart (+3 -2)
+    149        stopwatch.stop();
+    150 +      final ready = success && _warmedModels.contains(modelId);
+    151        LogService().log(
+    151 -          'SpeechToTextService: Preload completed in ${stopwatch.elapsedMilliseconds}ms');
+    152 -      _preloadCompleter!.complete(success);
+    152 +          'SpeechToTextService: Preload completed in ${stopwatch.elapsedMilliseconds}ms (ready: $ready)
+         ');
+    153 +      _preloadCompleter!.complete(ready);
+    154      } catch (e) {
+
+■ You've hit your usage limit. To get more access now, send a request to your admin or try again at Jan 8th,
+2026 9:42 AM.
+
+

@@ -141,9 +141,8 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     // Initialize tile caching
     await _mapTileService.initialize();
     // Trigger rebuild to ensure GeogramTileProvider is used
-    if (mounted) {
-      setState(() {});
-    }
+    if (!mounted) return;
+    setState(() {});
 
     // Try to load saved map state first
     final savedLat = _configService.getNestedValue('mapState.latitude') as double?;
@@ -168,6 +167,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
 
     if (savedLat != null && savedLon != null) {
       // Restore saved position as initial view
+      if (!mounted) return;
       setState(() {
         _centerPosition = LatLng(savedLat, savedLon);
         _currentZoom = savedZoom ?? _getZoomForRadius(_radiusKm);
@@ -184,6 +184,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       // Get user's saved location from profile
       final userLocation = _mapsService.getUserLocation();
       if (userLocation != null) {
+        if (!mounted) return;
         setState(() {
           _centerPosition = LatLng(userLocation.$1, userLocation.$2);
           _currentZoom = _getZoomForRadius(_radiusKm);
@@ -191,6 +192,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         _awaitingProfileLocation = false;
       } else {
         // First time - set temporary default and auto-detect location
+        if (!mounted) return;
         setState(() {
           _centerPosition = const LatLng(20, 0);
           _currentZoom = 3.0;
@@ -202,7 +204,9 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       }
     }
 
+    if (!mounted) return;
     await _loadItems();
+    if (!mounted) return;
     _ensureOfflineTiles();
   }
 
@@ -236,6 +240,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     // Only show loading indicator on first load, not auto-refresh
     final isFirstLoad = _allItems.isEmpty;
     if (isFirstLoad) {
+      if (!mounted) return;
       setState(() => _isLoading = true);
     }
 
@@ -257,6 +262,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         visibleTypes: Set.from(MapItemType.values),
         forceRefresh: forceRefresh,
       );
+      if (!mounted) return;
 
       // Check if items have actually changed before updating state
       final hasChanges = _hasItemsChanged(items);
@@ -265,6 +271,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         final grouped = _mapsService.groupByType(items);
         final sortedTypes = _mapsService.getTypesSortedByCount(grouped);
 
+        if (!mounted) return;
         setState(() {
           _allItems = items;
           _groupedItems = grouped;
@@ -275,6 +282,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
         LogService().log('MapsBrowserPage: Loaded ${items.length} items (updated)');
       } else {
         if (isFirstLoad) {
+          if (!mounted) return;
           setState(() => _isLoading = false);
         }
         LogService().log('MapsBrowserPage: Auto-refresh - no changes detected');
@@ -282,6 +290,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     } catch (e) {
       LogService().log('MapsBrowserPage: Error loading items: $e');
       if (isFirstLoad) {
+        if (!mounted) return;
         setState(() => _isLoading = false);
       }
     }
@@ -592,6 +601,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   /// Auto-detect location silently on first load (no error messages)
   Future<void> _autoDetectLocationSilently() async {
     LogService().log('MapsBrowserPage: Auto-detecting initial location...');
+    if (!mounted) return;
     setState(() => _isDetectingLocation = true);
 
     try {
@@ -728,6 +738,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
 
   /// Update the map center and reload items
   void _updateLocationAndReload(double lat, double lon, String successMessageKey) {
+    if (!mounted) return;
     setState(() {
       _centerPosition = LatLng(lat, lon);
       _currentZoom = _getZoomForRadius(_radiusKm);

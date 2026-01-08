@@ -1,0 +1,69 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Release-f5ebdc15457944623624.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.6.0"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"name" : "Release",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "whisper_flutter_library",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "whisper::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-whisper-Release-991e0b6913293e3f60ac.json",
+					"name" : "whisper",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "whisper_flutter::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-whisper_flutter-Release-a32b92c7ad6311d8d0c3.json",
+					"name" : "whisper_flutter",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/armeabi-v7a",
+		"source" : "/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/src"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

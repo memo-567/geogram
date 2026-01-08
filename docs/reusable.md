@@ -43,6 +43,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Services
 - [LocationService](#locationservice) - City lookup from coordinates
+- [LocationProviderService](#locationproviderservice) - Shared GPS positioning for all apps
+- [PathRecordingService](#pathrecordingservice) - GPS path recording (uses LocationProviderService)
 
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
@@ -1118,6 +1120,387 @@ if (jurisdiction != null) {
 
 ---
 
+### LocationProviderService
+
+**File:** `lib/services/location_provider_service.dart`
+
+Singleton service that maintains a GPS lock and provides positions to multiple consumers. Instead of each app/feature acquiring its own GPS lock, they can request the already-locked position from this shared service.
+
+**Key Benefits:**
+- **Battery efficient:** Single GPS lock shared across all consumers
+- **Already locked position:** Get accurate GPS immediately without waiting for lock
+- **Consumer management:** Auto-starts when first consumer registers, auto-stops when last one unregisters
+- **Cross-app sharing:** Write position to shared file for external app access
+
+**Initialization:**
+```dart
+final service = LocationProviderService();
+
+// Option 1: Register as a consumer (recommended)
+final dispose = await service.registerConsumer(
+  intervalSeconds: 30,
+  onPosition: (pos) => print('Got position: $pos'),
+);
+
+// When done, call dispose to unregister
+dispose();
+
+// Option 2: Manual start/stop
+await service.start(
+  intervalSeconds: 30,
+  sharedFilePath: '/path/to/shared/location.json', // optional
+);
+service.stop();
+```
+
+**Getting the Current Locked Position:**
+```dart
+final service = LocationProviderService();
+
+// Check if we have a valid, fresh position
+if (service.hasValidPosition) {
+  final pos = service.currentPosition!;
+  print('Using locked position: ${pos.latitude}, ${pos.longitude}');
+  print('Accuracy: ${pos.accuracy}m');
+  print('Age: ${DateTime.now().difference(pos.timestamp).inSeconds}s');
+}
+
+// Or request an immediate position (blocks until GPS lock)
+final pos = await service.requestImmediatePosition();
+if (pos != null) {
+  print('Got position: $pos');
+}
+```
+
+**Listening to Position Updates:**
+```dart
+// Real-time stream of positions
+service.positionStream.listen((pos) {
+  print('New position: ${pos.latitude}, ${pos.longitude}');
+  print('Source: ${pos.source}'); // 'gps', 'network', 'ip'
+});
+
+// Or use ChangeNotifier
+service.addListener(() {
+  final pos = service.currentPosition;
+  if (pos != null) updateUI(pos);
+});
+```
+
+**Cross-App Position Sharing:**
+```dart
+// App A: Start service with shared file
+await LocationProviderService().start(
+  intervalSeconds: 30,
+  sharedFilePath: '/data/shared/current_location.json',
+);
+
+// App B: Read the shared position (static method, no service needed)
+final pos = await LocationProviderService.readSharedPosition(
+  '/data/shared/current_location.json',
+);
+if (pos != null && pos.isFresh()) {
+  print('Got shared position: $pos');
+}
+```
+
+**LockedPosition Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `latitude` | double | Latitude in degrees |
+| `longitude` | double | Longitude in degrees |
+| `altitude` | double | Altitude in meters |
+| `accuracy` | double | Horizontal accuracy in meters |
+| `speed` | double | Speed in m/s |
+| `heading` | double | Heading in degrees |
+| `timestamp` | DateTime | When position was acquired |
+| `source` | String | Position source: 'gps', 'network', 'ip', 'browser' |
+
+**LockedPosition Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isFresh({maxAge})` | bool | Check if position is within maxAge (default: 5 min) |
+| `isHighAccuracy` | bool | True if accuracy < 50m |
+| `toJson()` | Map | Serialize for storage/sharing |
+
+**Service Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `isRunning` | bool | Service is actively acquiring positions |
+| `currentPosition` | LockedPosition? | Latest position (may be null) |
+| `hasValidPosition` | bool | Has a fresh, valid position |
+| `consumerCount` | int | Number of active consumers |
+| `positionStream` | Stream | Real-time position updates |
+
+**Platform Support:**
+
+| Platform | Method | Background Support |
+|----------|--------|-------------------|
+| Android | Foreground Service | Yes - persistent notification |
+| iOS | Position Stream | Yes - background location indicator |
+| Desktop | Timer + Geolocator | Limited - foreground only |
+| Web | Timer + Browser API | Limited - tab must be active |
+
+**Example: Multiple Features Sharing GPS:**
+```dart
+// Feature 1: Path recording
+final disposeForPath = await LocationProviderService().registerConsumer(
+  intervalSeconds: 60,
+  onPosition: (pos) => recordPathPoint(pos),
+);
+
+// Feature 2: Proximity detection (same GPS, different interval ignored)
+final disposeForProximity = await LocationProviderService().registerConsumer(
+  intervalSeconds: 30,
+  onPosition: (pos) => checkNearbyUsers(pos),
+);
+
+// Feature 3: Just needs current position occasionally
+void shareLocation() {
+  final pos = LocationProviderService().currentPosition;
+  if (pos != null && pos.isFresh()) {
+    sendLocationToContact(pos);
+  }
+}
+
+// When features are done
+disposeForPath();
+disposeForProximity();
+// Service auto-stops when all consumers unregister
+```
+
+**Dependencies:**
+- `geolocator: ^13.0.2` - GPS location access
+- Location permissions required (handled automatically)
+
+---
+
+### PathRecordingService
+
+**File:** `lib/tracker/services/path_recording_service.dart`
+
+GPS path recording service with crash recovery and platform-specific optimizations. Uses [LocationProviderService](#locationproviderservice) for GPS positioning, so it shares the GPS lock with other consumers.
+
+**Initialization:**
+```dart
+final recordingService = PathRecordingService();
+recordingService.initialize(trackerService);
+recordingService.addListener(_onRecordingChanged);
+
+// Check for active recording from app restart/crash
+await recordingService.checkAndResumeRecording();
+```
+
+**Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `startRecording(pathType, title, ...)` | `Future<TrackerPath?>` | Start new GPS recording |
+| `pauseRecording()` | `Future<bool>` | Pause current recording |
+| `resumeRecording()` | `Future<bool>` | Resume paused recording |
+| `stopRecording()` | `Future<TrackerPath?>` | Stop and complete recording |
+| `cancelRecording()` | `Future<bool>` | Cancel and discard recording |
+| `checkAndResumeRecording()` | `Future<bool>` | Resume from crash recovery |
+
+**Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `isRecording` | bool | Currently recording GPS points |
+| `isPaused` | bool | Recording is paused |
+| `hasActiveRecording` | bool | Has an active (recording or paused) session |
+| `activePathId` | String? | Current path ID |
+| `pointCount` | int | Number of recorded GPS points |
+| `totalDistance` | double | Total distance in meters |
+| `elapsedTime` | Duration | Time since recording started |
+| `recordingState` | TrackerRecordingState? | Full state object |
+
+**StartRecording Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pathType` | TrackerPathType | Yes | Type of path (walk, run, bicycle, etc.) |
+| `title` | String | Yes | Path title |
+| `description` | String? | No | Optional description |
+| `intervalSeconds` | int | No | GPS capture interval (default: 60) |
+
+**Path Types:**
+
+| Type | ID | Icon | Description |
+|------|----|------|-------------|
+| walk | walk | directions_walk | Walking path |
+| run | run | directions_run | Running/jogging |
+| bicycle | bicycle | directions_bike | Bicycle ride |
+| car | car | directions_car | Car trip |
+| train | train | train | Train journey |
+| airplane | airplane | flight | Flight path |
+| hike | hike | terrain | Hiking trail |
+| other | other | route | Generic path |
+
+**Usage Example:**
+
+```dart
+// Start recording
+final path = await recordingService.startRecording(
+  pathType: TrackerPathType.walk,
+  title: 'Morning Walk - Jan 8',
+  description: 'Around the park',
+  intervalSeconds: 60,  // Record every minute
+);
+
+if (path != null) {
+  print('Recording started: ${path.id}');
+}
+
+// Monitor recording state
+recordingService.addListener(() {
+  print('Points: ${recordingService.pointCount}');
+  print('Distance: ${recordingService.totalDistance / 1000} km');
+  print('Time: ${recordingService.elapsedTime}');
+});
+
+// Pause/resume
+await recordingService.pauseRecording();
+await recordingService.resumeRecording();
+
+// Stop and save
+final completedPath = await recordingService.stopRecording();
+if (completedPath != null) {
+  print('Recording complete: ${completedPath.totalDistanceMeters}m');
+}
+```
+
+**Platform Support:**
+
+| Platform | Method | Background Support | Notes |
+|----------|--------|-------------------|-------|
+| Android | Foreground Service + Geolocator | Yes | Persistent notification shows recording status |
+| iOS | Geolocator position stream | Yes | Background location indicator, requires `allowBackgroundLocationUpdates` |
+| Desktop | Timer + Geolocator | Limited | Falls back to IP geolocation when GPS unavailable |
+| Web | Timer + Browser Geolocation | Limited | Uses browser Geolocation API via geolocator_web |
+
+**Android Foreground Service:**
+
+The service uses Geolocator's built-in foreground notification on Android:
+
+```dart
+AndroidSettings(
+  accuracy: LocationAccuracy.high,
+  distanceFilter: 0,
+  intervalDuration: Duration(seconds: intervalSeconds),
+  foregroundNotificationConfig: ForegroundNotificationConfig(
+    notificationTitle: 'Recording Path',
+    notificationText: 'GPS tracking is active',
+    enableWakeLock: true,
+  ),
+)
+```
+
+**iOS Background Settings:**
+
+```dart
+AppleSettings(
+  accuracy: LocationAccuracy.high,
+  activityType: ActivityType.fitness,
+  pauseLocationUpdatesAutomatically: false,
+  allowBackgroundLocationUpdates: true,
+  showBackgroundLocationIndicator: true,
+)
+```
+
+**Crash Recovery:**
+
+Recording state is persisted to disk, allowing recovery after app crashes or restarts:
+
+```dart
+// State stored at: {collection}/recording_state.json
+class TrackerRecordingState {
+  final String activePathId;
+  final int activePathYear;
+  final RecordingStatus status;
+  final int intervalSeconds;
+  final String startedAt;
+  final String? lastPointTimestamp;
+  final int pointCount;
+}
+
+// On app startup, check for active recording:
+final resumed = await recordingService.checkAndResumeRecording();
+if (resumed) {
+  print('Resumed recording from crash recovery');
+}
+```
+
+**GPS Unavailable Handling:**
+
+When GPS/Internet is unavailable, the service skips recording points rather than saving empty values. Recording continues automatically when position data becomes available again.
+
+**Storage Format:**
+
+Paths are stored in year-based folders:
+```
+{collection}/paths/{YYYY}/{pathId}/
+  ├── path.json      # Path metadata (title, status, tags, etc.)
+  └── points.json    # GPS points array
+```
+
+**Point Data Structure:**
+
+```dart
+class TrackerPoint {
+  final int index;
+  final String timestamp;
+  final double lat;
+  final double lon;
+  final double? altitude;
+  final double? accuracy;
+  final double? speed;
+  final double? bearing;
+}
+```
+
+**Dependencies:**
+- `geolocator: ^13.0.2` - GPS location access with platform-specific settings
+- Requires location permissions: `ACCESS_FINE_LOCATION` (Android), `NSLocationWhenInUseUsageDescription` (iOS)
+- For background on Android: `FOREGROUND_SERVICE_LOCATION` permission
+- For background on iOS: `NSLocationAlwaysAndWhenInUseUsageDescription`
+
+**Integration with UI:**
+
+Use with `StartPathDialog` and `ActiveRecordingBanner`:
+
+```dart
+// Show start dialog
+final path = await StartPathDialog.show(
+  context,
+  recordingService: _recordingService,
+  i18n: widget.i18n,
+);
+
+// Show recording banner in your UI
+if (_recordingService.hasActiveRecording)
+  ActiveRecordingBanner(
+    recordingService: _recordingService,
+    i18n: widget.i18n,
+    onStop: _loadPaths,
+  ),
+```
+
+**Required i18n Keys:**
+- `tracker_start_path`, `tracker_stop_path`, `tracker_pause_path`, `tracker_resume_path`
+- `tracker_path_type`, `tracker_path_title`, `tracker_path_description`
+- `tracker_gps_interval`, `tracker_recording_in_progress`, `tracker_recording_paused`
+- `tracker_path_type_walk/run/bicycle/car/train/airplane/hike/other`
+- `tracker_interval_30s/1m/2m/5m`
+- `tracker_gps_permission_required`, `tracker_gps_disabled`
+- `tracker_morning`, `tracker_afternoon`, `tracker_evening`, `tracker_night`
+- `tracker_confirm_stop`, `tracker_confirm_stop_message`
+
+---
+
 ## QR Widgets
 
 ### QrShareReceiveWidget
@@ -1405,5 +1788,7 @@ TextFormField(
 | MessageBubbleWidget | widgets/ | Message | Chat bubbles |
 | MessageInputWidget | widgets/ | Input | Message composer |
 | LocationService | services/ | Service | City lookup from coordinates |
+| LocationProviderService | services/ | Service | Shared GPS positioning for all apps |
+| PathRecordingService | tracker/services/ | Service | GPS path recording (uses LocationProviderService) |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |

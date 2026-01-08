@@ -1,0 +1,389 @@
+import 'dart:math' as math;
+
+import 'tracker_metadata.dart';
+import 'tracker_visibility.dart';
+
+/// Status of a GPS path recording
+enum TrackerPathStatus {
+  recording,
+  paused,
+  completed,
+  cancelled,
+}
+
+/// Bounding box for a path
+class PathBounds {
+  final double minLat;
+  final double maxLat;
+  final double minLon;
+  final double maxLon;
+
+  const PathBounds({
+    required this.minLat,
+    required this.maxLat,
+    required this.minLon,
+    required this.maxLon,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'min_lat': minLat,
+        'max_lat': maxLat,
+        'min_lon': minLon,
+        'max_lon': maxLon,
+      };
+
+  factory PathBounds.fromJson(Map<String, dynamic> json) {
+    return PathBounds(
+      minLat: (json['min_lat'] as num).toDouble(),
+      maxLat: (json['max_lat'] as num).toDouble(),
+      minLon: (json['min_lon'] as num).toDouble(),
+      maxLon: (json['max_lon'] as num).toDouble(),
+    );
+  }
+
+  /// Calculate bounds from a list of points
+  factory PathBounds.fromPoints(List<TrackerPoint> points) {
+    if (points.isEmpty) {
+      return const PathBounds(minLat: 0, maxLat: 0, minLon: 0, maxLon: 0);
+    }
+
+    double minLat = points.first.lat;
+    double maxLat = points.first.lat;
+    double minLon = points.first.lon;
+    double maxLon = points.first.lon;
+
+    for (final point in points) {
+      if (point.lat < minLat) minLat = point.lat;
+      if (point.lat > maxLat) maxLat = point.lat;
+      if (point.lon < minLon) minLon = point.lon;
+      if (point.lon > maxLon) maxLon = point.lon;
+    }
+
+    return PathBounds(
+      minLat: minLat,
+      maxLat: maxLat,
+      minLon: minLon,
+      maxLon: maxLon,
+    );
+  }
+}
+
+/// A GPS path recording
+class TrackerPath {
+  final String id;
+  final String? title;
+  final String? description;
+  final String startedAt;
+  final String? endedAt;
+  final TrackerPathStatus status;
+  final int intervalSeconds;
+  final int totalPoints;
+  final double totalDistanceMeters;
+  final double? elevationGainMeters;
+  final double? elevationLossMeters;
+  final double? avgSpeedMps;
+  final double? maxSpeedMps;
+  final PathBounds? bounds;
+  final List<String> tags;
+  final String ownerCallsign;
+  final TrackerVisibility? visibility;
+  final TrackerNostrMetadata? metadata;
+
+  const TrackerPath({
+    required this.id,
+    this.title,
+    this.description,
+    required this.startedAt,
+    this.endedAt,
+    this.status = TrackerPathStatus.recording,
+    this.intervalSeconds = 60,
+    this.totalPoints = 0,
+    this.totalDistanceMeters = 0.0,
+    this.elevationGainMeters,
+    this.elevationLossMeters,
+    this.avgSpeedMps,
+    this.maxSpeedMps,
+    this.bounds,
+    this.tags = const [],
+    required this.ownerCallsign,
+    this.visibility,
+    this.metadata,
+  });
+
+  /// Parse started timestamp to DateTime
+  DateTime get startedAtDateTime {
+    try {
+      return DateTime.parse(startedAt);
+    } catch (e) {
+      return DateTime.now();
+    }
+  }
+
+  /// Parse ended timestamp to DateTime
+  DateTime? get endedAtDateTime {
+    if (endedAt == null) return null;
+    try {
+      return DateTime.parse(endedAt!);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Duration in seconds
+  int? get durationSeconds {
+    final end = endedAtDateTime;
+    if (end == null) return null;
+    return end.difference(startedAtDateTime).inSeconds;
+  }
+
+  /// Duration formatted as HH:MM:SS
+  String? get durationFormatted {
+    final seconds = durationSeconds;
+    if (seconds == null) return null;
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  /// Distance in kilometers
+  double get totalDistanceKm => totalDistanceMeters / 1000.0;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        if (title != null) 'title': title,
+        if (description != null) 'description': description,
+        'started_at': startedAt,
+        if (endedAt != null) 'ended_at': endedAt,
+        'status': status.name,
+        'interval_seconds': intervalSeconds,
+        'total_points': totalPoints,
+        'total_distance_meters': totalDistanceMeters,
+        if (elevationGainMeters != null)
+          'elevation_gain_meters': elevationGainMeters,
+        if (elevationLossMeters != null)
+          'elevation_loss_meters': elevationLossMeters,
+        if (avgSpeedMps != null) 'avg_speed_mps': avgSpeedMps,
+        if (maxSpeedMps != null) 'max_speed_mps': maxSpeedMps,
+        if (bounds != null) 'bounds': bounds!.toJson(),
+        if (tags.isNotEmpty) 'tags': tags,
+        'owner_callsign': ownerCallsign,
+        if (visibility != null) 'visibility': visibility!.toJson(),
+        if (metadata != null) 'metadata': metadata!.toJson(),
+      };
+
+  factory TrackerPath.fromJson(Map<String, dynamic> json) {
+    final statusStr = json['status'] as String? ?? 'recording';
+    final status = TrackerPathStatus.values.firstWhere(
+      (s) => s.name == statusStr,
+      orElse: () => TrackerPathStatus.recording,
+    );
+
+    return TrackerPath(
+      id: json['id'] as String,
+      title: json['title'] as String?,
+      description: json['description'] as String?,
+      startedAt: json['started_at'] as String,
+      endedAt: json['ended_at'] as String?,
+      status: status,
+      intervalSeconds: json['interval_seconds'] as int? ?? 60,
+      totalPoints: json['total_points'] as int? ?? 0,
+      totalDistanceMeters:
+          (json['total_distance_meters'] as num?)?.toDouble() ?? 0.0,
+      elevationGainMeters:
+          (json['elevation_gain_meters'] as num?)?.toDouble(),
+      elevationLossMeters:
+          (json['elevation_loss_meters'] as num?)?.toDouble(),
+      avgSpeedMps: (json['avg_speed_mps'] as num?)?.toDouble(),
+      maxSpeedMps: (json['max_speed_mps'] as num?)?.toDouble(),
+      bounds: json['bounds'] != null
+          ? PathBounds.fromJson(json['bounds'] as Map<String, dynamic>)
+          : null,
+      tags: (json['tags'] as List<dynamic>?)
+              ?.map((t) => t as String)
+              .toList() ??
+          const [],
+      ownerCallsign: json['owner_callsign'] as String,
+      visibility: json['visibility'] != null
+          ? TrackerVisibility.fromJson(
+              json['visibility'] as Map<String, dynamic>)
+          : null,
+      metadata: json['metadata'] != null
+          ? TrackerNostrMetadata.fromJson(
+              json['metadata'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
+  TrackerPath copyWith({
+    String? id,
+    String? title,
+    String? description,
+    String? startedAt,
+    String? endedAt,
+    TrackerPathStatus? status,
+    int? intervalSeconds,
+    int? totalPoints,
+    double? totalDistanceMeters,
+    double? elevationGainMeters,
+    double? elevationLossMeters,
+    double? avgSpeedMps,
+    double? maxSpeedMps,
+    PathBounds? bounds,
+    List<String>? tags,
+    String? ownerCallsign,
+    TrackerVisibility? visibility,
+    TrackerNostrMetadata? metadata,
+  }) {
+    return TrackerPath(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      status: status ?? this.status,
+      intervalSeconds: intervalSeconds ?? this.intervalSeconds,
+      totalPoints: totalPoints ?? this.totalPoints,
+      totalDistanceMeters: totalDistanceMeters ?? this.totalDistanceMeters,
+      elevationGainMeters: elevationGainMeters ?? this.elevationGainMeters,
+      elevationLossMeters: elevationLossMeters ?? this.elevationLossMeters,
+      avgSpeedMps: avgSpeedMps ?? this.avgSpeedMps,
+      maxSpeedMps: maxSpeedMps ?? this.maxSpeedMps,
+      bounds: bounds ?? this.bounds,
+      tags: tags ?? this.tags,
+      ownerCallsign: ownerCallsign ?? this.ownerCallsign,
+      visibility: visibility ?? this.visibility,
+      metadata: metadata ?? this.metadata,
+    );
+  }
+}
+
+/// A single GPS point in a path
+class TrackerPoint {
+  final int index;
+  final String timestamp;
+  final double lat;
+  final double lon;
+  final double? altitude;
+  final double? accuracy;
+  final double? speed;
+  final double? bearing;
+
+  const TrackerPoint({
+    required this.index,
+    required this.timestamp,
+    required this.lat,
+    required this.lon,
+    this.altitude,
+    this.accuracy,
+    this.speed,
+    this.bearing,
+  });
+
+  DateTime get timestampDateTime {
+    try {
+      return DateTime.parse(timestamp);
+    } catch (e) {
+      return DateTime.now();
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+        'index': index,
+        'timestamp': timestamp,
+        'lat': lat,
+        'lon': lon,
+        if (altitude != null) 'altitude': altitude,
+        if (accuracy != null) 'accuracy': accuracy,
+        if (speed != null) 'speed': speed,
+        if (bearing != null) 'bearing': bearing,
+      };
+
+  factory TrackerPoint.fromJson(Map<String, dynamic> json) {
+    return TrackerPoint(
+      index: json['index'] as int,
+      timestamp: json['timestamp'] as String,
+      lat: (json['lat'] as num).toDouble(),
+      lon: (json['lon'] as num).toDouble(),
+      altitude: (json['altitude'] as num?)?.toDouble(),
+      accuracy: (json['accuracy'] as num?)?.toDouble(),
+      speed: (json['speed'] as num?)?.toDouble(),
+      bearing: (json['bearing'] as num?)?.toDouble(),
+    );
+  }
+}
+
+/// Container for path points (stored in points.json)
+class TrackerPathPoints {
+  final String pathId;
+  final List<TrackerPoint> points;
+
+  const TrackerPathPoints({
+    required this.pathId,
+    this.points = const [],
+  });
+
+  Map<String, dynamic> toJson() => {
+        'path_id': pathId,
+        'points': points.map((p) => p.toJson()).toList(),
+      };
+
+  factory TrackerPathPoints.fromJson(Map<String, dynamic> json) {
+    return TrackerPathPoints(
+      pathId: json['path_id'] as String,
+      points: (json['points'] as List<dynamic>?)
+              ?.map((p) => TrackerPoint.fromJson(p as Map<String, dynamic>))
+              .toList() ??
+          const [],
+    );
+  }
+
+  TrackerPathPoints copyWith({
+    String? pathId,
+    List<TrackerPoint>? points,
+  }) {
+    return TrackerPathPoints(
+      pathId: pathId ?? this.pathId,
+      points: points ?? this.points,
+    );
+  }
+
+  /// Add a new point
+  TrackerPathPoints addPoint(TrackerPoint point) {
+    return copyWith(points: [...points, point]);
+  }
+
+  /// Calculate total distance using Haversine formula
+  double calculateTotalDistance() {
+    if (points.length < 2) return 0.0;
+
+    double total = 0.0;
+    for (int i = 1; i < points.length; i++) {
+      total += _haversineDistance(
+        points[i - 1].lat,
+        points[i - 1].lon,
+        points[i].lat,
+        points[i].lon,
+      );
+    }
+    return total;
+  }
+
+  /// Haversine distance calculation between two points (returns meters)
+  static double _haversineDistance(
+      double lat1, double lon1, double lat2, double lon2) {
+    const earthRadiusMeters = 6371000.0;
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRadians(lat1)) *
+            math.cos(_toRadians(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadiusMeters * c;
+  }
+
+  static double _toRadians(double degrees) => degrees * math.pi / 180;
+}

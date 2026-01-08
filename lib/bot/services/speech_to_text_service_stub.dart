@@ -85,6 +85,8 @@ class SpeechToTextService {
 
   Future<void> preloadModel(String modelId) async {}
 
+  Future<bool> ensureModelWarm(String modelId) async => false;
+
   Future<TranscriptionResult> transcribe(String audioFilePath) async {
     return TranscriptionResult.failure(
       error: 'Speech-to-text not supported on web',

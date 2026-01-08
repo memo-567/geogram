@@ -29,6 +29,7 @@ class GeolocationResult {
   final String? city;
   final String? country;
   final String? serviceName; // Which IP service was used (if IP-based)
+  final double? accuracy; // Accuracy in meters (for GPS/browser sources)
 
   GeolocationResult({
     required this.latitude,
@@ -37,6 +38,7 @@ class GeolocationResult {
     this.city,
     this.country,
     this.serviceName,
+    this.accuracy,
   });
 
   LatLng get latLng => LatLng(latitude, longitude);
@@ -45,7 +47,7 @@ class GeolocationResult {
 
   @override
   String toString() =>
-      'GeolocationResult($latitude, $longitude, source: $source${serviceName != null ? ', service: $serviceName' : ''})';
+      'GeolocationResult($latitude, $longitude, source: $source${serviceName != null ? ', service: $serviceName' : ''}${accuracy != null ? ', accuracy: ${accuracy}m' : ''})';
 }
 
 /// Utility class for geolocation services
@@ -118,20 +120,29 @@ class GeolocationUtils {
   }
 
   /// Detect location via GPS (Android/iOS)
-  /// Returns null if permission denied or service disabled
+  /// Returns null if permission denied, service disabled, or accuracy exceeds threshold
+  /// [minAccuracyMeters] - If provided, rejects positions with accuracy worse than this
+  ///   (useful for filtering out cell tower locations which typically have 500m+ accuracy)
+  /// [timeout] - Default 60s for cold GPS start without A-GPS assistance
   static Future<GeolocationResult?> detectViaGPS({
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 60),
     bool requestPermission = false,
+    double? minAccuracyMeters,
   }) async {
     if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
       return null;
     }
-    return _detectViaGPS(timeout: timeout, requestPermission: requestPermission);
+    return _detectViaGPS(
+      timeout: timeout,
+      requestPermission: requestPermission,
+      minAccuracyMeters: minAccuracyMeters,
+    );
   }
 
   static Future<GeolocationResult?> _detectViaGPS({
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 60),
     bool requestPermission = false,
+    double? minAccuracyMeters,
   }) async {
     try {
       // Check if location services are enabled
@@ -153,21 +164,29 @@ class GeolocationUtils {
         return null;
       }
 
-      // Get current position
+      // Get current position with best accuracy
       final position = await Geolocator.getCurrentPosition(
         locationSettings: LocationSettings(
-          accuracy: LocationAccuracy.high,
+          accuracy: LocationAccuracy.best,
           timeLimit: timeout,
         ),
       );
 
+      // Reject cell tower locations if accuracy threshold is specified
+      if (minAccuracyMeters != null && position.accuracy > minAccuracyMeters) {
+        LogService().log(
+            'GeolocationUtils: GPS accuracy ${position.accuracy.toStringAsFixed(0)}m exceeds threshold ${minAccuracyMeters.toStringAsFixed(0)}m, rejecting');
+        return null;
+      }
+
       LogService().log(
-          'GeolocationUtils: GPS location: ${position.latitude}, ${position.longitude}');
+          'GeolocationUtils: GPS location: ${position.latitude}, ${position.longitude} (accuracy: ${position.accuracy.toStringAsFixed(0)}m)');
 
       return GeolocationResult(
         latitude: position.latitude,
         longitude: position.longitude,
         source: 'gps',
+        accuracy: position.accuracy,
       );
     } catch (e) {
       LogService().log('GeolocationUtils: GPS detection failed: $e');
@@ -208,12 +227,13 @@ class GeolocationUtils {
       );
 
       LogService().log(
-          'GeolocationUtils: Browser location: ${position.latitude}, ${position.longitude}');
+          'GeolocationUtils: Browser location: ${position.latitude}, ${position.longitude} (accuracy: ${position.accuracy.toStringAsFixed(0)}m)');
 
       return GeolocationResult(
         latitude: position.latitude,
         longitude: position.longitude,
         source: 'browser',
+        accuracy: position.accuracy,
       );
     } catch (e) {
       LogService().log('GeolocationUtils: Browser geolocation failed: $e');

@@ -539,20 +539,11 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('blog')),
-        actions: [
-          // Refresh
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadPosts,
-            tooltip: _i18n.t('refresh'),
-          ),
-          // New post
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createNewPost,
-            tooltip: _i18n.t('new_post'),
-          ),
-        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _createNewPost,
+        icon: const Icon(Icons.add),
+        label: Text(_i18n.t('create')),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())

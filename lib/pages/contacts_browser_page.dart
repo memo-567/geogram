@@ -21,6 +21,7 @@ import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../models/event.dart';
+import '../widgets/transcribe_button_widget.dart';
 import 'add_edit_contact_page.dart';
 import 'contact_import_page.dart';
 import 'contact_qr_scan_page.dart';
@@ -2169,6 +2170,16 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
                       decoration: InputDecoration(
                         labelText: _i18n.t('content'),
                         border: const OutlineInputBorder(),
+                        suffixIcon: TranscribeButtonWidget(
+                          i18n: _i18n,
+                          onTranscribed: (text) {
+                            if (contentController.text.isEmpty) {
+                              contentController.text = text;
+                            } else {
+                              contentController.text += ' $text';
+                            }
+                          },
+                        ),
                       ),
                       maxLines: 3,
                       textCapitalization: TextCapitalization.sentences,
@@ -2765,6 +2776,9 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
   Future<void> _addHistoryEntry(ContactHistoryEntryType type) async {
     final noteController = TextEditingController();
+    final allowTranscribe = type == ContactHistoryEntryType.note ||
+        type == ContactHistoryEntryType.message ||
+        type == ContactHistoryEntryType.meeting;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2777,6 +2791,18 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             hintText: i18n.t('note_placeholder'),
             helperText: i18n.t('mandatory'),
             border: const OutlineInputBorder(),
+            suffixIcon: allowTranscribe
+                ? TranscribeButtonWidget(
+                    i18n: i18n,
+                    onTranscribed: (text) {
+                      if (noteController.text.isEmpty) {
+                        noteController.text = text;
+                      } else {
+                        noteController.text += ' $text';
+                      }
+                    },
+                  )
+                : null,
           ),
           maxLines: 4,
           autofocus: true,

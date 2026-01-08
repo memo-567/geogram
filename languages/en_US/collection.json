@@ -70,6 +70,9 @@
   "collection_type_forum": "Forum",
   "collection_type_groups": "Groups",
   "collection_type_inventory": "Inventory",
+  "collection_type_tracker": "Tracker",
+  "collection_type_desc_tracker": "Track your personal health, fitness, and activities. Record GPS paths, exercises, measurements, and more with privacy-first design.",
+  "collection_type_features_tracker": "GPS path recording|Exercise tracking|Health measurements|Fitness plans|Location sharing|Place check-ins|Proximity tracking",
   "collection_type_log": "Log",
   "collection_type_market": "Market",
   "collection_type_news": "News",
@@ -81,5 +84,10 @@
   "collection_type_wallet": "Wallet",
   "collection_type_www": "Website",
   "collection_updates": "Collection Updates",
-  "collection_updates_desc": "Notify when collections are updated or synced"
+  "collection_updates_desc": "Notify when collections are updated or synced",
+
+  "location_notification_title": "Location Active",
+  "location_notification_text": "Providing GPS position",
+  "location_recording_title": "Recording Path",
+  "location_recording_text": "GPS tracking is active"
 }

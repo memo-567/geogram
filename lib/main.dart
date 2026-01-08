@@ -67,6 +67,7 @@ import 'pages/places_browser_page.dart';
 import 'pages/console_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/inventory_browser_page.dart';
+import 'tracker/pages/tracker_browser_page.dart';
 import 'pages/wallet_browser_page.dart';
 import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
@@ -81,6 +82,7 @@ import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
 import 'pages/security_settings_page.dart';
+import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
@@ -1784,6 +1786,15 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     collection.title,
                                                 i18n: _i18n,
                                               )
+                                            : collection.type == 'tracker'
+                                            ? TrackerBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
                                             : collection.type == 'alerts'
                                             ? ReportBrowserPage(
                                                 collectionPath:
@@ -1970,6 +1981,15 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     collection.title,
                                                 i18n: _i18n,
                                               )
+                                            : collection.type == 'tracker'
+                                            ? TrackerBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
                                             : collection.type == 'alerts'
                                             ? ReportBrowserPage(
                                                 collectionPath:
@@ -2111,6 +2131,8 @@ class _CollectionGridCard extends StatelessWidget {
         return Icons.store;
       case 'inventory':
         return Icons.inventory_2;
+      case 'tracker':
+        return Icons.track_changes;
       case 'groups':
         return Icons.groups;
       case 'alerts':
@@ -2190,6 +2212,14 @@ class _CollectionGridCard extends StatelessWidget {
           colors: isDark
               ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
               : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+        );
+      case 'tracker':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
+              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
         );
       case 'wallet':
         return LinearGradient(
@@ -2539,6 +2569,8 @@ class _CollectionCard extends StatelessWidget {
         return Icons.store;
       case 'inventory':
         return Icons.inventory_2;
+      case 'tracker':
+        return Icons.track_changes;
       case 'groups':
         return Icons.groups;
       case 'alerts':
@@ -2618,6 +2650,14 @@ class _CollectionCard extends StatelessWidget {
           colors: isDark
               ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
               : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+        );
+      case 'tracker':
+        return LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
+              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
         );
       case 'wallet':
         return LinearGradient(
@@ -3405,6 +3445,20 @@ class _SettingsPageState extends State<SettingsPage> {
               context,
               MaterialPageRoute(
                 builder: (context) => const SecuritySettingsPage(),
+              ),
+            );
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.storage_outlined),
+          title: Text(_i18n.t('storage')),
+          subtitle: Text(_i18n.t('manage_app_storage')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const StorageSettingsPage(),
               ),
             );
           },

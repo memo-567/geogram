@@ -10,6 +10,7 @@ import '../models/place.dart';
 import '../services/collection_service.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
+import '../services/log_service.dart';
 import '../services/place_service.dart';
 
 /// Result of place selection including the place and optional collection info
@@ -143,13 +144,22 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
         return;
       }
 
-      // Get current position
+      // Get current position with high accuracy and reasonable timeout
       _userPosition = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 10),
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 20),
         ),
       );
+
+      // Reject low-accuracy positions (likely cell tower, not GPS)
+      if (_userPosition!.accuracy > 100) {
+        LogService().log(
+            'PlacePicker: Rejecting low-accuracy position (${_userPosition!.accuracy.toStringAsFixed(0)}m), falling back to IP');
+        _userPosition = null;
+        await _tryIpLocation();
+        return;
+      }
     } catch (e) {
       // Try IP-based location as fallback
       await _tryIpLocation();

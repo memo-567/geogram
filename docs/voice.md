@@ -151,30 +151,27 @@ This avoids the need for audio format conversion (FFmpeg) which would add signif
 
 ## Performance
 
-### Current Implementation
+### Implementation (cached + warm-up)
 
-The app attempts to preload the Whisper model in the background at startup:
+- `whisper_flutter_new` is vendored at `third_party/whisper_flutter_new` with a dependency override in `pubspec.yaml`.
+- Native code now caches the Whisper context and reuses it across calls (reloads only when the model path changes).
+- `SpeechToTextService.preloadModel` loads the model and runs a short silent WAV transcription (~400 ms) to fully initialize the context.
+- `TranscriptionDialog` waits for preload/warm-up after downloads before starting to record, so the first real transcription stays fast.
 
-**Preload Flow** (`lib/main.dart`):
-1. `runApp()` is called → UI renders
-2. `_startWhisperPreload()` fires immediately (fire-and-forget)
-3. Model loads in background via `SpeechToTextService().preloadModel()`
-4. Dialog coordination via `Completer` in `SpeechToTextService`
+### Warm-up triggers
 
-**Dialog Flow** (`lib/widgets/transcription_dialog.dart`):
-1. `_checkModelStatus()` checks if preload is in progress
-2. If preloading: waits via `waitForPreload()`
-3. If model loaded: starts recording immediately
-4. If not loaded: loads model (blocking)
+- **App startup:** `_startWhisperPreload()` runs as soon as the app launches if the preferred model is already downloaded; it completes only after warm-up finishes.
+- **First download:** After the download completes, the dialog shows "checking" while it loads and warms the model before recording. This avoids a 20–30 second pause during the first transcription.
+- **Model changes:** Calls to `ensureModelReady` also warm the newly loaded model when needed.
 
-### Known Limitation
+### Performance Expectations
 
-The model loading takes **~20-30 seconds** regardless of preloading strategy. This is due to:
-- FFI initialization in `whisper_flutter_new` native layer
-- Loading 145MB model file into memory
-- Cannot be optimized from Dart code
-
-The preload coordination ensures the model is only loaded once (not duplicated), but does not reduce the inherent ~20-30 second load time.
+| Scenario | Time | Notes |
+|----------|------|-------|
+| Warm-up (one-time per model) | ~20–30 seconds | Happens at startup if the model is present or immediately after first download; runs on a silent transcribe and caches the native context. |
+| First real transcription after warm-up | <5 seconds | No model load; uses cached context. |
+| Subsequent transcriptions | 2–5 seconds | Cached context reused. |
+| 10s audio with whisper-base | ~0.6 seconds transcription | Inference speed unchanged; only load latency moved earlier. |
 
 ### CPU Optimization
 
@@ -183,14 +180,10 @@ Transcription uses multiple CPU threads for faster processing:
 - Reserves 2 cores for system tasks (if more than 4 cores available)
 - Falls back to all cores on devices with 4 or fewer
 
-### Performance Expectations
+### Android Notes
 
-| Scenario | Time |
-|----------|------|
-| Model already loaded | 2-5 seconds |
-| Model not loaded (first use) | 20-30 seconds |
-| Subsequent transcriptions | 2-5 seconds |
-| 10s audio with whisper-base | ~0.6 seconds transcription |
+- The Android native layer supports `speed_up` and `whisper_full_parallel`, but they are currently disabled because they caused slower performance on real devices.
+- If you want to experiment with them, set `speedUp`/`nProcessors` in `SpeechToTextService` and measure `infer_ms` from logcat.
 
 ### Model Size vs Speed
 

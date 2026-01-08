@@ -114,6 +114,7 @@
   "recording_failed": "Gravação falhou",
   "tap_to_start_recording": "Toque em Iniciar para começar a gravar",
   "transcribing_audio": "A transcrever áudio...",
+  "transcription_wait_notice": "Isto pode demorar cerca de 30 segundos. Por favor aguarde.",
   "transcription_failed": "Transcrição falhou",
   "unknown_error": "Erro desconhecido",
   "up_to_seconds": "Até {0} segundos",

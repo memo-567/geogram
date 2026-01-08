@@ -30,6 +30,7 @@ import '../services/alert_sharing_service.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../widgets/transcribe_button_widget.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -1314,6 +1315,16 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
                         hintText: _i18n.t('description_hint'),
                         border: OutlineInputBorder(),
                         alignLabelWithHint: true,
+                        suffixIcon: TranscribeButtonWidget(
+                          i18n: _i18n,
+                          onTranscribed: (text) {
+                            if (_descriptionController.text.isEmpty) {
+                              _descriptionController.text = text;
+                            } else {
+                              _descriptionController.text += ' $text';
+                            }
+                          },
+                        ),
                       ),
                       maxLines: 8,
                     )

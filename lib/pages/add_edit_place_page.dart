@@ -16,6 +16,7 @@ import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
+import '../services/location_provider_service.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -61,6 +62,10 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
   bool _isSaving = false;
   bool _advancedOptionsExpanded = false;
+
+  // GPS preload state - uses shared LocationProviderService for efficient GPS sharing
+  LockedPosition? _preloadedGPSLocation;
+  VoidCallback? _disposeLocationConsumer;
 
   // Supported languages for multilingual content
   static const List<String> _supportedLanguages = ['EN', 'PT', 'ES', 'FR', 'DE', 'IT'];
@@ -109,6 +114,51 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     super.initState();
     _initializeControllers();
     _loadExistingImages();
+    _startGPSPreload();
+  }
+
+  /// Start GPS acquisition early so it's ready when user opens map picker
+  /// Uses shared LocationProviderService for efficient GPS sharing across the app
+  /// Only runs for new places on mobile devices
+  Future<void> _startGPSPreload() async {
+    // Only preload for new places (editing existing has coordinates)
+    if (widget.place != null) return;
+    // Only on mobile
+    if (kIsWeb) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    final locationService = LocationProviderService();
+
+    // Check if we already have a valid, high-accuracy position from another feature
+    if (locationService.hasValidPosition) {
+      final pos = locationService.currentPosition!;
+      // Only use if it's high accuracy (< 100m, not cell tower)
+      if (pos.accuracy < 100) {
+        if (mounted) {
+          setState(() => _preloadedGPSLocation = pos);
+        }
+        LogService().log(
+            'GPS preload: Using existing position from LocationProviderService: ${pos.latitude}, ${pos.longitude} (accuracy: ${pos.accuracy.toStringAsFixed(0)}m)');
+        return;
+      }
+    }
+
+    // Register as a consumer to get GPS updates
+    try {
+      _disposeLocationConsumer = await locationService.registerConsumer(
+        intervalSeconds: 30,
+        onPosition: (pos) {
+          // Only accept high-accuracy positions (< 100m)
+          if (pos.accuracy < 100 && mounted) {
+            setState(() => _preloadedGPSLocation = pos);
+            LogService().log(
+                'GPS preload complete: ${pos.latitude}, ${pos.longitude} (accuracy: ${pos.accuracy.toStringAsFixed(0)}m)');
+          }
+        },
+      );
+    } catch (e) {
+      LogService().log('GPS preload failed: $e');
+    }
   }
 
   void _initializeControllers() {
@@ -438,6 +488,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
   @override
   void dispose() {
+    // Unregister from LocationProviderService
+    _disposeLocationConsumer?.call();
     _nameController.dispose();
     _latitudeController.dispose();
     _longitudeController.dispose();
@@ -625,12 +677,19 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   }
 
   Future<void> _openMapPicker() async {
-    // Get current coordinates if available
+    // Priority: 1) existing coordinates from form, 2) preloaded GPS location
     LatLng? initialPosition;
     final lat = double.tryParse(_latitudeController.text.trim());
     final lon = double.tryParse(_longitudeController.text.trim());
     if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
       initialPosition = LatLng(lat, lon);
+    } else if (_preloadedGPSLocation != null) {
+      // Use preloaded GPS position from LocationProviderService
+      initialPosition = LatLng(
+        _preloadedGPSLocation!.latitude,
+        _preloadedGPSLocation!.longitude,
+      );
+      LogService().log('Using preloaded GPS for map picker: ${initialPosition.latitude}, ${initialPosition.longitude}');
     }
 
     // Open location picker
@@ -778,15 +837,11 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         ),
       const SizedBox(height: 16),
     ];
-    final requiredFields = isEdit
-        ? <Widget>[
-            ...placeNameSection,
-            ...locationSection,
-          ]
-        : <Widget>[
-            ...locationSection,
-            ...placeNameSection,
-          ];
+    // Name always first - gives GPS time to acquire while user types
+    final requiredFields = <Widget>[
+      ...placeNameSection,
+      ...locationSection,
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -1198,6 +1253,16 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                             border: const OutlineInputBorder(),
                             helperText: _i18n.t('place_history_help'),
                             helperMaxLines: 2,
+                            suffixIcon: TranscribeButtonWidget(
+                              i18n: _i18n,
+                              onTranscribed: (text) {
+                                if (_historyController.text.isEmpty) {
+                                  _historyController.text = text;
+                                } else {
+                                  _historyController.text += ' $text';
+                                }
+                              },
+                            ),
                           ),
                           maxLines: 6,
                           textCapitalization: TextCapitalization.sentences,

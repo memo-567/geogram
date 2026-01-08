@@ -1,0 +1,14 @@
+# ninja log v5
+0	4325	1767746860456261146	CMakeFiles/whisper.dir/whisper.cpp/ggml.c.o	5c1c9bb31576a779
+0	6483	1767746862665271864	CMakeFiles/whisper_flutter.dir/main.cpp.o	aeb7a4af5a0779a2
+0	11399	1767746867582295722	CMakeFiles/whisper.dir/whisper.cpp/whisper.cpp.o	e79e578675134003
+11400	11447	1767746867646296033	libwhisper.a	28650a900c2c2410
+11447	19332	1767746875522334254	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/u5j22246/obj/arm64-v8a/libwhisper.so	21e848c2d7af1805
+0	3	0	clean	2c778b01414b031f
+0	4	0	clean	2c778b01414b031f
+0	3	0	clean	2c778b01414b031f
+8	4782	1767787133514897259	CMakeFiles/whisper.dir/whisper.cpp/ggml.c.o	5c1c9bb31576a779
+8	8119	1767787136835908793	CMakeFiles/whisper_flutter.dir/main.cpp.o	aeb7a4af5a0779a2
+9	15084	1767787143791932952	CMakeFiles/whisper.dir/whisper.cpp/whisper.cpp.o	e79e578675134003
+15084	15119	1767787143854933171	libwhisper.a	28650a900c2c2410
+15119	25293	1767787154011968447	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/u5j22246/obj/arm64-v8a/libwhisper.so	21e848c2d7af1805

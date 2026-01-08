@@ -15,6 +15,7 @@ import '../bot/models/whisper_model_info.dart';
 import '../bot/services/speech_to_text_service.dart';
 import '../bot/services/whisper_model_manager.dart';
 import '../services/audio_service.dart';
+import '../services/ble_foreground_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 
@@ -63,6 +64,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   final WhisperModelManager _modelManager = WhisperModelManager();
   final AudioService _audioService = AudioService();
   final AudioRecorder _wavRecorder = AudioRecorder();
+  final BLEForegroundService _foregroundService = BLEForegroundService();
 
   _DialogState _state = _DialogState.checkingModel;
   Duration _recordingDuration = Duration.zero;
@@ -76,6 +78,9 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<double>? _downloadSubscription;
   Timer? _recordingTimer;
+
+  bool _foregroundServiceStarted = false;
+  bool _foregroundServiceWasRunning = false;
 
   late AnimationController _animationController;
   late Animation<double> _pulseAnimation;
@@ -116,8 +121,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       }
 
       // Check if model is already loaded (from preload or previous use)
-      if (_sttService.isModelLoaded && _sttService.loadedModelId == _modelId) {
-        LogService().log('TranscriptionDialog: Model already loaded, starting recording');
+      if (_sttService.isModelLoaded &&
+          _sttService.loadedModelId == _modelId) {
+        LogService()
+            .log('TranscriptionDialog: Model already loaded, starting recording');
         if (mounted) {
           _startRecording();
         }
@@ -127,9 +134,21 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       // Model not loaded yet - check if downloaded
       if (await _modelManager.isDownloaded(_modelId!)) {
         // Model available on disk, load it
-        await _sttService.loadModel(_modelId!);
         if (mounted) {
+          setState(() => _state = _DialogState.checkingModel);
+        }
+        final loaded = await _sttService.loadModel(_modelId!);
+        final warmed = loaded
+            ? await _sttService.ensureModelWarm(_modelId!)
+            : false;
+        if (loaded && warmed && mounted) {
           _startRecording();
+        } else if (mounted) {
+          setState(() {
+            _state = _DialogState.error;
+            _errorMessage =
+                widget.i18n.t('transcription_failed'); // generic fallback
+          });
         }
       } else {
         // Need to download model first
@@ -158,10 +177,31 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         }
       },
       onDone: () async {
-        // Model downloaded, load it and start recording immediately
-        await _sttService.loadModel(_modelId!);
+        // Model downloaded, load and warm it before recording
         if (mounted) {
-          _startRecording();
+          setState(() => _state = _DialogState.checkingModel);
+        }
+        try {
+          final loaded = await _sttService.loadModel(_modelId!);
+          final warmed = loaded
+              ? await _sttService.ensureModelWarm(_modelId!)
+              : false;
+          if (loaded && warmed && mounted) {
+            _startRecording();
+          } else if (mounted) {
+            setState(() {
+              _state = _DialogState.error;
+              _errorMessage = widget.i18n.t('transcription_failed');
+            });
+          }
+        } catch (e) {
+          LogService().log('TranscriptionDialog: Error preparing model: $e');
+          if (mounted) {
+            setState(() {
+              _state = _DialogState.error;
+              _errorMessage = e.toString();
+            });
+          }
         }
       },
       onError: (e) {
@@ -280,6 +320,8 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       return;
     }
 
+    await _beginForegroundProcessing();
+
     try {
       // Convert audio to WAV format for Whisper
       // The audio service records in Opus/WebM, but Whisper needs WAV
@@ -306,6 +348,8 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
           _errorMessage = e.toString();
         });
       }
+    } finally {
+      await _endForegroundProcessing();
     }
   }
 
@@ -370,6 +414,33 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
     Navigator.of(context).pop();
   }
 
+  Future<void> _beginForegroundProcessing() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    _foregroundServiceWasRunning = _foregroundService.isRunning;
+    if (!_foregroundServiceWasRunning) {
+      _foregroundServiceStarted = await _foregroundService.start();
+      if (_foregroundServiceStarted) {
+        LogService().log('TranscriptionDialog: Foreground service started for transcription');
+      }
+    }
+  }
+
+  Future<void> _endForegroundProcessing() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    if (_foregroundServiceStarted && !_foregroundServiceWasRunning) {
+      if (_foregroundService.isRunning && !_foregroundService.keepAliveEnabled) {
+        await _foregroundService.stop();
+        LogService().log('TranscriptionDialog: Foreground service stopped after transcription');
+      }
+    }
+    _foregroundServiceStarted = false;
+    _foregroundServiceWasRunning = false;
+  }
+
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
@@ -383,6 +454,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
     _downloadSubscription?.cancel();
     _recordingTimer?.cancel();
     _wavRecorder.dispose();
+    unawaited(_endForegroundProcessing());
     super.dispose();
   }
 
@@ -515,44 +587,46 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   }
 
   Widget _buildRecordingUI() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const SizedBox(height: 16),
-        // Animated waveform visualization
-        AnimatedBuilder(
-          animation: _pulseAnimation,
-          builder: (context, child) {
-            return CustomPaint(
-              size: const Size(120, 60),
-              painter: _AnimatedWaveformPainter(
-                color: Theme.of(context).colorScheme.error,
-                scale: _pulseAnimation.value,
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 16),
-        Text(
-          _formatDuration(_recordingDuration),
-          style: Theme.of(context).textTheme.headlineMedium,
-        ),
-        const SizedBox(height: 8),
-        // Progress bar showing time remaining
-        LinearProgressIndicator(
-          value: _recordingDuration.inMilliseconds /
-              widget.maxRecordingDuration.inMilliseconds,
-          backgroundColor:
-              Theme.of(context).colorScheme.surfaceContainerHighest,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          widget.i18n.t('up_to_seconds', params: ['${widget.maxRecordingDuration.inSeconds}']),
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 16),
+          // Animated waveform visualization
+          AnimatedBuilder(
+            animation: _pulseAnimation,
+            builder: (context, child) {
+              return CustomPaint(
+                size: const Size(120, 60),
+                painter: _AnimatedWaveformPainter(
+                  color: Theme.of(context).colorScheme.error,
+                  scale: _pulseAnimation.value,
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _formatDuration(_recordingDuration),
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 8),
+          // Progress bar showing time remaining
+          LinearProgressIndicator(
+            value: _recordingDuration.inMilliseconds /
+                widget.maxRecordingDuration.inMilliseconds,
+            backgroundColor:
+                Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            widget.i18n.t('up_to_seconds', params: ['${widget.maxRecordingDuration.inSeconds}']),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -571,9 +645,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
           widget.i18n.t('transcribing_audio'),
           textAlign: TextAlign.center,
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Text(
-          widget.i18n.t('please_wait'),
+          widget.i18n.t('transcription_wait_notice'),
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),

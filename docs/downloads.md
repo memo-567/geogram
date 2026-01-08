@@ -9,10 +9,16 @@ All files downloaded by Geogram clients and served by station servers.
 | Variable | Mobile | Desktop Linux | Desktop macOS | Desktop Windows |
 |----------|--------|---------------|---------------|-----------------|
 | `{data-root}` | `getApplicationDocumentsDirectory()/geogram` | `~/.local/share/geogram` | `~/.local/share/geogram` | `%USERPROFILE%/.local/share/geogram` |
-| `{app-support}` | N/A | `~/.local/share/geogram` | `~/Library/Application Support/geogram` | `%APPDATA%/geogram` |
+| `{app-support}` | `getApplicationSupportDirectory()` | `~/.local/share/geogram` | `~/Library/Application Support/geogram` | `%APPDATA%/geogram` |
+| `{app-cache}` | `getApplicationCacheDirectory()` | `~/.cache/geogram` | `~/Library/Caches/geogram` | `%LOCALAPPDATA%/geogram/cache` |
 | `{temp}` | `getExternalCacheDir()` or `getTemporaryDirectory()` | `/tmp` | `/tmp` | `%TEMP%` |
 | `{app-dir}` | N/A | Binary parent directory | App bundle | Exe directory |
 | `{cwd}` | N/A | Current working directory | Current working directory | Current working directory |
+
+**Android paths (example):**
+- `{data-root}` = `/data/user/0/dev.geogram/app_flutter/geogram/`
+- `{app-support}` = `/data/user/0/dev.geogram/files/`
+- `{app-cache}` = `/data/user/0/dev.geogram/cache/`
 
 Override: `GEOGRAM_DATA_DIR` env var or `--data-dir` CLI arg changes `{data-root}`.
 
@@ -205,6 +211,86 @@ TinyEMU/JSLinux files for running Alpine Linux VM.
 
 ---
 
+### 11. Application Log File
+
+**Service:** `lib/services/log_service.dart`
+
+Single file containing application debug logs. Can grow large over time.
+
+**Storage:** `{data-root}/log.txt`
+
+**Typical Size:** 10 MB - 200 MB (depending on usage and debug activity)
+
+---
+
+### 12. Collections Data
+
+**Service:** `lib/services/collection_service.dart`
+
+User's synced collections and files, organized by device callsign.
+
+**Storage:** `{data-root}/devices/{callsign}/`
+
+**Contents:**
+- Collection metadata and indexes
+- Synced files from stations
+- Place data and images
+
+**Typical Size:** Variable (depends on synced content)
+
+---
+
+### 13. Chat Data
+
+**Service:** `lib/services/chat_service.dart`
+
+Direct message conversations stored as restricted chat rooms.
+
+**Storage:** `{data-root}/chat/`
+
+**Typical Size:** Variable (depends on chat history)
+
+---
+
+### 14. Backups
+
+**Service:** `lib/services/backup_service.dart`
+
+Profile and data backups created by the user.
+
+**Storage:** `{data-root}/backups/`
+
+**Typical Size:** Variable
+
+---
+
+### 15. Transfers
+
+**Service:** `lib/services/transfer_service.dart`
+
+Pending and in-progress file transfers.
+
+**Storage:** `{data-root}/transfers/`
+
+**Typical Size:** Variable (temporary storage)
+
+---
+
+### 16. System Cache
+
+System-level cache managed by Flutter and WebView components.
+
+**Storage:** `{app-cache}/`
+
+**Contents:**
+- WebView cache
+- File picker temporary files
+- Crash reports
+
+**Typical Size:** 10-50 MB
+
+---
+
 ## Station Server Storage
 
 **Service:** `lib/services/station_server_service.dart`
@@ -249,15 +335,41 @@ Since the station server can also act as a client, using the same paths ensures 
 
 | Category | Source Priority | Storage Path | Size |
 |----------|-----------------|--------------|------|
-| Updates (backups) | GitHub > Station | `{app-support}/updates/` | 50-100 MB |
+| APK Backups | GitHub > Station | `{app-support}/updates/` | 50-100 MB per version |
 | Updates (mirror) | GitHub | `{data-root}/updates/` | 50-100 MB |
+| Log File | Local only | `{data-root}/log.txt` | 10-200 MB |
 | Tiles | Station > OSM/Esri | `{data-root}/tiles/` | Up to 500 MB |
+| Collections | Station sync | `{data-root}/devices/` | Variable |
 | Vision Models | Station > TFHub/HF | `{data-root}/bot/models/vision/` | 2 MB - 5 GB |
 | Whisper Models | Station > HF | `{data-root}/bot/models/whisper/` | 39 MB - 3 GB |
 | Music Models | Station only | `{data-root}/bot/models/music/` | Variable |
 | Music Tracks | Local only | `{data-root}/bot/music/tracks/` | Up to 500 MB |
 | Vision Cache | Local only | `{data-root}/bot/cache/vision/` | Variable |
-| Places | Station only | `{data-root}/devices/` | Variable |
 | Console VM | Station > Upstream | `{data-root}/console/vm/` | ~60-120 MB |
+| Chat Data | Local only | `{data-root}/chat/` | Variable |
+| Backups | Local only | `{data-root}/backups/` | Variable |
+| Transfers | Local only | `{data-root}/transfers/` | Variable |
+| System Cache | Local only | `{app-cache}/` | 10-50 MB |
 
-All storage is unified under `{data-root}` (the "Working folder" in Security settings).
+Most storage is unified under `{data-root}` (the "Working folder" in Security settings).
+APK backups and system cache use platform-specific directories (`{app-support}` and `{app-cache}`).
+
+---
+
+## Storage Settings UI
+
+**Page:** `lib/pages/storage_settings_page.dart`
+
+The Storage settings page (Settings > Storage) displays disk usage for all categories
+and allows users to clear individual categories to free up space.
+
+Categories are displayed with:
+- Icon and color coding
+- Translated name and description
+- Current size in human-readable format
+- Clear button (when data exists)
+
+The page handles three different storage roots:
+1. `{data-root}` - Main geogram data folder
+2. `{app-support}` - Platform app support directory (APK backups on Android)
+3. `{app-cache}` - Platform cache directory

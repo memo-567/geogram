@@ -1,0 +1,22 @@
+                        -H/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/src
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=21
+-DANDROID_PLATFORM=android-21
+-DANDROID_ABI=arm64-v8a
+-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a
+-DANDROID_NDK=/home/brito/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_ANDROID_NDK=/home/brito/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_TOOLCHAIN_FILE=/home/brito/Android/Sdk/ndk/27.0.12077973/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/home/brito/Android/Sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_C_FLAGS=-O3 -s -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden
+-DCMAKE_CXX_FLAGS=-O3 -s -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/u5j22246/obj/arm64-v8a
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/u5j22246/obj/arm64-v8a
+-B/home/brito/.pub-cache/hosted/pub.dev/whisper_flutter_new-1.0.1/android/.cxx/Release/u5j22246/arm64-v8a
+-GNinja
+-Wl,--gc-sections,--exclude-libs,ALL
+-DANDROID_STL=c++_static
+-DCMAKE_BUILD_TYPE=Release
+                        Build command args: []
+                        Version: 2

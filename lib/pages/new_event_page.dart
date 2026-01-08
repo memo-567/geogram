@@ -20,6 +20,7 @@ import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
+import '../widgets/transcribe_button_widget.dart';
 import 'contact_picker_page.dart';
 import 'location_picker_page.dart';
 import 'place_picker_page.dart';
@@ -1145,6 +1146,16 @@ class _NewEventPageState extends State<NewEventPage>
             labelText: _i18n.t('event_description'),
             border: const OutlineInputBorder(),
             alignLabelWithHint: true,
+            suffixIcon: TranscribeButtonWidget(
+              i18n: _i18n,
+              onTranscribed: (text) {
+                if (_contentController.text.isEmpty) {
+                  _contentController.text = text;
+                } else {
+                  _contentController.text += ' $text';
+                }
+              },
+            ),
           ),
           textCapitalization: TextCapitalization.sentences,
           maxLines: 8,

@@ -5,8 +5,11 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:whisper_flutter_new/whisper_flutter_new.dart';
 
 import '../models/whisper_model_info.dart';
@@ -94,6 +97,7 @@ class SpeechToTextService {
   String? _loadedModelId;
   SpeechToTextState _state = SpeechToTextState.idle;
   Completer<bool>? _preloadCompleter;
+  final Set<String> _warmedModels = {};
 
   final StreamController<SpeechToTextState> _stateController =
       StreamController<SpeechToTextState>.broadcast();
@@ -139,14 +143,21 @@ class SpeechToTextService {
 
     try {
       final success = await loadModel(modelId);
+      final warmed = success ? await _warmupModel(modelId) : false;
       stopwatch.stop();
+      final ready = success && warmed;
       LogService().log(
-          'SpeechToTextService: Preload completed in ${stopwatch.elapsedMilliseconds}ms');
-      _preloadCompleter!.complete(success);
+          'SpeechToTextService: Preload completed in ${stopwatch.elapsedMilliseconds}ms (ready: $ready)');
+      _preloadCompleter!.complete(ready);
     } catch (e) {
       LogService().log('SpeechToTextService: Preload failed: $e');
       _preloadCompleter!.completeError(e);
     }
+  }
+
+  /// Ensure the current model is fully warmed; returns true when ready.
+  Future<bool> ensureModelWarm(String modelId) async {
+    return _warmupModel(modelId);
   }
 
   void _setState(SpeechToTextState state) {
@@ -229,6 +240,99 @@ class SpeechToTextService {
     _setState(SpeechToTextState.idle);
   }
 
+  /// Generate and transcribe a short silent WAV to fully load the model into memory.
+  Future<bool> _warmupModel(String modelId) async {
+    if (_whisper == null || _loadedModelId != modelId) {
+      return false;
+    }
+    if (_warmedModels.contains(modelId)) {
+      return true;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final warmupPath = p.join(tempDir.path, 'whisper_warmup.wav');
+
+    try {
+      await _createSilentWav(warmupPath);
+      final warmupStopwatch = Stopwatch()..start();
+      final cpuCores = Platform.numberOfProcessors;
+      final warmupThreads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
+
+      await _whisper!.transcribe(
+        transcribeRequest: TranscribeRequest(
+          audio: warmupPath,
+          isTranslate: false,
+          isNoTimestamps: true,
+          splitOnWord: false,
+          threads: warmupThreads,
+          nProcessors: 1,
+          speedUp: false,
+        ),
+      );
+
+      warmupStopwatch.stop();
+      _warmedModels.add(modelId);
+      LogService().log(
+          'SpeechToTextService: Warmed up model $modelId in ${warmupStopwatch.elapsedMilliseconds}ms');
+      return true;
+    } catch (e) {
+      _warmedModels.remove(modelId);
+      LogService().log('SpeechToTextService: Warmup failed for $modelId: $e');
+      return false;
+    } finally {
+      try {
+        final file = File(warmupPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  Future<void> _createSilentWav(String path) async {
+    const sampleRate = 16000;
+    const channels = 1;
+    const bitsPerSample = 16;
+    const durationMs = 400;
+    final totalSamples = (sampleRate * durationMs) ~/ 1000;
+    final bytesPerSample = bitsPerSample ~/ 8;
+    final dataSize = totalSamples * channels * bytesPerSample;
+    final byteRate = sampleRate * channels * bytesPerSample;
+    final blockAlign = channels * bytesPerSample;
+
+    final builder = BytesBuilder();
+    void writeString(String value) => builder.add(value.codeUnits);
+    void writeUint32(int value) {
+      final buffer = ByteData(4)..setUint32(0, value, Endian.little);
+      builder.add(buffer.buffer.asUint8List());
+    }
+
+    void writeUint16(int value) {
+      final buffer = ByteData(2)..setUint16(0, value, Endian.little);
+      builder.add(buffer.buffer.asUint8List());
+    }
+
+    writeString('RIFF');
+    writeUint32(36 + dataSize);
+    writeString('WAVE');
+    writeString('fmt ');
+    writeUint32(16);
+    writeUint16(1); // PCM
+    writeUint16(channels);
+    writeUint32(sampleRate);
+    writeUint32(byteRate);
+    writeUint16(blockAlign);
+    writeUint16(bitsPerSample);
+    writeString('data');
+    writeUint32(dataSize);
+    builder.add(Uint8List(dataSize)); // Silence
+
+    final file = File(path);
+    await file.writeAsBytes(builder.toBytes(), flush: true);
+  }
+
   /// Transcribe an audio file to text
   ///
   /// The audio file should be in a supported format (wav, mp3, etc.)
@@ -264,13 +368,16 @@ class SpeechToTextService {
       // whisper_flutter_new handles isolate/background processing internally
       // Use available CPU cores for faster processing (default is 6)
       final cpuCores = Platform.numberOfProcessors;
+      final threads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
       final result = await _whisper!.transcribe(
         transcribeRequest: TranscribeRequest(
           audio: audioFilePath,
           isTranslate: false,
           isNoTimestamps: true,
-          splitOnWord: true,
-          threads: cpuCores > 4 ? cpuCores - 2 : cpuCores, // Leave 2 cores for system
+          splitOnWord: false,
+          threads: threads,
+          nProcessors: 1,
+          speedUp: false,
         ),
       );
 
@@ -327,7 +434,10 @@ class SpeechToTextService {
     }
 
     // Load the model
-    await loadModel(id);
+    final loaded = await loadModel(id);
+    if (loaded) {
+      await ensureModelWarm(id);
+    }
   }
 
   void dispose() {

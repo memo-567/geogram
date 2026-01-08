@@ -716,7 +716,7 @@ class StationService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final stationName = data['callsign'] as String? ?? stationCallsign ?? stationUrl;
+        final stationName = data['name'] as String? ?? stationCallsign ?? stationUrl;
         final roomsData = data['rooms'] as List<dynamic>? ?? [];
 
         final rooms = roomsData.map((room) {
