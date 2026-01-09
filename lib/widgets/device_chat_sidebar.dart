@@ -169,6 +169,49 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     );
   }
 
+  /// Check if a string looks like a URL
+  bool _isUrlLike(String value) {
+    return value.startsWith('wss://') ||
+        value.startsWith('ws://') ||
+        value.startsWith('https://') ||
+        value.startsWith('http://');
+  }
+
+  /// Strip protocol prefix from URL (wss://, ws://, https://, http://)
+  String _stripUrlProtocol(String url) {
+    return url
+        .replaceFirst('wss://', '')
+        .replaceFirst('ws://', '')
+        .replaceFirst('https://', '')
+        .replaceFirst('http://', '');
+  }
+
+  /// Format device title: show "Nickname (CALLSIGN)" when nickname available,
+  /// URL domain when no nickname, callsign as last resort
+  String _formatDeviceTitle(DeviceSource device) {
+    final name = device.name;
+    final callsign = device.callsign;
+    final url = device.url;
+
+    // Check if name is a proper nickname (not empty, not a URL, not same as callsign)
+    final hasNickname = name.isNotEmpty &&
+        !_isUrlLike(name) &&
+        name != callsign;
+
+    if (hasNickname) {
+      // Show "Nickname (CALLSIGN)" when we have a proper nickname
+      return callsign != null ? '$name ($callsign)' : name;
+    }
+
+    // No nickname - prefer URL domain over callsign
+    if (url != null && url.isNotEmpty) {
+      return _stripUrlProtocol(url);
+    }
+
+    // Last resort: callsign
+    return callsign ?? name;
+  }
+
   Widget _buildDeviceHeader(
     ThemeData theme,
     DeviceSource device,
@@ -220,27 +263,13 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               const SizedBox(width: 8),
               // Device name and callsign
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      device.name,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (device.callsign != null)
-                      Text(
-                        device.callsign!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontFamily: 'monospace',
-                          fontSize: 11,
-                        ),
-                      ),
-                  ],
+                child: Text(
+                  _formatDeviceTitle(device),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               // Status text (only shown when offline)

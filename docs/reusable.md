@@ -29,6 +29,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Dialog Widgets
 - [NewChannelDialog](#newchanneldialog) - Create chat channels
 - [NewThreadDialog](#newthreaddialog) - Create forum threads
+- [AddTrackableDialog](#addtrackabledialog) - Add exercise or measurement entries
 
 ### Selector Widgets
 - [CallsignSelectorWidget](#callsignselectorwidget) - Profile switching
@@ -845,6 +846,158 @@ if (result != null) {
 - Duplicate title detection
 - Character counters
 - Helpful tip box
+
+---
+
+### AddTrackableDialog
+
+**File:** `lib/tracker/dialogs/add_trackable_dialog.dart`
+
+Unified dialog for adding exercise or measurement entries. Replaces separate AddExerciseDialog and AddMeasurementDialog with a single implementation.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `service` | TrackerService | Yes | Tracker service for saving entries |
+| `i18n` | I18nService | Yes | Localization service |
+| `kind` | TrackableKind | Yes | Type: exercise or measurement |
+| `preselectedTypeId` | String? | No | Pre-select a specific type (hides dropdown) |
+| `year` | int | Yes | Year for storage |
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `showExercise(context, ...)` | `Future<bool?>` | Show dialog for exercise entry |
+| `showMeasurement(context, ...)` | `Future<bool?>` | Show dialog for measurement entry |
+
+**Usage (Exercise):**
+```dart
+final saved = await AddTrackableDialog.showExercise(
+  context,
+  service: trackerService,
+  i18n: widget.i18n,
+  year: DateTime.now().year,
+  preselectedTypeId: 'pushups', // Optional: pre-select type
+);
+
+if (saved == true) {
+  // Entry was saved, refresh data
+  await loadExercises();
+}
+```
+
+**Usage (Measurement):**
+```dart
+final saved = await AddTrackableDialog.showMeasurement(
+  context,
+  service: trackerService,
+  i18n: widget.i18n,
+  year: DateTime.now().year,
+  preselectedTypeId: 'weight', // Optional: pre-select type
+);
+
+if (saved == true) {
+  await loadMeasurements();
+}
+```
+
+**Supported Types:**
+
+Exercises (TrackableKind.exercise):
+| ID | Name | Unit | Max | Category |
+|----|------|------|-----|----------|
+| pushups | Push-ups | reps | 100 | Strength |
+| abdominals | Abdominals | reps | 100 | Strength |
+| squats | Squats | reps | 100 | Strength |
+| pullups | Pull-ups | reps | 100 | Strength |
+| lunges | Lunges | reps | 100 | Strength |
+| planks | Planks | seconds | 300 | Strength |
+| running | Running | meters | 50000 | Cardio |
+| walking | Walking | meters | 50000 | Cardio |
+| cycling | Cycling | meters | 100000 | Cardio |
+| swimming | Swimming | meters | 10000 | Cardio |
+
+Measurements (TrackableKind.measurement):
+| ID | Name | Unit | Range | Decimals |
+|----|------|------|-------|----------|
+| weight | Weight | kg | 0-500 | 1 |
+| height | Height | cm | 0-300 | 1 |
+| heart_rate | Heart Rate | bpm | 0-300 | 0 |
+| blood_glucose | Blood Glucose | mg/dL | 0-600 | 0 |
+| body_fat | Body Fat | % | 0-100 | 1 |
+| body_temperature | Temperature | °C | 30-45 | 1 |
+| body_water | Body Water | % | 0-100 | 1 |
+| muscle_mass | Muscle Mass | kg | 0-200 | 1 |
+| blood_pressure | Blood Pressure | mmHg | Special | N/A |
+
+**Input Modes:**
+
+1. **Integer Dropdown** (exercises, heart_rate, blood_glucose):
+   - Dropdown from 1 to maxCount
+   - Remembers last selected value per type
+   - Stored in ConfigService: `tracker.lastValue.{typeId}`
+
+2. **Decimal Field** (weight, body_fat, etc.):
+   - Text field with decimal keyboard
+   - Validates min/max range
+   - Shows unit suffix
+
+3. **Blood Pressure** (special case):
+   - Separate systolic/diastolic fields (required)
+   - Optional heart rate field
+   - Validates: systolic 50-300, diastolic 30-200
+
+**Features:**
+- Type dropdown (hidden when preselectedTypeId is set)
+- Duration field for cardio exercises (minutes)
+- Notes field with voice-to-text transcription button
+- Remembers last value for integer types
+- Form validation with localized error messages
+- Loading state with spinner during save
+
+**Related Models:**
+
+`TrackableTypeConfig` (lib/tracker/models/trackable_type.dart):
+```dart
+enum TrackableKind { exercise, measurement }
+enum TrackableCategory { strength, cardio, flexibility, health }
+
+class TrackableTypeConfig {
+  final String id;
+  final String displayName;
+  final String unit;
+  final TrackableKind kind;
+  final TrackableCategory category;
+  final int decimalPlaces;    // 0 for integers
+  final double? minValue;
+  final double? maxValue;
+  final int? maxCount;        // For dropdown max
+
+  bool get isExercise;
+  bool get isMeasurement;
+  bool get isInteger;
+  bool get isCardio;
+
+  static Map<String, TrackableTypeConfig> builtInTypes;
+  static Map<String, TrackableTypeConfig> exerciseTypes;
+  static Map<String, TrackableTypeConfig> measurementTypes;
+}
+```
+
+**Required i18n Keys:**
+- `tracker_add_exercise`, `tracker_add_measurement`
+- `tracker_exercise_type`, `tracker_measurement_type`
+- `tracker_count`, `tracker_distance_meters`, `tracker_duration_minutes`
+- `tracker_value`, `tracker_notes`
+- `tracker_required_field`, `tracker_invalid_number`
+- `tracker_required`, `tracker_invalid`
+- `tracker_systolic`, `tracker_diastolic`, `tracker_heart_rate_optional`
+- `tracker_min`, `tracker_max`
+- `tracker_blood_pressure`
+- `tracker_exercise_{id}` for each exercise type
+- `tracker_measurement_{id}` for each measurement type
+- `save`, `cancel`
 
 ---
 
@@ -1782,6 +1935,7 @@ TextFormField(
 | VoiceRecorderWidget | widgets/ | Recorder | Record voice |
 | NewChannelDialog | widgets/ | Dialog | Create chat channels |
 | NewThreadDialog | widgets/ | Dialog | Create forum threads |
+| AddTrackableDialog | tracker/dialogs/ | Dialog | Add exercise or measurement entries |
 | CallsignSelectorWidget | widgets/ | Selector | Profile switching |
 | ProfileSwitcher | widgets/ | Selector | App bar profile |
 | FolderTreeWidget | widgets/inventory/ | Tree | Folder navigation |

@@ -1049,17 +1049,24 @@ class ContactService {
 
   /// Save contact (create or update)
   /// Returns error message if duplicate found, null on success
-  Future<String?> saveContact(Contact contact, {String? groupPath}) async {
+  Future<String?> saveContact(
+    Contact contact, {
+    String? groupPath,
+    bool skipDuplicateCheck = false,
+    bool skipFastJsonRebuild = false,
+  }) async {
     if (_collectionPath == null) return 'Collection not initialized';
 
     // Check for duplicates (callsign and npub)
-    final duplicateError = await _checkDuplicates(
-      contact.callsign,
-      contact.npub,
-      excludeFilePath: contact.filePath,
-    );
-    if (duplicateError != null) {
-      return duplicateError;
+    if (!skipDuplicateCheck) {
+      final duplicateError = await _checkDuplicates(
+        contact.callsign,
+        contact.npub,
+        excludeFilePath: contact.filePath,
+      );
+      if (duplicateError != null) {
+        return duplicateError;
+      }
     }
 
     final savePath = groupPath != null && groupPath.isNotEmpty
@@ -1090,7 +1097,9 @@ class ContactService {
 
       // Invalidate and rebuild fast.json cache (await to ensure UI sees updated data)
       invalidateSummaryCache();
-      await rebuildFastJson();
+      if (!skipFastJsonRebuild) {
+        await rebuildFastJson();
+      }
 
       return null; // Success
     } catch (e) {

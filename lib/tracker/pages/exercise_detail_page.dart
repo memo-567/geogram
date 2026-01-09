@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/tracker_models.dart';
 import '../services/tracker_service.dart';
-import '../dialogs/add_exercise_dialog.dart';
+import '../dialogs/add_trackable_dialog.dart';
 import '../../services/i18n_service.dart';
 
 /// Detail page for viewing exercise entries and statistics
@@ -469,11 +469,11 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
   }
 
   Future<void> _addEntry() async {
-    final result = await AddExerciseDialog.show(
+    final result = await AddTrackableDialog.showExercise(
       context,
       service: widget.service,
       i18n: widget.i18n,
-      preselectedExerciseId: widget.exerciseId,
+      preselectedTypeId: widget.exerciseId,
       year: widget.year,
     );
 

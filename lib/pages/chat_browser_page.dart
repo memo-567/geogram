@@ -2768,6 +2768,50 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     ];
   }
 
+  /// Check if a string looks like a URL
+  bool _isUrlLike(String value) {
+    return value.startsWith('wss://') ||
+        value.startsWith('ws://') ||
+        value.startsWith('https://') ||
+        value.startsWith('http://');
+  }
+
+  /// Strip protocol prefix from URL
+  String _stripUrlProtocol(String url) {
+    return url
+        .replaceFirst('wss://', '')
+        .replaceFirst('ws://', '')
+        .replaceFirst('https://', '')
+        .replaceFirst('http://', '');
+  }
+
+  /// Format cached device title: show "Nickname (CALLSIGN)" when nickname available,
+  /// URL domain when no nickname, callsign as last resort
+  String _formatCachedDeviceTitle(CachedDeviceRooms device) {
+    final name = device.name;
+    final callsign = device.callsign;
+    final url = device.url;
+
+    // Check if name is a proper nickname (not empty, not a URL, not same as callsign)
+    final hasNickname = name != null &&
+        name.isNotEmpty &&
+        !_isUrlLike(name) &&
+        name != callsign;
+
+    if (hasNickname) {
+      // Show "Nickname (CALLSIGN)" when we have a proper nickname
+      return '$name ($callsign)';
+    }
+
+    // No nickname - prefer URL domain over callsign
+    if (url != null && url.isNotEmpty) {
+      return _stripUrlProtocol(url);
+    }
+
+    // Last resort: callsign
+    return callsign;
+  }
+
   /// Build cached devices section widgets
   List<Widget> _buildCachedDevicesSection(ThemeData theme) {
     // Filter out the device already shown in station section (by callsign, not index)
@@ -2813,7 +2857,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      cachedDevice.name ?? cachedDevice.callsign,
+                      _formatCachedDeviceTitle(cachedDevice),
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),

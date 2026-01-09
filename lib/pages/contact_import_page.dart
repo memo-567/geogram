@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../models/contact.dart' as geogram;
 import '../services/contact_import_service.dart';
 import '../services/contact_service.dart';
 import '../services/i18n_service.dart';
@@ -32,6 +33,7 @@ class _ContactImportPageState extends State<ContactImportPage> {
   final I18nService _i18n = I18nService();
 
   List<DeviceContactInfo> _deviceContacts = [];
+  List<geogram.Contact> _existingContacts = [];
   bool _isLoading = true;
   bool _isImporting = false;
   bool _permissionDenied = false;
@@ -62,6 +64,8 @@ class _ContactImportPageState extends State<ContactImportPage> {
   Future<void> _checkPermissionAndLoad() async {
     setState(() {
       _isLoading = true;
+      _deviceContacts = [];
+      _existingContacts = [];
       _permissionDenied = false;
       _permissionPermanentlyDenied = false;
       _errorMessage = null;
@@ -128,6 +132,7 @@ class _ContactImportPageState extends State<ContactImportPage> {
 
       setState(() {
         _deviceContacts = deviceContacts;
+        _existingContacts = existingContacts;
         _isLoading = false;
       });
     } catch (e) {
@@ -178,6 +183,7 @@ class _ContactImportPageState extends State<ContactImportPage> {
       contacts: _deviceContacts,
       collectionPath: widget.collectionPath,
       groupPath: importGroupPath,
+      existingContacts: _existingContacts,
       onProgress: (imported, total) {
         setState(() {
           _importProgress = imported;

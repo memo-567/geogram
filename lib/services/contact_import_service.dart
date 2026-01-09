@@ -21,6 +21,8 @@ class DeviceContactInfo {
   final List<String> phones;
   final List<String> addresses;
   final List<String> websites;
+  final Map<String, String> socialHandles;
+  final List<geogram.ContactDateReminder> dateReminders;
   final String? note;
   final Uint8List? photo;
   bool selected;
@@ -33,6 +35,8 @@ class DeviceContactInfo {
     this.phones = const [],
     this.addresses = const [],
     this.websites = const [],
+    this.socialHandles = const {},
+    this.dateReminders = const [],
     this.note,
     this.photo,
     this.selected = true,
@@ -99,27 +103,32 @@ class ContactImportService {
     LogService().log('ContactImport: Fetching device contacts...');
 
     try {
-      // Request contacts with photo and all properties
+      // Request contacts with properties and thumbnails for faster imports
       final contacts = await FlutterContacts.getContacts(
         withProperties: true,
-        withPhoto: true,
-        withThumbnail: false, // We use full photo
+        withThumbnail: true,
+        withPhoto: false,
+        sorted: false,
       );
 
       LogService().log('ContactImport: Found ${contacts.length} contacts');
 
       return contacts.map((contact) {
+        final displayName = (contact.displayName.isNotEmpty
+                ? contact.displayName
+                : _buildDisplayName(contact))
+            .trim();
         return DeviceContactInfo(
           id: contact.id,
-          displayName: contact.displayName.isNotEmpty
-              ? contact.displayName
-              : _buildDisplayName(contact),
-          emails: contact.emails.map((e) => e.address).toList(),
-          phones: contact.phones.map((p) => p.number).toList(),
-          addresses: contact.addresses.map((a) => _formatAddress(a)).toList(),
-          websites: contact.websites.map((w) => w.url).toList(),
-          note: contact.notes.isNotEmpty ? contact.notes.first.note : null,
-          photo: contact.photo,
+          displayName: displayName,
+          emails: _cleanEmails(contact.emails.map((e) => e.address)),
+          phones: _cleanPhones(contact.phones.map((p) => p.number)),
+          addresses: _cleanAddresses(contact.addresses.map(_formatAddress)),
+          websites: _cleanWebsites(contact.websites.map((w) => w.url)),
+          socialHandles: _buildSocialHandles(contact.socialMedias),
+          dateReminders: _buildDateReminders(contact.events),
+          note: _combineNotes(contact.notes),
+          photo: contact.photoOrThumbnail,
         );
       }).where((c) => c.displayName.isNotEmpty).toList();
     } catch (e) {
@@ -131,8 +140,14 @@ class ContactImportService {
   /// Build display name from name parts
   String _buildDisplayName(Contact contact) {
     final parts = <String>[];
+    if (contact.name.prefix.isNotEmpty) parts.add(contact.name.prefix);
     if (contact.name.first.isNotEmpty) parts.add(contact.name.first);
+    if (contact.name.middle.isNotEmpty) parts.add(contact.name.middle);
     if (contact.name.last.isNotEmpty) parts.add(contact.name.last);
+    if (contact.name.suffix.isNotEmpty) parts.add(contact.name.suffix);
+    if (parts.isEmpty && contact.name.nickname.isNotEmpty) {
+      return contact.name.nickname;
+    }
     if (parts.isEmpty && contact.emails.isNotEmpty) {
       return contact.emails.first.address.split('@').first;
     }
@@ -144,13 +159,158 @@ class ContactImportService {
 
   /// Format address to single line
   String _formatAddress(Address address) {
+    final formatted = address.address.trim();
+    final base = formatted.isNotEmpty ? formatted : _formatAddressParts(address);
+    if (base.isEmpty) return '';
+    final label = _formatAddressLabel(address);
+    final singleLine = base.replaceAll(RegExp(r'[\r\n]+'), ', ').trim();
+    if (singleLine.isEmpty) return '';
+    return label != null ? '$label: $singleLine' : singleLine;
+  }
+
+  String _formatAddressParts(Address address) {
     final parts = <String>[];
     if (address.street.isNotEmpty) parts.add(address.street);
+    if (address.pobox.isNotEmpty) parts.add(address.pobox);
+    if (address.neighborhood.isNotEmpty) parts.add(address.neighborhood);
+    if (address.subLocality.isNotEmpty) parts.add(address.subLocality);
     if (address.city.isNotEmpty) parts.add(address.city);
+    if (address.subAdminArea.isNotEmpty) parts.add(address.subAdminArea);
     if (address.state.isNotEmpty) parts.add(address.state);
     if (address.postalCode.isNotEmpty) parts.add(address.postalCode);
     if (address.country.isNotEmpty) parts.add(address.country);
+    if (address.isoCountry.isNotEmpty) parts.add(address.isoCountry);
     return parts.join(', ');
+  }
+
+  String? _formatAddressLabel(Address address) {
+    switch (address.label) {
+      case AddressLabel.custom:
+        final custom = address.customLabel.trim();
+        return custom.isNotEmpty ? custom : null;
+      case AddressLabel.other:
+        return 'other';
+      case AddressLabel.home:
+      case AddressLabel.school:
+      case AddressLabel.work:
+        return address.label.name;
+    }
+  }
+
+  List<String> _cleanEmails(Iterable<String> emails) {
+    return _dedupeByNormalized(emails, (email) => email.toLowerCase());
+  }
+
+  List<String> _cleanPhones(Iterable<String> phones) {
+    return _dedupeByNormalized(phones, _normalizePhone);
+  }
+
+  List<String> _cleanWebsites(Iterable<String> websites) {
+    return _dedupeByNormalized(websites, (website) => website.toLowerCase());
+  }
+
+  List<String> _cleanAddresses(Iterable<String> addresses) {
+    return _dedupeByNormalized(addresses, (address) => address.toLowerCase());
+  }
+
+  String? _combineNotes(List<Note> notes) {
+    if (notes.isEmpty) return null;
+    final seen = <String>{};
+    final parts = <String>[];
+    for (final note in notes) {
+      final trimmed = note.note.trim();
+      if (trimmed.isEmpty) continue;
+      if (seen.add(trimmed)) {
+        parts.add(trimmed);
+      }
+    }
+    if (parts.isEmpty) return null;
+    return parts.join('\n\n');
+  }
+
+  Map<String, String> _buildSocialHandles(List<SocialMedia> socialMedias) {
+    if (socialMedias.isEmpty) return const <String, String>{};
+    final handles = <String, String>{};
+    for (final social in socialMedias) {
+      final handle = social.userName.trim();
+      if (handle.isEmpty) continue;
+
+      String? label;
+      if (social.label == SocialMediaLabel.custom) {
+        final custom = social.customLabel.trim();
+        if (custom.isNotEmpty) {
+          label = custom;
+        }
+      } else if (social.label != SocialMediaLabel.other) {
+        label = social.label.name;
+      } else if (social.customLabel.trim().isNotEmpty) {
+        label = social.customLabel.trim();
+      }
+
+      if (label == null || label.isEmpty) continue;
+      final key = label.toLowerCase();
+      handles.putIfAbsent(key, () => handle);
+    }
+    return handles;
+  }
+
+  List<geogram.ContactDateReminder> _buildDateReminders(List<Event> events) {
+    if (events.isEmpty) return const <geogram.ContactDateReminder>[];
+    final reminders = <geogram.ContactDateReminder>[];
+    final seen = <String>{};
+
+    for (final event in events) {
+      if (event.month < 1 || event.month > 12 || event.day < 1 || event.day > 31) {
+        continue;
+      }
+
+      final type = _eventLabelToReminderType(event.label);
+      final label = event.label == EventLabel.custom && event.customLabel.trim().isNotEmpty
+          ? event.customLabel.trim()
+          : null;
+      final key = '${type.name}|${label ?? ''}|${event.month}|${event.day}|${event.year ?? ''}';
+      if (!seen.add(key)) continue;
+
+      reminders.add(geogram.ContactDateReminder(
+        type: type,
+        label: label,
+        month: event.month,
+        day: event.day,
+        year: event.year,
+      ));
+    }
+
+    return reminders;
+  }
+
+  geogram.ContactDateReminderType _eventLabelToReminderType(EventLabel label) {
+    switch (label) {
+      case EventLabel.birthday:
+        return geogram.ContactDateReminderType.birthday;
+      case EventLabel.anniversary:
+        return geogram.ContactDateReminderType.married;
+      case EventLabel.other:
+      case EventLabel.custom:
+        return geogram.ContactDateReminderType.other;
+    }
+  }
+
+  List<String> _dedupeByNormalized(
+    Iterable<String> values,
+    String Function(String value) normalize,
+  ) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) continue;
+      final key = normalize(trimmed);
+      if (key.isEmpty) continue;
+      if (seen.add(key)) {
+        result.add(trimmed);
+      }
+    }
+    return result;
   }
 
   /// Mark duplicates in the list based on existing Geogram contacts
@@ -158,38 +318,35 @@ class ContactImportService {
     List<DeviceContactInfo> deviceContacts,
     List<geogram.Contact> existingContacts,
   ) async {
-    for (var device in deviceContacts) {
-      device.isDuplicate = _isDuplicate(device, existingContacts);
+    final existingNames = <String>{};
+    final existingEmails = <String>{};
+    final existingPhones = <String>{};
+
+    for (final contact in existingContacts) {
+      existingNames.add(contact.displayName.toLowerCase());
+      for (final email in contact.emails) {
+        final trimmed = email.trim();
+        if (trimmed.isNotEmpty) {
+          existingEmails.add(trimmed.toLowerCase());
+        }
+      }
+      for (final phone in contact.phones) {
+        final normalized = _normalizePhone(phone);
+        if (normalized.isNotEmpty) {
+          existingPhones.add(normalized);
+        }
+      }
+    }
+
+    for (final device in deviceContacts) {
+      final nameMatch = existingNames.contains(device.displayName.toLowerCase());
+      final emailMatch = device.emails.any((email) => existingEmails.contains(email.toLowerCase()));
+      final phoneMatch = device.phones.any((phone) => existingPhones.contains(_normalizePhone(phone)));
+      device.isDuplicate = nameMatch || emailMatch || phoneMatch;
       if (device.isDuplicate) {
         device.selected = false; // Don't pre-select duplicates
       }
     }
-  }
-
-  /// Check if device contact is a duplicate
-  bool _isDuplicate(DeviceContactInfo device, List<geogram.Contact> existing) {
-    for (var contact in existing) {
-      // Check display name (case-insensitive)
-      if (contact.displayName.toLowerCase() == device.displayName.toLowerCase()) {
-        return true;
-      }
-
-      // Check emails
-      for (var email in device.emails) {
-        if (contact.emails.any((e) => e.toLowerCase() == email.toLowerCase())) {
-          return true;
-        }
-      }
-
-      // Check phones (normalize for comparison)
-      for (var phone in device.phones) {
-        final normalizedPhone = _normalizePhone(phone);
-        if (contact.phones.any((p) => _normalizePhone(p) == normalizedPhone)) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   /// Normalize phone for comparison
@@ -197,15 +354,76 @@ class ContactImportService {
     return phone.replaceAll(RegExp(r'[^\d+]'), '');
   }
 
+  NostrKeys _generateUniqueKeys(Set<String> usedCallsigns, Set<String> usedNpubs) {
+    while (true) {
+      final keys = NostrKeyGenerator.generateKeyPair();
+      if (usedCallsigns.add(keys.callsign) && usedNpubs.add(keys.npub)) {
+        return keys;
+      }
+    }
+  }
+
+  String _detectImageExtension(Uint8List bytes) {
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF) {
+      return 'jpg';
+    }
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0D &&
+        bytes[5] == 0x0A &&
+        bytes[6] == 0x1A &&
+        bytes[7] == 0x0A) {
+      return 'png';
+    }
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x38 &&
+        (bytes[4] == 0x39 || bytes[4] == 0x37) &&
+        bytes[5] == 0x61) {
+      return 'gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'webp';
+    }
+    return 'jpg';
+  }
+
   /// Import selected contacts
   Future<ImportResult> importContacts({
     required List<DeviceContactInfo> contacts,
     required String collectionPath,
     required String? groupPath,
+    List<geogram.Contact>? existingContacts,
     required Function(int imported, int total) onProgress,
   }) async {
     final contactService = ContactService();
     await contactService.initializeCollection(collectionPath);
+
+    final existing = existingContacts ?? await contactService.loadAllContactsRecursively();
+    final usedCallsigns = existing.map((contact) => contact.callsign).toSet();
+    final usedNpubs = <String>{};
+    for (final contact in existing) {
+      final npub = contact.npub;
+      if (npub != null && npub.isNotEmpty) {
+        usedNpubs.add(npub);
+      }
+    }
 
     int imported = 0;
     int skipped = 0;
@@ -217,11 +435,11 @@ class ContactImportService {
 
     for (var i = 0; i < selectedContacts.length; i++) {
       final device = selectedContacts[i];
-      onProgress(i, total);
+      onProgress(i + 1, total);
 
       try {
         // Generate temporary NOSTR identity
-        final keys = NostrKeyGenerator.generateKeyPair();
+        final keys = _generateUniqueKeys(usedCallsigns, usedNpubs);
 
         // Create timestamp
         final now = DateTime.now();
@@ -235,10 +453,11 @@ class ContactImportService {
         // Save profile picture if available
         String? profilePicture;
         if (device.photo != null && device.photo!.isNotEmpty) {
+          final extension = _detectImageExtension(device.photo!);
           profilePicture = await contactService.saveProfilePictureFromBytes(
             keys.callsign,
             device.photo!,
-            'jpg',
+            extension,
           );
         }
 
@@ -253,6 +472,8 @@ class ContactImportService {
           phones: device.phones,
           addresses: device.addresses,
           websites: device.websites,
+          socialHandles: device.socialHandles,
+          dateReminders: device.dateReminders,
           notes: device.note ?? '',
           profilePicture: profilePicture,
           isTemporaryIdentity: true,
@@ -262,7 +483,12 @@ class ContactImportService {
         );
 
         // Save contact
-        final error = await contactService.saveContact(contact, groupPath: groupPath);
+        final error = await contactService.saveContact(
+          contact,
+          groupPath: groupPath,
+          skipDuplicateCheck: true,
+          skipFastJsonRebuild: true,
+        );
 
         if (error != null) {
           failed++;
@@ -279,6 +505,10 @@ class ContactImportService {
 
     // Add skipped duplicates count
     skipped = contacts.where((c) => c.isDuplicate).length;
+
+    if (imported > 0) {
+      await contactService.rebuildFastJson();
+    }
 
     LogService().log('ContactImport: Complete - imported=$imported, skipped=$skipped, failed=$failed');
 

@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/tracker_models.dart';
+import '../models/trackable_type.dart';
 import '../services/tracker_service.dart';
 import '../services/path_recording_service.dart';
-import '../dialogs/add_exercise_dialog.dart';
-import '../dialogs/add_measurement_dialog.dart';
+import '../dialogs/add_trackable_dialog.dart';
 import '../dialogs/start_path_dialog.dart';
 import '../widgets/active_recording_banner.dart';
 import 'exercise_detail_page.dart';
@@ -405,7 +405,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       itemCount: _visibleExercises.length,
       itemBuilder: (context, index) {
         final exerciseId = _visibleExercises[index];
-        final config = ExerciseTypeConfig.builtInTypes[exerciseId];
+        final config = TrackableTypeConfig.exerciseTypes[exerciseId];
         if (config == null) return const SizedBox.shrink();
 
         final hasData = _exerciseTypes.contains(exerciseId);
@@ -456,7 +456,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   void _showAddExerciseToListDialog() {
     // Get exercises not yet in the visible list
-    final availableExercises = ExerciseTypeConfig.builtInTypes.keys
+    final availableExercises = TrackableTypeConfig.exerciseTypes.keys
         .where((id) => !_visibleExercises.contains(id))
         .toList();
 
@@ -478,7 +478,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             itemCount: availableExercises.length,
             itemBuilder: (context, index) {
               final exerciseId = availableExercises[index];
-              final config = ExerciseTypeConfig.builtInTypes[exerciseId]!;
+              final config = TrackableTypeConfig.exerciseTypes[exerciseId]!;
 
               return ListTile(
                 leading: Icon(_getExerciseIcon(config.category)),
@@ -507,14 +507,14 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     }
 
     // Show all built-in measurement types, mark those with data
-    final allTypes = MeasurementTypeConfig.builtInTypes.keys.toList();
+    final allTypes = TrackableTypeConfig.measurementTypes.keys.toList();
 
     return ListView.builder(
       padding: const EdgeInsets.all(8),
       itemCount: allTypes.length,
       itemBuilder: (context, index) {
         final typeId = allTypes[index];
-        final config = MeasurementTypeConfig.builtInTypes[typeId]!;
+        final config = TrackableTypeConfig.measurementTypes[typeId]!;
         final hasData = _measurementTypes.contains(typeId);
 
         return Card(
@@ -748,14 +748,16 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   // ============ Helper Methods ============
 
-  IconData _getExerciseIcon(ExerciseCategory category) {
+  IconData _getExerciseIcon(TrackableCategory category) {
     switch (category) {
-      case ExerciseCategory.strength:
+      case TrackableCategory.strength:
         return Icons.fitness_center;
-      case ExerciseCategory.cardio:
+      case TrackableCategory.cardio:
         return Icons.directions_run;
-      case ExerciseCategory.flexibility:
+      case TrackableCategory.flexibility:
         return Icons.self_improvement;
+      case TrackableCategory.health:
+        return Icons.favorite;
     }
   }
 
@@ -818,25 +820,12 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     }
   }
 
-  Future<void> _onAddExercise() async {
-    final result = await AddExerciseDialog.show(
-      context,
-      service: _service,
-      i18n: widget.i18n,
-      year: _selectedYear,
-    );
-
-    if (result == true) {
-      _loadCurrentTab();
-    }
-  }
-
   Future<void> _onAddExerciseEntry(String exerciseId) async {
-    final result = await AddExerciseDialog.show(
+    final result = await AddTrackableDialog.showExercise(
       context,
       service: _service,
       i18n: widget.i18n,
-      preselectedExerciseId: exerciseId,
+      preselectedTypeId: exerciseId,
       year: _selectedYear,
     );
 
@@ -846,7 +835,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   Future<void> _onAddMeasurement() async {
-    final result = await AddMeasurementDialog.show(
+    final result = await AddTrackableDialog.showMeasurement(
       context,
       service: _service,
       i18n: widget.i18n,

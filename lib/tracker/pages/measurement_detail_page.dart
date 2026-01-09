@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/tracker_models.dart';
 import '../services/tracker_service.dart';
-import '../dialogs/add_measurement_dialog.dart';
+import '../dialogs/add_trackable_dialog.dart';
 import '../../services/i18n_service.dart';
 
 /// Detail page for viewing measurement entries and statistics
@@ -734,7 +734,7 @@ class _MeasurementDetailPageState extends State<MeasurementDetailPage> {
   }
 
   Future<void> _addEntry() async {
-    final result = await AddMeasurementDialog.show(
+    final result = await AddTrackableDialog.showMeasurement(
       context,
       service: widget.service,
       i18n: widget.i18n,
