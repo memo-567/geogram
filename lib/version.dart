@@ -1,6 +1,6 @@
 /// App version - auto-generated from pubspec.yaml
 /// Run: dart run tool/update_version.dart
 /// This file is automatically updated by the pre-commit hook
-const String appVersion = '1.6.107';
-const String appBuildNumber = '10';
+const String appVersion = '1.6.108';
+const String appBuildNumber = '11';
 const String appFullVersion = '$appVersion+$appBuildNumber';
