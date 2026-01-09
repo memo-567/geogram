@@ -463,6 +463,13 @@ class TrackerService {
     return data.getTotalForCurrentWeek();
   }
 
+  /// Get this week's entry count for a measurement
+  Future<int> getMeasurementWeekCount(String typeId, {int? year}) async {
+    final data = await getMeasurement(typeId, year: year);
+    if (data == null) return 0;
+    return data.getCountForCurrentWeek();
+  }
+
   /// Delete an exercise entry
   Future<bool> deleteExerciseEntry(
     String exerciseId,
@@ -566,6 +573,140 @@ class TrackerService {
       return true;
     }
     return false;
+  }
+
+  /// Pause a plan
+  Future<bool> pausePlan(String planId) async {
+    if (_storage == null) return false;
+
+    final plan = await _storage!.readActivePlan(planId);
+    if (plan == null) return false;
+
+    final updatedPlan = plan.copyWith(
+      status: TrackerPlanStatus.paused,
+      updatedAt: DateTime.now().toIso8601String(),
+    );
+
+    final success = await _storage!.writeActivePlan(updatedPlan);
+    if (success) {
+      _notifyChange('plan', 'updated', id: planId, data: updatedPlan);
+    }
+    return success;
+  }
+
+  /// Resume a paused plan
+  Future<bool> resumePlan(String planId) async {
+    if (_storage == null) return false;
+
+    final plan = await _storage!.readActivePlan(planId);
+    if (plan == null) return false;
+
+    final updatedPlan = plan.copyWith(
+      status: TrackerPlanStatus.active,
+      updatedAt: DateTime.now().toIso8601String(),
+    );
+
+    final success = await _storage!.writeActivePlan(updatedPlan);
+    if (success) {
+      _notifyChange('plan', 'updated', id: planId, data: updatedPlan);
+    }
+    return success;
+  }
+
+  /// Complete a plan (marks as completed and archives)
+  Future<bool> completePlan(String planId) async {
+    if (_storage == null) return false;
+
+    final plan = await _storage!.readActivePlan(planId);
+    if (plan == null) return false;
+
+    final completedPlan = plan.copyWith(
+      status: TrackerPlanStatus.completed,
+      updatedAt: DateTime.now().toIso8601String(),
+    );
+
+    // Archive with completed status
+    return archivePlan(planId);
+  }
+
+  /// Get current week progress for a plan
+  Future<PlanWeeklyProgress?> getPlanWeekProgress(String planId) async {
+    if (_storage == null) return null;
+
+    final plan = await _storage!.readActivePlan(planId);
+    if (plan == null) return null;
+
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final endOfWeek = startOfWeek.add(const Duration(days: 6));
+
+    final weekStart = _formatDate(startOfWeek);
+    final weekEnd = _formatDate(endOfWeek);
+    final weekStr = '${startOfWeek.year}-W${_getWeekNumber(startOfWeek).toString().padLeft(2, '0')}';
+
+    // Calculate progress for each goal
+    final goalProgresses = <GoalWeeklyProgress>[];
+    int goalsAchieved = 0;
+
+    for (final goal in plan.goals) {
+      // Get exercise data for this goal
+      final exerciseData = await getExercise(goal.exerciseId, year: now.year);
+
+      // Calculate daily totals for the week
+      final dailyTotals = <String, int>{};
+      if (exerciseData != null) {
+        for (int i = 0; i < 7; i++) {
+          final day = startOfWeek.add(Duration(days: i));
+          final dayStr = _formatDate(day);
+          final count = exerciseData.getTotalForDate(day);
+          if (count > 0) {
+            dailyTotals[dayStr] = count;
+          }
+        }
+      }
+
+      final weekEnded = now.isAfter(endOfWeek);
+      final progress = GoalWeeklyProgress.calculate(
+        goal: goal,
+        dailyTotals: dailyTotals,
+        weekEnded: weekEnded,
+      );
+
+      goalProgresses.add(progress);
+      if (progress.status == GoalProgressStatus.achieved) {
+        goalsAchieved++;
+      }
+    }
+
+    // Calculate overall progress
+    double overallProgress = 0;
+    if (goalProgresses.isNotEmpty) {
+      overallProgress = goalProgresses
+              .map((g) => g.progressPercent)
+              .fold(0.0, (sum, p) => sum + p) /
+          goalProgresses.length;
+    }
+
+    return PlanWeeklyProgress(
+      planId: planId,
+      week: weekStr,
+      weekStart: weekStart,
+      weekEnd: weekEnd,
+      goals: goalProgresses,
+      overallProgressPercent: overallProgress,
+      goalsAchieved: goalsAchieved,
+      goalsTotal: plan.goals.length,
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  int _getWeekNumber(DateTime date) {
+    final firstDayOfYear = DateTime(date.year, 1, 1);
+    final daysSinceFirstDay = date.difference(firstDayOfYear).inDays;
+    return ((daysSinceFirstDay + firstDayOfYear.weekday) / 7).ceil();
   }
 
   // ============ Share Operations ============

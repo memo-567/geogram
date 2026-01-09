@@ -7,12 +7,16 @@ import '../models/trackable_type.dart';
 import '../services/tracker_service.dart';
 import '../services/path_recording_service.dart';
 import '../dialogs/add_trackable_dialog.dart';
+import '../dialogs/create_plan_dialog.dart';
 import '../dialogs/start_path_dialog.dart';
 import '../widgets/active_recording_banner.dart';
+import 'path_detail_page.dart';
 import 'exercise_detail_page.dart';
 import 'measurement_detail_page.dart';
+import 'plan_detail_page.dart';
 import '../../services/i18n_service.dart';
 import '../../services/config_service.dart';
+import '../../services/profile_service.dart';
 
 /// Tab type for the tracker browser
 enum TrackerTab {
@@ -54,14 +58,19 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   bool _loading = true;
   StreamSubscription? _changesSub;
 
-  /// User-selected exercises to show in the exercises tab
+  /// Tabs sorted by most recently used
+  List<TrackerTab> _sortedTabs = TrackerTab.values.toList();
+  Map<String, int> _tabLastUsed = {}; // tab name -> timestamp
+
+  /// User-selected trackables to show in each tab
   List<String> _visibleExercises = [];
+  List<String> _visibleMeasurements = [];
 
   // Data for each tab
   List<TrackerPath> _paths = [];
   List<String> _exerciseTypes = [];
-  Map<String, int> _weeklyTotals = {};
   List<String> _measurementTypes = [];
+  Map<String, int> _weeklyTotals = {}; // Used for both exercises and measurements
   List<TrackerPlan> _activePlans = [];
   List<DateTime> _proximityDates = [];
   List<DateTime> _visitDates = [];
@@ -74,37 +83,75 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   @override
   void initState() {
     super.initState();
+    _loadTabUsage();
     _tabController = TabController(length: TrackerTab.values.length, vsync: this);
     _tabController.addListener(_onTabChanged);
-    _loadVisibleExercises();
+    _loadVisibleTrackables();
     _initializeService();
   }
 
-  void _loadVisibleExercises() {
-    final saved = _configService.getNestedValue('tracker.visibleExercises');
-    if (saved is List) {
-      _visibleExercises = saved.cast<String>().toList();
+  // ============ Tab Usage Tracking (sort by most recently used) ============
+
+  void _loadTabUsage() {
+    final saved = _configService.getNestedValue('tracker.tabLastUsed');
+    if (saved is Map) {
+      _tabLastUsed = Map<String, int>.from(saved.map((k, v) => MapEntry(k.toString(), v as int)));
     }
+    _sortTabs();
   }
 
-  void _saveVisibleExercises() {
-    _configService.setNestedValue('tracker.visibleExercises', _visibleExercises);
-  }
-
-  void _addExerciseToVisible(String exerciseId) {
-    if (!_visibleExercises.contains(exerciseId)) {
-      setState(() {
-        _visibleExercises.add(exerciseId);
-      });
-      _saveVisibleExercises();
-    }
-  }
-
-  void _removeExerciseFromVisible(String exerciseId) {
-    setState(() {
-      _visibleExercises.remove(exerciseId);
+  void _sortTabs() {
+    _sortedTabs = TrackerTab.values.toList();
+    _sortedTabs.sort((a, b) {
+      final aTime = _tabLastUsed[a.name] ?? 0;
+      final bTime = _tabLastUsed[b.name] ?? 0;
+      return bTime.compareTo(aTime); // Most recent first
     });
-    _saveVisibleExercises();
+  }
+
+  void _recordTabUsage(TrackerTab tab) {
+    _tabLastUsed[tab.name] = DateTime.now().millisecondsSinceEpoch;
+    _configService.setNestedValue('tracker.tabLastUsed', _tabLastUsed);
+    // Re-sort tabs for next time (don't reorder while user is viewing)
+  }
+
+  // ============ Visibility Management (unified for exercises & measurements) ============
+
+  void _loadVisibleTrackables() {
+    final savedExercises = _configService.getNestedValue('tracker.visibleExercises');
+    if (savedExercises is List) {
+      _visibleExercises = savedExercises.cast<String>().toList();
+    }
+    final savedMeasurements = _configService.getNestedValue('tracker.visibleMeasurements');
+    if (savedMeasurements is List) {
+      _visibleMeasurements = savedMeasurements.cast<String>().toList();
+    }
+  }
+
+  List<String> _getVisibleList(TrackableKind kind) =>
+      kind == TrackableKind.exercise ? _visibleExercises : _visibleMeasurements;
+
+  void _saveVisibleList(TrackableKind kind) {
+    final key = kind == TrackableKind.exercise
+        ? 'tracker.visibleExercises'
+        : 'tracker.visibleMeasurements';
+    final list = _getVisibleList(kind);
+    _configService.setNestedValue(key, list);
+  }
+
+  void _addToVisibleList(TrackableKind kind, String typeId) {
+    final list = _getVisibleList(kind);
+    if (!list.contains(typeId)) {
+      setState(() => list.add(typeId));
+      _saveVisibleList(kind);
+      _loadCurrentTab(); // Reload to get weekly totals
+    }
+  }
+
+  void _removeFromVisibleList(TrackableKind kind, String typeId) {
+    final list = _getVisibleList(kind);
+    setState(() => list.remove(typeId));
+    _saveVisibleList(kind);
   }
 
   @override
@@ -116,9 +163,15 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   Future<void> _initializeService() async {
+    final profileCallsign = ProfileService().getProfile().callsign;
+    final ownerCallsign =
+        widget.ownerCallsign != null && widget.ownerCallsign!.isNotEmpty
+            ? widget.ownerCallsign!
+            : profileCallsign;
+
     await _service.initializeCollection(
       widget.collectionPath,
-      callsign: widget.ownerCallsign,
+      callsign: ownerCallsign,
     );
     _changesSub = _service.changes.listen(_onTrackerChange);
 
@@ -140,11 +193,12 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   void _onTabChanged() {
     if (_tabController.indexIsChanging) {
+      _recordTabUsage(_currentTab);
       _loadCurrentTab();
     }
   }
 
-  TrackerTab get _currentTab => TrackerTab.values[_tabController.index];
+  TrackerTab get _currentTab => _sortedTabs[_tabController.index];
 
   Future<void> _loadCurrentTab() async {
     setState(() => _loading = true);
@@ -157,16 +211,22 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         case TrackerTab.exercises:
           _exerciseTypes = await _service.listExerciseTypes(year: _selectedYear);
           // Load weekly totals for all visible exercises
-          _weeklyTotals = {};
-          for (final exerciseId in _visibleExercises) {
-            _weeklyTotals[exerciseId] = await _service.getExerciseWeekCount(
-              exerciseId,
+          for (final typeId in _visibleExercises) {
+            _weeklyTotals[typeId] = await _service.getExerciseWeekCount(
+              typeId,
               year: _selectedYear,
             );
           }
           break;
         case TrackerTab.measurements:
           _measurementTypes = await _service.listMeasurementTypes(year: _selectedYear);
+          // Load weekly totals for all visible measurements
+          for (final typeId in _visibleMeasurements) {
+            _weeklyTotals[typeId] = await _service.getMeasurementWeekCount(
+              typeId,
+              year: _selectedYear,
+            );
+          }
           break;
         case TrackerTab.plans:
           _activePlans = await _service.listActivePlans();
@@ -207,15 +267,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
-          tabs: [
-            Tab(icon: const Icon(Icons.route), text: widget.i18n.t('tracker_paths')),
-            Tab(icon: const Icon(Icons.fitness_center), text: widget.i18n.t('tracker_exercises')),
-            Tab(icon: const Icon(Icons.monitor_weight), text: widget.i18n.t('tracker_measurements')),
-            Tab(icon: const Icon(Icons.flag), text: widget.i18n.t('tracker_plans')),
-            Tab(icon: const Icon(Icons.people), text: widget.i18n.t('tracker_proximity')),
-            Tab(icon: const Icon(Icons.place), text: widget.i18n.t('tracker_visits')),
-            Tab(icon: const Icon(Icons.share_location), text: widget.i18n.t('tracker_sharing')),
-          ],
+          tabs: _sortedTabs.map((tab) => _buildTab(tab)).toList(),
         ),
         actions: [
           if (_showYearSelector)
@@ -249,15 +301,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [
-          _buildPathsTab(),
-          _buildExercisesTab(),
-          _buildMeasurementsTab(),
-          _buildPlansTab(),
-          _buildProximityTab(),
-          _buildVisitsTab(),
-          _buildSharingTab(),
-        ],
+        children: _sortedTabs.map((tab) => _buildTabContent(tab)).toList(),
       ),
       floatingActionButton: _buildFab(),
     );
@@ -265,10 +309,47 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   bool get _showYearSelector {
     // Note: paths tab has its own recording flow, no year selector needed
-    // Note: exercises tab now uses user-selected list, no year filter needed
-    return _currentTab == TrackerTab.measurements ||
-        _currentTab == TrackerTab.proximity ||
+    // Note: exercises/measurements tabs now use user-selected lists, no year filter needed
+    return _currentTab == TrackerTab.proximity ||
         _currentTab == TrackerTab.visits;
+  }
+
+  Tab _buildTab(TrackerTab tab) {
+    switch (tab) {
+      case TrackerTab.paths:
+        return Tab(icon: const Icon(Icons.route), text: widget.i18n.t('tracker_paths'));
+      case TrackerTab.exercises:
+        return Tab(icon: const Icon(Icons.fitness_center), text: widget.i18n.t('tracker_exercises'));
+      case TrackerTab.measurements:
+        return Tab(icon: const Icon(Icons.monitor_weight), text: widget.i18n.t('tracker_measurements'));
+      case TrackerTab.plans:
+        return Tab(icon: const Icon(Icons.flag), text: widget.i18n.t('tracker_plans'));
+      case TrackerTab.proximity:
+        return Tab(icon: const Icon(Icons.people), text: widget.i18n.t('tracker_proximity'));
+      case TrackerTab.visits:
+        return Tab(icon: const Icon(Icons.place), text: widget.i18n.t('tracker_visits'));
+      case TrackerTab.sharing:
+        return Tab(icon: const Icon(Icons.share_location), text: widget.i18n.t('tracker_sharing'));
+    }
+  }
+
+  Widget _buildTabContent(TrackerTab tab) {
+    switch (tab) {
+      case TrackerTab.paths:
+        return _buildPathsTab();
+      case TrackerTab.exercises:
+        return _buildTrackableTab(TrackableKind.exercise);
+      case TrackerTab.measurements:
+        return _buildTrackableTab(TrackableKind.measurement);
+      case TrackerTab.plans:
+        return _buildPlansTab();
+      case TrackerTab.proximity:
+        return _buildProximityTab();
+      case TrackerTab.visits:
+        return _buildVisitsTab();
+      case TrackerTab.sharing:
+        return _buildSharingTab();
+    }
   }
 
   Widget? _buildFab() {
@@ -282,11 +363,11 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         break;
       case TrackerTab.exercises:
         icon = Icons.add;
-        onPressed = _showAddExerciseToListDialog;
+        onPressed = () => _showAddToListDialog(TrackableKind.exercise);
         break;
       case TrackerTab.measurements:
         icon = Icons.add;
-        onPressed = _onAddMeasurement;
+        onPressed = () => _showAddToListDialog(TrackableKind.measurement);
         break;
       case TrackerTab.plans:
         icon = Icons.add;
@@ -372,64 +453,83 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     );
   }
 
-  Widget _buildExercisesTab() {
+  /// Unified tab builder for exercises and measurements
+  Widget _buildTrackableTab(TrackableKind kind) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    // Show only user-selected exercises (clean slate by default)
-    if (_visibleExercises.isEmpty) {
+    final isExercise = kind == TrackableKind.exercise;
+    final visibleList = _getVisibleList(kind);
+    final typesWithData = isExercise ? _exerciseTypes : _measurementTypes;
+    final availableTypes = isExercise
+        ? TrackableTypeConfig.exerciseTypes
+        : TrackableTypeConfig.measurementTypes;
+
+    // Empty state
+    final emptyMessage = isExercise
+        ? 'tracker_no_visible_exercises'
+        : 'tracker_no_visible_measurements';
+    final addButtonLabel = isExercise
+        ? 'tracker_add_exercise_to_list'
+        : 'tracker_add_measurement_to_list';
+    final emptyIcon = isExercise ? Icons.fitness_center : Icons.monitor_weight;
+
+    if (visibleList.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.fitness_center, size: 64, color: Colors.grey[400]),
+            Icon(emptyIcon, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
-              widget.i18n.t('tracker_no_visible_exercises'),
+              widget.i18n.t(emptyMessage),
               style: TextStyle(color: Colors.grey[600]),
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              onPressed: _showAddExerciseToListDialog,
+              onPressed: () => _showAddToListDialog(kind),
               icon: const Icon(Icons.add),
-              label: Text(widget.i18n.t('tracker_add_exercise_to_list')),
+              label: Text(widget.i18n.t(addButtonLabel)),
             ),
           ],
         ),
       );
     }
 
+    final hideLabel = isExercise ? 'tracker_hide_exercise' : 'tracker_hide_measurement';
+    final typePrefix = isExercise ? 'tracker_exercise_' : 'tracker_measurement_';
+
     return ListView.builder(
       padding: const EdgeInsets.all(8),
-      itemCount: _visibleExercises.length,
+      itemCount: visibleList.length,
       itemBuilder: (context, index) {
-        final exerciseId = _visibleExercises[index];
-        final config = TrackableTypeConfig.exerciseTypes[exerciseId];
+        final typeId = visibleList[index];
+        final config = availableTypes[typeId];
         if (config == null) return const SizedBox.shrink();
 
-        final hasData = _exerciseTypes.contains(exerciseId);
+        final hasData = typesWithData.contains(typeId);
 
         return Card(
           child: ListTile(
             leading: Icon(
-              _getExerciseIcon(config.category),
+              _getTrackableIcon(kind, typeId, config.category),
               color: hasData ? Theme.of(context).primaryColor : Colors.grey,
             ),
-            title: Text(widget.i18n.t('tracker_exercise_$exerciseId')),
-            subtitle: Text('${_weeklyTotals[exerciseId] ?? 0} ${widget.i18n.t('tracker_this_week')}'),
+            title: Text(widget.i18n.t('$typePrefix$typeId')),
+            subtitle: Text('${_weeklyTotals[typeId] ?? 0} ${widget.i18n.t('tracker_this_week')}'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline),
                   tooltip: widget.i18n.t('tracker_log_entry'),
-                  onPressed: () => _onAddExerciseEntry(exerciseId),
+                  onPressed: () => _onAddEntry(kind, typeId),
                 ),
                 PopupMenuButton<String>(
                   onSelected: (action) {
                     if (action == 'remove') {
-                      _removeExerciseFromVisible(exerciseId);
+                      _removeFromVisibleList(kind, typeId);
                     }
                   },
                   itemBuilder: (context) => [
@@ -439,7 +539,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
                         children: [
                           const Icon(Icons.visibility_off),
                           const SizedBox(width: 8),
-                          Text(widget.i18n.t('tracker_hide_exercise')),
+                          Text(widget.i18n.t(hideLabel)),
                         ],
                       ),
                     ),
@@ -447,22 +547,37 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
                 ),
               ],
             ),
-            onTap: () => _onExerciseTapped(exerciseId),
+            onTap: () => _onTrackableTapped(kind, typeId),
           ),
         );
       },
     );
   }
 
-  void _showAddExerciseToListDialog() {
-    // Get exercises not yet in the visible list
-    final availableExercises = TrackableTypeConfig.exerciseTypes.keys
-        .where((id) => !_visibleExercises.contains(id))
+  /// Unified add-to-list dialog for exercises and measurements
+  void _showAddToListDialog(TrackableKind kind) {
+    final isExercise = kind == TrackableKind.exercise;
+    final visibleList = _getVisibleList(kind);
+    final availableTypes = isExercise
+        ? TrackableTypeConfig.exerciseTypes
+        : TrackableTypeConfig.measurementTypes;
+
+    // Get types not yet in the visible list
+    final availableIds = availableTypes.keys
+        .where((id) => !visibleList.contains(id))
         .toList();
 
-    if (availableExercises.isEmpty) {
+    final allAddedMessage = isExercise
+        ? 'tracker_all_exercises_added'
+        : 'tracker_all_measurements_added';
+    final dialogTitle = isExercise
+        ? 'tracker_add_exercise_to_list'
+        : 'tracker_add_measurement_to_list';
+    final typePrefix = isExercise ? 'tracker_exercise_' : 'tracker_measurement_';
+
+    if (availableIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.i18n.t('tracker_all_exercises_added'))),
+        SnackBar(content: Text(widget.i18n.t(allAddedMessage))),
       );
       return;
     }
@@ -470,21 +585,21 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(widget.i18n.t('tracker_add_exercise_to_list')),
+        title: Text(widget.i18n.t(dialogTitle)),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: availableExercises.length,
+            itemCount: availableIds.length,
             itemBuilder: (context, index) {
-              final exerciseId = availableExercises[index];
-              final config = TrackableTypeConfig.exerciseTypes[exerciseId]!;
+              final typeId = availableIds[index];
+              final config = availableTypes[typeId]!;
 
               return ListTile(
-                leading: Icon(_getExerciseIcon(config.category)),
-                title: Text(widget.i18n.t('tracker_exercise_$exerciseId')),
+                leading: Icon(_getTrackableIcon(kind, typeId, config.category)),
+                title: Text(widget.i18n.t('$typePrefix$typeId')),
                 onTap: () {
-                  _addExerciseToVisible(exerciseId);
+                  _addToVisibleList(kind, typeId);
                   Navigator.of(context).pop();
                 },
               );
@@ -498,40 +613,6 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildMeasurementsTab() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    // Show all built-in measurement types, mark those with data
-    final allTypes = TrackableTypeConfig.measurementTypes.keys.toList();
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: allTypes.length,
-      itemBuilder: (context, index) {
-        final typeId = allTypes[index];
-        final config = TrackableTypeConfig.measurementTypes[typeId]!;
-        final hasData = _measurementTypes.contains(typeId);
-
-        return Card(
-          child: ListTile(
-            leading: Icon(
-              _getMeasurementIcon(typeId),
-              color: hasData ? Theme.of(context).primaryColor : Colors.grey,
-            ),
-            title: Text(widget.i18n.t('tracker_measurement_$typeId')),
-            subtitle: Text(config.unit),
-            trailing: hasData
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : null,
-            onTap: () => _onMeasurementTapped(typeId),
-          ),
-        );
-      },
     );
   }
 
@@ -748,7 +829,34 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   // ============ Helper Methods ============
 
-  IconData _getExerciseIcon(TrackableCategory category) {
+  /// Get icon for a trackable type
+  IconData _getTrackableIcon(TrackableKind kind, String typeId, TrackableCategory category) {
+    if (kind == TrackableKind.measurement) {
+      // Measurements have type-specific icons
+      switch (typeId) {
+        case 'weight':
+          return Icons.monitor_weight;
+        case 'height':
+          return Icons.height;
+        case 'blood_pressure':
+          return Icons.favorite;
+        case 'heart_rate':
+          return Icons.monitor_heart;
+        case 'blood_glucose':
+          return Icons.water_drop;
+        case 'body_fat':
+          return Icons.percent;
+        case 'body_temperature':
+          return Icons.thermostat;
+        case 'body_water':
+          return Icons.water;
+        case 'muscle_mass':
+          return Icons.fitness_center;
+        default:
+          return Icons.straighten;
+      }
+    }
+    // Exercises use category-based icons
     switch (category) {
       case TrackableCategory.strength:
         return Icons.fitness_center;
@@ -758,27 +866,6 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         return Icons.self_improvement;
       case TrackableCategory.health:
         return Icons.favorite;
-    }
-  }
-
-  IconData _getMeasurementIcon(String typeId) {
-    switch (typeId) {
-      case 'weight':
-        return Icons.monitor_weight;
-      case 'height':
-        return Icons.height;
-      case 'blood_pressure':
-        return Icons.favorite;
-      case 'heart_rate':
-        return Icons.monitor_heart;
-      case 'blood_glucose':
-        return Icons.water_drop;
-      case 'body_fat':
-        return Icons.percent;
-      case 'body_temperature':
-        return Icons.thermostat;
-      default:
-        return Icons.straighten;
     }
   }
 
@@ -820,38 +907,66 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     }
   }
 
-  Future<void> _onAddExerciseEntry(String exerciseId) async {
-    final result = await AddTrackableDialog.showExercise(
-      context,
-      service: _service,
-      i18n: widget.i18n,
-      preselectedTypeId: exerciseId,
-      year: _selectedYear,
-    );
+  /// Unified add entry handler for exercises and measurements
+  Future<void> _onAddEntry(TrackableKind kind, String typeId) async {
+    final result = kind == TrackableKind.exercise
+        ? await AddTrackableDialog.showExercise(
+            context,
+            service: _service,
+            i18n: widget.i18n,
+            preselectedTypeId: typeId,
+            year: _selectedYear,
+          )
+        : await AddTrackableDialog.showMeasurement(
+            context,
+            service: _service,
+            i18n: widget.i18n,
+            preselectedTypeId: typeId,
+            year: _selectedYear,
+          );
 
     if (result == true) {
       _loadCurrentTab();
     }
   }
 
-  Future<void> _onAddMeasurement() async {
-    final result = await AddTrackableDialog.showMeasurement(
+  /// Unified tap handler for exercises and measurements
+  void _onTrackableTapped(TrackableKind kind, String typeId) {
+    if (kind == TrackableKind.exercise) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ExerciseDetailPage(
+            service: _service,
+            i18n: widget.i18n,
+            exerciseId: typeId,
+            year: _selectedYear,
+          ),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => MeasurementDetailPage(
+            service: _service,
+            i18n: widget.i18n,
+            typeId: typeId,
+            year: _selectedYear,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onAddPlan() async {
+    final result = await CreatePlanDialog.show(
       context,
       service: _service,
       i18n: widget.i18n,
-      year: _selectedYear,
     );
 
     if (result == true) {
       _loadCurrentTab();
     }
-  }
-
-  void _onAddPlan() {
-    // TODO: Show dialog to create new plan
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(widget.i18n.t('tracker_add_plan_coming_soon'))),
-    );
   }
 
   void _onAddShare() {
@@ -862,29 +977,12 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   void _onPathTapped(TrackerPath path) {
-    // TODO: Navigate to path detail page
-  }
-
-  void _onExerciseTapped(String exerciseId) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => ExerciseDetailPage(
+        builder: (context) => PathDetailPage(
           service: _service,
           i18n: widget.i18n,
-          exerciseId: exerciseId,
-          year: _selectedYear,
-        ),
-      ),
-    );
-  }
-
-  void _onMeasurementTapped(String typeId) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => MeasurementDetailPage(
-          service: _service,
-          i18n: widget.i18n,
-          typeId: typeId,
+          path: path,
           year: _selectedYear,
         ),
       ),
@@ -892,7 +990,15 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   void _onPlanTapped(TrackerPlan plan) {
-    // TODO: Navigate to plan detail page
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PlanDetailPage(
+          service: _service,
+          i18n: widget.i18n,
+          planId: plan.id,
+        ),
+      ),
+    );
   }
 
   void _onProximityDateTapped(DateTime date) {

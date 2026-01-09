@@ -132,6 +132,7 @@ class PathRecordingService extends ChangeNotifier {
       );
 
       if (path == null) {
+        _stopGPSUpdates();
         LogService().log('PathRecordingService: Failed to create path');
         return null;
       }
@@ -157,6 +158,7 @@ class PathRecordingService extends ChangeNotifier {
       notifyListeners();
       return path;
     } catch (e) {
+      _stopGPSUpdates();
       LogService().log('PathRecordingService: Error starting recording: $e');
       return null;
     }

@@ -113,24 +113,10 @@ class ContactImportService {
 
       LogService().log('ContactImport: Found ${contacts.length} contacts');
 
-      return contacts.map((contact) {
-        final displayName = (contact.displayName.isNotEmpty
-                ? contact.displayName
-                : _buildDisplayName(contact))
-            .trim();
-        return DeviceContactInfo(
-          id: contact.id,
-          displayName: displayName,
-          emails: _cleanEmails(contact.emails.map((e) => e.address)),
-          phones: _cleanPhones(contact.phones.map((p) => p.number)),
-          addresses: _cleanAddresses(contact.addresses.map(_formatAddress)),
-          websites: _cleanWebsites(contact.websites.map((w) => w.url)),
-          socialHandles: _buildSocialHandles(contact.socialMedias),
-          dateReminders: _buildDateReminders(contact.events),
-          note: _combineNotes(contact.notes),
-          photo: contact.photoOrThumbnail,
-        );
-      }).where((c) => c.displayName.isNotEmpty).toList();
+      return contacts
+          .map(_buildDeviceContactInfo)
+          .where((c) => c.displayName.isNotEmpty)
+          .toList();
     } catch (e) {
       LogService().log('ContactImport: Error fetching contacts: $e');
       return [];
@@ -195,6 +181,131 @@ class ContactImportService {
       case AddressLabel.work:
         return address.label.name;
     }
+  }
+
+  DeviceContactInfo _buildDeviceContactInfo(Contact contact) {
+    final displayName = (contact.displayName.isNotEmpty
+            ? contact.displayName
+            : _buildDisplayName(contact))
+        .trim();
+
+    return DeviceContactInfo(
+      id: contact.id,
+      displayName: displayName,
+      emails: _cleanEmails(contact.emails.map((e) => e.address)),
+      phones: _cleanPhones(contact.phones.map((p) => p.number)),
+      addresses: _cleanAddresses(contact.addresses.map(_formatAddress)),
+      websites: _cleanWebsites(contact.websites.map((w) => w.url)),
+      socialHandles: _buildSocialHandles(contact.socialMedias),
+      dateReminders: _buildDateReminders(contact.events),
+      note: _combineNotes(contact.notes),
+      photo: contact.photoOrThumbnail,
+    );
+  }
+
+  Future<DeviceContactInfo> _hydrateDeviceContact(DeviceContactInfo device) async {
+    if (!_needsHydration(device)) return device;
+
+    try {
+      final contact = await FlutterContacts.getContact(
+        device.id,
+        withProperties: true,
+        withPhoto: true,
+        withThumbnail: false,
+        deduplicateProperties: true,
+      );
+      if (contact == null) return device;
+
+      final hydrated = _buildDeviceContactInfo(contact);
+      return _mergeDeviceContactInfo(device, hydrated);
+    } catch (e) {
+      LogService().log('ContactImport: Error hydrating ${device.displayName}: $e');
+      return device;
+    }
+  }
+
+  bool _needsHydration(DeviceContactInfo device) {
+    final hasPhoto = device.photo != null && device.photo!.isNotEmpty;
+    final hasAddresses = device.addresses.isNotEmpty;
+    return !hasPhoto || !hasAddresses;
+  }
+
+  DeviceContactInfo _mergeDeviceContactInfo(
+    DeviceContactInfo base,
+    DeviceContactInfo hydrated,
+  ) {
+    return DeviceContactInfo(
+      id: base.id,
+      displayName: base.displayName,
+      emails: _mergeLists(base.emails, hydrated.emails, (value) => value.toLowerCase()),
+      phones: _mergeLists(base.phones, hydrated.phones, _normalizePhone),
+      addresses: _mergeLists(base.addresses, hydrated.addresses, (value) => value.toLowerCase()),
+      websites: _mergeLists(base.websites, hydrated.websites, (value) => value.toLowerCase()),
+      socialHandles: {...hydrated.socialHandles, ...base.socialHandles},
+      dateReminders: _mergeDateReminders(base.dateReminders, hydrated.dateReminders),
+      note: _mergeNotes(base.note, hydrated.note),
+      photo: (base.photo != null && base.photo!.isNotEmpty) ? base.photo : hydrated.photo,
+      selected: base.selected,
+      isDuplicate: base.isDuplicate,
+    );
+  }
+
+  List<String> _mergeLists(
+    List<String> primary,
+    List<String> secondary,
+    String Function(String value) normalize,
+  ) {
+    return _dedupeByNormalized(
+      <String>[...primary, ...secondary],
+      normalize,
+    );
+  }
+
+  List<geogram.ContactDateReminder> _mergeDateReminders(
+    List<geogram.ContactDateReminder> primary,
+    List<geogram.ContactDateReminder> secondary,
+  ) {
+    if (primary.isEmpty && secondary.isEmpty) {
+      return const <geogram.ContactDateReminder>[];
+    }
+
+    final seen = <String>{};
+    final merged = <geogram.ContactDateReminder>[];
+
+    void addReminder(geogram.ContactDateReminder reminder) {
+      final key = reminder.toFileFormat();
+      if (seen.add(key)) {
+        merged.add(reminder);
+      }
+    }
+
+    for (final reminder in primary) {
+      addReminder(reminder);
+    }
+    for (final reminder in secondary) {
+      addReminder(reminder);
+    }
+
+    return merged;
+  }
+
+  String? _mergeNotes(String? primary, String? secondary) {
+    final notes = <String>{};
+    final ordered = <String>[];
+
+    void addNote(String? note) {
+      final trimmed = note?.trim();
+      if (trimmed == null || trimmed.isEmpty) return;
+      if (notes.add(trimmed)) {
+        ordered.add(trimmed);
+      }
+    }
+
+    addNote(primary);
+    addNote(secondary);
+
+    if (ordered.isEmpty) return null;
+    return ordered.join('\n\n');
   }
 
   List<String> _cleanEmails(Iterable<String> emails) {
@@ -438,6 +549,8 @@ class ContactImportService {
       onProgress(i + 1, total);
 
       try {
+        final hydrated = await _hydrateDeviceContact(device);
+
         // Generate temporary NOSTR identity
         final keys = _generateUniqueKeys(usedCallsigns, usedNpubs);
 
@@ -452,29 +565,29 @@ class ContactImportService {
 
         // Save profile picture if available
         String? profilePicture;
-        if (device.photo != null && device.photo!.isNotEmpty) {
-          final extension = _detectImageExtension(device.photo!);
+        if (hydrated.photo != null && hydrated.photo!.isNotEmpty) {
+          final extension = _detectImageExtension(hydrated.photo!);
           profilePicture = await contactService.saveProfilePictureFromBytes(
             keys.callsign,
-            device.photo!,
+            hydrated.photo!,
             extension,
           );
         }
 
         // Create Geogram contact
         final contact = geogram.Contact(
-          displayName: device.displayName,
+          displayName: hydrated.displayName,
           callsign: keys.callsign,
           npub: keys.npub,
           created: timestamp,
           firstSeen: timestamp,
-          emails: device.emails,
-          phones: device.phones,
-          addresses: device.addresses,
-          websites: device.websites,
-          socialHandles: device.socialHandles,
-          dateReminders: device.dateReminders,
-          notes: device.note ?? '',
+          emails: hydrated.emails,
+          phones: hydrated.phones,
+          addresses: hydrated.addresses,
+          websites: hydrated.websites,
+          socialHandles: hydrated.socialHandles,
+          dateReminders: hydrated.dateReminders,
+          notes: hydrated.note ?? '',
           profilePicture: profilePicture,
           isTemporaryIdentity: true,
           temporaryNsec: keys.nsec,
@@ -492,7 +605,7 @@ class ContactImportService {
 
         if (error != null) {
           failed++;
-          errors.add('${device.displayName}: $error');
+          errors.add('${hydrated.displayName}: $error');
         } else {
           imported++;
         }

@@ -489,6 +489,31 @@ class MeasurementData {
       statistics: MeasurementStatistics.calculate(newEntries),
     );
   }
+
+  /// Get entries for a specific date
+  List<MeasurementEntry> getEntriesForDate(DateTime date) {
+    return entries.where((e) {
+      final entryDate = e.timestampDateTime;
+      return entryDate.year == date.year &&
+          entryDate.month == date.month &&
+          entryDate.day == date.day;
+    }).toList();
+  }
+
+  /// Get count of entries for current week
+  int getCountForCurrentWeek() {
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final startDate = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+
+    return entries.where((e) {
+      final entryDate = e.timestampDateTime;
+      return entryDate.isAfter(startDate) ||
+             (entryDate.year == startDate.year &&
+              entryDate.month == startDate.month &&
+              entryDate.day == startDate.day);
+    }).length;
+  }
 }
 
 /// Blood pressure data file (special structure)

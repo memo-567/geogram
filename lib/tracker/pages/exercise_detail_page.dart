@@ -336,32 +336,51 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
     final dateStr = _formatDate(dateTime);
     final timeStr = _formatTime(dateTime);
 
-    return Dismissible(
-      key: Key(entry.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      confirmDismiss: (direction) => _confirmDelete(entry),
-      onDismissed: (direction) => _deleteEntry(entry),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
-          child: Icon(
-            _getExerciseIcon(config?.category ?? ExerciseCategory.strength),
-            color: Theme.of(context).primaryColor,
-          ),
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
+        child: Icon(
+          _getExerciseIcon(config?.category ?? ExerciseCategory.strength),
+          color: Theme.of(context).primaryColor,
         ),
-        title: Text(_formatCount(entry.count, config)),
-        subtitle: Text('$dateStr $timeStr'),
-        trailing: entry.durationSeconds != null
-            ? Text(_formatDuration(entry.durationSeconds!))
-            : null,
-        onTap: () => _showEntryDetails(entry),
       ),
+      title: Text(_formatCount(entry.count, config)),
+      subtitle: Text('$dateStr $timeStr${entry.durationSeconds != null ? ' • ${_formatDuration(entry.durationSeconds!)}' : ''}'),
+      trailing: PopupMenuButton<String>(
+        onSelected: (action) async {
+          if (action == 'edit') {
+            _showEntryDetails(entry);
+          } else if (action == 'delete') {
+            final confirmed = await _confirmDelete(entry);
+            if (confirmed == true) {
+              _deleteEntry(entry);
+            }
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem(
+            value: 'edit',
+            child: Row(
+              children: [
+                const Icon(Icons.edit),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('edit')),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                const Icon(Icons.delete, color: Colors.red),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('delete'), style: const TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      onTap: () => _showEntryDetails(entry),
     );
   }
 

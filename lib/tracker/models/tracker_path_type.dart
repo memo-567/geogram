@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 /// Types of paths that can be recorded
 enum TrackerPathType {
   walk('walk', Icons.directions_walk),
+  travel('travel', Icons.travel_explore),
   run('run', Icons.directions_run),
   bicycle('bicycle', Icons.directions_bike),
   car('car', Icons.directions_car),

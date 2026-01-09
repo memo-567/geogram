@@ -361,7 +361,10 @@ class CollectionService {
           return null;
         }
       } else {
-        return null;
+        final created = await _autoCreateContactsCollectionJs(folder);
+        if (!created || !await collectionJsFile.exists()) {
+          return null;
+        }
       }
     }
 
@@ -444,6 +447,68 @@ class CollectionService {
     } catch (e) {
       stderr.writeln('Error parsing collection.js: $e');
       return null;
+    }
+  }
+
+  Future<bool> _autoCreateContactsCollectionJs(Directory folder) async {
+    final folderName = folder.path.split('/').last;
+    if (folderName != 'contacts') {
+      return false;
+    }
+
+    try {
+      stderr.writeln('Auto-creating collection.js for contacts folder: ${folder.path}');
+      await _ensureContactsSupportFiles(folder);
+
+      final keys = NostrKeyGenerator.generateKeyPair();
+      _configService.storeCollectionKeys(keys);
+
+      final collection = Collection(
+        id: keys.npub,
+        title: 'Contacts',
+        description: '',
+        type: 'contacts',
+        updated: DateTime.now().toIso8601String(),
+        storagePath: folder.path,
+        isOwned: true,
+        isFavorite: false,
+        filesCount: 0,
+        totalSize: 0,
+      );
+
+      final collectionJsFile = File('${folder.path}/collection.js');
+      await collectionJsFile.writeAsString(collection.generateCollectionJs());
+      return true;
+    } catch (e) {
+      stderr.writeln('Error auto-creating contacts collection.js: $e');
+      return false;
+    }
+  }
+
+  Future<void> _ensureContactsSupportFiles(Directory folder) async {
+    final mediaDir = Directory('${folder.path}/media');
+    if (!await mediaDir.exists()) {
+      await mediaDir.create(recursive: true);
+    }
+
+    final extraDir = Directory('${folder.path}/extra');
+    if (!await extraDir.exists()) {
+      await extraDir.create(recursive: true);
+    }
+
+    final securityFile = File('${folder.path}/extra/security.json');
+    if (!await securityFile.exists()) {
+      final profileService = ProfileService();
+      final currentProfile = profileService.getProfile();
+      final securityData = {
+        'version': '1.0',
+        'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+        'moderators': <String>[],
+        'bannedNpubs': <String>[],
+      };
+      await securityFile.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(securityData),
+      );
     }
   }
 

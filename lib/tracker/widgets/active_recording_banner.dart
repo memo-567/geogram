@@ -69,6 +69,22 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
     }
   }
 
+  Widget _buildStatItem(
+    IconData icon,
+    String label,
+    TextStyle? textStyle,
+    Color iconColor,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: iconColor),
+        const SizedBox(width: 4),
+        Text(label, style: textStyle),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final service = widget.recordingService;
@@ -86,8 +102,75 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    final isRecording = service.isRecording;
     final isPaused = service.isPaused;
+    final statColor = isPaused
+        ? colorScheme.onSecondaryContainer.withValues(alpha: 0.7)
+        : colorScheme.onPrimaryContainer.withValues(alpha: 0.7);
+    final statTextStyle = theme.textTheme.bodySmall?.copyWith(
+      color: statColor,
+    );
+    final stats = Wrap(
+      spacing: 16,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _buildStatItem(
+          Icons.location_on_outlined,
+          '${service.pointCount} ${widget.i18n.t('tracker_points')}',
+          statTextStyle,
+          statColor,
+        ),
+        _buildStatItem(
+          Icons.straighten,
+          _formatDistance(service.totalDistance),
+          statTextStyle,
+          statColor,
+        ),
+      ],
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      children: [
+        SizedBox(
+          height: 32,
+          child: isPaused
+              ? OutlinedButton.icon(
+                  onPressed: () => service.resumeRecording(),
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: Text(widget.i18n.t('tracker_resume_path')),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                )
+              : OutlinedButton.icon(
+                  onPressed: () => service.pauseRecording(),
+                  icon: const Icon(Icons.pause, size: 16),
+                  label: Text(widget.i18n.t('tracker_pause_path')),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+        ),
+        SizedBox(
+          height: 32,
+          child: FilledButton.icon(
+            onPressed: () => _showStopConfirmation(context),
+            icon: const Icon(Icons.stop, size: 16),
+            label: Text(widget.i18n.t('tracker_stop_path')),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              visualDensity: VisualDensity.compact,
+              backgroundColor: colorScheme.error,
+              foregroundColor: colorScheme.onError,
+            ),
+          ),
+        ),
+      ],
+    );
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -166,84 +249,30 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
           const SizedBox(height: 8),
 
           // Stats row
-          Row(
-            children: [
-              // Points count
-              Icon(
-                Icons.location_on_outlined,
-                size: 16,
-                color: isPaused
-                    ? colorScheme.onSecondaryContainer.withValues(alpha: 0.7)
-                    : colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '${service.pointCount} ${widget.i18n.t('tracker_points')}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: isPaused
-                      ? colorScheme.onSecondaryContainer.withValues(alpha: 0.7)
-                      : colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                ),
-              ),
-              const SizedBox(width: 16),
-              // Distance
-              Icon(
-                Icons.straighten,
-                size: 16,
-                color: isPaused
-                    ? colorScheme.onSecondaryContainer.withValues(alpha: 0.7)
-                    : colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                _formatDistance(service.totalDistance),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: isPaused
-                      ? colorScheme.onSecondaryContainer.withValues(alpha: 0.7)
-                      : colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                ),
-              ),
-              const Spacer(),
-              // Pause/Resume button
-              SizedBox(
-                height: 32,
-                child: isPaused
-                    ? OutlinedButton.icon(
-                        onPressed: () => service.resumeRecording(),
-                        icon: const Icon(Icons.play_arrow, size: 16),
-                        label: Text(widget.i18n.t('tracker_resume_path')),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      )
-                    : OutlinedButton.icon(
-                        onPressed: () => service.pauseRecording(),
-                        icon: const Icon(Icons.pause, size: 16),
-                        label: Text(widget.i18n.t('tracker_pause_path')),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ),
-              ),
-              const SizedBox(width: 8),
-              // Stop button
-              SizedBox(
-                height: 32,
-                child: FilledButton.icon(
-                  onPressed: () => _showStopConfirmation(context),
-                  icon: const Icon(Icons.stop, size: 16),
-                  label: Text(widget.i18n.t('tracker_stop_path')),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    visualDensity: VisualDensity.compact,
-                    backgroundColor: colorScheme.error,
-                    foregroundColor: colorScheme.onError,
-                  ),
-                ),
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stackActions = constraints.maxWidth < 420;
+              if (stackActions) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    stats,
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: actions,
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: stats),
+                  const SizedBox(width: 8),
+                  actions,
+                ],
+              );
+            },
           ),
         ],
       ),

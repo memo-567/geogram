@@ -1,9 +1,17 @@
+import 'dart:io' if (dart.library.html) '../../platform/io_stub.dart' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 
 import '../models/tracker_models.dart';
 import '../services/path_recording_service.dart';
+import '../../widgets/transcribe_button_widget.dart';
 import '../../services/i18n_service.dart';
+import '../../services/location_service.dart';
+import '../../services/user_location_service.dart';
+import '../../util/geolocation_utils.dart';
 
 /// Dialog for starting a new path recording
 class StartPathDialog extends StatefulWidget {
@@ -38,10 +46,17 @@ class _StartPathDialogState extends State<StartPathDialog> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final UserLocationService _userLocationService = UserLocationService();
+  final LocationService _locationService = LocationService();
 
-  TrackerPathType _selectedType = TrackerPathType.walk;
+  TrackerPathType _selectedType = TrackerPathType.travel;
   int _intervalSeconds = 60;
   bool _starting = false;
+  bool _customTitle = false;
+  bool _settingAutoTitle = false;
+  String? _autoCityLabel;
+  double? _lastCityLat;
+  double? _lastCityLon;
 
   // Available GPS intervals
   static const _intervals = [
@@ -55,16 +70,68 @@ class _StartPathDialogState extends State<StartPathDialog> {
   void initState() {
     super.initState();
     _updateAutoTitle();
+    _userLocationService.addListener(_onLocationChanged);
+    _refreshAutoCity();
   }
 
   @override
   void dispose() {
+    _userLocationService.removeListener(_onLocationChanged);
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
 
+  void _onLocationChanged() {
+    if (!mounted) return;
+    _refreshAutoCity();
+  }
+
+  Future<void> _refreshAutoCity() async {
+    final location = _userLocationService.currentLocation;
+    if (location == null || !location.isValid) {
+      return;
+    }
+
+    if (_lastCityLat != null && _lastCityLon != null) {
+      final distanceKm = _locationService.calculateDistance(
+        _lastCityLat!,
+        _lastCityLon!,
+        location.latitude,
+        location.longitude,
+      );
+      if (distanceKm < 2) {
+        return;
+      }
+    }
+
+    _lastCityLat = location.latitude;
+    _lastCityLon = location.longitude;
+
+    final fallbackName = location.locationName?.trim();
+    if (fallbackName != null && fallbackName.isNotEmpty) {
+      _autoCityLabel = fallbackName;
+      _updateAutoTitle();
+      return;
+    }
+
+    final nearestCity = await _locationService.findNearestCity(
+      location.latitude,
+      location.longitude,
+    );
+    if (!mounted) return;
+
+    if (nearestCity != null) {
+      _autoCityLabel = '${nearestCity.city}, ${nearestCity.country}';
+      _updateAutoTitle();
+    }
+  }
+
   void _updateAutoTitle() {
+    if (_customTitle) {
+      return;
+    }
+
     final now = DateTime.now();
     final hour = now.hour;
 
@@ -87,7 +154,20 @@ class _StartPathDialogState extends State<StartPathDialog> {
     final dateFormat = DateFormat.MMMd();
     final dateStr = dateFormat.format(now);
 
-    _titleController.text = '$timeOfDay $typeName - $dateStr';
+    final buffer = StringBuffer('$timeOfDay $typeName');
+    final cityLabel = _autoCityLabel?.trim();
+    if (cityLabel != null && cityLabel.isNotEmpty) {
+      buffer.write(' - $cityLabel');
+    }
+    buffer.write(' - $dateStr');
+
+    _settingAutoTitle = true;
+    _titleController
+      ..text = buffer.toString()
+      ..selection = TextSelection.collapsed(
+        offset: _titleController.text.length,
+      );
+    _settingAutoTitle = false;
   }
 
   @override
@@ -130,8 +210,8 @@ class _StartPathDialogState extends State<StartPathDialog> {
                   if (value != null) {
                     setState(() {
                       _selectedType = value;
-                      _updateAutoTitle();
                     });
+                    _updateAutoTitle();
                   }
                 },
               ),
@@ -144,6 +224,12 @@ class _StartPathDialogState extends State<StartPathDialog> {
                   labelText: widget.i18n.t('tracker_path_title'),
                   border: const OutlineInputBorder(),
                 ),
+                onChanged: (value) {
+                  if (_settingAutoTitle) return;
+                  if (!_customTitle) {
+                    setState(() => _customTitle = true);
+                  }
+                },
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
                     return widget.i18n.t('tracker_required_field');
@@ -159,6 +245,21 @@ class _StartPathDialogState extends State<StartPathDialog> {
                 decoration: InputDecoration(
                   labelText: widget.i18n.t('tracker_path_description'),
                   border: const OutlineInputBorder(),
+                  suffixIcon: TranscribeButtonWidget(
+                    i18n: widget.i18n,
+                    onTranscribed: (text) {
+                      final current = _descriptionController.text;
+                      final needsSpace =
+                          current.isNotEmpty && !current.endsWith(' ');
+                      final appended = '$current${needsSpace ? ' ' : ''}$text';
+                      _descriptionController
+                        ..text = appended
+                        ..selection = TextSelection.collapsed(
+                          offset: appended.length,
+                        );
+                    },
+                    enabled: !_starting,
+                  ),
                 ),
                 maxLines: 2,
               ),
@@ -228,10 +329,10 @@ class _StartPathDialogState extends State<StartPathDialog> {
         if (path != null) {
           Navigator.of(context).pop(path);
         } else {
-          // Show error - GPS permission denied or location services disabled
+          final message = await _resolveStartErrorMessage();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(widget.i18n.t('tracker_gps_permission_required')),
+              content: Text(message),
             ),
           );
           setState(() => _starting = false);
@@ -245,5 +346,24 @@ class _StartPathDialogState extends State<StartPathDialog> {
         setState(() => _starting = false);
       }
     }
+  }
+
+  Future<String> _resolveStartErrorMessage() async {
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      return widget.i18n.t('tracker_error_starting_path');
+    }
+
+    final permission = await GeolocationUtils.checkPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return widget.i18n.t('tracker_gps_permission_required');
+    }
+
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return widget.i18n.t('tracker_gps_disabled');
+    }
+
+    return widget.i18n.t('tracker_error_starting_path');
   }
 }

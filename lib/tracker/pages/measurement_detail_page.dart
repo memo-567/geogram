@@ -494,29 +494,51 @@ class _MeasurementDetailPageState extends State<MeasurementDetailPage> {
     final unit = _config?.unit ?? _data?.unit ?? '';
     final decimalPlaces = _config?.decimalPlaces ?? _data?.decimalPlaces ?? 1;
 
-    return Dismissible(
-      key: Key(entry.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      confirmDismiss: (direction) => _confirmDelete(entry.id),
-      onDismissed: (direction) => _deleteMeasurementEntry(entry.id),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
-          child: Icon(
-            _getMeasurementIcon(widget.typeId),
-            color: Theme.of(context).primaryColor,
-          ),
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
+        child: Icon(
+          _getMeasurementIcon(widget.typeId),
+          color: Theme.of(context).primaryColor,
         ),
-        title: Text('${entry.value.toStringAsFixed(decimalPlaces)} $unit'),
-        subtitle: Text('$dateStr $timeStr'),
-        onTap: () => _showMeasurementEntryDetails(entry),
       ),
+      title: Text('${entry.value.toStringAsFixed(decimalPlaces)} $unit'),
+      subtitle: Text('$dateStr $timeStr'),
+      trailing: PopupMenuButton<String>(
+        onSelected: (action) async {
+          if (action == 'edit') {
+            _showMeasurementEntryDetails(entry);
+          } else if (action == 'delete') {
+            final confirmed = await _confirmDelete(entry.id);
+            if (confirmed == true) {
+              _deleteMeasurementEntry(entry.id);
+            }
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem(
+            value: 'edit',
+            child: Row(
+              children: [
+                const Icon(Icons.edit),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('edit')),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                const Icon(Icons.delete, color: Colors.red),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('delete'), style: const TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      onTap: () => _showMeasurementEntryDetails(entry),
     );
   }
 
@@ -528,32 +550,51 @@ class _MeasurementDetailPageState extends State<MeasurementDetailPage> {
     // Determine blood pressure category for color coding
     final color = _getBloodPressureColor(entry.systolic, entry.diastolic);
 
-    return Dismissible(
-      key: Key(entry.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        child: const Icon(Icons.delete, color: Colors.white),
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: color.withValues(alpha: 0.2),
+        child: Icon(Icons.favorite, color: color),
       ),
-      confirmDismiss: (direction) => _confirmDelete(entry.id),
-      onDismissed: (direction) => _deleteBloodPressureEntry(entry.id),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withValues(alpha: 0.2),
-          child: Icon(Icons.favorite, color: color),
-        ),
-        title: Text(
-          entry.displayValue,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text('$dateStr $timeStr'),
-        trailing: entry.heartRate != null
-            ? Text('${entry.heartRate} bpm')
-            : null,
-        onTap: () => _showBloodPressureEntryDetails(entry),
+      title: Text(
+        entry.displayValue,
+        style: const TextStyle(fontWeight: FontWeight.bold),
       ),
+      subtitle: Text('$dateStr $timeStr${entry.heartRate != null ? ' • ${entry.heartRate} bpm' : ''}'),
+      trailing: PopupMenuButton<String>(
+        onSelected: (action) async {
+          if (action == 'edit') {
+            _showBloodPressureEntryDetails(entry);
+          } else if (action == 'delete') {
+            final confirmed = await _confirmDelete(entry.id);
+            if (confirmed == true) {
+              _deleteBloodPressureEntry(entry.id);
+            }
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem(
+            value: 'edit',
+            child: Row(
+              children: [
+                const Icon(Icons.edit),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('edit')),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                const Icon(Icons.delete, color: Colors.red),
+                const SizedBox(width: 8),
+                Text(widget.i18n.t('delete'), style: const TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      onTap: () => _showBloodPressureEntryDetails(entry),
     );
   }
 
