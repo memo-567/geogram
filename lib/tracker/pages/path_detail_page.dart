@@ -12,6 +12,7 @@ import '../services/path_share_service.dart';
 import '../services/tracker_service.dart';
 import '../utils/speed_utils.dart';
 import '../dialogs/edit_path_dialog.dart';
+import '../widgets/tracker_map_card.dart';
 import 'add_expense_page.dart';
 import 'path_map_fullscreen_page.dart';
 import '../../services/i18n_service.dart';
@@ -43,14 +44,12 @@ class PathDetailPage extends StatefulWidget {
 
 class _PathDetailPageState extends State<PathDetailPage> {
   final MapTileService _mapTileService = MapTileService();
-  final MapController _mapController = MapController();
 
   TrackerPath? _path;
   TrackerPathPoints? _points;
   TrackerExpenses? _expenses;
   List<Polyline> _speedSegments = [];
   bool _loading = true;
-  bool _tilesAvailable = true;
 
   Timer? _refreshTimer;
   LockedPosition? _lastLivePosition;
@@ -146,8 +145,6 @@ class _PathDetailPageState extends State<PathDetailPage> {
 
     if (mounted) {
       setState(() => _loading = false);
-      // Note: Map bounds are now set via initialCameraFit in _buildMapCard
-      // so no need to call _fitBoundsToPath here
     }
   }
 
@@ -332,38 +329,6 @@ class _PathDetailPageState extends State<PathDetailPage> {
     return (gain > 0 ? gain : null, loss > 0 ? loss : null);
   }
 
-  void _fitBoundsToPath() {
-    final points = _points?.points ?? const <TrackerPoint>[];
-    if (points.isEmpty) return;
-
-    var minLat = points.first.lat;
-    var maxLat = points.first.lat;
-    var minLon = points.first.lon;
-    var maxLon = points.first.lon;
-
-    for (final point in points) {
-      minLat = math.min(minLat, point.lat);
-      maxLat = math.max(maxLat, point.lat);
-      minLon = math.min(minLon, point.lon);
-      maxLon = math.max(maxLon, point.lon);
-    }
-
-    final latPadding = math.max((maxLat - minLat) * 0.15, 0.002);
-    final lonPadding = math.max((maxLon - minLon) * 0.15, 0.002);
-
-    final bounds = LatLngBounds(
-      LatLng(minLat - latPadding, minLon - lonPadding),
-      LatLng(maxLat + latPadding, maxLon + lonPadding),
-    );
-
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: bounds,
-        padding: const EdgeInsets.all(32),
-      ),
-    );
-  }
-
   Color _speedColor(double speed, double maxSpeed) {
     if (maxSpeed <= 0) return Colors.blue;
     final ratio = (speed / maxSpeed).clamp(0.0, 1.0);
@@ -467,210 +432,54 @@ class _PathDetailPageState extends State<PathDetailPage> {
     );
   }
 
-  /// Calculate bounds for the path with padding
-  LatLngBounds? _calculatePathBounds(List<TrackerPoint> points) {
-    if (points.isEmpty) return null;
-
-    var minLat = points.first.lat;
-    var maxLat = points.first.lat;
-    var minLon = points.first.lon;
-    var maxLon = points.first.lon;
-
-    for (final point in points) {
-      minLat = math.min(minLat, point.lat);
-      maxLat = math.max(maxLat, point.lat);
-      minLon = math.min(minLon, point.lon);
-      maxLon = math.max(maxLon, point.lon);
-    }
-
-    final latPadding = math.max((maxLat - minLat) * 0.15, 0.002);
-    final lonPadding = math.max((maxLon - minLon) * 0.15, 0.002);
-
-    return LatLngBounds(
-      LatLng(minLat - latPadding, minLon - lonPadding),
-      LatLng(maxLat + latPadding, maxLon + lonPadding),
-    );
-  }
-
   Widget _buildMapCard(List<TrackerPoint> points) {
     final start = points.isNotEmpty ? points.first : null;
     final end = points.isNotEmpty ? points.last : null;
     final fallbackPosition = widget.recordingService?.lastPosition;
-    final fallbackCenter = fallbackPosition != null
-        ? LatLng(fallbackPosition.latitude, fallbackPosition.longitude)
-        : const LatLng(0, 0);
-    final centerLat = end?.lat ?? start?.lat ?? fallbackPosition?.latitude;
-    final centerLon = end?.lon ?? start?.lon ?? fallbackPosition?.longitude;
 
-    // Calculate bounds upfront for initialCameraFit
-    final pathBounds = _calculatePathBounds(points);
+    // Convert points to LatLng for TrackerMapCard
+    final latLngPoints = points.map((p) => LatLng(p.lat, p.lon)).toList();
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        height: 260,
-        child: Stack(
-          children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                // Use initialCameraFit if we have bounds, otherwise fall back to center/zoom
-                initialCameraFit: pathBounds != null
-                    ? CameraFit.bounds(
-                        bounds: pathBounds,
-                        padding: const EdgeInsets.all(32),
-                      )
-                    : null,
-                initialCenter: pathBounds == null && centerLat != null && centerLon != null
-                    ? LatLng(centerLat, centerLon)
-                    : fallbackCenter,
-                initialZoom: pathBounds == null ? 14 : 10,
-                minZoom: 1,
-                maxZoom: 18,
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.all,
-                ),
-                onTap: (_, __) => _openFullscreenMap(_path ?? widget.path),
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: _mapTileService.getTileUrl(MapLayerType.satellite),
-                  userAgentPackageName: 'dev.geogram',
-                  subdomains: const [],
-                  tileBuilder: (context, tileWidget, tile) => tileWidget,
-                  tileProvider: _mapTileService.getTileProvider(MapLayerType.satellite),
-                  errorTileCallback: (_, __, ___) {
-                    if (_tilesAvailable) {
-                      setState(() => _tilesAvailable = false);
-                    }
-                    if (centerLat != null && centerLon != null) {
-                      unawaited(
-                        _mapTileService.ensureOfflineTiles(
-                          lat: centerLat,
-                          lng: centerLon,
-                        ),
-                      );
-                    }
-                  },
-                ),
-                // Borders overlay for satellite view
-                ColorFiltered(
-                  colorFilter: const ColorFilter.matrix(<double>[
-                    1.2, 0, 0, 0, 0,
-                    0, 1.2, 0, 0, 0,
-                    0, 0, 1.2, 0, 0,
-                    0, 0, 0, 0.7, 0,
-                  ]),
-                  child: TileLayer(
-                    urlTemplate: _mapTileService.getBordersUrl(),
-                    userAgentPackageName: 'dev.geogram',
-                    subdomains: const [],
-                    tileProvider: _mapTileService.getBordersProvider(),
-                    evictErrorTileStrategy: EvictErrorTileStrategy.none,
-                  ),
-                ),
-                TileLayer(
-                  urlTemplate: _mapTileService.getLabelsUrl(),
-                  userAgentPackageName: 'dev.geogram',
-                  subdomains: const [],
-                  tileProvider: _mapTileService.getLabelsProvider(),
-                  evictErrorTileStrategy: EvictErrorTileStrategy.none,
-                ),
-                // Only show transport labels for trips under 100km
-                if (_totalDistanceMeters < 100000)
-                  ColorFiltered(
-                    colorFilter: const ColorFilter.matrix(<double>[
-                      0.3, 0.3, 0.3, 0, 30,
-                      0.3, 0.3, 0.3, 0, 30,
-                      0.3, 0.3, 0.3, 0, 30,
-                      0, 0, 0, 1.0, 0,
-                    ]),
-                    child: TileLayer(
-                      urlTemplate: _mapTileService.getTransportLabelsUrl(),
-                      userAgentPackageName: 'dev.geogram',
-                      subdomains: const [],
-                      tileProvider: _mapTileService.getTransportLabelsProvider(),
-                      evictErrorTileStrategy: EvictErrorTileStrategy.none,
-                    ),
-                  ),
-                if (_speedSegments.isNotEmpty)
-                  PolylineLayer(
-                    polylines: _speedSegments,
-                  ),
-                MarkerLayer(
-                  markers: [
-                    if (start != null)
-                      Marker(
-                        point: LatLng(start.lat, start.lon),
-                        width: 28,
-                        height: 28,
-                        child: const Icon(Icons.trip_origin, color: Colors.green),
-                      ),
-                    if (end != null)
-                      Marker(
-                        point: LatLng(end.lat, end.lon),
-                        width: 28,
-                        height: 28,
-                        child: const Icon(Icons.flag, color: Colors.red),
-                      ),
-                    // Expense markers
-                    ...(_expenses?.expenses ?? [])
-                        .where((e) => e.lat != null && e.lon != null)
-                        .map((expense) => Marker(
-                              point: LatLng(expense.lat!, expense.lon!),
-                              width: 32,
-                              height: 32,
-                              child: _buildExpenseMarker(expense.type),
-                            )),
-                  ],
-                ),
-              ],
-            ),
-            // Show city-to-city label only for trips >= 30km
-            if (_startCity != null && _endCity != null)
-              Positioned(
-                bottom: 12,
-                left: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '$_startCity → $_endCity',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ),
-              ),
-            Positioned(
-              top: 12,
-              right: 12,
-              child: IconButton(
-                icon: const Icon(Icons.open_in_full, color: Colors.white),
-                onPressed: () => _openFullscreenMap(_path ?? widget.path),
-                tooltip: widget.i18n.t('tracker_fullscreen_map'),
-              ),
-            ),
-            if (!_tilesAvailable)
-              Positioned(
-                top: 12,
-                left: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    widget.i18n.t('tracker_offline_tiles'),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ),
-              ),
-          ],
+    // Build markers list
+    final markers = <Marker>[
+      if (start != null)
+        Marker(
+          point: LatLng(start.lat, start.lon),
+          width: 28,
+          height: 28,
+          child: const Icon(Icons.trip_origin, color: Colors.green),
         ),
-      ),
+      if (end != null)
+        Marker(
+          point: LatLng(end.lat, end.lon),
+          width: 28,
+          height: 28,
+          child: const Icon(Icons.flag, color: Colors.red),
+        ),
+      // Expense markers
+      ...(_expenses?.expenses ?? [])
+          .where((e) => e.lat != null && e.lon != null)
+          .map((expense) => Marker(
+                point: LatLng(expense.lat!, expense.lon!),
+                width: 32,
+                height: 32,
+                child: _buildExpenseMarker(expense.type),
+              )),
+    ];
+
+    return TrackerMapCard(
+      points: latLngPoints,
+      markers: markers,
+      polylines: _speedSegments.isNotEmpty ? _speedSegments : null,
+      showTransportLabels: _totalDistanceMeters < 100000,
+      fallbackCenter: fallbackPosition != null
+          ? LatLng(fallbackPosition.latitude, fallbackPosition.longitude)
+          : const LatLng(0, 0),
+      onTap: () => _openFullscreenMap(_path ?? widget.path),
+      onFullscreen: () => _openFullscreenMap(_path ?? widget.path),
+      bottomLeftOverlay: _startCity != null && _endCity != null
+          ? MapLabelOverlay(text: '$_startCity → $_endCity')
+          : null,
     );
   }
 

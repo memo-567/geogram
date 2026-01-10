@@ -76,10 +76,10 @@ class ConfigService {
     _config = {
       'version': '1.0.0',
       'created': DateTime.now().toIso8601String(),
-      'collections': {
+      'collections': <String, dynamic>{
         'favorites': <String>[],
       },
-      'settings': {
+      'settings': <String, dynamic>{
         'theme': 'system',
         'language': 'en_US',
       },

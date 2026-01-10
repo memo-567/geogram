@@ -365,15 +365,18 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                       _titleController.clear();
                     }
                   });
-                  // Scroll to make expanded item visible
+                  // Scroll to make expanded item fully visible (including bottom content)
                   if (!isExpanded) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                    // Wait for expand animation to complete before scrolling
+                    Future.delayed(const Duration(milliseconds: 280), () {
+                      if (!mounted) return;
                       final key = _itemKeys[typeInfo.type];
                       if (key?.currentContext != null) {
                         Scrollable.ensureVisible(
                           key!.currentContext!,
                           duration: const Duration(milliseconds: 300),
                           curve: Curves.easeInOut,
+                          alignment: 0.8, // Show item near bottom to ensure Create button is visible
                         );
                       }
                     });

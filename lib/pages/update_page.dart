@@ -869,7 +869,12 @@ class _UpdatePageState extends State<UpdatePage> {
                         ),
                         title: Row(
                           children: [
-                            Text('v${backup.version ?? "unknown"}'),
+                            Flexible(
+                              child: Text(
+                                'v${backup.version ?? "unknown"}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
                             if (backup.isPinned) ...[
                               const SizedBox(width: 8),
                               Container(

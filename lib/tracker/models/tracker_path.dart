@@ -243,10 +243,12 @@ class TrackerPath {
     final q = query.toLowerCase().trim();
     if (q.isEmpty) return true;
 
-    // Check if searching for tag with #
+    // Check if searching for tag with # prefix
+    // #train matches tags starting with "train" (e.g., "train", "training")
     if (q.startsWith('#')) {
       final tagQuery = q.substring(1);
-      return userTags.any((t) => t.contains(tagQuery));
+      if (tagQuery.isEmpty) return userTags.isNotEmpty;
+      return userTags.any((t) => t.startsWith(tagQuery));
     }
 
     // Search in title, description, and tags

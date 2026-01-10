@@ -469,7 +469,7 @@ class _MeasurementDetailPageState extends State<MeasurementDetailPage> {
   Widget _buildStatItem(String label, String value, IconData icon) {
     return Column(
       children: [
-        Icon(icon, color: Theme.of(context).primaryColor),
+        Icon(icon, color: Colors.white),
         const SizedBox(height: 4),
         Text(
           value,

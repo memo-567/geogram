@@ -1140,15 +1140,15 @@ class _HomePageState extends State<HomePage> {
                         );
                       },
                     ),
-                  // Settings icon
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined),
-                    tooltip: _i18n.t('settings'),
-                    onPressed: () {
-                      setState(() {
-                        _selectedIndex = 3; // Navigate to Settings
-                      });
-                    },
+                  // Menu icon - opens settings drawer from right
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.menu),
+                      tooltip: _i18n.t('settings'),
+                      onPressed: () {
+                        Scaffold.of(context).openEndDrawer();
+                      },
+                    ),
                   ),
                 ],
               )
@@ -1217,6 +1217,164 @@ class _HomePageState extends State<HomePage> {
               label: Text(_i18n.t('log')),
             ),
           ],
+        ),
+        endDrawer: Drawer(
+          child: SafeArea(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    _i18n.t('settings'),
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.person_outline),
+                  title: Text(_i18n.t('profile')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const ProfilePage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.location_on_outlined),
+                  title: Text(_i18n.t('location')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const LocationPage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.security_outlined),
+                  title: Text(_i18n.t('security')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SecuritySettingsPage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.storage_outlined),
+                  title: Text(_i18n.t('storage')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const StorageSettingsPage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.settings_input_antenna),
+                  title: Text(_i18n.t('connections')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const StationsPage()),
+                    );
+                  },
+                ),
+                if (_profileService.getProfile().isRelay)
+                  ListTile(
+                    leading: const Icon(Icons.cell_tower, color: Colors.orange),
+                    title: Text(_i18n.t('station_settings')),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const StationDashboardPage()),
+                      );
+                    },
+                  ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.language),
+                  title: Text(_i18n.t('language')),
+                  subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final selectedLanguage = await showDialog<String>(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return AlertDialog(
+                          title: Text(_i18n.t('select_language')),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: _i18n.supportedLanguages.map((languageCode) {
+                              return RadioListTile<String>(
+                                title: Text(_i18n.getLanguageName(languageCode)),
+                                value: languageCode,
+                                groupValue: _i18n.currentLanguage,
+                                onChanged: (String? value) {
+                                  Navigator.pop(context, value);
+                                },
+                              );
+                            }).toList(),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: Text(_i18n.t('cancel')),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                    if (selectedLanguage != null && selectedLanguage != _i18n.currentLanguage) {
+                      await _i18n.setLanguage(selectedLanguage);
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.color_lens_outlined),
+                  title: Text(_i18n.t('app_theme')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.system_update),
+                  title: Text(_i18n.t('software_updates')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const UpdatePage()),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.info_outlined),
+                  title: Text(_i18n.t('about')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => AboutPage()),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
         ),
         body: _pages[_selectedIndex],
         bottomNavigationBar: NavigationBar(
@@ -2402,7 +2560,8 @@ class _CollectionGridCard extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Center(
+              child: Align(
+                alignment: Alignment.centerLeft,
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,

@@ -18,6 +18,7 @@ import 'path_detail_page.dart';
 import 'exercise_detail_page.dart';
 import 'measurement_detail_page.dart';
 import 'plan_detail_page.dart';
+import 'proximity_detail_page.dart';
 import '../../services/i18n_service.dart';
 import '../../services/config_service.dart';
 import '../../services/profile_service.dart';
@@ -586,8 +587,8 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             ),
           ),
 
-        // Popular tags (only when not searching)
-        if (hasPaths && !hasSearch) _buildPopularTags(),
+        // Popular tags (always visible when paths exist)
+        if (hasPaths) _buildPopularTags(),
 
         // Search results summary
         if (hasSearch) _buildSearchSummary(),
@@ -639,19 +640,32 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     final popularTags = _getPopularTags();
     if (popularTags.isEmpty) return const SizedBox.shrink();
 
+    // Get currently selected tag (if searching with #)
+    final currentTagFilter = _pathSearchQuery.startsWith('#')
+        ? _pathSearchQuery.substring(1).toLowerCase()
+        : null;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
           children: popularTags.map((tag) {
+            final isSelected = currentTagFilter == tag;
             return Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: ActionChip(
+              child: FilterChip(
                 label: Text('#$tag'),
-                onPressed: () {
-                  _pathSearchController.text = '#$tag';
-                  setState(() => _pathSearchQuery = '#$tag');
+                selected: isSelected,
+                onSelected: (_) {
+                  if (isSelected) {
+                    // Clear filter if tapping currently selected tag
+                    _pathSearchController.clear();
+                    setState(() => _pathSearchQuery = '');
+                  } else {
+                    _pathSearchController.text = '#$tag';
+                    setState(() => _pathSearchQuery = '#$tag');
+                  }
                 },
                 visualDensity: VisualDensity.compact,
               ),
@@ -987,7 +1001,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           child: ListTile(
             leading: Icon(
               _getTrackableIcon(kind, typeId, config.category),
-              color: hasData ? Theme.of(context).primaryColor : Colors.white,
+              color: Colors.white,
             ),
             title: Text(widget.i18n.t('$typePrefix$typeId')),
             subtitle: Text('${_weeklyTotals[typeId] ?? 0} ${widget.i18n.t('tracker_this_week')}'),
@@ -1328,6 +1342,8 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     return ExpansionTile(
       key: PageStorageKey<String>(weekKey),
       initiallyExpanded: isExpanded,
+      shape: const Border(),
+      collapsedShape: const Border(),
       title: Text('${widget.i18n.t('tracker_week_of')} $weekLabel'),
       subtitle: Text('$deviceCount ${widget.i18n.t('tracker_proximity_devices').toLowerCase()}, '
           '$placeCount ${widget.i18n.t('tracker_proximity_places').toLowerCase()}'),
@@ -1350,7 +1366,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
                 ),
               ),
             ]
-          : filteredTracks.map((track) => _buildProximityTrackCard(track)).toList(),
+          : filteredTracks.map((track) => _buildProximityTrackCard(track, year, week)).toList(),
     );
   }
 
@@ -1363,13 +1379,10 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     return mondayOfWeek1.add(Duration(days: daysSinceJan4));
   }
 
-  Widget _buildProximityTrackCard(ProximityTrack track) {
+  Widget _buildProximityTrackCard(ProximityTrack track, int year, int week) {
     final isDevice = track.type == ProximityTargetType.device;
     final icon = isDevice ? Icons.bluetooth : Icons.place;
-    final totalMinutes = track.weekSummary.totalSeconds ~/ 60;
-    final hours = totalMinutes ~/ 60;
-    final minutes = totalMinutes % 60;
-    final durationText = hours > 0 ? '${hours}h ${minutes}m' : '${minutes}m';
+    final durationText = _formatDurationHuman(track.weekSummary.totalSeconds);
 
     final lastSeen = track.weekSummary.lastDetection != null
         ? DateFormat.MMMd().add_jm().format(DateTime.parse(track.weekSummary.lastDetection!).toLocal())
@@ -1378,6 +1391,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: ListTile(
+        onTap: () => _openProximityDetail(track, year, week),
         leading: Icon(icon, color: isDevice ? Colors.blue : Colors.green),
         title: Text(track.displayName),
         subtitle: Column(
@@ -1391,11 +1405,32 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
               ),
           ],
         ),
-        trailing: Text(
-          '${track.weekSummary.totalEntries}',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: isDevice ? Colors.blue : Colors.green,
-              ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${track.weekSummary.totalEntries}',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: isDevice ? Colors.blue : Colors.green,
+                  ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, color: Colors.grey[400]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openProximityDetail(ProximityTrack track, int year, int week) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ProximityDetailPage(
+          service: _service,
+          i18n: widget.i18n,
+          track: track,
+          year: year,
+          week: week,
         ),
       ),
     );
@@ -1586,6 +1621,50 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       return '${hours}h ${minutes}m';
     }
     return '${duration.inHours}h';
+  }
+
+  /// Format seconds into a human-readable duration string
+  /// Examples: "10 minutes", "1 hour and 30 minutes", "2 days and 5 hours"
+  String _formatDurationHuman(int totalSeconds) {
+    if (totalSeconds < 60) {
+      return totalSeconds == 1 ? '1 second' : '$totalSeconds seconds';
+    }
+
+    final totalMinutes = totalSeconds ~/ 60;
+    if (totalMinutes < 60) {
+      return totalMinutes == 1 ? '1 minute' : '$totalMinutes minutes';
+    }
+
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    if (hours < 24) {
+      final hourText = hours == 1 ? '1 hour' : '$hours hours';
+      if (minutes == 0) {
+        return hourText;
+      }
+      final minuteText = minutes == 1 ? '1 minute' : '$minutes minutes';
+      return '$hourText and $minuteText';
+    }
+
+    final days = hours ~/ 24;
+    final remainingHours = hours % 24;
+    if (days < 30) {
+      final dayText = days == 1 ? '1 day' : '$days days';
+      if (remainingHours == 0) {
+        return dayText;
+      }
+      final hourText = remainingHours == 1 ? '1 hour' : '$remainingHours hours';
+      return '$dayText and $hourText';
+    }
+
+    final months = days ~/ 30;
+    final remainingDays = days % 30;
+    final monthText = months == 1 ? '1 month' : '$months months';
+    if (remainingDays == 0) {
+      return monthText;
+    }
+    final dayText = remainingDays == 1 ? '1 day' : '$remainingDays days';
+    return '$monthText and $dayText';
   }
 
   String _formatDate(DateTime date) {

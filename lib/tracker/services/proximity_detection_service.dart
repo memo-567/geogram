@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show VoidCallback;
+import 'dart:ui';
 
 import '../models/tracker_proximity_track.dart';
 import 'tracker_service.dart';
@@ -10,7 +10,7 @@ import '../../services/location_provider_service.dart';
 import '../../services/devices_service.dart';
 
 /// Service for detecting nearby devices (via Bluetooth) and places (via GPS).
-/// Registers as a LocationProviderService consumer for reliable background execution.
+/// Registers as a consumer of LocationProviderService to get GPS updates.
 class ProximityDetectionService {
   static final ProximityDetectionService _instance =
       ProximityDetectionService._internal();
@@ -18,8 +18,10 @@ class ProximityDetectionService {
   ProximityDetectionService._internal();
 
   TrackerService? _trackerService;
-  VoidCallback? _disposeConsumer;
+  Timer? _scanTimer;
   bool _isRunning = false;
+  VoidCallback? _locationConsumerDispose;
+  LockedPosition? _lastPosition;
 
   /// Cached places list (refreshed every 5 minutes)
   List<_CachedPlace> _cachedPlaces = [];
@@ -45,21 +47,24 @@ class ProximityDetectionService {
     _trackerService = trackerService;
     _isRunning = true;
 
-    // Register as LocationProviderService consumer - fires every 60 seconds
-    _disposeConsumer = await LocationProviderService().registerConsumer(
+    // Register as a consumer of LocationProviderService to get GPS updates
+    _locationConsumerDispose = await LocationProviderService().registerConsumer(
       intervalSeconds: 60,
-      onPosition: (pos) => _onPositionUpdate(pos),
+      onPosition: (position) {
+        _lastPosition = position;
+        LogService().log('ProximityDetectionService: Got position update: ${position.latitude}, ${position.longitude}');
+      },
     );
 
     // Run initial scan immediately
-    final currentPos = LocationProviderService().currentPosition;
-    if (currentPos != null) {
-      _scanDevices(currentPos.latitude, currentPos.longitude);
-    } else {
-      _scanDevices(0.0, 0.0);
-    }
+    _scanNearbyDevices();
 
-    LogService().log('ProximityDetectionService: Started as LocationProvider consumer');
+    // Then scan every 60 seconds using a simple timer
+    _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _scanNearbyDevices();
+    });
+
+    LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
   }
 
   /// Stop the proximity detection service
@@ -68,26 +73,19 @@ class ProximityDetectionService {
       return;
     }
 
-    _disposeConsumer?.call();
-    _disposeConsumer = null;
+    _locationConsumerDispose?.call();
+    _locationConsumerDispose = null;
+    _scanTimer?.cancel();
+    _scanTimer = null;
     _isRunning = false;
     _activeSessions.clear();
+    _lastPosition = null;
 
     LogService().log('ProximityDetectionService: Stopped');
   }
 
-  /// Handle position update from LocationProviderService
-  void _onPositionUpdate(LockedPosition pos) {
-    if (!_isRunning || _trackerService == null) return;
-
-    // Scan for devices and places
-    _scanDevices(pos.latitude, pos.longitude);
-    _checkNearbyPlaces(pos.latitude, pos.longitude);
-    _refreshPlacesIfNeeded();
-  }
-
-  /// Scan for Bluetooth-connected devices
-  Future<void> _scanDevices(double lat, double lon) async {
+  /// Scan for nearby BLE devices (detected via bleRssi != null)
+  Future<void> _scanNearbyDevices() async {
     if (!_isRunning || _trackerService == null) return;
 
     try {
@@ -96,18 +94,26 @@ class ProximityDetectionService {
       final week = getWeekNumber(now);
       final timestamp = now.toUtc().toIso8601String();
 
+      // Get current position from our registered consumer or fallback to service's current position
+      final currentPos = _lastPosition ?? LocationProviderService().currentPosition;
+      final lat = currentPos?.latitude ?? 0.0;
+      final lon = currentPos?.longitude ?? 0.0;
+
+      if (lat == 0.0 && lon == 0.0) {
+        LogService().log('ProximityDetectionService: No GPS position available yet');
+      }
+
       // Get all devices from DevicesService
       final allDevices = DevicesService().getAllDevices();
 
-      // Filter for devices with Bluetooth connection
-      final bluetoothDevices = allDevices.where((device) =>
-        device.connectionMethods.contains('bluetooth') ||
-        device.connectionMethods.contains('bluetooth_plus')
+      // Filter for devices CURRENTLY detected via BLE (bleRssi != null means active BLE detection)
+      final nearbyDevices = allDevices.where((device) =>
+        device.bleRssi != null
       ).toList();
 
-      LogService().log('ProximityDetectionService: Found ${bluetoothDevices.length} Bluetooth devices');
+      LogService().log('ProximityDetectionService: Found ${nearbyDevices.length} nearby BLE devices');
 
-      for (final device in bluetoothDevices) {
+      for (final device in nearbyDevices) {
         await _recordProximity(
           id: device.callsign,
           type: ProximityTargetType.device,
@@ -120,6 +126,12 @@ class ProximityDetectionService {
           callsign: device.callsign,
           npub: device.npub,
         );
+      }
+
+      // Also check for nearby places if we have a location
+      if (lat != 0.0 || lon != 0.0) {
+        _checkNearbyPlaces(lat, lon);
+        _refreshPlacesIfNeeded();
       }
 
       // Clean up stale sessions
@@ -240,29 +252,65 @@ class ProximityDetectionService {
 
     // Check if we should extend existing entry or create new one
     if (lastSeen != null && now.difference(lastSeen) < _sessionTimeout) {
-      // Extend the most recent entry - update duration regardless of isOpen
-      // since we're within the session timeout window
+      // Extend the most recent entry - update duration and handle GPS updates
       if (track.entries.isNotEmpty) {
         final lastEntry = track.entries.last;
         final startTime = lastEntry.timestampDateTime;
         final duration = now.difference(startTime).inSeconds;
+        final lastHasLocation = lastEntry.lat != 0.0 || lastEntry.lon != 0.0;
+        final currentHasLocation = lat != 0.0 || lon != 0.0;
 
-        final updatedEntry = lastEntry.copyWith(
-          endedAt: timestamp,
-          durationSeconds: duration,
-        );
-
-        final updatedEntries = List<ProximityEntry>.from(track.entries);
-        updatedEntries[updatedEntries.length - 1] = updatedEntry;
-
-        track = track.copyWith(entries: updatedEntries);
+        if (!lastHasLocation && currentHasLocation) {
+          // Case 1: Entry had no GPS, now we have it → update coordinates
+          final updatedEntry = lastEntry.copyWith(
+            lat: lat,
+            lon: lon,
+            endedAt: timestamp,
+            durationSeconds: duration,
+          );
+          final updatedEntries = List<ProximityEntry>.from(track.entries);
+          updatedEntries[updatedEntries.length - 1] = updatedEntry;
+          track = track.copyWith(entries: updatedEntries);
+        } else if (lastHasLocation && currentHasLocation) {
+          // Case 2: Both have location → check if we moved significantly
+          final distance = _calculateDistance(lastEntry.lat, lastEntry.lon, lat, lon);
+          if (distance > 50) {
+            // Moved >50m → create new entry (path segment)
+            final newEntry = ProximityEntry(
+              timestamp: timestamp,
+              lat: lat,
+              lon: lon,
+              durationSeconds: 60,
+            );
+            track = track.copyWith(entries: [...track.entries, newEntry]);
+          } else {
+            // Same location → just extend duration
+            final updatedEntry = lastEntry.copyWith(
+              endedAt: timestamp,
+              durationSeconds: duration,
+            );
+            final updatedEntries = List<ProximityEntry>.from(track.entries);
+            updatedEntries[updatedEntries.length - 1] = updatedEntry;
+            track = track.copyWith(entries: updatedEntries);
+          }
+        } else {
+          // Case 3: No GPS before or now → just extend duration
+          final updatedEntry = lastEntry.copyWith(
+            endedAt: timestamp,
+            durationSeconds: duration,
+          );
+          final updatedEntries = List<ProximityEntry>.from(track.entries);
+          updatedEntries[updatedEntries.length - 1] = updatedEntry;
+          track = track.copyWith(entries: updatedEntries);
+        }
       }
     } else {
-      // Create new entry
+      // Create new entry - each detection counts as 60 seconds (scan interval)
       final entry = ProximityEntry(
         timestamp: timestamp,
         lat: lat,
         lon: lon,
+        durationSeconds: 60,
       );
 
       track = track.copyWith(

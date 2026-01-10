@@ -35,6 +35,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [CallsignSelectorWidget](#callsignselectorwidget) - Profile switching
 - [ProfileSwitcher](#profileswitcher) - App bar profile
 
+### Map Widgets
+- [TrackerMapCard](#trackermapcard) - Reusable satellite map miniature
+
 ### Tree Widgets
 - [FolderTreeWidget](#foldertreewidget) - Folder navigation
 
@@ -1065,6 +1068,135 @@ AppBar(
 
 ---
 
+## Map Widgets
+
+### TrackerMapCard
+
+**File:** `lib/tracker/widgets/tracker_map_card.dart`
+
+Reusable satellite map card widget for the Tracker feature. Displays a map with optional markers, polylines, and overlays. Supports auto-fitting to bounds and fullscreen expansion.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `points` | List\<LatLng\> | Yes | Points used to calculate map bounds (auto-fit camera) |
+| `markers` | List\<Marker\> | No | Markers to display on the map (default: []) |
+| `polylines` | List\<Polyline\>? | No | Optional polylines to draw (paths, routes) |
+| `height` | double | No | Card height in pixels (default: 260) |
+| `onTap` | VoidCallback? | No | Callback when map is tapped (not on marker) |
+| `onFullscreen` | VoidCallback? | No | Callback for fullscreen button press |
+| `bottomLeftOverlay` | Widget? | No | Optional overlay widget at bottom-left (e.g., city label) |
+| `showTransportLabels` | bool | No | Show transport/road labels (default: false) |
+| `boundsPadding` | EdgeInsets | No | Padding around bounds (default: EdgeInsets.all(32)) |
+| `fallbackCenter` | LatLng | No | Fallback center when no points (default: LatLng(0, 0)) |
+| `fallbackZoom` | double | No | Fallback zoom level (default: 14) |
+
+**Usage:**
+```dart
+TrackerMapCard(
+  points: [
+    LatLng(40.7128, -74.0060),
+    LatLng(40.7580, -73.9855),
+  ],
+  markers: [
+    Marker(
+      point: LatLng(40.7128, -74.0060),
+      width: 40,
+      height: 40,
+      child: Icon(Icons.location_on, color: Colors.red),
+    ),
+  ],
+  height: 300,
+  showTransportLabels: true,
+  onFullscreen: () => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => FullscreenMapPage()),
+  ),
+  bottomLeftOverlay: MapLabelOverlay(text: 'New York'),
+)
+```
+
+**Features:**
+- **Satellite tiles** with borders and labels overlay
+- **Auto-fit camera** to show all points with padding
+- **Fullscreen button** (optional, top-right)
+- **Marker layer** for custom markers
+- **Polyline layer** for paths/routes
+- **Transport labels** for road names (optional)
+- **Offline tile handling** with warning indicator
+- **MapLabelOverlay helper** for styled bottom-left labels
+
+**MapLabelOverlay Helper:**
+```dart
+// Use for consistent styled labels on the map
+TrackerMapCard(
+  points: points,
+  bottomLeftOverlay: MapLabelOverlay(text: 'Lisbon → Madrid'),
+)
+```
+
+**Example: Path Display:**
+```dart
+// Display a recorded path with start/end markers
+TrackerMapCard(
+  points: pathPoints.map((p) => LatLng(p.lat, p.lon)).toList(),
+  markers: [
+    Marker(
+      point: LatLng(pathPoints.first.lat, pathPoints.first.lon),
+      child: Icon(Icons.trip_origin, color: Colors.green),
+    ),
+    Marker(
+      point: LatLng(pathPoints.last.lat, pathPoints.last.lon),
+      child: Icon(Icons.flag, color: Colors.red),
+    ),
+  ],
+  polylines: [
+    Polyline(
+      points: pathPoints.map((p) => LatLng(p.lat, p.lon)).toList(),
+      strokeWidth: 3,
+      color: Colors.blue,
+    ),
+  ],
+  onTap: () => openFullscreenMap(),
+)
+```
+
+**Example: Proximity Contacts:**
+```dart
+// Display contact locations with tap handlers
+TrackerMapCard(
+  points: clusters.map((c) => LatLng(c.lat, c.lon)).toList(),
+  markers: clusters.map((cluster) => Marker(
+    point: LatLng(cluster.lat, cluster.lon),
+    width: 40,
+    height: 40,
+    child: GestureDetector(
+      onTap: () => showClusterDetails(cluster),
+      child: CircleAvatar(
+        backgroundColor: Colors.blue,
+        child: Text('${cluster.count}'),
+      ),
+    ),
+  )).toList(),
+  height: 300,
+  showTransportLabels: true,
+)
+```
+
+**Tile Layers:**
+The widget uses these tile layers in order:
+1. Satellite base layer (MapTileService)
+2. Borders overlay with enhanced contrast
+3. Labels layer (place names)
+4. Transport labels (road names) - optional
+
+**Dependencies:**
+- `flutter_map: ^7.0.0` - Map widget
+- `latlong2: ^0.9.1` - Coordinates
+- `MapTileService` - Tile management and caching
+
+---
+
 ## Tree Widgets
 
 ### FolderTreeWidget
@@ -1953,6 +2085,7 @@ TextFormField(
 | AddTrackableDialog | tracker/dialogs/ | Dialog | Add exercise or measurement entries |
 | CallsignSelectorWidget | widgets/ | Selector | Profile switching |
 | ProfileSwitcher | widgets/ | Selector | App bar profile |
+| TrackerMapCard | tracker/widgets/ | Map | Satellite map miniature with markers |
 | FolderTreeWidget | widgets/inventory/ | Tree | Folder navigation |
 | MessageBubbleWidget | widgets/ | Message | Chat bubbles |
 | MessageInputWidget | widgets/ | Input | Message composer |
