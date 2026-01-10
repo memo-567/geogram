@@ -11,12 +11,14 @@ class ActiveRecordingBanner extends StatefulWidget {
   final PathRecordingService recordingService;
   final I18nService i18n;
   final VoidCallback? onStop;
+  final VoidCallback? onTap;
 
   const ActiveRecordingBanner({
     super.key,
     required this.recordingService,
     required this.i18n,
     this.onStop,
+    this.onTap,
   });
 
   @override
@@ -115,7 +117,7 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _buildStatItem(
-          Icons.location_on_outlined,
+          Icons.emoji_events_outlined,
           '${service.pointCount} ${widget.i18n.t('tracker_points')}',
           statTextStyle,
           statColor,
@@ -172,23 +174,26 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
       ],
     );
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: isPaused
-            ? colorScheme.secondaryContainer
-            : colorScheme.primaryContainer,
-        border: Border(
-          bottom: BorderSide(
-            color: isPaused
-                ? colorScheme.secondary.withValues(alpha: 0.3)
-                : colorScheme.primary.withValues(alpha: 0.3),
+    return Material(
+      color: isPaused
+          ? colorScheme.secondaryContainer
+          : colorScheme.primaryContainer,
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: isPaused
+                    ? colorScheme.secondary.withValues(alpha: 0.3)
+                    : colorScheme.primary.withValues(alpha: 0.3),
+              ),
+            ),
           ),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           // Status row
           Row(
             children: [
@@ -274,7 +279,9 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
               );
             },
           ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }

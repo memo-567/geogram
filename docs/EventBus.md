@@ -452,6 +452,45 @@ if (mounted) {
 
 ---
 
+### PositionUpdatedEvent
+
+Fired by `LocationProviderService` when a new GPS position is acquired. Subscribe to this event for location-based features instead of using polling loops.
+
+```dart
+class PositionUpdatedEvent extends AppEvent {
+  final double latitude;
+  final double longitude;
+  final double altitude;
+  final double accuracy;
+  final double speed;
+  final double heading;
+  final String source; // 'gps', 'network', 'ip'
+}
+```
+
+**Publishers:**
+
+| Service | Event | Trigger |
+|---------|-------|---------|
+| `LocationProviderService` | PositionUpdatedEvent | New GPS position acquired from device or IP fallback |
+
+**Usage Example:**
+
+```dart
+// Subscribe to position updates for proximity detection
+EventBus().on<PositionUpdatedEvent>((event) {
+  if (event.accuracy < 50) {
+    checkNearbyPlaces(event.latitude, event.longitude);
+  }
+});
+```
+
+**Integrated Subscribers:**
+
+- `ProximityDetectionService` - Checks for nearby devices and places within 50m
+
+---
+
 ## Future Extensions
 
 Events defined but not yet integrated:

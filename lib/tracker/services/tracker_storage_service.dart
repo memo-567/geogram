@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/tracker_models.dart';
+import '../models/tracker_proximity_track.dart';
 import '../utils/tracker_path_utils.dart';
 import '../../services/log_service.dart';
 
@@ -113,6 +114,40 @@ class TrackerStorageService {
     } catch (e) {
       LogService().log('TrackerStorageService: Error listing paths: $e');
       return [];
+    }
+  }
+
+  // ============ Path Expenses Operations ============
+
+  /// Read path expenses
+  Future<TrackerExpenses?> readPathExpenses(int year, String pathId) async {
+    try {
+      final filePath = TrackerPathUtils.pathExpensesFile(basePath, year, pathId);
+      final file = File(filePath);
+      if (!await file.exists()) return null;
+
+      final content = await file.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      return TrackerExpenses.fromJson(json);
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error reading path expenses: $e');
+      return null;
+    }
+  }
+
+  /// Write path expenses
+  Future<bool> writePathExpenses(int year, String pathId, TrackerExpenses expenses) async {
+    try {
+      final filePath = TrackerPathUtils.pathExpensesFile(basePath, year, pathId);
+      final file = File(filePath);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(expenses.toJson()),
+      );
+      return true;
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error writing path expenses: $e');
+      return false;
     }
   }
 
@@ -801,6 +836,105 @@ class TrackerStorageService {
       return dates;
     } catch (e) {
       LogService().log('TrackerStorageService: Error listing visit dates: $e');
+      return [];
+    }
+  }
+
+  // ============ Unified Proximity Track Operations (Year/Week) ============
+
+  /// Get the directory path for proximity tracks of a specific week
+  String _proximityWeekDir(int year, int week) {
+    final weekFolder = 'W${week.toString().padLeft(2, '0')}';
+    return '$basePath/proximity/$year/$weekFolder';
+  }
+
+  /// Read a proximity track file
+  Future<ProximityTrack?> readProximityTrack(int year, int week, String id) async {
+    try {
+      final dirPath = _proximityWeekDir(year, week);
+      final filePath = '$dirPath/$id-track.json';
+      final file = File(filePath);
+      if (!await file.exists()) return null;
+
+      final content = await file.readAsString();
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      return ProximityTrack.fromJson(json);
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error reading proximity track: $e');
+      return null;
+    }
+  }
+
+  /// Write a proximity track file
+  Future<bool> writeProximityTrack(int year, int week, ProximityTrack track) async {
+    try {
+      final dirPath = _proximityWeekDir(year, week);
+      final filePath = '$dirPath/${track.id}-track.json';
+      final file = File(filePath);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(track.toJson()),
+      );
+      return true;
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error writing proximity track: $e');
+      return false;
+    }
+  }
+
+  /// List all proximity tracks for a specific week
+  Future<List<ProximityTrack>> listProximityTracks(int year, int week) async {
+    try {
+      final dirPath = _proximityWeekDir(year, week);
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) return [];
+
+      final tracks = <ProximityTrack>[];
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.path.endsWith('-track.json')) {
+          try {
+            final content = await entity.readAsString();
+            final json = jsonDecode(content) as Map<String, dynamic>;
+            tracks.add(ProximityTrack.fromJson(json));
+          } catch (_) {
+            // Skip invalid files
+          }
+        }
+      }
+
+      // Sort by total time descending
+      tracks.sort((a, b) =>
+          b.weekSummary.totalSeconds.compareTo(a.weekSummary.totalSeconds));
+      return tracks;
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error listing proximity tracks: $e');
+      return [];
+    }
+  }
+
+  /// List weeks with proximity data for a year
+  Future<List<int>> listProximityWeeks(int year) async {
+    try {
+      final dirPath = '$basePath/proximity/$year';
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) return [];
+
+      final weeks = <int>[];
+      await for (final entity in dir.list()) {
+        if (entity is Directory) {
+          final name = entity.path.split('/').last;
+          if (name.startsWith('W')) {
+            final week = int.tryParse(name.substring(1));
+            if (week != null && week >= 1 && week <= 53) {
+              weeks.add(week);
+            }
+          }
+        }
+      }
+      weeks.sort((a, b) => b.compareTo(a)); // Most recent first
+      return weeks;
+    } catch (e) {
+      LogService().log('TrackerStorageService: Error listing proximity weeks: $e');
       return [];
     }
   }

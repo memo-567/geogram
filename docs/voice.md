@@ -155,20 +155,20 @@ This avoids the need for audio format conversion (FFmpeg) which would add signif
 
 - `whisper_flutter_new` is vendored at `third_party/whisper_flutter_new` with a dependency override in `pubspec.yaml`.
 - Native code now caches the Whisper context and reuses it across calls (reloads only when the model path changes).
-- `SpeechToTextService.preloadModel` loads the model and runs a short silent WAV transcription (~400 ms) to fully initialize the context.
-- `TranscriptionDialog` waits for preload/warm-up after downloads before starting to record, so the first real transcription stays fast.
+- `SpeechToTextService.loadModel` + `ensureModelWarm` load the model and run a short silent WAV transcription (~400 ms) to fully initialize the context.
+- `TranscriptionDialog` starts background load + warm-up when opened; if the user taps Start before it is ready, a wait dialog is shown.
 
 ### Warm-up triggers
 
-- **App startup:** `_startWhisperPreload()` runs as soon as the app launches if the preferred model is already downloaded; it completes only after warm-up finishes.
-- **First download:** After the download completes, the dialog shows "checking" while it loads and warms the model before recording. This avoids a 20–30 second pause during the first transcription.
+- **Transcription dialog opened:** If the preferred model is already downloaded, the dialog kicks off a background load + warm-up immediately (UI stays responsive).
+- **First download:** After the download completes, the dialog starts background load + warm-up before recording is allowed.
 - **Model changes:** Calls to `ensureModelReady` also warm the newly loaded model when needed.
 
 ### Performance Expectations
 
 | Scenario | Time | Notes |
 |----------|------|-------|
-| Warm-up (one-time per model) | ~20–30 seconds | Happens at startup if the model is present or immediately after first download; runs on a silent transcribe and caches the native context. |
+| Warm-up (one-time per model) | ~20–30 seconds | Happens when opening the transcription dialog if the model is present or immediately after first download; runs on a silent transcribe and caches the native context. |
 | First real transcription after warm-up | <5 seconds | No model load; uses cached context. |
 | Subsequent transcriptions | 2–5 seconds | Cached context reused. |
 | 10s audio with whisper-base | ~0.6 seconds transcription | Inference speed unchanged; only load latency moved earlier. |

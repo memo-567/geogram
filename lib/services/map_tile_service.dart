@@ -8,7 +8,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show kIsWeb, ValueNotifier;
+import 'package:flutter/foundation.dart' show kIsWeb, ValueNotifier, compute;
 import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart' as fmtc;
@@ -61,6 +61,25 @@ class TileLoadingStatus {
   }
 }
 
+/// Download progress state for UI
+class TileDownloadProgress {
+  final bool isDownloading;
+  final int downloadedTiles;
+  final int totalTiles;
+  final int skippedTiles;
+  final String? error;
+
+  const TileDownloadProgress({
+    this.isDownloading = false,
+    this.downloadedTiles = 0,
+    this.totalTiles = 0,
+    this.skippedTiles = 0,
+    this.error,
+  });
+
+  double get progress => totalTiles > 0 ? downloadedTiles / totalTiles : 0.0;
+}
+
 /// Centralized service for managing map tiles with offline caching
 /// Tile fetching priority: 1) Cache, 2) Station, 3) Direct Internet (OSM)
 /// Tiles are stored in {data-root}/tiles/
@@ -96,6 +115,10 @@ class MapTileService {
   /// Notifier for tile loading status (loading count, failed count)
   final ValueNotifier<TileLoadingStatus> statusNotifier =
       ValueNotifier(const TileLoadingStatus());
+
+  /// Notifier for download progress (persists across UI navigation)
+  final ValueNotifier<TileDownloadProgress> downloadProgressNotifier =
+      ValueNotifier(const TileDownloadProgress());
 
   /// Timer to auto-clear failure status after a delay
   Timer? _failureClearTimer;
@@ -430,6 +453,30 @@ class MapTileService {
     final sign = x < 0 ? -1.0 : 1.0;
     final absX = x.abs();
     return sign * math.log(absX + math.sqrt(absX * absX + 1.0));
+  }
+
+  /// Validate tile image data by attempting to decode it
+  /// Returns true if the image can be decoded successfully
+  static Future<bool> validateTileData(Uint8List data) async {
+    if (data.isEmpty) return false;
+
+    // Check for valid PNG or JPEG header
+    if (data.length < 8) return false;
+    final isPng = data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47;
+    final isJpeg = data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
+    if (!isPng && !isJpeg) return false;
+
+    try {
+      // Actually try to decode the image to verify it's not corrupt
+      final codec = await ui.instantiateImageCodec(data);
+      // Try to get the first frame to force decompression
+      await codec.getNextFrame();
+      codec.dispose();
+      return true;
+    } catch (e) {
+      LogService().log('MapTileService: Tile validation failed: $e');
+      return false;
+    }
   }
 
   /// Test tile fetching by simulating map navigation
@@ -883,9 +930,12 @@ class MapTileService {
               const Duration(seconds: 10),
             );
             if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-              await File(labelsPath).parent.create(recursive: true);
-              await File(labelsPath).writeAsBytes(response.bodyBytes);
-              downloaded++;
+              // Validate tile before caching
+              if (await validateTileData(response.bodyBytes)) {
+                await File(labelsPath).parent.create(recursive: true);
+                await File(labelsPath).writeAsBytes(response.bodyBytes);
+                downloaded++;
+              }
             }
           } catch (_) {}
         }
@@ -902,9 +952,12 @@ class MapTileService {
               const Duration(seconds: 10),
             );
             if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-              await File(transportPath).parent.create(recursive: true);
-              await File(transportPath).writeAsBytes(response.bodyBytes);
-              downloaded++;
+              // Validate tile before caching
+              if (await validateTileData(response.bodyBytes)) {
+                await File(transportPath).parent.create(recursive: true);
+                await File(transportPath).writeAsBytes(response.bodyBytes);
+                downloaded++;
+              }
             }
           } catch (_) {}
         }
@@ -955,9 +1008,12 @@ class MapTileService {
           );
 
           if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-            await cacheFile.parent.create(recursive: true);
-            await cacheFile.writeAsBytes(response.bodyBytes);
-            downloaded++;
+            // Validate tile before caching
+            if (await validateTileData(response.bodyBytes)) {
+              await cacheFile.parent.create(recursive: true);
+              await cacheFile.writeAsBytes(response.bodyBytes);
+              downloaded++;
+            }
           }
         } catch (e) {
           // Skip failed tiles silently
@@ -1043,17 +1099,127 @@ class MapTileService {
     return downloaded;
   }
 
+  /// Start a background download that persists across UI navigation
+  /// Updates downloadProgressNotifier with progress
+  void startBackgroundDownload({
+    required double lat,
+    required double lng,
+    required double satelliteRadiusKm,
+    required int satelliteMaxZoom,
+    required double standardRadiusKm,
+    required int standardMaxZoom,
+    required int maxAgeMonths,
+  }) {
+    // Don't start if already downloading
+    if (downloadProgressNotifier.value.isDownloading) return;
+
+    // Reset progress
+    downloadProgressNotifier.value = const TileDownloadProgress(isDownloading: true);
+
+    // Run download in background
+    _runBackgroundDownload(
+      lat: lat,
+      lng: lng,
+      satelliteRadiusKm: satelliteRadiusKm,
+      satelliteMaxZoom: satelliteMaxZoom,
+      standardRadiusKm: standardRadiusKm,
+      standardMaxZoom: standardMaxZoom,
+      maxAgeMonths: maxAgeMonths,
+    );
+  }
+
+  Future<void> _runBackgroundDownload({
+    required double lat,
+    required double lng,
+    required double satelliteRadiusKm,
+    required int satelliteMaxZoom,
+    required double standardRadiusKm,
+    required int standardMaxZoom,
+    required int maxAgeMonths,
+  }) async {
+    try {
+      final maxAgeDays = maxAgeMonths * 30;
+      int totalDownloaded = 0;
+      int totalSkipped = 0;
+
+      // Download satellite tiles
+      final satelliteTiles = await downloadTilesForRadius(
+        lat: lat,
+        lng: lng,
+        radiusKm: satelliteRadiusKm,
+        minZoom: 8,
+        maxZoom: satelliteMaxZoom,
+        layers: [MapLayerType.satellite],
+        maxAgeDays: maxAgeDays,
+        onProgressWithSkipped: (downloaded, total, skipped) {
+          downloadProgressNotifier.value = TileDownloadProgress(
+            isDownloading: true,
+            downloadedTiles: downloaded,
+            totalTiles: total,
+            skippedTiles: skipped,
+          );
+        },
+      );
+      totalDownloaded += satelliteTiles;
+
+      // Download standard map tiles
+      final standardTiles = await downloadTilesForRadius(
+        lat: lat,
+        lng: lng,
+        radiusKm: standardRadiusKm,
+        minZoom: 8,
+        maxZoom: standardMaxZoom,
+        layers: [MapLayerType.standard],
+        maxAgeDays: maxAgeDays,
+        onProgressWithSkipped: (downloaded, total, skipped) {
+          downloadProgressNotifier.value = TileDownloadProgress(
+            isDownloading: true,
+            downloadedTiles: satelliteTiles + downloaded,
+            totalTiles: satelliteTiles + total,
+            skippedTiles: totalSkipped + skipped,
+          );
+          totalSkipped = skipped;
+        },
+      );
+      totalDownloaded += standardTiles;
+
+      // Download complete
+      downloadProgressNotifier.value = TileDownloadProgress(
+        isDownloading: false,
+        downloadedTiles: totalDownloaded,
+        totalTiles: downloadProgressNotifier.value.totalTiles,
+        skippedTiles: totalSkipped,
+      );
+
+      LogService().log('MapTileService: Background download complete: $totalDownloaded tiles');
+    } catch (e) {
+      downloadProgressNotifier.value = TileDownloadProgress(
+        isDownloading: false,
+        error: e.toString(),
+      );
+      LogService().log('MapTileService: Background download failed: $e');
+    }
+  }
+
   /// Get cache statistics (size in bytes and tile count)
+  /// Runs in an isolate to avoid blocking the UI
   Future<Map<String, int>> getCacheStatistics() async {
     if (!_initialized) await initialize();
     if (_tilesPath == null || kIsWeb) {
       return {'sizeBytes': 0, 'tileCount': 0};
     }
 
+    final cachePath = '$_tilesPath/cache';
+    // Run in isolate to avoid blocking UI
+    return await compute(_computeCacheStatistics, cachePath);
+  }
+
+  /// Static function to compute cache statistics in an isolate
+  static Future<Map<String, int>> _computeCacheStatistics(String cachePath) async {
     int totalSize = 0;
     int tileCount = 0;
 
-    final cacheDir = Directory('$_tilesPath/cache');
+    final cacheDir = Directory(cachePath);
     if (await cacheDir.exists()) {
       await for (final entity in cacheDir.list(recursive: true)) {
         if (entity is File && entity.path.endsWith('.png')) {
@@ -1192,9 +1358,12 @@ class MapTileService {
               .get(Uri.parse(url))
               .timeout(const Duration(seconds: 5));
           if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-            await file.parent.create(recursive: true);
-            await file.writeAsBytes(response.bodyBytes);
-            return _TileDownloadResult.downloaded;
+            // Validate tile before caching
+            if (await validateTileData(response.bodyBytes)) {
+              await file.parent.create(recursive: true);
+              await file.writeAsBytes(response.bodyBytes);
+              return _TileDownloadResult.downloaded;
+            }
           }
         } catch (_) {
           // Station failed, try direct internet
@@ -1210,9 +1379,12 @@ class MapTileService {
             .timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-          await file.parent.create(recursive: true);
-          await file.writeAsBytes(response.bodyBytes);
-          return _TileDownloadResult.downloaded;
+          // Validate tile before caching
+          if (await validateTileData(response.bodyBytes)) {
+            await file.parent.create(recursive: true);
+            await file.writeAsBytes(response.bodyBytes);
+            return _TileDownloadResult.downloaded;
+          }
         }
       } catch (e) {
         LogService().log('MapTileService: Direct download failed for $z/$x/$y: $e');
@@ -1270,9 +1442,12 @@ class MapTileService {
               .get(Uri.parse(url))
               .timeout(const Duration(seconds: 5));
           if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-            await file.parent.create(recursive: true);
-            await file.writeAsBytes(response.bodyBytes);
-            return true;
+            // Validate tile before caching
+            if (await validateTileData(response.bodyBytes)) {
+              await file.parent.create(recursive: true);
+              await file.writeAsBytes(response.bodyBytes);
+              return true;
+            }
           }
         } catch (_) {
           // Station failed, try direct internet
@@ -1288,9 +1463,12 @@ class MapTileService {
             .timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-          await file.parent.create(recursive: true);
-          await file.writeAsBytes(response.bodyBytes);
-          return true;
+          // Validate tile before caching
+          if (await validateTileData(response.bodyBytes)) {
+            await file.parent.create(recursive: true);
+            await file.writeAsBytes(response.bodyBytes);
+            return true;
+          }
         }
       } catch (e) {
         LogService().log('MapTileService: Direct download failed for $z/$x/$y: $e');
@@ -1402,56 +1580,152 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     bool needsNetworkFetch = true;
     Uint8List? tileData;
 
-    // 1. Try file cache first (ALWAYS check cache before network)
-    try {
-      final cachePath = _getTileCachePath(z, x, y);
-      final cacheFile = File(cachePath);
-      if (await cacheFile.exists()) {
-        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
-        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
-          // Cache hit with valid image - use it immediately
-          needsNetworkFetch = false;
-          // Don't log every cache hit to reduce log spam
-          final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
-          return decode(buffer);
-        } else {
-          // Invalid cached data, delete it
-          await cacheFile.delete();
-        }
+    // Helper to safely decode transparent tile - never throws
+    Future<ui.Codec> safeTransparent() async {
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
+        final codec = await decode(buffer);
+        // Validate codec by getting first frame
+        await codec.getNextFrame();
+        return codec;
+      } catch (e) {
+        // Even transparent tile failed - create minimal 1x1 image
+        final recorder = ui.PictureRecorder();
+        final canvas = ui.Canvas(recorder);
+        canvas.drawRect(
+          const ui.Rect.fromLTWH(0, 0, 1, 1),
+          ui.Paint()..color = const ui.Color(0x00000000),
+        );
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(1, 1);
+        return await image.toByteData(format: ui.ImageByteFormat.png).then(
+          (data) async {
+            final buffer = await ui.ImmutableBuffer.fromUint8List(data!.buffer.asUint8List());
+            return decode(buffer);
+          },
+        );
       }
-    } catch (e) {
-      // Cache miss or error, continue to next source
     }
 
-    final allowStation = mapTileService.canUseStation;
-    final allowInternet = mapTileService.canUseInternet;
-
-    // If offline and no cache, return transparent immediately
-    if (needsNetworkFetch && !allowStation && !allowInternet) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    // Network fetch needed - track loading status
-    if (needsNetworkFetch) {
-      mapTileService._startLoading();
+    // Helper to validate codec by decompressing first frame
+    Future<ui.Codec?> validateCodec(ui.Codec codec) async {
+      try {
+        await codec.getNextFrame();
+        return codec;
+      } catch (e) {
+        return null;
+      }
     }
 
     try {
-      bool networkFailed = false; // Track if network is completely unavailable
+      // 1. Try file cache first (ALWAYS check cache before network)
+      try {
+        final cachePath = _getTileCachePath(z, x, y);
+        final cacheFile = File(cachePath);
+        if (await cacheFile.exists()) {
+          final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
+          if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
+            // Cache hit with valid image - try to decode AND validate
+            try {
+              final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+              final codec = await decode(buffer);
+              // Validate by decompressing first frame
+              final validated = await validateCodec(codec);
+              if (validated != null) {
+                needsNetworkFetch = false;
+                // Re-decode since we consumed the frame
+                final buffer2 = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                return decode(buffer2);
+              } else {
+                // Validation failed - delete corrupt cache
+                await cacheFile.delete();
+                LogService().log('TILE [$z/$x/$y] Corrupt cache deleted (validation failed)');
+              }
+            } catch (e) {
+              // Decode failed - cached data is corrupt, delete it
+              await cacheFile.delete();
+              LogService().log('TILE [$z/$x/$y] Corrupt cache deleted');
+            }
+          } else {
+            // Invalid cached data, delete it
+            await cacheFile.delete();
+          }
+        }
+      } catch (e) {
+        // Cache miss or error, continue to next source
+      }
 
-      // 2. Try station if available (supports both standard and satellite tiles)
-      if (allowStation && !networkFailed) {
-        final stationUrl = mapTileService.getStationTileUrl(layerType);
-        if (stationUrl != null) {
-          final url = stationUrl
-              .replaceAll('{z}', z.toString())
-              .replaceAll('{x}', x.toString())
-              .replaceAll('{y}', y.toString());
+      final allowStation = mapTileService.canUseStation;
+      final allowInternet = mapTileService.canUseInternet;
+
+      // If offline and no cache, return transparent immediately
+      if (needsNetworkFetch && !allowStation && !allowInternet) {
+        return safeTransparent();
+      }
+
+      // Network fetch needed - track loading status
+      if (needsNetworkFetch) {
+        mapTileService._startLoading();
+      }
+
+      try {
+        bool networkFailed = false; // Track if network is completely unavailable
+
+        // 2. Try station if available (supports both standard and satellite tiles)
+        if (allowStation && !networkFailed) {
+          final stationUrl = mapTileService.getStationTileUrl(layerType);
+          if (stationUrl != null) {
+            final url = stationUrl
+                .replaceAll('{z}', z.toString())
+                .replaceAll('{x}', x.toString())
+                .replaceAll('{y}', y.toString());
+            try {
+              final response = await httpClient
+                  .get(Uri.parse(url))
+                  .timeout(const Duration(seconds: 5));
+
+              if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
+                tileData = response.bodyBytes;
+                // Cache the tile for future use
+                await _cacheTile(z, x, y, tileData);
+              }
+            } catch (e) {
+              // Check for DNS/network failures - fail fast
+              final errorStr = e.toString().toLowerCase();
+              if (errorStr.contains('socketexception') ||
+                  errorStr.contains('failed host lookup') ||
+                  errorStr.contains('network is unreachable') ||
+                  errorStr.contains('no address associated')) {
+                networkFailed = true;
+              }
+            }
+          }
+        }
+
+        // 3. Try direct internet if station failed and network seems available
+        if (tileData == null && allowInternet && !networkFailed) {
           try {
+            String url;
+            if (layerType == MapLayerType.satellite) {
+              // Esri satellite uses z/y/x order
+              url = MapTileService.satelliteTileUrl
+                  .replaceAll('{z}', z.toString())
+                  .replaceAll('{y}', y.toString())
+                  .replaceAll('{x}', x.toString());
+            } else {
+              // OSM uses z/x/y order
+              url = MapTileService.osmTileUrl
+                  .replaceAll('{z}', z.toString())
+                  .replaceAll('{x}', x.toString())
+                  .replaceAll('{y}', y.toString());
+            }
+
             final response = await httpClient
-                .get(Uri.parse(url))
-                .timeout(const Duration(seconds: 5));
+                .get(
+                  Uri.parse(url),
+                  headers: {'User-Agent': 'dev.geogram'},
+                )
+                .timeout(const Duration(seconds: 10));
 
             if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
               tileData = response.bodyBytes;
@@ -1459,83 +1733,41 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
               await _cacheTile(z, x, y, tileData);
             }
           } catch (e) {
-            // Check for DNS/network failures - fail fast
-            final errorStr = e.toString().toLowerCase();
-            if (errorStr.contains('socketexception') ||
-                errorStr.contains('failed host lookup') ||
-                errorStr.contains('network is unreachable') ||
-                errorStr.contains('no address associated')) {
-              networkFailed = true;
-              LogService().log('TILE [$z/$x/$y] Network unavailable, skipping');
-            }
+            // Network failed - silent, will return transparent
           }
         }
-      }
 
-      // 3. Try direct internet if station failed and network seems available
-      if (tileData == null && allowInternet && !networkFailed) {
+        // Return fetched tile or transparent placeholder on failure
+        if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
+          mapTileService._recordFailure();
+          return safeTransparent();
+        }
+
+        // Try to decode the tile and validate it
         try {
-          String url;
-          if (layerType == MapLayerType.satellite) {
-            // Esri satellite uses z/y/x order
-            url = MapTileService.satelliteTileUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{y}', y.toString())
-                .replaceAll('{x}', x.toString());
+          final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+          final codec = await decode(buffer);
+          // Validate by decompressing first frame
+          final validated = await validateCodec(codec);
+          if (validated != null) {
+            // Re-decode since we consumed the frame
+            final buffer2 = await ui.ImmutableBuffer.fromUint8List(tileData);
+            return decode(buffer2);
           } else {
-            // OSM uses z/x/y order
-            url = MapTileService.osmTileUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{x}', x.toString())
-                .replaceAll('{y}', y.toString());
-          }
-
-          final response = await httpClient
-              .get(
-                Uri.parse(url),
-                headers: {'User-Agent': 'dev.geogram'},
-              )
-              .timeout(const Duration(seconds: 10));
-
-          if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-            tileData = response.bodyBytes;
-            // Cache the tile for future use
-            await _cacheTile(z, x, y, tileData);
+            return safeTransparent();
           }
         } catch (e) {
-          // Network failed - don't retry, just fail fast
-          final errorStr = e.toString().toLowerCase();
-          if (errorStr.contains('socketexception') ||
-              errorStr.contains('failed host lookup') ||
-              errorStr.contains('network is unreachable') ||
-              errorStr.contains('no address associated')) {
-            // Network is completely unavailable - notify service
-            LogService().log('TILE [$z/$x/$y] Network unavailable');
-          }
+          // Decode failed, return transparent placeholder
+          return safeTransparent();
+        }
+      } finally {
+        if (needsNetworkFetch) {
+          mapTileService._finishLoading();
         }
       }
-
-      // Return fetched tile or transparent placeholder on failure
-      if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-        mapTileService._recordFailure();
-        // Return transparent placeholder instead of throwing
-        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-        return decode(buffer);
-      }
-
-      // Try to decode the tile, fall back to transparent on error
-      try {
-        final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
-        return decode(buffer);
-      } catch (e) {
-        // Decode failed, return transparent placeholder
-        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-        return decode(buffer);
-      }
-    } finally {
-      if (needsNetworkFetch) {
-        mapTileService._finishLoading();
-      }
+    } catch (e) {
+      // Catch-all: any unhandled exception returns transparent
+      return safeTransparent();
     }
   }
 
@@ -1636,11 +1868,14 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
       }
 
       if (tileBytes != null) {
-        final cacheDir = cacheFile.parent;
-        if (!await cacheDir.exists()) {
-          await cacheDir.create(recursive: true);
+        // Validate tile before caching
+        if (await MapTileService.validateTileData(tileBytes)) {
+          final cacheDir = cacheFile.parent;
+          if (!await cacheDir.exists()) {
+            await cacheDir.create(recursive: true);
+          }
+          await cacheFile.writeAsBytes(tileBytes);
         }
-        await cacheFile.writeAsBytes(tileBytes);
       }
     } catch (e) {
       // Silently ignore prefetch failures - not critical
@@ -1744,74 +1979,116 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
     final y = coordinates.y.toInt();
     Uint8List? tileData;
 
-    // 1. Try file cache first
+    // Helper to safely return transparent tile
+    Future<ui.Codec> safeTransparent() async {
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
+        final codec = await decode(buffer);
+        await codec.getNextFrame(); // Validate
+        return codec;
+      } catch (e) {
+        // Last resort - create image programmatically
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder).drawRect(
+          const ui.Rect.fromLTWH(0, 0, 1, 1),
+          ui.Paint()..color = const ui.Color(0x00000000),
+        );
+        final image = await recorder.endRecording().toImage(1, 1);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        final buffer = await ui.ImmutableBuffer.fromUint8List(data!.buffer.asUint8List());
+        return decode(buffer);
+      }
+    }
+
+    // Helper to validate codec
+    Future<bool> validateCodec(ui.Codec codec) async {
+      try {
+        await codec.getNextFrame();
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     try {
-      final cachePath = _getLabelsCachePath(z, x, y);
-      final cacheFile = File(cachePath);
-      if (await cacheFile.exists()) {
-        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
-        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
-          try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
-            return decode(buffer);
-          } catch (e) {
-            // Corrupted cache, delete and re-fetch
+      // 1. Try file cache first
+      try {
+        final cachePath = _getLabelsCachePath(z, x, y);
+        final cacheFile = File(cachePath);
+        if (await cacheFile.exists()) {
+          final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
+          if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
+            try {
+              final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+              final codec = await decode(buffer);
+              if (await validateCodec(codec)) {
+                final buffer2 = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                return decode(buffer2);
+              } else {
+                await cacheFile.delete();
+              }
+            } catch (e) {
+              // Corrupted cache, delete and re-fetch
+              await cacheFile.delete();
+            }
+          } else {
+            // Invalid cache data, delete it
             await cacheFile.delete();
           }
-        } else {
-          // Invalid cache data, delete it
-          await cacheFile.delete();
         }
+      } catch (e) {
+        // Cache miss, continue to network
+      }
+
+      if (!mapTileService.canUseInternet) {
+        return safeTransparent();
+      }
+
+      // 2. Fetch from network - Esri uses z/y/x order
+      try {
+        final url = MapTileService.labelsOnlyUrl
+            .replaceAll('{z}', z.toString())
+            .replaceAll('{y}', y.toString())
+            .replaceAll('{x}', x.toString());
+
+        final response = await httpClient
+            .get(
+              Uri.parse(url),
+              headers: {'User-Agent': 'dev.geogram'},
+            )
+            .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
+          tileData = response.bodyBytes;
+          // Cache the tile
+          await _cacheLabelsTile(z, x, y, tileData);
+        }
+      } catch (e) {
+        // Network failed
+      }
+
+      // 3. Also fetch transport labels for detailed road names at higher zoom levels
+      if (z >= 10 && tileData != null) {
+        _prefetchTransportLabels(z, x, y);
+      }
+
+      if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
+        return safeTransparent();
+      }
+
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+        final codec = await decode(buffer);
+        if (await validateCodec(codec)) {
+          final buffer2 = await ui.ImmutableBuffer.fromUint8List(tileData);
+          return decode(buffer2);
+        }
+        return safeTransparent();
+      } catch (e) {
+        return safeTransparent();
       }
     } catch (e) {
-      // Cache miss, continue to network
-    }
-
-    if (!mapTileService.canUseInternet) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    // 2. Fetch from network - Esri uses z/y/x order
-    try {
-      final url = MapTileService.labelsOnlyUrl
-          .replaceAll('{z}', z.toString())
-          .replaceAll('{y}', y.toString())
-          .replaceAll('{x}', x.toString());
-
-      final response = await httpClient
-          .get(
-            Uri.parse(url),
-            headers: {'User-Agent': 'dev.geogram'},
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-        tileData = response.bodyBytes;
-        // Cache the tile
-        await _cacheLabelsTile(z, x, y, tileData);
-      }
-    } catch (e) {
-      // Network failed
-    }
-
-    // 3. Also fetch transport labels for detailed road names at higher zoom levels
-    if (z >= 10 && tileData != null) {
-      _prefetchTransportLabels(z, x, y);
-    }
-
-    if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
-      return decode(buffer);
-    } catch (e) {
-      // Decode failed, return transparent
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
+      return safeTransparent();
     }
   }
 
@@ -1849,11 +2126,14 @@ class GeogramLabelsImageProvider extends ImageProvider<GeogramLabelsImageProvide
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        final cacheDir = cacheFile.parent;
-        if (!await cacheDir.exists()) {
-          await cacheDir.create(recursive: true);
+        // Validate tile before caching
+        if (await MapTileService.validateTileData(response.bodyBytes)) {
+          final cacheDir = cacheFile.parent;
+          if (!await cacheDir.exists()) {
+            await cacheDir.create(recursive: true);
+          }
+          await cacheFile.writeAsBytes(response.bodyBytes);
         }
-        await cacheFile.writeAsBytes(response.bodyBytes);
       }
     } catch (e) {
       // Silently ignore prefetch failures
@@ -1950,64 +2230,105 @@ class GeogramTransportLabelsImageProvider extends ImageProvider<GeogramTransport
     final y = coordinates.y.toInt();
     Uint8List? tileData;
 
-    // 1. Try file cache first
+    // Helper to safely return transparent tile
+    Future<ui.Codec> safeTransparent() async {
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
+        final codec = await decode(buffer);
+        await codec.getNextFrame();
+        return codec;
+      } catch (e) {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder).drawRect(
+          const ui.Rect.fromLTWH(0, 0, 1, 1),
+          ui.Paint()..color = const ui.Color(0x00000000),
+        );
+        final image = await recorder.endRecording().toImage(1, 1);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        final buffer = await ui.ImmutableBuffer.fromUint8List(data!.buffer.asUint8List());
+        return decode(buffer);
+      }
+    }
+
+    Future<bool> validateCodec(ui.Codec codec) async {
+      try {
+        await codec.getNextFrame();
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     try {
-      final cachePath = _getTransportCachePath(z, x, y);
-      final cacheFile = File(cachePath);
-      if (await cacheFile.exists()) {
-        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
-        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
-          try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
-            return decode(buffer);
-          } catch (e) {
-            // Corrupted cache, delete and re-fetch
+      // 1. Try file cache first
+      try {
+        final cachePath = _getTransportCachePath(z, x, y);
+        final cacheFile = File(cachePath);
+        if (await cacheFile.exists()) {
+          final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
+          if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
+            try {
+              final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+              final codec = await decode(buffer);
+              if (await validateCodec(codec)) {
+                final buffer2 = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                return decode(buffer2);
+              } else {
+                await cacheFile.delete();
+              }
+            } catch (e) {
+              // Corrupted cache, delete and re-fetch
+              await cacheFile.delete();
+            }
+          } else {
             await cacheFile.delete();
           }
-        } else {
-          await cacheFile.delete();
         }
+      } catch (e) {
+        // Cache miss
+      }
+
+      if (!mapTileService.canUseInternet) {
+        return safeTransparent();
+      }
+
+      // 2. Fetch from network - Esri uses z/y/x order
+      try {
+        final url = MapTileService.transportLabelsUrl
+            .replaceAll('{z}', z.toString())
+            .replaceAll('{y}', y.toString())
+            .replaceAll('{x}', x.toString());
+
+        final response = await httpClient
+            .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
+            .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
+          tileData = response.bodyBytes;
+          // Cache the tile
+          await _cacheTransportTile(z, x, y, tileData);
+        }
+      } catch (e) {
+        // Network failed
+      }
+
+      if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
+        return safeTransparent();
+      }
+
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+        final codec = await decode(buffer);
+        if (await validateCodec(codec)) {
+          final buffer2 = await ui.ImmutableBuffer.fromUint8List(tileData);
+          return decode(buffer2);
+        }
+        return safeTransparent();
+      } catch (e) {
+        return safeTransparent();
       }
     } catch (e) {
-      // Cache miss
-    }
-
-    if (!mapTileService.canUseInternet) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    // 2. Fetch from network - Esri uses z/y/x order
-    try {
-      final url = MapTileService.transportLabelsUrl
-          .replaceAll('{z}', z.toString())
-          .replaceAll('{y}', y.toString())
-          .replaceAll('{x}', x.toString());
-
-      final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-        tileData = response.bodyBytes;
-        // Cache the tile
-        await _cacheTransportTile(z, x, y, tileData);
-      }
-    } catch (e) {
-      // Network failed
-    }
-
-    if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
-      return decode(buffer);
-    } catch (e) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
+      return safeTransparent();
     }
   }
 
@@ -2115,64 +2436,103 @@ class GeogramBordersImageProvider extends ImageProvider<GeogramBordersImageProvi
     final y = coordinates.y.toInt();
     Uint8List? tileData;
 
-    // 1. Try file cache first
+    // Helper to safely return transparent tile
+    Future<ui.Codec> safeTransparent() async {
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
+        return decode(buffer);
+      } catch (e) {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder).drawRect(
+          const ui.Rect.fromLTWH(0, 0, 1, 1),
+          ui.Paint()..color = const ui.Color(0x00000000),
+        );
+        final image = await recorder.endRecording().toImage(1, 1);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        final buffer = await ui.ImmutableBuffer.fromUint8List(data!.buffer.asUint8List());
+        return decode(buffer);
+      }
+    }
+
+    Future<bool> validateCodec(ui.Codec codec) async {
+      try {
+        await codec.getNextFrame();
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     try {
-      final cachePath = _getBordersCachePath(z, x, y);
-      final cacheFile = File(cachePath);
-      if (await cacheFile.exists()) {
-        final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
-        if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
-          try {
-            final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
-            return decode(buffer);
-          } catch (e) {
-            // Corrupted cache, delete and re-fetch
+      // 1. Try file cache first
+      try {
+        final cachePath = _getBordersCachePath(z, x, y);
+        final cacheFile = File(cachePath);
+        if (await cacheFile.exists()) {
+          final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
+          if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
+            try {
+              final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+              final codec = await decode(buffer);
+              if (await validateCodec(codec)) {
+                final buffer2 = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                return decode(buffer2);
+              } else {
+                await cacheFile.delete();
+              }
+            } catch (e) {
+              // Corrupted cache, delete and re-fetch
+              await cacheFile.delete();
+            }
+          } else {
             await cacheFile.delete();
           }
-        } else {
-          await cacheFile.delete();
         }
+      } catch (e) {
+        // Cache miss
+      }
+
+      if (!mapTileService.canUseInternet) {
+        return safeTransparent();
+      }
+
+      // 2. Fetch from network - Esri uses z/y/x order
+      try {
+        final url = MapTileService.bordersUrl
+            .replaceAll('{z}', z.toString())
+            .replaceAll('{y}', y.toString())
+            .replaceAll('{x}', x.toString());
+
+        final response = await httpClient
+            .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
+            .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
+          tileData = response.bodyBytes;
+          // Cache the tile
+          await _cacheBordersTile(z, x, y, tileData);
+        }
+      } catch (e) {
+        // Network failed
+      }
+
+      if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
+        return safeTransparent();
+      }
+
+      try {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
+        final codec = await decode(buffer);
+        if (await validateCodec(codec)) {
+          final buffer2 = await ui.ImmutableBuffer.fromUint8List(tileData);
+          return decode(buffer2);
+        }
+        return safeTransparent();
+      } catch (e) {
+        return safeTransparent();
       }
     } catch (e) {
-      // Cache miss
-    }
-
-    if (!mapTileService.canUseInternet) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    // 2. Fetch from network - Esri uses z/y/x order
-    try {
-      final url = MapTileService.bordersUrl
-          .replaceAll('{z}', z.toString())
-          .replaceAll('{y}', y.toString())
-          .replaceAll('{x}', x.toString());
-
-      final response = await httpClient
-          .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-        tileData = response.bodyBytes;
-        // Cache the tile
-        await _cacheBordersTile(z, x, y, tileData);
-      }
-    } catch (e) {
-      // Network failed
-    }
-
-    if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
-    }
-
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
-      return decode(buffer);
-    } catch (e) {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(_transparentTile);
-      return decode(buffer);
+      return safeTransparent();
     }
   }
 

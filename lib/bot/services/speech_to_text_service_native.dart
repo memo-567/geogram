@@ -133,8 +133,8 @@ class SpeechToTextService {
     return isModelLoaded;
   }
 
-  /// Preload model in background (called from main.dart)
-  /// Sets up completer so dialog can wait for completion
+  /// Preload model in background.
+  /// Sets up a completer so callers can wait for completion.
   Future<void> preloadModel(String modelId) async {
     if (_preloadCompleter != null) return; // Already preloading
 

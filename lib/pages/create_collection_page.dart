@@ -529,10 +529,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 6),
-                        Text(
-                          f,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: theme.colorScheme.onSurface,
+                        Flexible(
+                          child: Text(
+                            f,
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

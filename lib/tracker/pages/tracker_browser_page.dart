@@ -1,13 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../models/tracker_models.dart';
 import '../models/trackable_type.dart';
+import '../models/tracker_proximity_track.dart';
 import '../services/tracker_service.dart';
 import '../services/path_recording_service.dart';
+import '../services/proximity_detection_service.dart';
 import '../dialogs/add_trackable_dialog.dart';
 import '../dialogs/create_plan_dialog.dart';
+import '../dialogs/edit_path_dialog.dart';
 import '../dialogs/start_path_dialog.dart';
 import '../widgets/active_recording_banner.dart';
 import 'path_detail_page.dart';
@@ -24,10 +28,12 @@ enum TrackerTab {
   exercises,
   measurements,
   plans,
-  proximity,
-  visits,
+  proximity, // Unified: devices + places (within 50m)
   sharing,
 }
+
+/// Filter for proximity tab display
+enum ProximityFilter { all, devices, places }
 
 /// Main tracker browser page with tabbed layout
 class TrackerBrowserPage extends StatefulWidget {
@@ -58,22 +64,32 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   bool _loading = true;
   StreamSubscription? _changesSub;
 
-  /// Tabs sorted by most recently used
+  /// Tabs sorted by weighted usage score (frequency + recency with 30-day decay)
   List<TrackerTab> _sortedTabs = TrackerTab.values.toList();
-  Map<String, int> _tabLastUsed = {}; // tab name -> timestamp
+  Map<String, List<int>> _tabUsageHistory = {}; // tab name -> list of usage timestamps
 
   /// User-selected trackables to show in each tab
   List<String> _visibleExercises = [];
   List<String> _visibleMeasurements = [];
 
   // Data for each tab
-  List<TrackerPath> _paths = [];
+  Map<int, List<TrackerPath>> _pathsByYear = {};
+  List<int> _pathYears = [];
+  final Set<String> _expandedYearKeys = {};
+  final Set<String> _expandedWeekKeys = {};
   List<String> _exerciseTypes = [];
   List<String> _measurementTypes = [];
   Map<String, int> _weeklyTotals = {}; // Used for both exercises and measurements
   List<TrackerPlan> _activePlans = [];
-  List<DateTime> _proximityDates = [];
-  List<DateTime> _visitDates = [];
+
+  // Proximity data (organized by year/week like paths)
+  Map<int, Map<int, List<ProximityTrack>>> _proximityByYearWeek = {};
+  List<int> _proximityYears = [];
+  final Set<String> _expandedProximityYearKeys = {};
+  final Set<String> _expandedProximityWeekKeys = {};
+  ProximityFilter _proximityFilter = ProximityFilter.all;
+  bool _proximityTrackingEnabled = false;
+
   List<GroupShare> _groupShares = [];
   List<TemporaryShare> _temporaryShares = [];
   List<ReceivedLocation> _receivedLocations = [];
@@ -84,34 +100,120 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   void initState() {
     super.initState();
     _loadTabUsage();
+    _loadProximityTrackingEnabled();
     _tabController = TabController(length: TrackerTab.values.length, vsync: this);
     _tabController.addListener(_onTabChanged);
     _loadVisibleTrackables();
     _initializeService();
   }
 
-  // ============ Tab Usage Tracking (sort by most recently used) ============
+  void _loadProximityTrackingEnabled() {
+    final saved = _configService.getNestedValue('tracker.proximityTrackingEnabled');
+    _proximityTrackingEnabled = saved == true;
+  }
+
+  void _setProximityTrackingEnabled(bool enabled) {
+    setState(() => _proximityTrackingEnabled = enabled);
+    _configService.setNestedValue('tracker.proximityTrackingEnabled', enabled);
+
+    if (enabled) {
+      // Store collection path for auto-start on app restart
+      _configService.setNestedValue('tracker.proximityCollectionPath', widget.collectionPath);
+      ProximityDetectionService().start(_service);
+    } else {
+      ProximityDetectionService().stop();
+    }
+  }
+
+  // ============ Tab Usage Tracking (weighted score with 30-day decay) ============
+
+  /// Expiration period for usage history (30 days in milliseconds)
+  static const int _usageExpirationMs = 30 * 24 * 60 * 60 * 1000;
 
   void _loadTabUsage() {
-    final saved = _configService.getNestedValue('tracker.tabLastUsed');
+    final saved = _configService.getNestedValue('tracker.tabUsageHistory');
     if (saved is Map) {
-      _tabLastUsed = Map<String, int>.from(saved.map((k, v) => MapEntry(k.toString(), v as int)));
+      // New format: Map<String, List<int>>
+      _tabUsageHistory = Map<String, List<int>>.from(
+        saved.map((k, v) => MapEntry(
+          k.toString(),
+          (v as List).map((e) => e as int).toList(),
+        )),
+      );
+    } else {
+      // Check for old format migration: Map<String, int>
+      final oldSaved = _configService.getNestedValue('tracker.tabLastUsed');
+      if (oldSaved is Map) {
+        // Migrate old format to new format
+        _tabUsageHistory = Map<String, List<int>>.from(
+          oldSaved.map((k, v) => MapEntry(k.toString(), [v as int])),
+        );
+        // Save in new format and clear old key
+        _saveTabUsage();
+      }
     }
+    _cleanupExpiredUsage();
     _sortTabs();
+  }
+
+  void _saveTabUsage() {
+    _configService.setNestedValue('tracker.tabUsageHistory', _tabUsageHistory);
+  }
+
+  void _cleanupExpiredUsage() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cutoff = now - _usageExpirationMs;
+
+    for (final tabName in _tabUsageHistory.keys) {
+      _tabUsageHistory[tabName] = _tabUsageHistory[tabName]!
+          .where((ts) => ts >= cutoff)
+          .toList();
+    }
+    // Remove empty entries
+    _tabUsageHistory.removeWhere((_, timestamps) => timestamps.isEmpty);
+  }
+
+  /// Calculate weighted usage score for a tab.
+  /// Recent uses count more than older ones, with exponential decay over 30 days.
+  double _calculateTabScore(List<int>? timestamps) {
+    if (timestamps == null || timestamps.isEmpty) return 0;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cutoff = now - _usageExpirationMs;
+    double score = 0;
+
+    for (final ts in timestamps) {
+      if (ts < cutoff) continue; // Skip expired entries
+
+      // Age in days (0-30)
+      final ageMs = now - ts;
+      final ageDays = ageMs / (24 * 60 * 60 * 1000);
+
+      // Weight: 1.0 for today, decreasing to ~0.25 at 30 days
+      // Using formula: 1 / (1 + ageDays * 0.1)
+      final weight = 1.0 / (1.0 + ageDays * 0.1);
+      score += weight;
+    }
+    return score;
   }
 
   void _sortTabs() {
     _sortedTabs = TrackerTab.values.toList();
     _sortedTabs.sort((a, b) {
-      final aTime = _tabLastUsed[a.name] ?? 0;
-      final bTime = _tabLastUsed[b.name] ?? 0;
-      return bTime.compareTo(aTime); // Most recent first
+      final aScore = _calculateTabScore(_tabUsageHistory[a.name]);
+      final bScore = _calculateTabScore(_tabUsageHistory[b.name]);
+      return bScore.compareTo(aScore); // Highest score first
     });
   }
 
   void _recordTabUsage(TrackerTab tab) {
-    _tabLastUsed[tab.name] = DateTime.now().millisecondsSinceEpoch;
-    _configService.setNestedValue('tracker.tabLastUsed', _tabLastUsed);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _tabUsageHistory.putIfAbsent(tab.name, () => []);
+    _tabUsageHistory[tab.name]!.add(now);
+
+    // Cleanup expired entries periodically
+    _cleanupExpiredUsage();
+    _saveTabUsage();
     // Re-sort tabs for next time (don't reorder while user is viewing)
   }
 
@@ -180,6 +282,11 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     _recordingService.addListener(_onRecordingChanged);
     await _recordingService.checkAndResumeRecording();
 
+    // Start proximity detection service if enabled
+    if (_proximityTrackingEnabled) {
+      ProximityDetectionService().start(_service);
+    }
+
     await _loadCurrentTab();
   }
 
@@ -206,7 +313,24 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     try {
       switch (_currentTab) {
         case TrackerTab.paths:
-          _paths = await _service.listPaths(year: _selectedYear);
+          final years = await _service.listPathYears();
+          if (!years.contains(DateTime.now().year)) {
+            years.add(DateTime.now().year);
+          }
+          years.sort((a, b) => b.compareTo(a));
+
+          final byYear = <int, List<TrackerPath>>{};
+          for (final year in years) {
+            final paths = await _service.listPaths(year: year);
+            paths.sort((a, b) =>
+                b.startedAtDateTime.compareTo(a.startedAtDateTime));
+            if (paths.isNotEmpty) {
+              byYear[year] = paths;
+            }
+          }
+
+          _pathYears = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
+          _pathsByYear = byYear;
           break;
         case TrackerTab.exercises:
           _exerciseTypes = await _service.listExerciseTypes(year: _selectedYear);
@@ -232,10 +356,37 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           _activePlans = await _service.listActivePlans();
           break;
         case TrackerTab.proximity:
-          _proximityDates = await _service.listProximityDates(year: _selectedYear);
-          break;
-        case TrackerTab.visits:
-          _visitDates = await _service.listVisitDates(year: _selectedYear);
+          // Load proximity data organized by year/week
+          final years = await _service.listProximityYears();
+          final now = DateTime.now();
+          if (!years.contains(now.year)) {
+            years.add(now.year);
+          }
+          years.sort((a, b) => b.compareTo(a));
+
+          final byYearWeek = <int, Map<int, List<ProximityTrack>>>{};
+          for (final year in years) {
+            final weeks = await _service.listProximityWeeks(year: year);
+            // Always include current week for current year
+            if (year == now.year && !weeks.contains(getWeekNumber(now))) {
+              weeks.add(getWeekNumber(now));
+            }
+            weeks.sort((a, b) => b.compareTo(a));
+
+            if (weeks.isNotEmpty) {
+              byYearWeek[year] = {};
+              for (final week in weeks) {
+                final tracks = await _service.getProximityTracks(year: year, week: week);
+                // Sort by total time and limit to top 50
+                tracks.sort((a, b) =>
+                    b.weekSummary.totalSeconds.compareTo(a.weekSummary.totalSeconds));
+                byYearWeek[year]![week] = tracks.take(50).toList();
+              }
+            }
+          }
+
+          _proximityYears = byYearWeek.keys.toList()..sort((a, b) => b.compareTo(a));
+          _proximityByYearWeek = byYearWeek;
           break;
         case TrackerTab.sharing:
           _groupShares = await _service.listGroupShares();
@@ -308,10 +459,10 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   bool get _showYearSelector {
-    // Note: paths tab has its own recording flow, no year selector needed
+    // Note: paths tab has its own year/week expansion tiles
     // Note: exercises/measurements tabs now use user-selected lists, no year filter needed
-    return _currentTab == TrackerTab.proximity ||
-        _currentTab == TrackerTab.visits;
+    // Note: proximity tab now has its own year/week expansion tiles
+    return false;
   }
 
   Tab _buildTab(TrackerTab tab) {
@@ -326,8 +477,6 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         return Tab(icon: const Icon(Icons.flag), text: widget.i18n.t('tracker_plans'));
       case TrackerTab.proximity:
         return Tab(icon: const Icon(Icons.people), text: widget.i18n.t('tracker_proximity'));
-      case TrackerTab.visits:
-        return Tab(icon: const Icon(Icons.place), text: widget.i18n.t('tracker_visits'));
       case TrackerTab.sharing:
         return Tab(icon: const Icon(Icons.share_location), text: widget.i18n.t('tracker_sharing'));
     }
@@ -345,8 +494,6 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         return _buildPlansTab();
       case TrackerTab.proximity:
         return _buildProximityTab();
-      case TrackerTab.visits:
-        return _buildVisitsTab();
       case TrackerTab.sharing:
         return _buildSharingTab();
     }
@@ -394,6 +541,8 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       return const Center(child: CircularProgressIndicator());
     }
 
+    final hasPaths = _pathsByYear.isNotEmpty;
+
     return Column(
       children: [
         // Active recording banner
@@ -402,11 +551,12 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             recordingService: _recordingService,
             i18n: widget.i18n,
             onStop: _loadCurrentTab,
+            onTap: _openActivePath,
           ),
 
         // Path list
         Expanded(
-          child: _paths.isEmpty && !_recordingService.hasActiveRecording
+          child: !hasPaths && !_recordingService.hasActiveRecording
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -420,37 +570,200 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
                     ],
                   ),
                 )
-              : ListView.builder(
+              : ListView(
                   padding: const EdgeInsets.all(8),
-                  itemCount: _paths.length,
-                  itemBuilder: (context, index) {
-                    final path = _paths[index];
-                    final pathType = TrackerPathType.fromTags(path.tags);
-
-                    return Card(
-                      child: ListTile(
-                        leading: Icon(
-                          pathType?.icon ?? Icons.route,
-                          color: path.status == TrackerPathStatus.recording
-                              ? Colors.red
-                              : null,
-                        ),
-                        title: Text(path.title ?? path.id),
-                        subtitle: Text(
-                          '${path.totalPoints} ${widget.i18n.t('tracker_points')} - '
-                          '${_formatDistance(path.totalDistanceMeters)}',
-                        ),
-                        trailing: path.status == TrackerPathStatus.recording
-                            ? const Icon(Icons.fiber_manual_record, color: Colors.red)
-                            : null,
-                        onTap: () => _onPathTapped(path),
-                      ),
-                    );
-                  },
+                  children: _buildPathGroups(),
                 ),
         ),
       ],
     );
+  }
+
+  List<Widget> _buildPathGroups() {
+    final now = DateTime.now();
+    final currentWeekStart = _startOfWeek(now);
+    final singleYear = _pathYears.length == 1;
+    final widgets = <Widget>[];
+
+    for (final year in _pathYears) {
+      final paths = _pathsByYear[year] ?? const [];
+      if (paths.isEmpty) continue;
+
+      final weekGroups = _groupPathsByWeek(paths);
+      final yearKey = 'year:$year';
+      final isCurrentYear = year == now.year;
+      final isExpanded = _expandedYearKeys.contains(yearKey) ||
+          isCurrentYear ||
+          (singleYear && isCurrentYear);
+
+      final yearWidget = ExpansionTile(
+        key: PageStorageKey<String>(yearKey),
+        initiallyExpanded: isExpanded,
+        title: Text(year.toString()),
+        onExpansionChanged: (expanded) {
+          setState(() {
+            if (expanded) {
+              _expandedYearKeys.add(yearKey);
+            } else {
+              _expandedYearKeys.remove(yearKey);
+            }
+          });
+        },
+        children: weekGroups.entries
+            .map((entry) => _buildWeekTile(
+                  entry.key,
+                  entry.value,
+                  currentWeekStart,
+                  year,
+                ))
+            .toList(),
+      );
+
+      if (singleYear && isCurrentYear) {
+        widgets.addAll(
+          weekGroups.entries.map((entry) => _buildWeekTile(
+                entry.key,
+                entry.value,
+                currentWeekStart,
+                year,
+              )),
+        );
+      } else {
+        widgets.add(yearWidget);
+      }
+    }
+
+    return widgets;
+  }
+
+  Map<DateTime, List<TrackerPath>> _groupPathsByWeek(List<TrackerPath> paths) {
+    final grouped = <DateTime, List<TrackerPath>>{};
+    for (final path in paths) {
+      final start = path.startedAtDateTime;
+      final weekStart = _startOfWeek(start);
+      grouped.putIfAbsent(weekStart, () => []).add(path);
+    }
+
+    final sortedKeys = grouped.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+    final sorted = <DateTime, List<TrackerPath>>{};
+    for (final key in sortedKeys) {
+      final weekPaths = grouped[key] ?? [];
+      weekPaths.sort(
+        (a, b) => b.startedAtDateTime.compareTo(a.startedAtDateTime),
+      );
+      sorted[key] = weekPaths;
+    }
+
+    return sorted;
+  }
+
+  Widget _buildWeekTile(
+    DateTime weekStart,
+    List<TrackerPath> paths,
+    DateTime currentWeekStart,
+    int year,
+  ) {
+    final weekKey = 'week:$year:${weekStart.toIso8601String()}';
+    final isCurrentWeek =
+        weekStart.year == currentWeekStart.year &&
+        weekStart.month == currentWeekStart.month &&
+        weekStart.day == currentWeekStart.day;
+    final isExpanded =
+        _expandedWeekKeys.contains(weekKey) || isCurrentWeek;
+    final weekLabel = DateFormat.MMMd().format(weekStart);
+
+    return ExpansionTile(
+      key: PageStorageKey<String>(weekKey),
+      initiallyExpanded: isExpanded,
+      title: Text('${widget.i18n.t('tracker_week_of')} $weekLabel'),
+      subtitle: Text('${paths.length} ${widget.i18n.t('tracker_sessions')}'),
+      onExpansionChanged: (expanded) {
+        setState(() {
+          if (expanded) {
+            _expandedWeekKeys.add(weekKey);
+          } else {
+            _expandedWeekKeys.remove(weekKey);
+          }
+        });
+      },
+      children: paths.map((path) => _buildPathTile(path, year)).toList(),
+    );
+  }
+
+  Widget _buildPathTile(TrackerPath path, int year) {
+    final pathType = TrackerPathType.fromTags(path.tags);
+    final startedAt = DateFormat.yMMMd().add_jm().format(path.startedAtDateTime);
+    final isActive = _recordingService.activePathId == path.id;
+    final points = isActive ? _recordingService.pointCount : path.totalPoints;
+    final distance = isActive
+        ? _recordingService.totalDistance
+        : path.totalDistanceMeters;
+    final duration = _resolvePathDuration(path, isActive: isActive);
+    final durationLabel = duration != null ? _formatDurationCompact(duration) : null;
+    final theme = Theme.of(context);
+    final statStyle = theme.textTheme.bodySmall;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: ListTile(
+        leading: Icon(
+          pathType?.icon ?? Icons.route,
+          color:
+              path.status == TrackerPathStatus.recording ? Colors.red : null,
+        ),
+        title: Text(path.title ?? path.id),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(startedAt),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (durationLabel != null && durationLabel.isNotEmpty)
+                  _buildStatItem(
+                    Icons.timer_outlined,
+                    durationLabel,
+                    statStyle,
+                  ),
+                _buildStatItem(
+                  Icons.emoji_events_outlined,
+                  '$points ${widget.i18n.t('tracker_points')}',
+                  statStyle,
+                ),
+                _buildStatItem(
+                  Icons.straighten,
+                  _formatDistance(distance),
+                  statStyle,
+                ),
+              ],
+            ),
+          ],
+        ),
+        trailing: PopupMenuButton<String>(
+          onSelected: (value) => _handlePathMenu(value, path, year),
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'edit',
+              child: Text(widget.i18n.t('tracker_edit_path')),
+            ),
+            PopupMenuItem(
+              value: 'delete',
+              child: Text(widget.i18n.t('tracker_delete_path')),
+            ),
+          ],
+        ),
+        onTap: () => _onPathTapped(path, year),
+      ),
+    );
+  }
+
+  DateTime _startOfWeek(DateTime date) {
+    final normalized = DateTime(date.year, date.month, date.day);
+    return normalized.subtract(Duration(days: normalized.weekday - 1));
   }
 
   /// Unified tab builder for exercises and measurements
@@ -514,7 +827,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           child: ListTile(
             leading: Icon(
               _getTrackableIcon(kind, typeId, config.category),
-              color: hasData ? Theme.of(context).primaryColor : Colors.grey,
+              color: hasData ? Theme.of(context).primaryColor : Colors.white,
             ),
             title: Text(widget.i18n.t('$typePrefix$typeId')),
             subtitle: Text('${_weeklyTotals[typeId] ?? 0} ${widget.i18n.t('tracker_this_week')}'),
@@ -596,7 +909,10 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
               final config = availableTypes[typeId]!;
 
               return ListTile(
-                leading: Icon(_getTrackableIcon(kind, typeId, config.category)),
+                leading: Icon(
+                  _getTrackableIcon(kind, typeId, config.category),
+                  color: Colors.white,
+                ),
                 title: Text(widget.i18n.t('$typePrefix$typeId')),
                 onTap: () {
                   _addToVisibleList(kind, typeId);
@@ -662,72 +978,266 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_proximityDates.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.people, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              widget.i18n.t('tracker_no_proximity'),
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-          ],
-        ),
-      );
-    }
+    final hasData = _proximityByYearWeek.isNotEmpty &&
+        _proximityByYearWeek.values.any((weeks) =>
+            weeks.values.any((tracks) => tracks.isNotEmpty));
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: _proximityDates.length,
-      itemBuilder: (context, index) {
-        final date = _proximityDates[index];
-        return Card(
-          child: ListTile(
-            leading: const Icon(Icons.people),
-            title: Text(_formatDate(date)),
-            onTap: () => _onProximityDateTapped(date),
+    return Column(
+      children: [
+        // Enable/disable switch and filter
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            children: [
+              // Enable/disable switch
+              Row(
+                children: [
+                  Icon(
+                    _proximityTrackingEnabled ? Icons.sensors : Icons.sensors_off,
+                    color: _proximityTrackingEnabled ? Colors.green : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      widget.i18n.t('tracker_proximity_tracking'),
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
+                  ),
+                  Switch(
+                    value: _proximityTrackingEnabled,
+                    onChanged: _setProximityTrackingEnabled,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Segmented control for filter
+              SegmentedButton<ProximityFilter>(
+                segments: [
+                  ButtonSegment(
+                    value: ProximityFilter.all,
+                    label: Text(widget.i18n.t('tracker_proximity_all')),
+                    icon: const Icon(Icons.select_all),
+                  ),
+                  ButtonSegment(
+                    value: ProximityFilter.devices,
+                    label: Text(widget.i18n.t('tracker_proximity_devices')),
+                    icon: const Icon(Icons.bluetooth),
+                  ),
+                  ButtonSegment(
+                    value: ProximityFilter.places,
+                    label: Text(widget.i18n.t('tracker_proximity_places')),
+                    icon: const Icon(Icons.place),
+                  ),
+                ],
+                selected: {_proximityFilter},
+                onSelectionChanged: (selected) {
+                  setState(() => _proximityFilter = selected.first);
+                },
+              ),
+            ],
           ),
-        );
-      },
+        ),
+        // Year/week list
+        Expanded(
+          child: !hasData
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _proximityFilter == ProximityFilter.places
+                            ? Icons.place
+                            : _proximityFilter == ProximityFilter.devices
+                                ? Icons.bluetooth
+                                : Icons.people,
+                        size: 64,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        widget.i18n.t('tracker_no_proximity'),
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                      if (!_proximityTrackingEnabled) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          widget.i18n.t('tracker_enable_tracking_hint'),
+                          style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                        ),
+                      ],
+                    ],
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(8),
+                  children: _buildProximityGroups(),
+                ),
+        ),
+      ],
     );
   }
 
-  Widget _buildVisitsTab() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+  List<Widget> _buildProximityGroups() {
+    final now = DateTime.now();
+    final currentWeek = getWeekNumber(now);
+    final singleYear = _proximityYears.length == 1;
+    final widgets = <Widget>[];
+
+    for (final year in _proximityYears) {
+      final weeksMap = _proximityByYearWeek[year] ?? {};
+      if (weeksMap.isEmpty) continue;
+
+      final yearKey = 'prox_year:$year';
+      final isCurrentYear = year == now.year;
+      final isExpanded = _expandedProximityYearKeys.contains(yearKey) ||
+          isCurrentYear ||
+          (singleYear && isCurrentYear);
+
+      final weekEntries = weeksMap.entries.toList()
+        ..sort((a, b) => b.key.compareTo(a.key));
+
+      final yearWidget = ExpansionTile(
+        key: PageStorageKey<String>(yearKey),
+        initiallyExpanded: isExpanded,
+        title: Text(year.toString()),
+        onExpansionChanged: (expanded) {
+          setState(() {
+            if (expanded) {
+              _expandedProximityYearKeys.add(yearKey);
+            } else {
+              _expandedProximityYearKeys.remove(yearKey);
+            }
+          });
+        },
+        children: weekEntries
+            .map((entry) => _buildProximityWeekTile(
+                  year,
+                  entry.key,
+                  entry.value,
+                  currentWeek,
+                ))
+            .toList(),
+      );
+
+      if (singleYear && isCurrentYear) {
+        widgets.addAll(
+          weekEntries.map((entry) => _buildProximityWeekTile(
+                year,
+                entry.key,
+                entry.value,
+                currentWeek,
+              )),
+        );
+      } else {
+        widgets.add(yearWidget);
+      }
     }
 
-    if (_visitDates.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+    return widgets;
+  }
+
+  Widget _buildProximityWeekTile(
+    int year,
+    int week,
+    List<ProximityTrack> tracks,
+    int currentWeek,
+  ) {
+    final weekKey = 'prox_week:$year:$week';
+    final isCurrentWeek = year == DateTime.now().year && week == currentWeek;
+    final isExpanded = _expandedProximityWeekKeys.contains(weekKey) || isCurrentWeek;
+
+    // Filter tracks based on selected filter
+    final filteredTracks = tracks.where((track) {
+      switch (_proximityFilter) {
+        case ProximityFilter.all:
+          return true;
+        case ProximityFilter.devices:
+          return track.type == ProximityTargetType.device;
+        case ProximityFilter.places:
+          return track.type == ProximityTargetType.place;
+      }
+    }).toList();
+
+    // Calculate week start date for display
+    final weekStartDate = _getWeekStartDate(year, week);
+    final weekLabel = DateFormat.MMMd().format(weekStartDate);
+
+    final deviceCount = tracks.where((t) => t.type == ProximityTargetType.device).length;
+    final placeCount = tracks.where((t) => t.type == ProximityTargetType.place).length;
+
+    return ExpansionTile(
+      key: PageStorageKey<String>(weekKey),
+      initiallyExpanded: isExpanded,
+      title: Text('${widget.i18n.t('tracker_week_of')} $weekLabel'),
+      subtitle: Text('$deviceCount ${widget.i18n.t('tracker_proximity_devices').toLowerCase()}, '
+          '$placeCount ${widget.i18n.t('tracker_proximity_places').toLowerCase()}'),
+      onExpansionChanged: (expanded) {
+        setState(() {
+          if (expanded) {
+            _expandedProximityWeekKeys.add(weekKey);
+          } else {
+            _expandedProximityWeekKeys.remove(weekKey);
+          }
+        });
+      },
+      children: filteredTracks.isEmpty
+          ? [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  widget.i18n.t('tracker_no_proximity'),
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+              ),
+            ]
+          : filteredTracks.map((track) => _buildProximityTrackCard(track)).toList(),
+    );
+  }
+
+  /// Get the start date of a week given year and week number
+  DateTime _getWeekStartDate(int year, int week) {
+    // ISO week date calculation
+    final jan4 = DateTime(year, 1, 4);
+    final daysSinceJan4 = (week - 1) * 7;
+    final mondayOfWeek1 = jan4.subtract(Duration(days: jan4.weekday - 1));
+    return mondayOfWeek1.add(Duration(days: daysSinceJan4));
+  }
+
+  Widget _buildProximityTrackCard(ProximityTrack track) {
+    final isDevice = track.type == ProximityTargetType.device;
+    final icon = isDevice ? Icons.bluetooth : Icons.place;
+    final totalMinutes = track.weekSummary.totalSeconds ~/ 60;
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    final durationText = hours > 0 ? '${hours}h ${minutes}m' : '${minutes}m';
+
+    final lastSeen = track.weekSummary.lastDetection != null
+        ? DateFormat.MMMd().add_jm().format(DateTime.parse(track.weekSummary.lastDetection!).toLocal())
+        : null;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: ListTile(
+        leading: Icon(icon, color: isDevice ? Colors.blue : Colors.green),
+        title: Text(track.displayName),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.place, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              widget.i18n.t('tracker_no_visits'),
-              style: TextStyle(color: Colors.grey[600]),
-            ),
+            Text('$durationText ${widget.i18n.t('tracker_this_week')}'),
+            if (lastSeen != null)
+              Text(
+                '${widget.i18n.t('tracker_last_update')}: $lastSeen',
+                style: TextStyle(color: Colors.grey[500], fontSize: 12),
+              ),
           ],
         ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: _visitDates.length,
-      itemBuilder: (context, index) {
-        final date = _visitDates[index];
-        return Card(
-          child: ListTile(
-            leading: const Icon(Icons.place),
-            title: Text(_formatDate(date)),
-            onTap: () => _onVisitDateTapped(date),
-          ),
-        );
-      },
+        trailing: Text(
+          '${track.weekSummary.totalEntries}',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: isDevice ? Colors.blue : Colors.green,
+              ),
+        ),
+      ),
     );
   }
 
@@ -876,6 +1386,48 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     return '${meters.toInt()} m';
   }
 
+  Widget _buildStatItem(
+    IconData icon,
+    String label,
+    TextStyle? textStyle,
+  ) {
+    final color = textStyle?.color ?? Colors.grey;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(label, style: textStyle),
+      ],
+    );
+  }
+
+  Duration? _resolvePathDuration(TrackerPath path, {required bool isActive}) {
+    if (isActive) {
+      return _recordingService.elapsedTime;
+    }
+    final start = path.startedAtDateTime;
+    final end = path.endedAtDateTime ?? DateTime.now();
+    return end.difference(start);
+  }
+
+  String _formatDurationCompact(Duration duration) {
+    final totalMinutes = duration.inMinutes;
+    if (totalMinutes <= 0) return '';
+    if (totalMinutes < 60) {
+      return '${totalMinutes}m';
+    }
+    final hours = duration.inHours;
+    if (hours < 24) {
+      final minutes = totalMinutes.remainder(60);
+      if (minutes == 0) {
+        return '${hours}h';
+      }
+      return '${hours}h ${minutes}m';
+    }
+    return '${duration.inHours}h';
+  }
+
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
@@ -976,14 +1528,82 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     );
   }
 
-  void _onPathTapped(TrackerPath path) {
+  void _onPathTapped(TrackerPath path, int year) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => PathDetailPage(
           service: _service,
           i18n: widget.i18n,
           path: path,
-          year: _selectedYear,
+          year: year,
+          recordingService: _recordingService,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handlePathMenu(
+    String action,
+    TrackerPath path,
+    int year,
+  ) async {
+    switch (action) {
+      case 'edit':
+        final result = await EditPathDialog.show(
+          context,
+          path: path,
+          i18n: widget.i18n,
+        );
+        if (result == null) return;
+        final updated = path.copyWith(
+          title: result.title,
+          description: result.description,
+        );
+        await _service.updatePath(updated, year: year);
+        _loadCurrentTab();
+        return;
+      case 'delete':
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(widget.i18n.t('tracker_delete_path')),
+            content: Text(widget.i18n.t('tracker_delete_path_confirm')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(widget.i18n.t('cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(widget.i18n.t('tracker_delete_path')),
+              ),
+            ],
+          ),
+        );
+        if (confirmed == true) {
+          await _service.deletePath(path.id, year: year);
+          _loadCurrentTab();
+        }
+        return;
+    }
+  }
+
+  Future<void> _openActivePath() async {
+    final state = _recordingService.recordingState;
+    if (state == null) return;
+    final path = await _service.getPath(
+      state.activePathId,
+      year: state.activePathYear,
+    );
+    if (path == null || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PathDetailPage(
+          service: _service,
+          i18n: widget.i18n,
+          path: path,
+          year: state.activePathYear,
+          recordingService: _recordingService,
         ),
       ),
     );
@@ -999,14 +1619,6 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         ),
       ),
     );
-  }
-
-  void _onProximityDateTapped(DateTime date) {
-    // TODO: Navigate to proximity detail page
-  }
-
-  void _onVisitDateTapped(DateTime date) {
-    // TODO: Navigate to visit detail page
   }
 
   void _onReceivedLocationTapped(ReceivedLocation location) {

@@ -20,6 +20,10 @@ class TrackerPathUtils {
   static String pathPointsFile(String basePath, int year, String pathId) =>
       '${pathDir(basePath, year, pathId)}/points.json';
 
+  /// Get path expenses file
+  static String pathExpensesFile(String basePath, int year, String pathId) =>
+      '${pathDir(basePath, year, pathId)}/expenses.json';
+
   // ============ Measurements ============
 
   /// Get measurements directory for a year

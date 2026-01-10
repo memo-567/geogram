@@ -552,3 +552,34 @@ class TransferResumedEvent extends AppEvent {
 
 /// Navigate to home/apps tab
 class NavigateToHomeEvent extends AppEvent {}
+
+// ============================================================
+// Location Events
+// ============================================================
+
+/// GPS position updated event
+/// Fired by LocationProviderService when a new position is acquired.
+/// Subscribe to this event instead of using timers for location-based features.
+class PositionUpdatedEvent extends AppEvent {
+  final double latitude;
+  final double longitude;
+  final double altitude;
+  final double accuracy;
+  final double speed;
+  final double heading;
+  final String source; // 'gps', 'network', 'ip'
+
+  PositionUpdatedEvent({
+    required this.latitude,
+    required this.longitude,
+    required this.altitude,
+    required this.accuracy,
+    required this.speed,
+    required this.heading,
+    required this.source,
+  });
+
+  @override
+  String toString() =>
+      'PositionUpdatedEvent(lat: $latitude, lon: $longitude, accuracy: ${accuracy.toStringAsFixed(1)}m, source: $source)';
+}

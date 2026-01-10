@@ -10,3 +10,5 @@ export 'tracker_plan.dart';
 export 'tracker_visit.dart';
 export 'tracker_proximity.dart';
 export 'tracker_share.dart';
+export 'tracker_expense.dart';
+export 'tracker_expenses.dart';

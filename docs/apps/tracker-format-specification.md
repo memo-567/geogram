@@ -15,9 +15,8 @@ Last Updated: 2026-01-07
 8. [Exercise Tracking](#exercise-tracking)
 9. [Fitness Plans](#fitness-plans)
 10. [Location Sharing](#location-sharing)
-11. [Bluetooth Proximity](#bluetooth-proximity)
-12. [Place Visits](#place-visits)
-13. [Privacy & Security](#privacy--security)
+11. [Unified Proximity Tracking](#unified-proximity-tracking)
+12. [Privacy & Security](#privacy--security)
 14. [Battery Optimization](#battery-optimization)
 15. [NOSTR Integration](#nostr-integration)
 16. [Validation Rules](#validation-rules)
@@ -37,8 +36,7 @@ The Tracker app enables comprehensive personal tracking capabilities within Geog
 - **Exercises** - Simple logging of exercise counts (e.g., "20 pushups today")
 - **Plans** - Weekly fitness plans with combined goals and progress tracking
 - **Location Sharing** - Share location with groups or temporarily with individuals
-- **Bluetooth Proximity** - Track time spent near other Geogram users
-- **Place Visits** - Auto check-in/checkout based on GPS proximity to registered places
+- **Proximity** - Unified tracking of nearby Bluetooth devices and places within 50m
 
 All data is stored locally in JSON format, with optional NOSTR signatures for verification.
 
@@ -1082,20 +1080,114 @@ Share your location with groups (family, friends) or temporarily with individual
 
 ---
 
-## Bluetooth Proximity
+## Unified Proximity Tracking
 
 ### Purpose
 
-Track the amount of time spent near other Geogram users via Bluetooth, enabling relationship insights and social metrics.
+Track the amount of time spent near:
+1. **Devices**: Other Geogram users within Bluetooth range
+2. **Places**: Registered places within 50 meters (from internal, station, or connect sources)
 
 ### How It Works
 
-1. App broadcasts a unique identifier via Bluetooth LE
-2. Scans for nearby Geogram users at configured intervals
-3. Records proximity sessions when another user is detected
-4. Aggregates data into daily logs and statistics
+1. Subscribe to `PositionUpdatedEvent` from LocationProviderService (EventBus)
+2. On each GPS update, scan for nearby Bluetooth devices
+3. Check current location against registered places (50m radius)
+4. Record proximity entries with timestamps and location
+5. Store in weekly folders with individual track files per device/place
 
-### Daily Proximity Log (proximity/{YYYY}/proximity_{YYYYMMDD}.json)
+### Storage Structure
+
+```
+proximity/
+└── {YYYY}/
+    └── W{WW}/                          # Week folder (W01-W52)
+        ├── X1ABCD-track.json           # Device track by callsign
+        ├── ALICE1-track.json           # Another device
+        ├── place_home_38_72_n9_14-track.json   # Place track
+        └── place_office_38_73_n9_15-track.json
+```
+
+### Track File Format (proximity/{YYYY}/W{WW}/{id}-track.json)
+
+**Device track:**
+```json
+{
+  "id": "X1ABCD",
+  "type": "device",
+  "display_name": "Alice",
+  "callsign": "X1ABCD",
+  "npub": "npub1alice...",
+  "entries": [
+    {
+      "timestamp": "2026-01-15T09:00:00Z",
+      "lat": 38.7223,
+      "lon": -9.1393,
+      "ended_at": "2026-01-15T12:30:00Z",
+      "duration_seconds": 12600
+    }
+  ],
+  "week_summary": {
+    "total_seconds": 23400,
+    "total_entries": 2,
+    "first_detection": "2026-01-15T09:00:00Z",
+    "last_detection": "2026-01-15T17:00:00Z"
+  }
+}
+```
+
+**Place track:**
+```json
+{
+  "id": "place_home_38_72_n9_14",
+  "type": "place",
+  "display_name": "Home",
+  "source": "internal",
+  "place_id": "places_collection_abc/place_xyz",
+  "coordinates": {"lat": 38.7223, "lon": -9.1393},
+  "entries": [...],
+  "week_summary": {...}
+}
+```
+
+### Entry Field Descriptions
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `timestamp` | string | Yes | ISO 8601 start time |
+| `lat` | double | Yes | Latitude when detected |
+| `lon` | double | Yes | Longitude when detected |
+| `ended_at` | string | No | ISO 8601 end time (open if null) |
+| `duration_seconds` | int | No | Duration in seconds |
+
+### Week Summary Field Descriptions
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `total_seconds` | int | Yes | Total time this week |
+| `total_entries` | int | Yes | Number of detection sessions |
+| `first_detection` | string | No | ISO 8601 first detection |
+| `last_detection` | string | No | ISO 8601 last detection |
+
+### Detection Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Place radius | 50m | Maximum distance to detect a place |
+| Session timeout | 2 min | Gap before starting new entry |
+| Places cache | 5 min | How often to refresh places list |
+
+### Legacy Format
+
+> **Note:** Previous versions stored daily proximity and visits separately:
+> - `proximity/{YYYY}/proximity_{YYYYMMDD}.json` - Bluetooth contacts
+> - `visits/{YYYY}/visits_{YYYYMMDD}.json` - Place check-ins
+>
+> These files are preserved for backward compatibility but new data uses the unified weekly format.
+
+---
+
+## Legacy: Daily Proximity Log (proximity/{YYYY}/proximity_{YYYYMMDD}.json)
 
 ```json
 {

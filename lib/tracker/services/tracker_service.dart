@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import '../models/tracker_models.dart';
+import '../models/tracker_proximity_track.dart';
 import '../utils/tracker_path_utils.dart';
 import 'tracker_storage_service.dart';
 import '../../services/log_service.dart';
@@ -112,6 +113,7 @@ class TrackerService {
     String? description,
     int intervalSeconds = 60,
     List<String>? tags,
+    List<TrackerPathSegment>? segments,
   }) async {
     if (_storage == null || _ownerCallsign == null) return null;
 
@@ -127,6 +129,7 @@ class TrackerService {
       intervalSeconds: intervalSeconds,
       totalPoints: 0,
       tags: tags ?? const [],
+      segments: segments ?? const [],
       ownerCallsign: _ownerCallsign!,
     );
 
@@ -140,6 +143,22 @@ class TrackerService {
     if (success) {
       await _storage!.writePathPoints(now.year, pathId, points);
       _notifyChange('path', 'created', id: pathId, data: path);
+      return path;
+    }
+    return null;
+  }
+
+  /// Update an existing path (title, description, tags, segments, etc.)
+  Future<TrackerPath?> updatePath(
+    TrackerPath path, {
+    int? year,
+  }) async {
+    if (_storage == null) return null;
+
+    final yr = year ?? DateTime.now().year;
+    final success = await _storage!.writePath(yr, path);
+    if (success) {
+      _notifyChange('path', 'updated', id: path.id, data: path);
       return path;
     }
     return null;
@@ -193,6 +212,61 @@ class TrackerService {
     return null;
   }
 
+  /// Complete a path recording with a specific end time.
+  Future<TrackerPath?> completePathAt(
+    String pathId,
+    DateTime endTime, {
+    int? year,
+  }) async {
+    if (_storage == null) return null;
+
+    final yr = year ?? DateTime.now().year;
+    final path = await _storage!.readPath(yr, pathId);
+    if (path == null) return null;
+
+    final points = await _storage!.readPathPoints(yr, pathId);
+    final totalDistance = points?.calculateTotalDistance() ?? 0;
+    final totalPoints = points?.points.length ?? 0;
+
+    final completedPath = path.copyWith(
+      status: TrackerPathStatus.completed,
+      endedAt: endTime.toIso8601String(),
+      totalDistanceMeters: totalDistance,
+      totalPoints: totalPoints,
+    );
+
+    final success = await _storage!.writePath(yr, completedPath);
+    if (success) {
+      _notifyChange('path', 'updated', id: pathId, data: completedPath);
+      return completedPath;
+    }
+    return null;
+  }
+
+  /// Replace all points for a path (used for trimming).
+  Future<bool> replacePathPoints(
+    String pathId,
+    TrackerPathPoints points, {
+    int? year,
+  }) async {
+    if (_storage == null) return false;
+
+    final yr = year ?? DateTime.now().year;
+    final success = await _storage!.writePathPoints(yr, pathId, points);
+    if (!success) return false;
+
+    final path = await _storage!.readPath(yr, pathId);
+    if (path != null) {
+      final updatedPath = path.copyWith(
+        totalPoints: points.points.length,
+        totalDistanceMeters: points.calculateTotalDistance(),
+      );
+      await _storage!.writePath(yr, updatedPath);
+      _notifyChange('path', 'updated', id: pathId, data: updatedPath);
+    }
+    return true;
+  }
+
   /// Delete a path
   Future<bool> deletePath(String pathId, {int? year}) async {
     if (_storage == null) return false;
@@ -236,6 +310,96 @@ class TrackerService {
       return resumedPath;
     }
     return null;
+  }
+
+  // ============ Path Expenses Operations ============
+
+  /// Get expenses for a path
+  Future<TrackerExpenses?> getPathExpenses(String pathId, {int? year}) async {
+    if (_storage == null) return null;
+    return _storage!.readPathExpenses(year ?? DateTime.now().year, pathId);
+  }
+
+  /// Save expenses for a path
+  Future<bool> savePathExpenses(
+    String pathId,
+    TrackerExpenses expenses, {
+    int? year,
+  }) async {
+    if (_storage == null) return false;
+
+    final yr = year ?? DateTime.now().year;
+    final success = await _storage!.writePathExpenses(yr, pathId, expenses);
+    if (success) {
+      _notifyChange('expenses', 'updated', id: pathId, data: expenses);
+    }
+    return success;
+  }
+
+  /// Add an expense to a path
+  Future<TrackerExpense?> addPathExpense(
+    String pathId,
+    TrackerExpense expense, {
+    int? year,
+  }) async {
+    if (_storage == null) return null;
+
+    final yr = year ?? DateTime.now().year;
+    var expenses = await _storage!.readPathExpenses(yr, pathId);
+
+    // Create new expenses file if it doesn't exist
+    expenses ??= TrackerExpenses(pathId: pathId);
+
+    final updatedExpenses = expenses.addExpense(expense);
+    final success = await _storage!.writePathExpenses(yr, pathId, updatedExpenses);
+
+    if (success) {
+      _notifyChange('expense', 'created', id: pathId, data: expense);
+      return expense;
+    }
+    return null;
+  }
+
+  /// Update an expense for a path
+  Future<bool> updatePathExpense(
+    String pathId,
+    TrackerExpense expense, {
+    int? year,
+  }) async {
+    if (_storage == null) return false;
+
+    final yr = year ?? DateTime.now().year;
+    final expenses = await _storage!.readPathExpenses(yr, pathId);
+    if (expenses == null) return false;
+
+    final updatedExpenses = expenses.updateExpense(expense);
+    final success = await _storage!.writePathExpenses(yr, pathId, updatedExpenses);
+
+    if (success) {
+      _notifyChange('expense', 'updated', id: pathId, data: expense);
+    }
+    return success;
+  }
+
+  /// Delete an expense from a path
+  Future<bool> deletePathExpense(
+    String pathId,
+    String expenseId, {
+    int? year,
+  }) async {
+    if (_storage == null) return false;
+
+    final yr = year ?? DateTime.now().year;
+    final expenses = await _storage!.readPathExpenses(yr, pathId);
+    if (expenses == null) return false;
+
+    final updatedExpenses = expenses.removeExpense(expenseId);
+    final success = await _storage!.writePathExpenses(yr, pathId, updatedExpenses);
+
+    if (success) {
+      _notifyChange('expense', 'deleted', id: pathId);
+    }
+    return success;
   }
 
   // ============ Recording State Operations ============
@@ -844,6 +1008,67 @@ class TrackerService {
       _notifyChange('proximity', 'updated', data: data);
     }
     return success;
+  }
+
+  // ============ Unified Proximity Track Operations (Year/Week) ============
+
+  /// Get all proximity tracks for a specific week
+  Future<List<ProximityTrack>> getProximityTracks({
+    int? year,
+    int? week,
+  }) async {
+    if (_storage == null) return [];
+    final now = DateTime.now();
+    return _storage!.listProximityTracks(
+      year ?? now.year,
+      week ?? getWeekNumber(now),
+    );
+  }
+
+  /// Get a specific proximity track
+  Future<ProximityTrack?> getProximityTrack({
+    required String id,
+    int? year,
+    int? week,
+  }) async {
+    if (_storage == null) return null;
+    final now = DateTime.now();
+    return _storage!.readProximityTrack(
+      year ?? now.year,
+      week ?? getWeekNumber(now),
+      id,
+    );
+  }
+
+  /// Update a proximity track
+  Future<bool> updateProximityTrack(
+    ProximityTrack track, {
+    int? year,
+    int? week,
+  }) async {
+    if (_storage == null) return false;
+    final now = DateTime.now();
+    final success = await _storage!.writeProximityTrack(
+      year ?? now.year,
+      week ?? getWeekNumber(now),
+      track,
+    );
+    if (success) {
+      _notifyChange('proximity_track', 'updated', data: track);
+    }
+    return success;
+  }
+
+  /// List weeks with proximity data for a year
+  Future<List<int>> listProximityWeeks({int? year}) async {
+    if (_storage == null) return [];
+    return _storage!.listProximityWeeks(year ?? DateTime.now().year);
+  }
+
+  /// List years with proximity data
+  Future<List<int>> listProximityYears() async {
+    if (_storage == null) return [];
+    return _storage!.listYears('proximity');
   }
 
   // ============ Visit Operations ============

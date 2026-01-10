@@ -50,7 +50,7 @@ class _StartPathDialogState extends State<StartPathDialog> {
   final LocationService _locationService = LocationService();
 
   TrackerPathType _selectedType = TrackerPathType.travel;
-  int _intervalSeconds = 60;
+  int _intervalSeconds = 0;
   bool _starting = false;
   bool _customTitle = false;
   bool _settingAutoTitle = false;
@@ -60,6 +60,8 @@ class _StartPathDialogState extends State<StartPathDialog> {
 
   // Available GPS intervals
   static const _intervals = [
+    (0, 'auto'),
+    (15, '15s'),
     (30, '30s'),
     (60, '1m'),
     (120, '2m'),

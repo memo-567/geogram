@@ -1,7 +1,8 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../models/tracker_models.dart';
 import 'tracker_service.dart';
@@ -17,11 +18,20 @@ class PathRecordingService extends ChangeNotifier {
 
   TrackerService? _trackerService;
   TrackerRecordingState? _recordingState;
+  TrackerPath? _activePath;
   VoidCallback? _locationConsumerDispose;
   DateTime? _startTime;
   int _pointCount = 0;
   double _totalDistance = 0;
   LockedPosition? _lastPosition;
+  LockedPosition? _lastObservedPosition;
+  DateTime? _lastRecordedAt;
+  DateTime? _lastObservedAt;
+  Timer? _gpsWatchdog;
+  LockedPosition? _stationaryAnchor;
+  DateTime? _stationaryStartAt;
+  bool _stoppingForInactivity = false;
+  static const int _autoBaseIntervalSeconds = 5;
 
   // Getters
   bool get isRecording => _recordingState?.isRecording ?? false;
@@ -34,6 +44,8 @@ class PathRecordingService extends ChangeNotifier {
       ? DateTime.now().difference(_startTime!)
       : Duration.zero;
   TrackerRecordingState? get recordingState => _recordingState;
+  TrackerPath? get activePath => _activePath;
+  LockedPosition? get lastPosition => _lastObservedPosition ?? _lastPosition;
 
   /// Initialize the service with a TrackerService
   void initialize(TrackerService trackerService) {
@@ -50,6 +62,10 @@ class PathRecordingService extends ChangeNotifier {
         _recordingState = state;
         _startTime = DateTime.parse(state.startedAt);
         _pointCount = state.pointCount;
+        _activePath = await _trackerService!.getPath(
+          state.activePathId,
+          year: state.activePathYear,
+        );
 
         // Load existing points to calculate distance
         final points = await _trackerService!.getPathPoints(
@@ -69,6 +85,8 @@ class PathRecordingService extends ChangeNotifier {
             timestamp: DateTime.parse(lastPoint.timestamp),
             source: 'stored',
           );
+          _lastObservedPosition = _lastPosition;
+          _lastRecordedAt = _lastPosition?.timestamp;
         }
 
         if (state.isRecording) {
@@ -109,7 +127,7 @@ class PathRecordingService extends ChangeNotifier {
     try {
       // Start location provider first to validate GPS availability
       final started = await _startGPSUpdates(
-        intervalSeconds,
+        intervalSeconds <= 0 ? _autoBaseIntervalSeconds : intervalSeconds,
         notificationTitle: notificationTitle,
         notificationText: notificationText,
       );
@@ -122,6 +140,13 @@ class PathRecordingService extends ChangeNotifier {
 
       // Create tags with path type
       final tags = <String>[pathType.toTag()];
+      final segments = [
+        TrackerPathSegment(
+          typeId: pathType.id,
+          startedAt: now.toIso8601String(),
+          startPointIndex: 0,
+        ),
+      ];
 
       // Create the path
       final path = await _trackerService!.createPath(
@@ -129,6 +154,7 @@ class PathRecordingService extends ChangeNotifier {
         description: description,
         intervalSeconds: intervalSeconds,
         tags: tags,
+        segments: segments,
       );
 
       if (path == null) {
@@ -153,6 +179,13 @@ class PathRecordingService extends ChangeNotifier {
       _pointCount = 0;
       _totalDistance = 0;
       _lastPosition = null;
+      _lastObservedPosition = null;
+      _lastRecordedAt = null;
+      _lastObservedAt = null;
+      _stationaryAnchor = null;
+      _stationaryStartAt = null;
+      _stoppingForInactivity = false;
+      _activePath = path;
 
       // GPS already started above
       notifyListeners();
@@ -162,6 +195,62 @@ class PathRecordingService extends ChangeNotifier {
       LogService().log('PathRecordingService: Error starting recording: $e');
       return null;
     }
+  }
+
+  /// Change the active path type and record a segment boundary.
+  Future<bool> updatePathType(TrackerPathType type) async {
+    if (_trackerService == null || _recordingState == null) {
+      return false;
+    }
+    final path = _activePath ??
+        await _trackerService!.getPath(
+          _recordingState!.activePathId,
+          year: _recordingState!.activePathYear,
+        );
+    if (path == null) return false;
+
+    final segments = List<TrackerPathSegment>.from(path.segments);
+    final now = DateTime.now().toIso8601String();
+
+    if (segments.isNotEmpty) {
+      final lastIndex = segments.length - 1;
+      final lastSegment = segments[lastIndex];
+      segments[lastIndex] = lastSegment.copyWith(
+        endedAt: now,
+        endPointIndex: _pointCount,
+      );
+    }
+
+    segments.add(
+      TrackerPathSegment(
+        typeId: type.id,
+        startedAt: now,
+        startPointIndex: _pointCount,
+      ),
+    );
+
+    final updatedTags = _replaceTypeTag(path.tags, type);
+    final updatedPath = path.copyWith(
+      tags: updatedTags,
+      segments: segments,
+    );
+
+    final saved = await _trackerService!.updatePath(
+      updatedPath,
+      year: _recordingState!.activePathYear,
+    );
+    if (saved != null) {
+      _activePath = saved;
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  List<String> _replaceTypeTag(List<String> tags, TrackerPathType type) {
+    final nextTags = tags.where((tag) => !tag.startsWith('type:')).toList();
+    nextTags.insert(0, type.toTag());
+    return nextTags;
   }
 
   /// Pause the current recording
@@ -215,7 +304,13 @@ class PathRecordingService extends ChangeNotifier {
       );
 
       // Resume GPS updates
-      await _startGPSUpdates(_recordingState!.intervalSeconds);
+      final interval = _recordingState!.intervalSeconds <= 0
+          ? _autoBaseIntervalSeconds
+          : _recordingState!.intervalSeconds;
+      await _startGPSUpdates(interval);
+      _stationaryAnchor = _lastPosition;
+      _stationaryStartAt = null;
+      _stoppingForInactivity = false;
 
       notifyListeners();
       return true;
@@ -234,6 +329,27 @@ class PathRecordingService extends ChangeNotifier {
     try {
       _stopGPSUpdates();
 
+      final recordingPath = await _trackerService?.getPath(
+        _recordingState!.activePathId,
+        year: _recordingState!.activePathYear,
+      );
+      if (recordingPath != null && recordingPath.segments.isNotEmpty) {
+        final now = DateTime.now().toIso8601String();
+        final segments = List<TrackerPathSegment>.from(recordingPath.segments);
+        final lastIndex = segments.length - 1;
+        final lastSegment = segments[lastIndex];
+        if (lastSegment.endedAt == null) {
+          segments[lastIndex] = lastSegment.copyWith(
+            endedAt: now,
+            endPointIndex: _pointCount,
+          );
+          await _trackerService?.updatePath(
+            recordingPath.copyWith(segments: segments),
+            year: _recordingState!.activePathYear,
+          );
+        }
+      }
+
       final path = await _trackerService?.completePath(
         _recordingState!.activePathId,
         year: _recordingState!.activePathYear,
@@ -246,6 +362,14 @@ class PathRecordingService extends ChangeNotifier {
       _pointCount = 0;
       _totalDistance = 0;
       _lastPosition = null;
+      _lastObservedPosition = null;
+      _lastRecordedAt = null;
+      _lastObservedAt = null;
+      _stationaryAnchor = null;
+      _stationaryStartAt = null;
+      _stoppingForInactivity = false;
+      _activePath = null;
+      _activePath = null;
 
       notifyListeners();
       return path;
@@ -276,6 +400,12 @@ class PathRecordingService extends ChangeNotifier {
       _pointCount = 0;
       _totalDistance = 0;
       _lastPosition = null;
+      _lastObservedPosition = null;
+      _lastRecordedAt = null;
+      _lastObservedAt = null;
+      _stationaryAnchor = null;
+      _stationaryStartAt = null;
+      _stoppingForInactivity = false;
 
       notifyListeners();
       return true;
@@ -300,6 +430,7 @@ class PathRecordingService extends ChangeNotifier {
         notificationTitle: notificationTitle,
         notificationText: notificationText,
       );
+      _startGpsWatchdog(intervalSeconds);
       return true;
     } catch (e) {
       LogService().log('PathRecordingService: Failed to start GPS: $e');
@@ -311,6 +442,8 @@ class PathRecordingService extends ChangeNotifier {
   void _stopGPSUpdates() {
     _locationConsumerDispose?.call();
     _locationConsumerDispose = null;
+    _gpsWatchdog?.cancel();
+    _gpsWatchdog = null;
   }
 
   /// Handle a position update from LocationProviderService
@@ -319,7 +452,172 @@ class PathRecordingService extends ChangeNotifier {
       return;
     }
 
+    _lastObservedPosition = position;
+    _lastObservedAt = position.timestamp;
+    _checkForInactivityStop(position);
+
+    final intervalSeconds = _resolveIntervalSeconds(position);
+    final now = position.timestamp;
+    if (_lastRecordedAt != null &&
+        now.difference(_lastRecordedAt!).inSeconds < intervalSeconds) {
+      return;
+    }
+
+    _lastRecordedAt = now;
     _addPoint(position);
+  }
+
+  void _checkForInactivityStop(LockedPosition position) {
+    if (_stoppingForInactivity) {
+      return;
+    }
+    if (_stationaryAnchor == null) {
+      _stationaryAnchor = position;
+      _stationaryStartAt = null;
+      return;
+    }
+
+    final distance = _calculateDistance(
+      _stationaryAnchor!.latitude,
+      _stationaryAnchor!.longitude,
+      position.latitude,
+      position.longitude,
+    );
+
+    if (distance > 10) {
+      _stationaryAnchor = position;
+      _stationaryStartAt = null;
+      return;
+    }
+
+    _stationaryStartAt ??= position.timestamp;
+    final idleDuration = position.timestamp.difference(_stationaryStartAt!);
+    if (idleDuration >= const Duration(hours: 1)) {
+      _stoppingForInactivity = true;
+      unawaited(_stopDueToInactivity());
+    }
+  }
+
+  Future<void> _stopDueToInactivity() async {
+    if (_trackerService == null || _recordingState == null) {
+      _stoppingForInactivity = false;
+      return;
+    }
+
+    final stopTime = _stationaryStartAt ?? DateTime.now();
+    try {
+      _stopGPSUpdates();
+      await _trimPointsForInactivity(stopTime);
+      await _trackerService!.completePathAt(
+        _recordingState!.activePathId,
+        stopTime,
+        year: _recordingState!.activePathYear,
+      );
+      await _trackerService?.clearRecordingState();
+    } catch (e) {
+      LogService().log('PathRecordingService: Inactivity stop error: $e');
+    } finally {
+      _recordingState = null;
+      _startTime = null;
+      _pointCount = 0;
+      _totalDistance = 0;
+      _lastPosition = null;
+      _lastObservedPosition = null;
+      _lastRecordedAt = null;
+      _lastObservedAt = null;
+      _stationaryAnchor = null;
+      _stationaryStartAt = null;
+      _activePath = null;
+      _stoppingForInactivity = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _trimPointsForInactivity(DateTime stopTime) async {
+    if (_trackerService == null || _recordingState == null) {
+      return;
+    }
+
+    final points = await _trackerService!.getPathPoints(
+      _recordingState!.activePathId,
+      year: _recordingState!.activePathYear,
+    );
+    if (points == null || points.points.isEmpty) {
+      return;
+    }
+
+    final kept = points.points.where((point) {
+      final timestamp = DateTime.tryParse(point.timestamp);
+      if (timestamp == null) return true;
+      return timestamp.isBefore(stopTime);
+    }).toList();
+
+    final trimmed = kept.isNotEmpty ? kept : [points.points.first];
+    final reindexed = _reindexPoints(trimmed);
+    await _trackerService!.replacePathPoints(
+      _recordingState!.activePathId,
+      points.copyWith(points: reindexed),
+      year: _recordingState!.activePathYear,
+    );
+
+    await _trimSegmentsForInactivity(reindexed.length, stopTime);
+  }
+
+  Future<void> _trimSegmentsForInactivity(
+    int lastPointIndex,
+    DateTime stopTime,
+  ) async {
+    if (_trackerService == null || _recordingState == null) return;
+    final path = await _trackerService!.getPath(
+      _recordingState!.activePathId,
+      year: _recordingState!.activePathYear,
+    );
+    if (path == null || path.segments.isEmpty) return;
+
+    final adjusted = <TrackerPathSegment>[];
+    for (final segment in path.segments) {
+      final startIndex = segment.startPointIndex ?? 0;
+      if (startIndex > lastPointIndex) {
+        break;
+      }
+      final endIndex = segment.endPointIndex != null
+          ? segment.endPointIndex!.clamp(0, lastPointIndex)
+          : lastPointIndex;
+      adjusted.add(
+        segment.copyWith(
+          endPointIndex: endIndex,
+          endedAt: segment.endedAt ?? stopTime.toIso8601String(),
+        ),
+      );
+    }
+
+    if (adjusted.isNotEmpty) {
+      final updatedPath = path.copyWith(segments: adjusted);
+      await _trackerService!.updatePath(
+        updatedPath,
+        year: _recordingState!.activePathYear,
+      );
+    }
+  }
+
+  List<TrackerPoint> _reindexPoints(List<TrackerPoint> points) {
+    final updated = <TrackerPoint>[];
+    for (var i = 0; i < points.length; i++) {
+      final point = points[i];
+      updated.add(
+        TrackerPoint(
+          index: i,
+          timestamp: point.timestamp,
+          lat: point.lat,
+          lon: point.lon,
+          altitude: point.altitude,
+          accuracy: point.accuracy,
+          speed: point.speed,
+          bearing: point.bearing,
+        ),
+      );
+    }
+    return updated;
   }
 
   /// Add a point to the current path
@@ -327,6 +625,22 @@ class PathRecordingService extends ChangeNotifier {
     if (_recordingState == null || _trackerService == null) return;
 
     try {
+      final lastPosition = _lastPosition;
+      final pointTime = position.timestamp;
+      double? segmentSpeed;
+      if (lastPosition != null) {
+        final distance = _calculateDistance(
+          lastPosition.latitude,
+          lastPosition.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        final millis = pointTime.difference(lastPosition.timestamp).inMilliseconds;
+        if (millis > 0) {
+          segmentSpeed = distance / (millis / 1000.0);
+        }
+      }
+
       final point = TrackerPoint(
         index: _pointCount,
         timestamp: position.timestamp.toIso8601String(),
@@ -345,6 +659,7 @@ class PathRecordingService extends ChangeNotifier {
       );
 
       if (success) {
+        await _updateSegmentMaxSpeed(segmentSpeed);
         // Calculate distance from last point
         if (_lastPosition != null) {
           final distance = _calculateDistance(
@@ -357,7 +672,8 @@ class PathRecordingService extends ChangeNotifier {
         }
 
         _lastPosition = position;
-        _pointCount++;
+        _lastObservedPosition = position;
+      _pointCount++;
 
         // Update recording state
         _recordingState = _recordingState!.copyWith(
@@ -374,16 +690,117 @@ class PathRecordingService extends ChangeNotifier {
     }
   }
 
+  Future<void> _updateSegmentMaxSpeed(double? segmentSpeed) async {
+    // Filter out unreasonable speeds (GPS errors)
+    // Cap at 120 m/s = 432 km/h (fastest trains)
+    if (segmentSpeed == null || segmentSpeed <= 0 || segmentSpeed > 120.0) {
+      return;
+    }
+    final activePath = _activePath ??
+        await _trackerService?.getPath(
+          _recordingState!.activePathId,
+          year: _recordingState!.activePathYear,
+        );
+    if (activePath == null || activePath.segments.isEmpty) {
+      return;
+    }
+
+    final segments = List<TrackerPathSegment>.from(activePath.segments);
+    final lastIndex = segments.length - 1;
+    final lastSegment = segments[lastIndex];
+    final currentMax = lastSegment.maxSpeedMps ?? 0;
+    if (segmentSpeed <= currentMax) {
+      return;
+    }
+
+    segments[lastIndex] = lastSegment.copyWith(maxSpeedMps: segmentSpeed);
+    final pathMax = activePath.maxSpeedMps == null
+        ? segmentSpeed
+        : math.max(activePath.maxSpeedMps!, segmentSpeed);
+
+    final updatedPath = activePath.copyWith(
+      segments: segments,
+      maxSpeedMps: pathMax,
+    );
+    final saved = await _trackerService?.updatePath(
+      updatedPath,
+      year: _recordingState!.activePathYear,
+    );
+    if (saved != null) {
+      _activePath = saved;
+    }
+  }
+
   /// Calculate distance between two points using Haversine formula
   double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     const R = 6371000.0; // Earth radius in meters
-    final dLat = (lat2 - lat1) * pi / 180;
-    final dLon = (lon2 - lon1) * pi / 180;
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
-        sin(dLon / 2) * sin(dLon / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    final dLat = (lat2 - lat1) * math.pi / 180;
+    final dLon = (lon2 - lon1) * math.pi / 180;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180) *
+            math.cos(lat2 * math.pi / 180) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
     return R * c;
+  }
+
+  int _resolveIntervalSeconds(LockedPosition position) {
+    if (_recordingState == null) return _autoBaseIntervalSeconds;
+    final intervalSeconds = _recordingState!.intervalSeconds;
+    if (intervalSeconds > 0) {
+      return intervalSeconds;
+    }
+
+    final speed = position.speed ?? _lastPosition?.speed ?? 0;
+    if (speed >= 7.0) {
+      return 5;
+    }
+    if (speed >= 2.5) {
+      return 10;
+    }
+    return 20;
+  }
+
+  void _startGpsWatchdog(int intervalSeconds) {
+    _gpsWatchdog?.cancel();
+    final checkSeconds = intervalSeconds < 10 ? 10 : intervalSeconds;
+    _gpsWatchdog = Timer.periodic(
+      Duration(seconds: checkSeconds),
+      (_) {
+        if (_recordingState == null || !_recordingState!.isRecording) {
+          return;
+        }
+        final lastSeen = _lastObservedAt ?? _lastRecordedAt;
+        if (lastSeen == null) {
+          unawaited(_forcePositionUpdate());
+          return;
+        }
+        final staleSeconds = DateTime.now().difference(lastSeen).inSeconds;
+        if (staleSeconds >= intervalSeconds * 3) {
+          unawaited(_forcePositionUpdate());
+        }
+      },
+    );
+  }
+
+  Future<void> _forcePositionUpdate() async {
+    try {
+      final enabled = await Geolocator.isLocationServiceEnabled();
+      if (!enabled) {
+        LogService().log('PathRecordingService: GPS disabled while recording');
+        return;
+      }
+      final position =
+          await LocationProviderService().requestImmediatePosition();
+      if (position != null) {
+        _onPositionUpdate(position);
+      } else {
+        LogService().log('PathRecordingService: No GPS fix yet, retrying');
+      }
+    } catch (e) {
+      LogService().log('PathRecordingService: GPS watchdog error: $e');
+    }
   }
 
   /// Clean up resources

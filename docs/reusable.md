@@ -1325,7 +1325,22 @@ if (pos != null) {
 }
 ```
 
-**Listening to Position Updates:**
+**Listening to Position Updates (EventBus - Recommended):**
+```dart
+import '../util/event_bus.dart';
+
+// Subscribe to PositionUpdatedEvent via EventBus (decoupled, no loops)
+final subscription = EventBus().on<PositionUpdatedEvent>((event) {
+  print('New position: ${event.latitude}, ${event.longitude}');
+  print('Source: ${event.source}'); // 'gps', 'network', 'ip'
+  print('Accuracy: ${event.accuracy}m');
+});
+
+// Cancel when done
+subscription.cancel();
+```
+
+**Alternative: Stream or ChangeNotifier**
 ```dart
 // Real-time stream of positions
 service.positionStream.listen((pos) {

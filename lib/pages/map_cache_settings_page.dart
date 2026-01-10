@@ -37,24 +37,50 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
   // Cache freshness
   int _maxAgeMonths = 3;
 
-  // Download state
-  bool _isDownloading = false;
-  int _downloadedTiles = 0;
-  int _totalTiles = 0;
-  int _skippedTiles = 0;
-  String? _downloadError;
-
   // Cache info
   int _cacheSize = 0;
   int _tileCount = 0;
-  bool _loadingCacheInfo = false;
-  bool _cacheInfoUpdating = false;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
     _loadCachedInfoThenRefresh();
+    // Listen to download progress from the service
+    _mapTileService.downloadProgressNotifier.addListener(_onDownloadProgress);
+  }
+
+  @override
+  void dispose() {
+    _mapTileService.downloadProgressNotifier.removeListener(_onDownloadProgress);
+    super.dispose();
+  }
+
+  void _onDownloadProgress() {
+    if (mounted) {
+      final progress = _mapTileService.downloadProgressNotifier.value;
+      // Show success message when download completes
+      if (!progress.isDownloading && progress.downloadedTiles > 0 && progress.error == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('tiles_downloaded',
+                params: [progress.downloadedTiles.toString()])),
+            backgroundColor: Colors.green,
+          ),
+        );
+        _loadCacheInfo();
+      }
+      // Show error message if download failed
+      if (progress.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('error')}: ${progress.error}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      setState(() {});
+    }
   }
 
   /// Load cached info from disk first, then refresh in background
@@ -67,11 +93,6 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
       setState(() {
         _cacheSize = cachedSize;
         _tileCount = cachedCount;
-        _cacheInfoUpdating = true;
-      });
-    } else {
-      setState(() {
-        _loadingCacheInfo = true;
       });
     }
 
@@ -111,10 +132,6 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
   }
 
   Future<void> _loadCacheInfo({bool isManualRefresh = false}) async {
-    if (isManualRefresh) {
-      setState(() => _cacheInfoUpdating = true);
-    }
-
     try {
       final stats = await _mapTileService.getCacheStatistics();
       if (mounted) {
@@ -128,17 +145,10 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
         setState(() {
           _cacheSize = size;
           _tileCount = count;
-          _loadingCacheInfo = false;
-          _cacheInfoUpdating = false;
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loadingCacheInfo = false;
-          _cacheInfoUpdating = false;
-        });
-      }
+      // Silently ignore - will use cached values
     }
   }
 
@@ -167,7 +177,8 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
   }
 
   Future<void> _startDownload() async {
-    if (_isDownloading) return;
+    final progress = _mapTileService.downloadProgressNotifier.value;
+    if (progress.isDownloading) return;
 
     _saveSettings();
 
@@ -184,87 +195,16 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
       return;
     }
 
-    setState(() {
-      _isDownloading = true;
-      _downloadedTiles = 0;
-      _totalTiles = 0;
-      _skippedTiles = 0;
-      _downloadError = null;
-    });
-
-    try {
-      final maxAgeDays = _maxAgeMonths * 30;
-
-      // Download satellite tiles
-      final satelliteTiles = await _mapTileService.downloadTilesForRadius(
-        lat: position.latitude,
-        lng: position.longitude,
-        radiusKm: _satelliteRadiusKm,
-        minZoom: 8,
-        maxZoom: _satelliteMaxZoom,
-        layers: [MapLayerType.satellite],
-        maxAgeDays: maxAgeDays,
-        onProgressWithSkipped: (downloaded, total, skipped) {
-          if (mounted) {
-            setState(() {
-              _downloadedTiles = downloaded;
-              _totalTiles = total;
-              _skippedTiles = skipped;
-            });
-          }
-        },
-      );
-
-      // Download standard map tiles
-      final standardTiles = await _mapTileService.downloadTilesForRadius(
-        lat: position.latitude,
-        lng: position.longitude,
-        radiusKm: _standardRadiusKm,
-        minZoom: 8,
-        maxZoom: _standardMaxZoom,
-        layers: [MapLayerType.standard],
-        maxAgeDays: maxAgeDays,
-        onProgressWithSkipped: (downloaded, total, skipped) {
-          if (mounted) {
-            setState(() {
-              _downloadedTiles = satelliteTiles + downloaded;
-              _totalTiles = satelliteTiles + total;
-              _skippedTiles += skipped;
-            });
-          }
-        },
-      );
-
-      if (mounted) {
-        final totalDownloaded = satelliteTiles + standardTiles;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('tiles_downloaded',
-                params: [totalDownloaded.toString()])),
-            backgroundColor: Colors.green,
-          ),
-        );
-        await _loadCacheInfo();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _downloadError = e.toString();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_i18n.t('error')}: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isDownloading = false;
-        });
-      }
-    }
+    // Start background download - continues even if user leaves this page
+    _mapTileService.startBackgroundDownload(
+      lat: position.latitude,
+      lng: position.longitude,
+      satelliteRadiusKm: _satelliteRadiusKm,
+      satelliteMaxZoom: _satelliteMaxZoom,
+      standardRadiusKm: _standardRadiusKm,
+      standardMaxZoom: _standardMaxZoom,
+      maxAgeMonths: _maxAgeMonths,
+    );
   }
 
   String _formatBytes(int bytes) {
@@ -282,9 +222,12 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
     return '$months ${_i18n.t('months')}';
   }
 
+  bool get _isDownloading => _mapTileService.downloadProgressNotifier.value.isDownloading;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDownloading = _isDownloading;
 
     return Scaffold(
       appBar: AppBar(
@@ -312,7 +255,7 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
             max: 1000,
             divisions: 18,
             unit: 'km',
-            onChanged: _isDownloading
+            onChanged: isDownloading
                 ? null
                 : (value) {
                     setState(() => _satelliteRadiusKm = value);
@@ -328,7 +271,7 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
             divisions: 10,
             unit: '',
             formatValue: (v) => _getZoomLabel(v.round()),
-            onChanged: _isDownloading
+            onChanged: isDownloading
                 ? null
                 : (value) {
                     setState(() => _satelliteMaxZoom = value.round());
@@ -352,7 +295,7 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
             max: 3000,
             divisions: 20,
             unit: 'km',
-            onChanged: _isDownloading
+            onChanged: isDownloading
                 ? null
                 : (value) {
                     setState(() => _standardRadiusKm = value);
@@ -368,7 +311,7 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
             divisions: 4,
             unit: '',
             formatValue: (v) => _getZoomLabel(v.round()),
-            onChanged: _isDownloading
+            onChanged: isDownloading
                 ? null
                 : (value) {
                     setState(() => _standardMaxZoom = value.round());
@@ -394,28 +337,35 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
           const SizedBox(height: 24),
 
           // Download Progress
-          if (_isDownloading) ...[
-            _buildProgressCard(theme),
-            const SizedBox(height: 16),
-          ],
-
-          // Download Button
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _isDownloading ? null : () => _startDownload(),
-              icon: const Icon(Icons.download),
-              label: Text(_i18n.t('download_tiles')),
-            ),
+          ValueListenableBuilder<TileDownloadProgress>(
+            valueListenable: _mapTileService.downloadProgressNotifier,
+            builder: (context, progress, child) {
+              if (progress.isDownloading) {
+                return Column(
+                  children: [
+                    _buildProgressCard(theme, progress),
+                    const SizedBox(height: 16),
+                  ],
+                );
+              }
+              return const SizedBox.shrink();
+            },
           ),
 
-          if (_downloadError != null) ...[
-            const SizedBox(height: 16),
-            Text(
-              _downloadError!,
-              style: TextStyle(color: theme.colorScheme.error),
-            ),
-          ],
+          // Download Button
+          ValueListenableBuilder<TileDownloadProgress>(
+            valueListenable: _mapTileService.downloadProgressNotifier,
+            builder: (context, progress, child) {
+              return SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: progress.isDownloading ? null : () => _startDownload(),
+                  icon: const Icon(Icons.download),
+                  label: Text(_i18n.t('download_tiles')),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -559,34 +509,17 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
                     size: 20, color: theme.colorScheme.onSurfaceVariant),
                 const SizedBox(width: 8),
                 Text(
-                  _i18n.t('cache_info'),
+                  _i18n.t('cache'),
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                if (_cacheInfoUpdating) ...[
-                  const SizedBox(width: 8),
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ],
                 const Spacer(),
-                if (_loadingCacheInfo)
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  IconButton(
-                    icon: const Icon(Icons.refresh, size: 20),
-                    onPressed: (_cacheInfoUpdating || _loadingCacheInfo)
-                        ? null
-                        : () => _loadCacheInfo(isManualRefresh: true),
-                    tooltip: _i18n.t('refresh'),
-                  ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 20),
+                  onPressed: () => _loadCacheInfo(isManualRefresh: true),
+                  tooltip: _i18n.t('refresh'),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -608,10 +541,88 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isDownloading
+                    ? null
+                    : () => _showDeleteConfirmation(context),
+                icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+                label: Text(
+                  _i18n.t('delete_cache'),
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: theme.colorScheme.error.withValues(alpha: 0.5)),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _showDeleteConfirmation(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('delete_cache')),
+        content: Text(_i18n.t('delete_cache_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deleteCache();
+    }
+  }
+
+  Future<void> _deleteCache() async {
+    try {
+      await _mapTileService.clearCache();
+
+      // Reset metrics to zero
+      setState(() {
+        _cacheSize = 0;
+        _tileCount = 0;
+      });
+
+      // Also clear the cached values in config
+      _configService.setNestedValue('mapCache.lastCacheSize', 0);
+      _configService.setNestedValue('mapCache.lastTileCount', 0);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('cache_deleted')),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildInfoItem(ThemeData theme, String label, String value) {
@@ -635,9 +646,8 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
     );
   }
 
-  Widget _buildProgressCard(ThemeData theme) {
-    final progress = _totalTiles > 0 ? _downloadedTiles / _totalTiles : 0.0;
-    final percentage = (progress * 100).toStringAsFixed(0);
+  Widget _buildProgressCard(ThemeData theme, TileDownloadProgress downloadProgress) {
+    final percentage = (downloadProgress.progress * 100).toStringAsFixed(0);
 
     return Card(
       child: Padding(
@@ -662,18 +672,18 @@ class _MapCacheSettingsPageState extends State<MapCacheSettingsPage> {
               ],
             ),
             const SizedBox(height: 12),
-            LinearProgressIndicator(value: progress),
+            LinearProgressIndicator(value: downloadProgress.progress),
             const SizedBox(height: 8),
             Text(
-              '$_downloadedTiles / $_totalTiles ${_i18n.t('tiles')}',
+              '${downloadProgress.downloadedTiles} / ${downloadProgress.totalTiles} ${_i18n.t('tiles')}',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            if (_skippedTiles > 0) ...[
+            if (downloadProgress.skippedTiles > 0) ...[
               const SizedBox(height: 4),
               Text(
-                '${_i18n.t('already_cached')}: $_skippedTiles',
+                '${_i18n.t('already_cached')}: ${downloadProgress.skippedTiles}',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

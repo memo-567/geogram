@@ -74,6 +74,9 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   String? _modelId;
   bool _isRecording = false;
   String? _wavRecordingPath;
+  bool _modelReady = false;
+  bool _modelLoading = false;
+  Future<void>? _modelLoadFuture;
 
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<double>? _downloadSubscription;
@@ -89,7 +92,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   void initState() {
     super.initState();
     _setupAnimations();
-    _checkModelStatus();
+    _prepareModel();
   }
 
   void _setupAnimations() {
@@ -106,7 +109,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
     _animationController.repeat(reverse: true);
   }
 
-  Future<void> _checkModelStatus() async {
+  Future<void> _prepareModel() async {
     try {
       await _modelManager.initialize();
       await _sttService.initialize();
@@ -114,49 +117,20 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       // Get preferred model
       _modelId = await _modelManager.getPreferredModel();
 
-      // Wait for any in-progress preload first
-      if (_sttService.isPreloading) {
-        LogService().log('TranscriptionDialog: Waiting for background preload...');
-        await _sttService.waitForPreload();
-      }
-
-      // Check if model is already loaded (from preload or previous use)
-      if (_sttService.isModelLoaded &&
-          _sttService.loadedModelId == _modelId) {
-        LogService()
-            .log('TranscriptionDialog: Model already loaded, starting recording');
+      // Model not loaded yet - check if downloaded
+      if (await _modelManager.isDownloaded(_modelId!)) {
         if (mounted) {
-          _startRecording();
+          setState(() => _state = _DialogState.idle);
         }
+        _startBackgroundModelLoad();
         return;
       }
 
-      // Model not loaded yet - check if downloaded
-      if (await _modelManager.isDownloaded(_modelId!)) {
-        // Model available on disk, load it
-        if (mounted) {
-          setState(() => _state = _DialogState.checkingModel);
-        }
-        final loaded = await _sttService.loadModel(_modelId!);
-        final warmed = loaded
-            ? await _sttService.ensureModelWarm(_modelId!)
-            : false;
-        if (loaded && warmed && mounted) {
-          _startRecording();
-        } else if (mounted) {
-          setState(() {
-            _state = _DialogState.error;
-            _errorMessage =
-                widget.i18n.t('transcription_failed'); // generic fallback
-          });
-        }
-      } else {
-        // Need to download model first
-        if (mounted) {
-          setState(() => _state = _DialogState.downloadingModel);
-        }
-        _startModelDownload();
+      // Need to download model first
+      if (mounted) {
+        setState(() => _state = _DialogState.downloadingModel);
       }
+      _startModelDownload();
     } catch (e) {
       LogService().log('TranscriptionDialog: Error checking model: $e');
       if (mounted) {
@@ -177,32 +151,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         }
       },
       onDone: () async {
-        // Model downloaded, load and warm it before recording
         if (mounted) {
-          setState(() => _state = _DialogState.checkingModel);
+          setState(() => _state = _DialogState.idle);
         }
-        try {
-          final loaded = await _sttService.loadModel(_modelId!);
-          final warmed = loaded
-              ? await _sttService.ensureModelWarm(_modelId!)
-              : false;
-          if (loaded && warmed && mounted) {
-            _startRecording();
-          } else if (mounted) {
-            setState(() {
-              _state = _DialogState.error;
-              _errorMessage = widget.i18n.t('transcription_failed');
-            });
-          }
-        } catch (e) {
-          LogService().log('TranscriptionDialog: Error preparing model: $e');
-          if (mounted) {
-            setState(() {
-              _state = _DialogState.error;
-              _errorMessage = e.toString();
-            });
-          }
-        }
+        _startBackgroundModelLoad();
       },
       onError: (e) {
         LogService().log('TranscriptionDialog: Download error: $e');
@@ -213,6 +165,87 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
           });
         }
       },
+    );
+  }
+
+  void _startBackgroundModelLoad() {
+    if (_modelId == null) {
+      return;
+    }
+
+    if (_sttService.isModelLoaded && _sttService.loadedModelId == _modelId) {
+      if (mounted) {
+        setState(() {
+          _modelReady = true;
+          _modelLoading = false;
+        });
+      }
+      return;
+    }
+
+    if (_modelLoadFuture != null) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _modelLoading = true;
+      });
+    } else {
+      _modelLoading = true;
+    }
+    _modelLoadFuture = () async {
+      try {
+        LogService().log('TranscriptionDialog: Background loading model $_modelId');
+        final loaded = await _sttService.loadModel(_modelId!);
+        final warmed = loaded
+            ? await _sttService.ensureModelWarm(_modelId!)
+            : false;
+        if (mounted) {
+          setState(() {
+            _modelReady = loaded && warmed;
+            _modelLoading = false;
+            if (!_modelReady) {
+              _state = _DialogState.error;
+              _errorMessage = widget.i18n.t('transcription_failed');
+            }
+          });
+        }
+      } catch (e) {
+        LogService().log('TranscriptionDialog: Background load error: $e');
+        if (mounted) {
+          setState(() {
+            _modelLoading = false;
+            _state = _DialogState.error;
+            _errorMessage = e.toString();
+          });
+        }
+      }
+    }();
+  }
+
+  Future<void> _handleStartRecording() async {
+    if (_modelReady) {
+      await _startRecording();
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.i18n.t('please_wait')),
+        content: Text(widget.i18n.t('checking_speech_model')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(widget.i18n.t('ok')),
+          ),
+        ],
+      ),
     );
   }
 
@@ -393,8 +426,11 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       _errorMessage = null;
       _downloadProgress = 0;
       _recordingDuration = Duration.zero;
+      _modelReady = false;
+      _modelLoading = false;
+      _modelLoadFuture = null;
     });
-    _checkModelStatus();
+    _prepareModel();
   }
 
   void _cancel() {
@@ -582,6 +618,16 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
         ),
+        if (_modelLoading) ...[
+          const SizedBox(height: 8),
+          Text(
+            widget.i18n.t('checking_speech_model'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ],
     );
   }
@@ -699,7 +745,7 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
             child: Text(widget.i18n.t('cancel')),
           ),
           FilledButton.icon(
-            onPressed: _startRecording,
+            onPressed: _handleStartRecording,
             icon: const Icon(Icons.mic),
             label: Text(widget.i18n.t('start')),
           ),

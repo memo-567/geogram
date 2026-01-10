@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'log_service.dart';
 import '../util/geolocation_utils.dart';
+import '../util/event_bus.dart';
 
 /// Represents a locked GPS position with metadata
 class LockedPosition {
@@ -121,6 +122,7 @@ class LocationProviderService extends ChangeNotifier {
   StreamSubscription<Position>? _positionSubscription;
   Timer? _periodicTimer;
   LockedPosition? _currentPosition;
+  DateTime? _lastUpdateTime;
   bool _isRunning = false;
   int _consumerCount = 0;
   String? _sharedFilePath;
@@ -404,6 +406,7 @@ class LocationProviderService extends ChangeNotifier {
           LogService().log('LocationProviderService: GPS stream error: $e');
         },
       );
+      // Mobile uses event-driven stream from Geolocator, no timer needed
     } else {
       // Desktop: Timer-based
       _periodicTimer = Timer.periodic(
@@ -434,6 +437,17 @@ class LocationProviderService extends ChangeNotifier {
         result = await GeolocationUtils.detectViaBrowser(requestPermission: false);
       } else {
         result = await GeolocationUtils.detectViaGPS(requestPermission: false);
+        if (result == null && (Platform.isAndroid || Platform.isIOS)) {
+          final lastKnown = await Geolocator.getLastKnownPosition();
+          if (lastKnown != null) {
+            result = GeolocationResult(
+              latitude: lastKnown.latitude,
+              longitude: lastKnown.longitude,
+              source: 'gps',
+              accuracy: lastKnown.accuracy,
+            );
+          }
+        }
         if (result == null) {
           // IP fallback
           result = await GeolocationUtils.detectViaIP();
@@ -451,8 +465,21 @@ class LocationProviderService extends ChangeNotifier {
 
   void _updatePosition(LockedPosition position) {
     _currentPosition = position;
+    _lastUpdateTime = DateTime.now();
     _positionController.add(position);
     _writeSharedPosition(position);
+
+    // Fire EventBus event for decoupled subscribers
+    EventBus().fire(PositionUpdatedEvent(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      altitude: position.altitude,
+      accuracy: position.accuracy,
+      speed: position.speed,
+      heading: position.heading,
+      source: position.source,
+    ));
+
     notifyListeners();
   }
 

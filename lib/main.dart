@@ -38,8 +38,6 @@ import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
 import 'services/group_sync_service.dart';
 import 'services/map_tile_service.dart';
-import 'bot/services/speech_to_text_service.dart';
-import 'bot/services/whisper_model_manager.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
@@ -68,6 +66,8 @@ import 'pages/console_browser_page.dart';
 import 'pages/market_browser_page.dart';
 import 'pages/inventory_browser_page.dart';
 import 'tracker/pages/tracker_browser_page.dart';
+import 'tracker/services/tracker_service.dart';
+import 'tracker/services/proximity_detection_service.dart';
 import 'pages/wallet_browser_page.dart';
 import 'pages/report_browser_page.dart';
 import 'pages/groups_browser_page.dart';
@@ -86,22 +86,6 @@ import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
-
-/// Start whisper model preload immediately (fire-and-forget)
-/// This runs in parallel with Phase 2 services to minimize wait time
-void _startWhisperPreload() {
-  SpeechToTextService().initialize().then((_) async {
-    final modelManager = WhisperModelManager();
-    await modelManager.initialize();
-    final preferredModel = await modelManager.getPreferredModel();
-
-    if (await modelManager.isDownloaded(preferredModel)) {
-      await SpeechToTextService().preloadModel(preferredModel);
-    }
-  }).catchError((e) {
-    LogService().log('SpeechToTextService: Background preload failed: $e');
-  });
-}
 
 void main() async {
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
@@ -332,12 +316,6 @@ void main() async {
   print('MAIN: Starting app (deferred services will initialize in background)');
   runApp(const GeogramApp());
 
-  // Start whisper preload IMMEDIATELY (fire-and-forget, parallel with Phase 2)
-  // This starts ~15 seconds earlier than waiting for Phase 2 services
-  if (!kIsWeb) {
-    _startWhisperPreload();
-  }
-
   // PHASE 2: Deferred services (initialize after first frame)
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -453,6 +431,23 @@ void main() async {
           await DevicesService().initialize();
           LogService().log('DevicesService initialized (deferred)');
         }
+      }
+
+      // Auto-start ProximityDetectionService if enabled
+      final proximityEnabled = ConfigService().getNestedValue('tracker.proximityTrackingEnabled') == true;
+      final proximityCollectionPath = ConfigService().getNestedValue('tracker.proximityCollectionPath');
+      LogService().log('ProximityDetectionService: Auto-start check - enabled=$proximityEnabled, path=$proximityCollectionPath');
+      if (proximityEnabled && proximityCollectionPath is String && proximityCollectionPath.isNotEmpty) {
+        try {
+          final profileCallsign = ProfileService().getProfile().callsign;
+          await TrackerService().initializeCollection(proximityCollectionPath, callsign: profileCallsign);
+          await ProximityDetectionService().start(TrackerService());
+          LogService().log('ProximityDetectionService auto-started successfully');
+        } catch (e) {
+          LogService().log('ProximityDetectionService: Failed to auto-start: $e');
+        }
+      } else {
+        LogService().log('ProximityDetectionService: Auto-start skipped (not enabled or no path)');
       }
 
       // Initialize NetworkMonitorService to track LAN/Internet connectivity

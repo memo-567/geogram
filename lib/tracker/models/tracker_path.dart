@@ -68,6 +68,63 @@ class PathBounds {
   }
 }
 
+/// Transport segment within a path recording.
+class TrackerPathSegment {
+  final String typeId;
+  final String startedAt;
+  final String? endedAt;
+  final int? startPointIndex;
+  final int? endPointIndex;
+  final double? maxSpeedMps;
+
+  const TrackerPathSegment({
+    required this.typeId,
+    required this.startedAt,
+    this.endedAt,
+    this.startPointIndex,
+    this.endPointIndex,
+    this.maxSpeedMps,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type_id': typeId,
+        'started_at': startedAt,
+        if (endedAt != null) 'ended_at': endedAt,
+        if (startPointIndex != null) 'start_point_index': startPointIndex,
+        if (endPointIndex != null) 'end_point_index': endPointIndex,
+        if (maxSpeedMps != null) 'max_speed_mps': maxSpeedMps,
+      };
+
+  factory TrackerPathSegment.fromJson(Map<String, dynamic> json) {
+    return TrackerPathSegment(
+      typeId: json['type_id'] as String,
+      startedAt: json['started_at'] as String,
+      endedAt: json['ended_at'] as String?,
+      startPointIndex: json['start_point_index'] as int?,
+      endPointIndex: json['end_point_index'] as int?,
+      maxSpeedMps: (json['max_speed_mps'] as num?)?.toDouble(),
+    );
+  }
+
+  TrackerPathSegment copyWith({
+    String? typeId,
+    String? startedAt,
+    String? endedAt,
+    int? startPointIndex,
+    int? endPointIndex,
+    double? maxSpeedMps,
+  }) {
+    return TrackerPathSegment(
+      typeId: typeId ?? this.typeId,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      startPointIndex: startPointIndex ?? this.startPointIndex,
+      endPointIndex: endPointIndex ?? this.endPointIndex,
+      maxSpeedMps: maxSpeedMps ?? this.maxSpeedMps,
+    );
+  }
+}
+
 /// A GPS path recording
 class TrackerPath {
   final String id;
@@ -85,9 +142,12 @@ class TrackerPath {
   final double? maxSpeedMps;
   final PathBounds? bounds;
   final List<String> tags;
+  final List<TrackerPathSegment> segments;
   final String ownerCallsign;
   final TrackerVisibility? visibility;
   final TrackerNostrMetadata? metadata;
+  final String? startCity;
+  final String? endCity;
 
   const TrackerPath({
     required this.id,
@@ -105,9 +165,12 @@ class TrackerPath {
     this.maxSpeedMps,
     this.bounds,
     this.tags = const [],
+    this.segments = const [],
     required this.ownerCallsign,
     this.visibility,
     this.metadata,
+    this.startCity,
+    this.endCity,
   });
 
   /// Parse started timestamp to DateTime
@@ -167,9 +230,13 @@ class TrackerPath {
         if (maxSpeedMps != null) 'max_speed_mps': maxSpeedMps,
         if (bounds != null) 'bounds': bounds!.toJson(),
         if (tags.isNotEmpty) 'tags': tags,
+        if (segments.isNotEmpty)
+          'segments': segments.map((segment) => segment.toJson()).toList(),
         'owner_callsign': ownerCallsign,
         if (visibility != null) 'visibility': visibility!.toJson(),
         if (metadata != null) 'metadata': metadata!.toJson(),
+        if (startCity != null) 'start_city': startCity,
+        if (endCity != null) 'end_city': endCity,
       };
 
   factory TrackerPath.fromJson(Map<String, dynamic> json) {
@@ -203,6 +270,11 @@ class TrackerPath {
               ?.map((t) => t as String)
               .toList() ??
           const [],
+      segments: (json['segments'] as List<dynamic>?)
+              ?.map((segment) =>
+                  TrackerPathSegment.fromJson(segment as Map<String, dynamic>))
+              .toList() ??
+          const [],
       ownerCallsign: json['owner_callsign'] as String,
       visibility: json['visibility'] != null
           ? TrackerVisibility.fromJson(
@@ -212,6 +284,8 @@ class TrackerPath {
           ? TrackerNostrMetadata.fromJson(
               json['metadata'] as Map<String, dynamic>)
           : null,
+      startCity: json['start_city'] as String?,
+      endCity: json['end_city'] as String?,
     );
   }
 
@@ -231,9 +305,12 @@ class TrackerPath {
     double? maxSpeedMps,
     PathBounds? bounds,
     List<String>? tags,
+    List<TrackerPathSegment>? segments,
     String? ownerCallsign,
     TrackerVisibility? visibility,
     TrackerNostrMetadata? metadata,
+    String? startCity,
+    String? endCity,
   }) {
     return TrackerPath(
       id: id ?? this.id,
@@ -251,9 +328,12 @@ class TrackerPath {
       maxSpeedMps: maxSpeedMps ?? this.maxSpeedMps,
       bounds: bounds ?? this.bounds,
       tags: tags ?? this.tags,
+      segments: segments ?? this.segments,
       ownerCallsign: ownerCallsign ?? this.ownerCallsign,
       visibility: visibility ?? this.visibility,
       metadata: metadata ?? this.metadata,
+      startCity: startCity ?? this.startCity,
+      endCity: endCity ?? this.endCity,
     );
   }
 }
