@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2026-01-10 - v1.7.1
+
+### Changes
+- UI: add settings drawer, improve Apps panel layout, and fix tracker icons
+
+
 ## 2026-01-10 - v1.7.0
 
 ### Changes

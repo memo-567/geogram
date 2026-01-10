@@ -1,0 +1,1 @@
+- UI: add settings drawer, improve Apps panel layout, and fix tracker icons

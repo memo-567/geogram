@@ -18,9 +18,9 @@ RepoType: git
 Repo: https://github.com/geograms/geogram.git
 
 Builds:
-  - versionName: 1.7.0
-    versionCode: 530
-    commit: v1.7.0
+  - versionName: 1.7.1
+    versionCode: 532
+    commit: v1.7.1
     output: build/app/outputs/flutter-apk/app-release.apk
     srclibs:
       - flutter@stable
@@ -40,5 +40,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.7.0
-CurrentVersionCode: 530
+CurrentVersion: 1.7.1
+CurrentVersionCode: 532
