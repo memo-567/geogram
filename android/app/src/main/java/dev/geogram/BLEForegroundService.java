@@ -68,6 +68,22 @@ public class BLEForegroundService extends Service {
         Log.d(TAG, "Foreground service start requested");
     }
 
+    /**
+     * Start the service from a boot receiver.
+     * On Android 15+ (API 35+), BOOT_COMPLETED receivers cannot start foreground services
+     * with dataSync type, so we pass a flag to use only connectedDevice type.
+     */
+    public static void startFromBoot(Context context) {
+        Intent intent = new Intent(context, BLEForegroundService.class);
+        intent.setAction("START_FROM_BOOT");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        Log.d(TAG, "Foreground service start requested from boot");
+    }
+
     public static void stop(Context context) {
         Intent intent = new Intent(context, BLEForegroundService.class);
         context.stopService(intent);
@@ -145,19 +161,33 @@ public class BLEForegroundService extends Service {
 
         Notification notification = createNotification();
 
+        // Check if this is a boot start - Android 15+ restricts dataSync from BOOT_COMPLETED
+        boolean isFromBoot = "START_FROM_BOOT".equals(action);
+
         // Use both connectedDevice (for BLE) and dataSync (for WebSocket/network) service types
         // This ensures network operations continue even when the display is off
         // Note: On Android 14+ (API 34+), CONNECTED_DEVICE type requires Bluetooth permissions
         // to be granted at runtime, not just declared in the manifest
+        // Note: On Android 15+ (API 35+), dataSync cannot be started from BOOT_COMPLETED
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             int serviceType;
             if (hasBluetoothPermissions()) {
-                // Full service with BLE support
-                serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
-                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-                Log.d(TAG, "Starting foreground service with CONNECTED_DEVICE|DATA_SYNC types");
+                // On Android 15+ from boot, only use connectedDevice (dataSync is restricted)
+                if (isFromBoot && Build.VERSION.SDK_INT >= 35) {
+                    serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+                    Log.d(TAG, "Starting foreground service from boot with CONNECTED_DEVICE type only (Android 15+ restriction)");
+                } else {
+                    // Full service with BLE and network support
+                    serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                    Log.d(TAG, "Starting foreground service with CONNECTED_DEVICE|DATA_SYNC types");
+                }
             } else {
-                // Fallback to dataSync only when Bluetooth permissions not granted
+                // No Bluetooth permissions - on Android 15+ from boot, we can't start at all
+                // since dataSync is also restricted. Log warning and try anyway.
+                if (isFromBoot && Build.VERSION.SDK_INT >= 35) {
+                    Log.w(TAG, "Boot start on Android 15+ without Bluetooth permissions - service may fail");
+                }
                 serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
                 Log.w(TAG, "Bluetooth permissions not granted, using DATA_SYNC type only");
             }

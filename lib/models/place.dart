@@ -29,6 +29,10 @@ class Place {
   final List<String> admins; // List of npubs
   final List<String> moderators; // List of npubs
 
+  // Visibility
+  final String visibility; // 'private', 'public', or 'restricted'
+  final List<String> allowedGroups; // Group names for restricted visibility
+
   // Metadata
   final String? metadataNpub;
   final String? signature;
@@ -61,6 +65,8 @@ class Place {
     this.histories = const {},
     this.admins = const [],
     this.moderators = const [],
+    this.visibility = 'private',
+    this.allowedGroups = const [],
     this.metadataNpub,
     this.signature,
     this.profileImage,
@@ -184,6 +190,8 @@ class Place {
         if (histories.isNotEmpty) 'histories': histories,
         if (admins.isNotEmpty) 'admins': admins,
         if (moderators.isNotEmpty) 'moderators': moderators,
+        'visibility': visibility,
+        if (allowedGroups.isNotEmpty) 'allowedGroups': allowedGroups,
         if (metadataNpub != null) 'metadataNpub': metadataNpub,
         if (signature != null) 'signature': signature,
         if (profileImage != null) 'profileImage': profileImage,
@@ -224,6 +232,10 @@ class Place {
       moderators: json['moderators'] != null
           ? List<String>.from(json['moderators'] as List)
           : const [],
+      visibility: json['visibility'] as String? ?? 'private',
+      allowedGroups: json['allowedGroups'] != null
+          ? List<String>.from(json['allowedGroups'] as List)
+          : const [],
       metadataNpub: json['metadataNpub'] as String?,
       signature: json['signature'] as String?,
       profileImage: json['profileImage'] as String?,
@@ -254,6 +266,8 @@ class Place {
     Map<String, String>? histories,
     List<String>? admins,
     List<String>? moderators,
+    String? visibility,
+    List<String>? allowedGroups,
     String? metadataNpub,
     String? signature,
     String? profileImage,
@@ -281,6 +295,8 @@ class Place {
       histories: histories ?? this.histories,
       admins: admins ?? this.admins,
       moderators: moderators ?? this.moderators,
+      visibility: visibility ?? this.visibility,
+      allowedGroups: allowedGroups ?? this.allowedGroups,
       metadataNpub: metadataNpub ?? this.metadataNpub,
       signature: signature ?? this.signature,
       profileImage: profileImage ?? this.profileImage,

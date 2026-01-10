@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.7.1+1
+version: 1.7.2+2
 
 environment:
   sdk: ^3.10.0
@@ -57,6 +57,7 @@ dependencies:
   geolocator: ^13.0.2
   geolocator_web: ^4.1.1       # Web support for geolocator (browser Geolocation API)
   permission_handler: ^11.3.1  # Explicit permission requests on Android
+  auto_start_flutter: ^0.2.0   # OEM-specific auto-start permission helper
   fs_shim: ^2.3.0              # Virtual file system abstraction (IndexedDB on web)
   shared_preferences: ^2.2.3   # Persist simple data (e.g., DM notification debug mode)
   dart_console: ^4.1.2       # Terminal input/output for CLI mode

@@ -419,7 +419,7 @@ class _PathDetailPageState extends State<PathDetailPage> {
         const SizedBox(height: 8),
         _buildShareButton(path),
         const SizedBox(height: 16),
-        _buildHighlightsCard(pathType),
+        _buildHighlightsCard(path, pathType),
         if (isActive || hasSegments) ...[
           const SizedBox(height: 16),
           _buildSegmentCard(path, isActive: isActive),
@@ -483,9 +483,10 @@ class _PathDetailPageState extends State<PathDetailPage> {
     );
   }
 
-  Widget _buildHighlightsCard(TrackerPathType? pathType) {
+  Widget _buildHighlightsCard(TrackerPath path, TrackerPathType? pathType) {
     final pointsCount = _points?.points.length ?? 0;
     final theme = Theme.of(context);
+    final userTags = path.userTags;
 
     return Card(
       child: Padding(
@@ -537,12 +538,12 @@ class _PathDetailPageState extends State<PathDetailPage> {
               ],
             ),
             // User tags
-            if (_path != null && _path!.userTags.isNotEmpty) ...[
+            if (userTags.isNotEmpty) ...[
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 4,
-                children: _path!.userTags.map((tag) {
+                children: userTags.map((tag) {
                   return Chip(
                     label: Text('#$tag'),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -1629,6 +1630,8 @@ class _PathDetailPageState extends State<PathDetailPage> {
     final lastIndex = path.segments.length - 1;
     final canDelete =
         segmentIndex > 0 && (!isActive || segmentIndex < lastIndex);
+    // Can split if segment has enough duration (at least 1 minute)
+    final canSplit = summary.duration.inMinutes >= 1;
 
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -1636,6 +1639,20 @@ class _PathDetailPageState extends State<PathDetailPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: Text(widget.i18n.t('tracker_edit_transport_type')),
+              onTap: () => Navigator.of(context).pop('edit_type'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_cut),
+              title: Text(widget.i18n.t('tracker_split_segment')),
+              enabled: canSplit,
+              onTap: canSplit
+                  ? () => Navigator.of(context).pop('split')
+                  : null,
+            ),
+            const Divider(),
             ListTile(
               leading: const Icon(Icons.delete_outline),
               title: Text(widget.i18n.t('delete')),
@@ -1657,11 +1674,329 @@ class _PathDetailPageState extends State<PathDetailPage> {
       ),
     );
 
-    if (selected == 'delete') {
+    if (selected == 'edit_type') {
+      await _editSegmentType(path, segmentIndex, summary);
+    } else if (selected == 'split') {
+      await _splitSegment(path, segmentIndex, summary);
+    } else if (selected == 'delete') {
       await _deleteSegment(path, segmentIndex);
     } else if (selected == 'merge_prev') {
       await _mergeWithPreviousSegment(path, segmentIndex);
     }
+  }
+
+  Future<void> _editSegmentType(
+    TrackerPath path,
+    int segmentIndex,
+    _SegmentSummary summary,
+  ) async {
+    final segment = path.segments[segmentIndex];
+    final currentType = TrackerPathType.fromId(segment.typeId);
+
+    final newType = await showModalBottomSheet<TrackerPathType>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                widget.i18n.t('tracker_select_transport_type'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            ...TrackerPathType.values.map((type) => ListTile(
+                  leading: Icon(
+                    type.icon,
+                    color: type == currentType
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                  title: Text(widget.i18n.t(type.translationKey)),
+                  selected: type == currentType,
+                  onTap: () => Navigator.of(context).pop(type),
+                )),
+          ],
+        ),
+      ),
+    );
+
+    if (newType == null || newType == currentType) return;
+
+    final segments = List<TrackerPathSegment>.from(path.segments);
+    segments[segmentIndex] = TrackerPathSegment(
+      typeId: newType.id,
+      startedAt: segment.startedAt,
+      endedAt: segment.endedAt,
+      startPointIndex: segment.startPointIndex,
+      endPointIndex: segment.endPointIndex,
+      maxSpeedMps: segment.maxSpeedMps,
+    );
+
+    // Update tags if this is the last segment
+    var updatedTags = path.tags;
+    if (segmentIndex == path.segments.length - 1) {
+      final typeTag = newType.toTag();
+      updatedTags = [
+        typeTag,
+        ...path.tags.where((tag) => !tag.startsWith('type:')),
+      ];
+    }
+
+    final updatedPath = path.copyWith(
+      segments: segments,
+      tags: updatedTags,
+    );
+
+    final saved = await widget.service.updatePath(
+      updatedPath,
+      year: widget.year,
+    );
+    if (saved != null && mounted) {
+      setState(() => _path = saved);
+    }
+  }
+
+  Future<void> _splitSegment(
+    TrackerPath path,
+    int segmentIndex,
+    _SegmentSummary summary,
+  ) async {
+    // Show dialog to select split time
+    final splitDuration = await _showSplitTimeDialog(summary.duration);
+    if (splitDuration == null || splitDuration.inSeconds <= 0) return;
+
+    // Calculate where to split in the segment
+    final segment = path.segments[segmentIndex];
+    final segmentEndTime = summary.endTime;
+    if (segmentEndTime == null) return;
+
+    // New segment will be at the end, so we subtract from the end time
+    final splitTime = segmentEndTime.subtract(splitDuration);
+
+    // Find the point index closest to the split time
+    final points = _points?.points ?? const <TrackerPoint>[];
+    final startIdx = segment.startPointIndex ?? 0;
+    final endIdx = segment.endPointIndex ?? (points.length - 1);
+
+    int? splitPointIndex;
+    for (var i = startIdx; i <= endIdx && i < points.length; i++) {
+      final pointTime = points[i].timestampDateTime;
+      if (pointTime.isAfter(splitTime) || pointTime.isAtSameMomentAs(splitTime)) {
+        splitPointIndex = i;
+        break;
+      }
+    }
+
+    // If we couldn't find a good split point, use time-based split
+    if (splitPointIndex == null || splitPointIndex <= startIdx) {
+      splitPointIndex = ((startIdx + endIdx) / 2).round();
+    }
+
+    // Ask for new segment type
+    final newType = await showModalBottomSheet<TrackerPathType>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                widget.i18n.t('tracker_select_new_segment_type'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            ...TrackerPathType.values.map((type) => ListTile(
+                  leading: Icon(type.icon),
+                  title: Text(widget.i18n.t(type.translationKey)),
+                  onTap: () => Navigator.of(context).pop(type),
+                )),
+          ],
+        ),
+      ),
+    );
+
+    if (newType == null || !mounted) return;
+
+    // Create the new segments
+    final segments = List<TrackerPathSegment>.from(path.segments);
+
+    // Update the original segment to end at the split point
+    final originalSegment = segments[segmentIndex];
+    segments[segmentIndex] = TrackerPathSegment(
+      typeId: originalSegment.typeId,
+      startedAt: originalSegment.startedAt,
+      endedAt: splitTime.toUtc().toIso8601String(),
+      startPointIndex: originalSegment.startPointIndex,
+      endPointIndex: splitPointIndex > 0 ? splitPointIndex - 1 : splitPointIndex,
+      maxSpeedMps: null, // Will be recalculated
+    );
+
+    // Create the new segment starting from the split point
+    final newSegment = TrackerPathSegment(
+      typeId: newType.id,
+      startedAt: splitTime.toUtc().toIso8601String(),
+      endedAt: originalSegment.endedAt,
+      startPointIndex: splitPointIndex,
+      endPointIndex: originalSegment.endPointIndex,
+      maxSpeedMps: null, // Will be recalculated
+    );
+
+    // Insert the new segment after the current one
+    segments.insert(segmentIndex + 1, newSegment);
+
+    // Update tags if this was the last segment (now the new segment is last)
+    var updatedTags = path.tags;
+    if (segmentIndex == path.segments.length - 1) {
+      final typeTag = newType.toTag();
+      updatedTags = [
+        typeTag,
+        ...path.tags.where((tag) => !tag.startsWith('type:')),
+      ];
+    }
+
+    final updatedPath = path.copyWith(
+      segments: segments,
+      tags: updatedTags,
+    );
+
+    final saved = await widget.service.updatePath(
+      updatedPath,
+      year: widget.year,
+    );
+    if (saved != null && mounted) {
+      setState(() => _path = saved);
+      // Recalculate max speeds for the new segments
+      await _forceRecalculateMaxSpeeds();
+    }
+  }
+
+  Future<Duration?> _showSplitTimeDialog(Duration segmentDuration) async {
+    int amount = 10;
+    String unit = 'minutes';
+
+    return showDialog<Duration>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // Calculate max allowed value based on segment duration and unit
+          int maxAmount;
+          switch (unit) {
+            case 'minutes':
+              maxAmount = segmentDuration.inMinutes - 1;
+              break;
+            case 'hours':
+              maxAmount = segmentDuration.inHours - 1;
+              if (maxAmount < 1) maxAmount = 1;
+              break;
+            case 'days':
+              maxAmount = segmentDuration.inDays - 1;
+              if (maxAmount < 1) maxAmount = 1;
+              break;
+            default:
+              maxAmount = segmentDuration.inMinutes - 1;
+          }
+          if (amount > maxAmount) amount = maxAmount;
+          if (amount < 1) amount = 1;
+
+          return AlertDialog(
+            title: Text(widget.i18n.t('tracker_split_segment')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.i18n.t('tracker_split_segment_description')),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                        controller: TextEditingController(text: amount.toString()),
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: widget.i18n.t('tracker_amount'),
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: (value) {
+                          final parsed = int.tryParse(value);
+                          if (parsed != null && parsed > 0) {
+                            setDialogState(() => amount = parsed);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 3,
+                      child: DropdownButtonFormField<String>(
+                        value: unit,
+                        decoration: InputDecoration(
+                          labelText: widget.i18n.t('tracker_unit'),
+                          border: const OutlineInputBorder(),
+                        ),
+                        items: [
+                          DropdownMenuItem(
+                            value: 'minutes',
+                            child: Text(widget.i18n.t('tracker_minutes')),
+                          ),
+                          DropdownMenuItem(
+                            value: 'hours',
+                            child: Text(widget.i18n.t('tracker_hours')),
+                          ),
+                          if (segmentDuration.inDays >= 1)
+                            DropdownMenuItem(
+                              value: 'days',
+                              child: Text(widget.i18n.t('tracker_days')),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setDialogState(() => unit = value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.i18n.t('tracker_split_from_end_hint'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(widget.i18n.t('cancel')),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Duration result;
+                  switch (unit) {
+                    case 'hours':
+                      result = Duration(hours: amount);
+                      break;
+                    case 'days':
+                      result = Duration(days: amount);
+                      break;
+                    default:
+                      result = Duration(minutes: amount);
+                  }
+                  Navigator.of(context).pop(result);
+                },
+                child: Text(widget.i18n.t('tracker_split')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _deleteSegment(TrackerPath path, int segmentIndex) async {

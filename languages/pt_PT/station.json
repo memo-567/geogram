@@ -10,7 +10,7 @@
   "station_profile": "Perfil de Estação",
   "station_required_for_media": "Nenhuma estação configurada para media pública do evento.",
   "station_send_failed": "Falha ao enviar para a estação",
-  "station_settings": "Configurações do Relay",
+  "station_settings": "Estação",
   "station_status": "Estado da Estação",
   "station_status_desc": "Notificar sobre alterações de conexão da estação",
   "station_system": "Sistema de Relés",

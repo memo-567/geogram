@@ -31,6 +31,8 @@ class PlaceParser {
     String? hours;
     final admins = <String>[];
     final moderators = <String>[];
+    String visibility = 'private';
+    final allowedGroups = <String>[];
     String? metadataNpub;
     String? signature;
     String? profileImage;
@@ -91,6 +93,14 @@ class PlaceParser {
       } else if (trimmed.startsWith('MODERATORS:')) {
         final modList = trimmed.substring(11).trim().split(',');
         moderators.addAll(modList.map((m) => m.trim()).where((m) => m.isNotEmpty));
+      } else if (trimmed.startsWith('VISIBILITY:')) {
+        final vis = trimmed.substring(11).trim().toLowerCase();
+        if (vis == 'public' || vis == 'private' || vis == 'restricted') {
+          visibility = vis;
+        }
+      } else if (trimmed.startsWith('ALLOWED_GROUPS:')) {
+        final groupList = trimmed.substring(15).trim().split(',');
+        allowedGroups.addAll(groupList.map((g) => g.trim()).where((g) => g.isNotEmpty));
       }
       // Parse NOSTR metadata
       else if (trimmed.startsWith('--> npub:')) {
@@ -225,6 +235,8 @@ class PlaceParser {
       histories: histories,
       admins: admins,
       moderators: moderators,
+      visibility: visibility,
+      allowedGroups: allowedGroups,
       metadataNpub: metadataNpub,
       signature: signature,
       profileImage: profileImage,

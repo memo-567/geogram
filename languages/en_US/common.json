@@ -1362,7 +1362,7 @@
   "create": "Create",
   "station_profile": "Station Profile",
   "station_dashboard": "Station Dashboard",
-  "station_settings": "Station Settings",
+  "station_settings": "Station",
   "configure_station_server": "Configure your station server",
   "dashboard": "Dashboard",
   "welcome_to_geogram": "Welcome to Geogram",
@@ -1771,6 +1771,8 @@
 
   "place_type_beach": "Beach",
   "place_type_cafe": "Café",
+  "place_type_campsite": "Campsite",
+  "place_type_caravan-park": "Caravan Park",
   "place_type_church": "Church",
   "place_type_cinema": "Cinema",
   "place_type_firefighters": "Fire Station",
@@ -1779,11 +1781,13 @@
   "place_type_grocery": "Grocery",
   "place_type_hospital": "Hospital",
   "place_type_hotel": "Hotel",
+  "place_type_house": "House",
   "place_type_landmark": "Landmark",
   "place_type_library": "Library",
   "place_type_market": "Market",
   "place_type_monument": "Monument",
   "place_type_museum": "Museum",
+  "place_type_overnight-parking": "Overnight Parking",
   "place_type_park": "Park",
   "place_type_pharmacy": "Pharmacy",
   "place_type_police": "Police Station",
@@ -1794,6 +1798,7 @@
   "place_type_theater": "Theater",
   "place_type_veterinary": "Veterinary",
   "place_type_viewpoint": "Viewpoint",
+  "place_type_wild-camping": "Wild Camping",
   "place_type_other": "Other",
 
   "bot": "Bot",
@@ -2035,5 +2040,8 @@
   "neighborhood": "Neighborhood",
   "street": "Street",
   "detail": "Detail",
-  "location_required": "Location required to download tiles"
+  "location_required": "Location required to download tiles",
+
+  "place_groups_access": "Groups with Access",
+  "select_groups_for_restricted": "Please select at least one group for restricted visibility"
 }

@@ -1271,7 +1271,7 @@
   "create": "Criar",
   "station_profile": "Perfil de Estação",
   "station_dashboard": "Painel do Relay",
-  "station_settings": "Configurações do Relay",
+  "station_settings": "Estação",
   "configure_station_server": "Configure o seu servidor de estação",
   "dashboard": "Painel",
   "welcome_to_geogram": "Bem-vindo ao Geogram",
@@ -1718,6 +1718,8 @@
 
   "place_type_beach": "Praia",
   "place_type_cafe": "Café",
+  "place_type_campsite": "Parque de Campismo",
+  "place_type_caravan-park": "Parque de Caravanas",
   "place_type_church": "Igreja",
   "place_type_cinema": "Cinema",
   "place_type_firefighters": "Bombeiros",
@@ -1726,11 +1728,13 @@
   "place_type_grocery": "Mercearia",
   "place_type_hospital": "Hospital",
   "place_type_hotel": "Hotel",
+  "place_type_house": "Casa",
   "place_type_landmark": "Marco",
   "place_type_library": "Biblioteca",
   "place_type_market": "Mercado",
   "place_type_monument": "Monumento",
   "place_type_museum": "Museu",
+  "place_type_overnight-parking": "Pernoita",
   "place_type_park": "Parque",
   "place_type_pharmacy": "Farmácia",
   "place_type_police": "Polícia",
@@ -1741,6 +1745,7 @@
   "place_type_theater": "Teatro",
   "place_type_veterinary": "Veterinário",
   "place_type_viewpoint": "Miradouro",
+  "place_type_wild-camping": "Campismo Selvagem",
   "place_type_other": "Outro",
 
   "bot": "Bot",
@@ -1982,5 +1987,8 @@
   "neighborhood": "Bairro",
   "street": "Rua",
   "detail": "Detalhe",
-  "location_required": "Localização necessária para descarregar tiles"
+  "location_required": "Localização necessária para descarregar tiles",
+
+  "place_groups_access": "Grupos com Acesso",
+  "select_groups_for_restricted": "Por favor selecione pelo menos um grupo para visibilidade restrita"
 }

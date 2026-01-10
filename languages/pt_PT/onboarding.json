@@ -1,6 +1,8 @@
 {
   "onboarding_continue": "Continuar",
   "onboarding_intro_description": "O Geogram é uma app de comunicação offline-first que funciona sem internet. Usa rede mesh Bluetooth, encriptação NOSTR e integração rádio para manter-te ligado em qualquer lugar.",
+  "onboarding_permission_autostart": "Início Automático",
+  "onboarding_permission_autostart_short": "Iniciar automaticamente ao ligar o dispositivo",
   "onboarding_permission_bluetooth": "Bluetooth",
   "onboarding_permission_bluetooth_short": "Para descobrir dispositivos Geogram próximos",
   "onboarding_permission_install": "Instalar Atualizações",

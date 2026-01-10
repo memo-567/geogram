@@ -13,7 +13,6 @@ import '../services/station_node_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import 'station_setup_root_page.dart';
-import 'station_setup_node_page.dart';
 import 'station_settings_page.dart';
 import 'station_logs_page.dart';
 import 'station_authorities_page.dart';
@@ -83,7 +82,7 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
       appBar: AppBar(title: Text('Station')),
       body: Center(
         child: Container(
-          constraints: BoxConstraints(maxWidth: 500),
+          constraints: BoxConstraints(maxWidth: 400),
           padding: EdgeInsets.all(24),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -96,69 +95,21 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
               ),
               SizedBox(height: 8),
               Text(
-                'Turn this device into a station node to help connect other devices across networks.',
+                'Turn this device into a station to help connect other devices across networks.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[600]),
               ),
               SizedBox(height: 32),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: _buildSetupCard(
-                      icon: Icons.hub,
-                      title: 'Root Station',
-                      description: 'Create a new station network. You become the network owner.',
-                      buttonText: 'Create Network',
-                      onTap: _createRootRelay,
-                    ),
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: _buildSetupCard(
-                      icon: Icons.device_hub,
-                      title: 'Node Station',
-                      description: 'Join an existing station network. Extend network coverage.',
-                      buttonText: 'Join Network',
-                      onTap: _joinAsNode,
-                    ),
-                  ),
-                ],
+              FilledButton.icon(
+                onPressed: _createRootRelay,
+                icon: Icon(Icons.hub),
+                label: Text('Create Station'),
+                style: FilledButton.styleFrom(
+                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                ),
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSetupCard({
-    required IconData icon,
-    required String title,
-    required String description,
-    required String buttonText,
-    required VoidCallback onTap,
-  }) {
-    return Card(
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Icon(icon, size: 48, color: Colors.white),
-            SizedBox(height: 12),
-            Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            SizedBox(height: 8),
-            Text(
-              description,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-            SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: onTap,
-              child: Text(buttonText),
-            ),
-          ],
         ),
       ),
     );
@@ -648,15 +599,6 @@ class _RelayDashboardPageState extends State<StationDashboardPage> {
   void _createRootRelay() async {
     final result = await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => StationSetupRootPage()),
-    );
-    if (result == true) {
-      setState(() => _stationNode = _stationNodeService.stationNode);
-    }
-  }
-
-  void _joinAsNode() async {
-    final result = await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => StationSetupNodePage()),
     );
     if (result == true) {
       setState(() => _stationNode = _stationNodeService.stationNode);

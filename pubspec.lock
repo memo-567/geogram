@@ -49,6 +49,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.1.25"
+  auto_start_flutter:
+    dependency: "direct main"
+    description:
+      name: auto_start_flutter
+      sha256: aaf71e05e5de1b3cb24f5db4fa27ce245f5e2d0b01ad45d4fd3ca9d105a60801
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   bech32:
     dependency: "direct main"
     description:

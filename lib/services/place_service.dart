@@ -158,6 +158,12 @@ class PlaceService {
       buffer.writeln('MODERATORS: ${place.moderators.join(', ')}');
     }
 
+    // Visibility
+    buffer.writeln('VISIBILITY: ${place.visibility}');
+    if (place.visibility == 'restricted' && place.allowedGroups.isNotEmpty) {
+      buffer.writeln('ALLOWED_GROUPS: ${place.allowedGroups.join(', ')}');
+    }
+
     buffer.writeln();
 
     // Description

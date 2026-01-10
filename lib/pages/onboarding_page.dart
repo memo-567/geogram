@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'package:auto_start_flutter/auto_start_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -22,6 +23,28 @@ class OnboardingPage extends StatefulWidget {
 class _OnboardingPageState extends State<OnboardingPage> {
   final I18nService _i18n = I18nService();
   bool _isRequestingPermissions = false;
+  bool _hasAutoStartSettings = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAutoStartAvailability();
+  }
+
+  /// Check if this device has OEM-specific auto-start settings (Xiaomi, Huawei, etc.)
+  Future<void> _checkAutoStartAvailability() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+
+    try {
+      final available = await isAutoStartAvailable ?? false;
+      if (mounted) {
+        setState(() => _hasAutoStartSettings = available);
+      }
+      LogService().log('Onboarding: Auto-start settings available: $available');
+    } catch (e) {
+      LogService().log('Onboarding: Error checking auto-start availability: $e');
+    }
+  }
 
   Future<void> _requestPermissionsAndContinue() async {
     if (_isRequestingPermissions) return;
@@ -71,6 +94,18 @@ class _OnboardingPageState extends State<OnboardingPage> {
     } catch (e) {
       LogService().log('Onboarding: Error requesting notification permission: $e');
       // Continue even if notification permission request fails
+    }
+
+    // Open auto-start settings for OEM devices that require it (Xiaomi, Huawei, etc.)
+    try {
+      if (_hasAutoStartSettings) {
+        LogService().log('Onboarding: Opening OEM auto-start settings...');
+        await getAutoStartPermission();
+        LogService().log('Onboarding: Auto-start settings opened');
+      }
+    } catch (e) {
+      LogService().log('Onboarding: Error opening auto-start settings: $e');
+      // Continue even if auto-start settings fail to open
     }
 
     // Complete onboarding regardless of permission result
@@ -194,6 +229,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   Icons.notifications_outlined,
                   'Notifications',
                   'Receive alerts for new messages',
+                ),
+
+              // Auto-start permission (only shown for OEM devices that need it)
+              if (_hasAutoStartSettings)
+                _buildPermissionItem(
+                  theme,
+                  Icons.restart_alt,
+                  _i18n.t('onboarding_permission_autostart'),
+                  _i18n.t('onboarding_permission_autostart_short'),
                 ),
 
               // Install permission

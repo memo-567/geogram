@@ -287,5 +287,18 @@
   "tracker_share_copied": "Image copied to clipboard",
   "tracker_share_saved": "Image saved",
   "tracker_share_not_supported": "Share not supported on this platform",
-  "tracker_tracked_with": "Tracked with Geogram"
+  "tracker_tracked_with": "Tracked with Geogram",
+
+  "tracker_edit_transport_type": "Edit Transport Type",
+  "tracker_select_transport_type": "Select Transport Type",
+  "tracker_split_segment": "Split Segment",
+  "tracker_select_new_segment_type": "Select Type for New Segment",
+  "tracker_split_segment_description": "Extract time from the end of this segment to create a new one.",
+  "tracker_split_from_end_hint": "The specified time will be taken from the end of the segment",
+  "tracker_amount": "Amount",
+  "tracker_unit": "Unit",
+  "tracker_minutes": "Minutes",
+  "tracker_hours": "Hours",
+  "tracker_days": "Days",
+  "tracker_split": "Split"
 }

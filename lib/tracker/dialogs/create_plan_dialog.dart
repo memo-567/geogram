@@ -6,7 +6,7 @@ import '../models/trackable_type.dart';
 import '../services/tracker_service.dart';
 import '../../services/i18n_service.dart';
 
-/// Dialog for creating a new fitness plan with goals
+/// Bottom sheet for creating a new fitness plan with goals
 class CreatePlanDialog extends StatefulWidget {
   final TrackerService service;
   final I18nService i18n;
@@ -17,14 +17,16 @@ class CreatePlanDialog extends StatefulWidget {
     required this.i18n,
   });
 
-  /// Show the create plan dialog
+  /// Show the create plan bottom sheet
   static Future<bool?> show(
     BuildContext context, {
     required TrackerService service,
     required I18nService i18n,
   }) {
-    return showDialog<bool>(
+    return showModalBottomSheet<bool>(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
       builder: (context) => CreatePlanDialog(
         service: service,
         i18n: i18n,
@@ -118,118 +120,189 @@ class _CreatePlanDialogState extends State<CreatePlanDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.i18n.t('tracker_create_plan')),
-      content: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.9,
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Title field
-                TextFormField(
-                  controller: _titleController,
-                  decoration: InputDecoration(
-                    labelText: widget.i18n.t('tracker_plan_title'),
-                    border: const OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return widget.i18n.t('tracker_required_field');
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
+    final theme = Theme.of(context);
 
-                // Description field
-                TextFormField(
-                  controller: _descriptionController,
-                  decoration: InputDecoration(
-                    labelText: widget.i18n.t('tracker_plan_description'),
-                    border: const OutlineInputBorder(),
-                  ),
-                  maxLines: 2,
-                ),
-                const SizedBox(height: 16),
-
-                // Date selection
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildDateField(
-                        label: widget.i18n.t('tracker_start_date'),
-                        date: _startDate,
-                        onTap: _selectStartDate,
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (context, scrollController) => Container(
+        decoration: BoxDecoration(
+          color: theme.scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(
+          children: [
+            // Handle bar and header
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              child: Column(
+                children: [
+                  // Drag handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildDateField(
-                        label: widget.i18n.t('tracker_end_date'),
-                        date: _endDate,
-                        onTap: _selectEndDate,
-                        onClear: _endDate != null ? _clearEndDate : null,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-
-                // Goals section
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      widget.i18n.t('tracker_goals'),
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.add_circle),
-                      onPressed: _addGoal,
-                      tooltip: widget.i18n.t('tracker_add_goal'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // Goals list
-                ..._goals.asMap().entries.map((entry) =>
-                    _buildGoalCard(entry.key, entry.value)),
-
-                if (_goals.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      widget.i18n.t('tracker_at_least_one_goal'),
-                      style: TextStyle(color: Colors.grey[600]),
-                      textAlign: TextAlign.center,
-                    ),
                   ),
-              ],
+                  const SizedBox(height: 16),
+                  // Title row with close button
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.i18n.t('tracker_create_plan'),
+                          style: theme.textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(context).pop(false),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
+            const Divider(),
+            // Scrollable content
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Title field
+                        TextFormField(
+                          controller: _titleController,
+                          decoration: InputDecoration(
+                            labelText: widget.i18n.t('tracker_plan_title'),
+                            border: const OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return widget.i18n.t('tracker_required_field');
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Description field
+                        TextFormField(
+                          controller: _descriptionController,
+                          decoration: InputDecoration(
+                            labelText: widget.i18n.t('tracker_plan_description'),
+                            border: const OutlineInputBorder(),
+                          ),
+                          maxLines: 2,
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Date selection
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildDateField(
+                                label: widget.i18n.t('tracker_start_date'),
+                                date: _startDate,
+                                onTap: _selectStartDate,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _buildDateField(
+                                label: widget.i18n.t('tracker_end_date'),
+                                date: _endDate,
+                                onTap: _selectEndDate,
+                                onClear: _endDate != null ? _clearEndDate : null,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Goals section
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              widget.i18n.t('tracker_goals'),
+                              style: theme.textTheme.titleMedium,
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle),
+                              onPressed: _addGoal,
+                              tooltip: widget.i18n.t('tracker_add_goal'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+
+                        // Goals list
+                        ..._goals.asMap().entries.map((entry) =>
+                            _buildGoalCard(entry.key, entry.value)),
+
+                        if (_goals.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              widget.i18n.t('tracker_at_least_one_goal'),
+                              style: TextStyle(color: Colors.grey[600]),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Bottom action buttons
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.scaffoldBackgroundColor,
+                border: Border(
+                  top: BorderSide(color: theme.dividerColor),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+                      child: Text(widget.i18n.t('cancel')),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _saving ? null : _save,
+                      child: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(widget.i18n.t('save')),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: Text(widget.i18n.t('cancel')),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: _saving
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Text(widget.i18n.t('save')),
-        ),
-      ],
     );
   }
 

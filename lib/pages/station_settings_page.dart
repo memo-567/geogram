@@ -169,14 +169,14 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
     final node = _stationNodeService.stationNode;
     if (node == null) {
       return Scaffold(
-        appBar: AppBar(title: Text('Station Settings')),
+        appBar: AppBar(title: Text('Station')),
         body: Center(child: Text('No station configured')),
       );
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Station Settings'),
+        title: Text('Station'),
         actions: [
           if (_hasChanges)
             TextButton(

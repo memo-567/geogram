@@ -161,16 +161,20 @@ class _ProximityDetailPageState extends State<ProximityDetailPage> {
         color: theme.scaffoldBackgroundColor,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      child: Column(
+      child: ListView(
+        controller: scrollController,
+        padding: const EdgeInsets.only(bottom: 24),
         children: [
           // Handle bar
-          Container(
-            margin: const EdgeInsets.symmetric(vertical: 12),
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey[400],
-              borderRadius: BorderRadius.circular(2),
+          Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[400],
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
           // Header
@@ -255,29 +259,21 @@ class _ProximityDetailPageState extends State<ProximityDetailPage> {
             ),
           ),
           const SizedBox(height: 8),
-          // Contact list
-          Expanded(
-            child: ListView.builder(
-              controller: scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: cluster.entries.length,
-              itemBuilder: (context, index) {
-                final entry = cluster.entries[index];
-                final time = entry.timestampDateTime.toLocal();
-                final duration = entry.durationSeconds ?? 60;
+          // Contact list items
+          ...cluster.entries.map((entry) {
+            final time = entry.timestampDateTime.toLocal();
+            final duration = entry.durationSeconds ?? 60;
 
-                return ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.circle, size: 8),
-                  title: Text(dateFormat.format(time)),
-                  trailing: Text(
-                    _formatDuration(duration),
-                    style: theme.textTheme.bodySmall,
-                  ),
-                );
-              },
-            ),
-          ),
+            return ListTile(
+              dense: true,
+              leading: const Icon(Icons.circle, size: 8),
+              title: Text(dateFormat.format(time)),
+              trailing: Text(
+                _formatDuration(duration),
+                style: theme.textTheme.bodySmall,
+              ),
+            );
+          }),
         ],
       ),
     );

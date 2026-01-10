@@ -10,7 +10,7 @@
   "station_profile": "Station Profile",
   "station_required_for_media": "No station configured for public event media.",
   "station_send_failed": "Failed to send to station",
-  "station_settings": "Station Settings",
+  "station_settings": "Station",
   "station_status": "Station Status",
   "station_status_desc": "Notify about station connection changes",
   "station_system": "Station System",

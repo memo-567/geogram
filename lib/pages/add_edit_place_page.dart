@@ -17,9 +17,20 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../services/location_provider_service.dart';
+import '../services/collection_service.dart';
+import '../services/groups_service.dart';
+import '../models/group.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
 import '../widgets/transcribe_button_widget.dart';
+
+/// Helper class for group options in visibility selector
+class _GroupOption {
+  final Group group;
+  final String? collectionTitle;
+
+  const _GroupOption(this.group, this.collectionTitle);
+}
 
 /// Full-page form for adding or editing a place
 class AddEditPlacePage extends StatefulWidget {
@@ -63,6 +74,12 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   bool _isSaving = false;
   bool _advancedOptionsExpanded = false;
 
+  // Visibility controls
+  String _visibility = 'private';
+  final Set<String> _selectedGroups = {};
+  final List<_GroupOption> _availableGroups = [];
+  bool _isLoadingGroups = true;
+
   // GPS preload state - uses shared LocationProviderService for efficient GPS sharing
   LockedPosition? _preloadedGPSLocation;
   VoidCallback? _disposeLocationConsumer;
@@ -82,6 +99,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   final List<String> _commonTypes = [
     'beach',
     'cafe',
+    'campsite',
+    'caravan-park',
     'church',
     'cinema',
     'firefighters',
@@ -96,6 +115,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'market',
     'monument',
     'museum',
+    'overnight-parking',
     'park',
     'pharmacy',
     'police',
@@ -106,6 +126,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'theater',
     'veterinary',
     'viewpoint',
+    'wild-camping',
     'other',
   ];
 
@@ -115,6 +136,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     _initializeControllers();
     _loadExistingImages();
     _startGPSPreload();
+    _loadGroups();
   }
 
   /// Start GPS acquisition early so it's ready when user opens map picker
@@ -178,10 +200,12 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     _foundedController = TextEditingController(text: place?.founded ?? '');
     _hoursController = TextEditingController(text: place?.hours ?? '');
 
-    // Load existing translations when editing
+    // Load existing translations and visibility when editing
     if (place != null) {
       _descriptions = Map<String, String>.from(place.descriptions);
       _histories = Map<String, String>.from(place.histories);
+      _visibility = place.visibility;
+      _selectedGroups.addAll(place.allowedGroups);
 
       // If no translations exist, use primary description/history
       if (_descriptions.isNotEmpty) {
@@ -258,6 +282,53 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       _histories[_historyLanguage] = current;
     }
     return _histories.keys.where((k) => _histories[k]?.isNotEmpty ?? false).toList();
+  }
+
+  /// Load available groups for restricted visibility
+  Future<void> _loadGroups() async {
+    try {
+      final collections = await CollectionService().loadCollections();
+      final groupCollections = collections
+          .where((c) => c.type == 'groups' && c.storagePath != null)
+          .toList();
+
+      _availableGroups.clear();
+      final groupsService = GroupsService();
+      final profile = _profileService.getProfile();
+
+      for (final collection in groupCollections) {
+        await groupsService.initializeCollection(
+          collection.storagePath!,
+          creatorNpub: profile.npub,
+        );
+        final groups = await groupsService.loadGroups();
+        for (final group in groups) {
+          if (!group.isActive) continue;
+          _availableGroups.add(_GroupOption(group, collection.title));
+        }
+      }
+
+      _availableGroups.sort((a, b) {
+        final titleA = _groupLabel(a).toLowerCase();
+        final titleB = _groupLabel(b).toLowerCase();
+        return titleA.compareTo(titleB);
+      });
+    } catch (e) {
+      LogService().log('Error loading groups: $e');
+      _availableGroups.clear();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isLoadingGroups = false;
+    });
+  }
+
+  String _groupLabel(_GroupOption option) {
+    if (option.group.title.isNotEmpty) {
+      return option.group.title;
+    }
+    return option.group.name;
   }
 
   /// Load existing images from the place folder
@@ -526,6 +597,17 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       return;
     }
 
+    // Validate restricted visibility has groups selected
+    if (_visibility == 'restricted' && _selectedGroups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('select_groups_for_restricted')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
 
     try {
@@ -589,6 +671,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         descriptions: Map<String, String>.from(_descriptions), // All translations
         history: primaryHistory,
         histories: Map<String, String>.from(_histories), // All translations
+        visibility: _visibility,
+        allowedGroups: _selectedGroups.toList(),
       );
 
       final placeFolderPath = kIsWeb ? null : await _placeService.getPlaceFolderPath(draftPlace);
@@ -1165,6 +1249,108 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                 ),
               const SizedBox(height: 24),
             ],
+
+            // Visibility Section
+            Text(
+              _i18n.t('visibility'),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _visibility,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                helperText: _i18n.t('visibility_help'),
+              ),
+              items: [
+                DropdownMenuItem(
+                  value: 'public',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.public, size: 20),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('visibility_public')),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'private',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.lock, size: 20),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('visibility_private')),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'restricted',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.group, size: 20),
+                      const SizedBox(width: 8),
+                      Text(_i18n.t('visibility_restricted')),
+                    ],
+                  ),
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() {
+                    _visibility = value;
+                  });
+                }
+              },
+            ),
+            if (_visibility == 'restricted') ...[
+              const SizedBox(height: 16),
+              Text(
+                _i18n.t('place_groups_access'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_isLoadingGroups)
+                const LinearProgressIndicator()
+              else if (_availableGroups.isEmpty)
+                Text(
+                  _i18n.t('no_groups_available'),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                )
+              else
+                ..._availableGroups.map((option) {
+                  final label = _groupLabel(option);
+                  final subtitleParts = <String>[];
+                  if (option.group.title.isNotEmpty && option.group.name != option.group.title) {
+                    subtitleParts.add(option.group.name);
+                  }
+                  if (option.collectionTitle != null && option.collectionTitle!.isNotEmpty) {
+                    subtitleParts.add(option.collectionTitle!);
+                  }
+                  return CheckboxListTile(
+                    value: _selectedGroups.contains(option.group.name),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _selectedGroups.add(option.group.name);
+                        } else {
+                          _selectedGroups.remove(option.group.name);
+                        }
+                      });
+                    },
+                    title: Text(label),
+                    subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join(' - ')),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                  );
+                }),
+            ],
+            const SizedBox(height: 24),
 
             // Advanced Options Section (expandable, closed by default)
             Theme(
