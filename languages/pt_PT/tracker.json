@@ -143,6 +143,9 @@
   "tracker_edit_path": "Editar percurso",
   "tracker_delete_path": "Eliminar percurso",
   "tracker_delete_path_confirm": "Tem a certeza de que quer eliminar este percurso?",
+  "tracker_search_paths": "Pesquisar percursos...",
+  "tracker_tags": "Etiquetas",
+  "tracker_add_tag": "Adicionar etiqueta...",
 
   "tracker_path_type_walk": "Caminhada",
   "tracker_path_type_travel": "Viagem",

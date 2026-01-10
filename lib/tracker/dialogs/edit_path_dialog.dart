@@ -7,14 +7,16 @@ import '../../widgets/transcribe_button_widget.dart';
 class EditPathResult {
   final String title;
   final String? description;
+  final List<String> tags;
 
   const EditPathResult({
     required this.title,
     this.description,
+    this.tags = const [],
   });
 }
 
-/// Dialog for editing a path title/description.
+/// Dialog for editing a path title/description/tags.
 class EditPathDialog extends StatefulWidget {
   final TrackerPath path;
   final I18nService i18n;
@@ -47,6 +49,8 @@ class _EditPathDialogState extends State<EditPathDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController;
   late final TextEditingController _descriptionController;
+  late final TextEditingController _tagController;
+  late List<String> _currentTags;
 
   @override
   void initState() {
@@ -54,13 +58,33 @@ class _EditPathDialogState extends State<EditPathDialog> {
     _titleController = TextEditingController(text: widget.path.title ?? '');
     _descriptionController =
         TextEditingController(text: widget.path.description ?? '');
+    _tagController = TextEditingController();
+    _currentTags = List<String>.from(widget.path.userTags);
   }
 
   @override
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _tagController.dispose();
     super.dispose();
+  }
+
+  void _addTag(String tag) {
+    final normalized = tag.toLowerCase().trim().replaceAll('#', '');
+    if (normalized.isEmpty) return;
+    if (_currentTags.contains(normalized)) return;
+
+    setState(() {
+      _currentTags.add(normalized);
+      _tagController.clear();
+    });
+  }
+
+  void _removeTag(String tag) {
+    setState(() {
+      _currentTags.remove(tag);
+    });
   }
 
   @override
@@ -72,6 +96,7 @@ class _EditPathDialogState extends State<EditPathDialog> {
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               TextFormField(
                 controller: _titleController,
@@ -109,6 +134,35 @@ class _EditPathDialogState extends State<EditPathDialog> {
                 ),
                 maxLines: 3,
               ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _tagController,
+                decoration: InputDecoration(
+                  labelText: widget.i18n.t('tracker_tags'),
+                  hintText: widget.i18n.t('tracker_add_tag'),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _addTag(_tagController.text),
+                  ),
+                ),
+                onSubmitted: _addTag,
+              ),
+              if (_currentTags.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: _currentTags.map((tag) {
+                    return Chip(
+                      label: Text('#$tag'),
+                      deleteIcon: const Icon(Icons.close, size: 18),
+                      onDeleted: () => _removeTag(tag),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    );
+                  }).toList(),
+                ),
+              ],
             ],
           ),
         ),
@@ -135,6 +189,7 @@ class _EditPathDialogState extends State<EditPathDialog> {
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
+        tags: _currentTags,
       ),
     );
   }

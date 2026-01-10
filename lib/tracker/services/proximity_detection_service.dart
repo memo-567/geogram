@@ -1,15 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show VoidCallback;
 
 import '../models/tracker_proximity_track.dart';
 import 'tracker_service.dart';
 import '../../services/log_service.dart';
 import '../../services/location_service.dart';
+import '../../services/location_provider_service.dart';
 import '../../services/devices_service.dart';
-import '../../util/event_bus.dart';
 
 /// Service for detecting nearby devices (via Bluetooth) and places (via GPS).
-/// Subscribes to PositionUpdatedEvent and checks for proximity matches.
+/// Registers as a LocationProviderService consumer for reliable background execution.
 class ProximityDetectionService {
   static final ProximityDetectionService _instance =
       ProximityDetectionService._internal();
@@ -17,8 +18,7 @@ class ProximityDetectionService {
   ProximityDetectionService._internal();
 
   TrackerService? _trackerService;
-  EventSubscription<PositionUpdatedEvent>? _positionSubscription;
-  Timer? _scanTimer;
+  VoidCallback? _disposeConsumer;
   bool _isRunning = false;
 
   /// Cached places list (refreshed every 5 minutes)
@@ -38,111 +38,57 @@ class ProximityDetectionService {
   /// Start the proximity detection service
   Future<void> start(TrackerService trackerService) async {
     if (_isRunning) {
-      LogService().log('ProximityDetectionService: Already running, skipping start');
+      LogService().log('ProximityDetectionService: Already running');
       return;
     }
 
     _trackerService = trackerService;
     _isRunning = true;
 
-    // Subscribe to position updates for place detection
-    _positionSubscription = EventBus().on<PositionUpdatedEvent>(_onPositionUpdate);
-
-    // Timer for device scanning every 60 seconds
-    _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      LogService().log('ProximityDetectionService: Timer fired');
-      _scanDevices();
-    });
+    // Register as LocationProviderService consumer - fires every 60 seconds
+    _disposeConsumer = await LocationProviderService().registerConsumer(
+      intervalSeconds: 60,
+      onPosition: (pos) => _onPositionUpdate(pos),
+    );
 
     // Run initial scan immediately
-    LogService().log('ProximityDetectionService: Running initial scan');
-    _scanDevices();
+    final currentPos = LocationProviderService().currentPosition;
+    if (currentPos != null) {
+      _scanDevices(currentPos.latitude, currentPos.longitude);
+    } else {
+      _scanDevices(0.0, 0.0);
+    }
 
-    LogService().log('ProximityDetectionService: Started with 60s timer');
+    LogService().log('ProximityDetectionService: Started as LocationProvider consumer');
   }
 
   /// Stop the proximity detection service
   void stop() {
     if (!_isRunning) {
-      LogService().log('ProximityDetectionService: Not running, skipping stop');
       return;
     }
 
-    LogService().log('ProximityDetectionService: Stopping...');
-    _positionSubscription?.cancel();
-    _positionSubscription = null;
-    _scanTimer?.cancel();
-    _scanTimer = null;
+    _disposeConsumer?.call();
+    _disposeConsumer = null;
     _isRunning = false;
     _activeSessions.clear();
 
     LogService().log('ProximityDetectionService: Stopped');
   }
 
-  /// Handle position update from EventBus
-  Future<void> _onPositionUpdate(PositionUpdatedEvent event) async {
+  /// Handle position update from LocationProviderService
+  void _onPositionUpdate(LockedPosition pos) {
     if (!_isRunning || _trackerService == null) return;
 
-    try {
-      // Refresh cached places if needed
-      await _refreshPlacesIfNeeded();
-
-      // Check for nearby places
-      await _checkNearbyPlaces(event.latitude, event.longitude);
-
-      // Check for devices with Bluetooth connection via DevicesService
-      await _checkNearbyDevices(event.latitude, event.longitude);
-
-      // Clean up stale sessions
-      _cleanupStaleSessions(DateTime.now());
-
-    } catch (e) {
-      LogService().log('ProximityDetectionService: Error in position update: $e');
-    }
+    // Scan for devices and places
+    _scanDevices(pos.latitude, pos.longitude);
+    _checkNearbyPlaces(pos.latitude, pos.longitude);
+    _refreshPlacesIfNeeded();
   }
 
-  /// Check for devices with active Bluetooth connection
-  Future<void> _checkNearbyDevices(double lat, double lon) async {
-    final now = DateTime.now();
-    final year = now.year;
-    final week = getWeekNumber(now);
-    final timestamp = now.toUtc().toIso8601String();
-
-    // Get all devices from DevicesService
-    final allDevices = DevicesService().getAllDevices();
-
-    // Filter for devices with Bluetooth connection
-    final bluetoothDevices = allDevices.where((device) =>
-      device.connectionMethods.contains('bluetooth') ||
-      device.connectionMethods.contains('bluetooth_plus')
-    );
-
-    for (final device in bluetoothDevices) {
-      await _recordProximity(
-        id: device.callsign,
-        type: ProximityTargetType.device,
-        displayName: device.name.isNotEmpty ? device.name : device.callsign,
-        lat: lat,
-        lon: lon,
-        timestamp: timestamp,
-        year: year,
-        week: week,
-        callsign: device.callsign,
-        npub: device.npub,
-      );
-    }
-  }
-
-  /// Scan for Bluetooth-connected devices (called every 60 seconds by timer)
-  Future<void> _scanDevices() async {
-    if (!_isRunning) {
-      LogService().log('ProximityDetectionService: _scanDevices skipped - not running');
-      return;
-    }
-    if (_trackerService == null) {
-      LogService().log('ProximityDetectionService: _scanDevices skipped - no tracker service');
-      return;
-    }
+  /// Scan for Bluetooth-connected devices
+  Future<void> _scanDevices(double lat, double lon) async {
+    if (!_isRunning || _trackerService == null) return;
 
     try {
       final now = DateTime.now();
@@ -153,8 +99,6 @@ class ProximityDetectionService {
       // Get all devices from DevicesService
       final allDevices = DevicesService().getAllDevices();
 
-      LogService().log('ProximityDetectionService: Scanning ${allDevices.length} devices');
-
       // Filter for devices with Bluetooth connection
       final bluetoothDevices = allDevices.where((device) =>
         device.connectionMethods.contains('bluetooth') ||
@@ -164,13 +108,12 @@ class ProximityDetectionService {
       LogService().log('ProximityDetectionService: Found ${bluetoothDevices.length} Bluetooth devices');
 
       for (final device in bluetoothDevices) {
-        LogService().log('ProximityDetectionService: Recording device ${device.callsign}');
         await _recordProximity(
           id: device.callsign,
           type: ProximityTargetType.device,
           displayName: device.name.isNotEmpty ? device.name : device.callsign,
-          lat: 0.0,  // No GPS needed for device proximity
-          lon: 0.0,
+          lat: lat,
+          lon: lon,
           timestamp: timestamp,
           year: year,
           week: week,
@@ -179,7 +122,6 @@ class ProximityDetectionService {
         );
       }
 
-      LogService().log('ProximityDetectionService: Scan complete');
       // Clean up stale sessions
       _cleanupStaleSessions(now);
 
@@ -208,17 +150,12 @@ class ProximityDetectionService {
       final locationService = LocationService();
       await locationService.init();
 
-      // Load internal places from all collections
-      // This would need to be implemented based on how places are stored
-      // For now, we'll use a placeholder that can be expanded
-
       // TODO: Load places from:
       // 1. Internal Places collections
       // 2. Station server places (cached)
       // 3. Connect places (from other devices)
 
       _cachedPlaces = places;
-      LogService().log('ProximityDetectionService: Refreshed ${places.length} places');
     } catch (e) {
       LogService().log('ProximityDetectionService: Error refreshing places: $e');
     }
@@ -303,24 +240,22 @@ class ProximityDetectionService {
 
     // Check if we should extend existing entry or create new one
     if (lastSeen != null && now.difference(lastSeen) < _sessionTimeout) {
-      // Extend the most recent entry
+      // Extend the most recent entry - update duration regardless of isOpen
+      // since we're within the session timeout window
       if (track.entries.isNotEmpty) {
         final lastEntry = track.entries.last;
-        if (lastEntry.isOpen) {
-          // Update ended_at and duration
-          final startTime = lastEntry.timestampDateTime;
-          final duration = now.difference(startTime).inSeconds;
+        final startTime = lastEntry.timestampDateTime;
+        final duration = now.difference(startTime).inSeconds;
 
-          final updatedEntry = lastEntry.copyWith(
-            endedAt: timestamp,
-            durationSeconds: duration,
-          );
+        final updatedEntry = lastEntry.copyWith(
+          endedAt: timestamp,
+          durationSeconds: duration,
+        );
 
-          final updatedEntries = List<ProximityEntry>.from(track.entries);
-          updatedEntries[updatedEntries.length - 1] = updatedEntry;
+        final updatedEntries = List<ProximityEntry>.from(track.entries);
+        updatedEntries[updatedEntries.length - 1] = updatedEntry;
 
-          track = track.copyWith(entries: updatedEntries);
-        }
+        track = track.copyWith(entries: updatedEntries);
       }
     } else {
       // Create new entry

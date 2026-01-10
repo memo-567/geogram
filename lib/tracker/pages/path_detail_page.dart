@@ -727,6 +727,21 @@ class _PathDetailPageState extends State<PathDetailPage> {
                   ),
               ],
             ),
+            // User tags
+            if (_path != null && _path!.userTags.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: _path!.userTags.map((tag) {
+                  return Chip(
+                    label: Text('#$tag'),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  );
+                }).toList(),
+              ),
+            ],
           ],
         ),
       ),
@@ -1969,10 +1984,12 @@ class _PathDetailPageState extends State<PathDetailPage> {
     );
     if (result == null) return;
 
-    final updated = path.copyWith(
-      title: result.title,
-      description: result.description,
-    );
+    final updated = path
+        .copyWith(
+          title: result.title,
+          description: result.description,
+        )
+        .withUserTags(result.tags);
 
     final saved = await widget.service.updatePath(
       updated,

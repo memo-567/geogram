@@ -1,5 +1,118 @@
 # Geogram Desktop Changelog
 
+## 2026-01-10 - v1.7.0
+
+### Changes
+- Release: bump version to 1.7.0+12
+- Feat: add share image with cached map tiles, truck path type, and expenses
+- Release: bump version to 1.6.108+11
+- Feat: add tracker plans, path details, and motivation features
+- Release: bump version to 1.6.107+10
+- Feat: improve chat device title display and unify tracker dialogs
+- Release: bump version to 1.6.106+9
+- Feat: map cache settings and tracker exercises improvements
+- Stabilize BLE messaging and WebRTC offline handling
+- Fix: refresh event files section after uploading media
+- Release: bump version to 1.6.105+8
+- Fix BLE+ pairing handshake
+- Release: bump version to 1.6.104+7
+- Fix BLE DM routing and document transport flow
+- Release: bump version to 1.6.103+6
+- Feat: improve offline GPS, UI fixes, and blog FAB
+- Release: bump version to 1.6.102+5
+- Feat: add date reminders for contacts
+- Docs: update voice.md with current preload implementation
+- Perf: start whisper preload immediately after runApp()
+- Fix: coordinate whisper model preloading with dialog
+- Docs: update voice.md with preloading and performance details
+- Perf: lazy load whisper model at app startup
+- Perf: speed up voice transcription 100x
+- UI: move NPUB and callsign to collapsible Details section
+- UI: fix contact detail display issues
+- Docs: update F-Droid publishing guide
+- UI: improve interaction dialog and list
+- UI: contact panel improvements
+- UI: remove Group field from contact detail view
+- Refactor: create shared PlaceCoordinatesRow widget
+- UI: move coordinates value below label for readability
+- Release v1.6.101
+- ProGuard: remove Flutter keep rules to allow R8 to strip Play Core
+- Release v1.6.100
+- Release v1.6.99
+- Android: add Play Core exclusions for F-Droid compliance
+- Android: fix R8 build failure by ignoring Play Core classes
+- Android: fix R8 build failure by ignoring Play Core classes
+- Docs: add F-Droid publishing guide
+- CLI: make log_service conditional (stub on non-Flutter)
+- CLI: remove ensemble_ts_interpreter (depends on Flutter)
+- CLI: create separate pure-Dart package for CLI build
+- Contacts: fix recreation after deleting all contacts
+- Web: make speech-to-text conditional (stub on web)
+- CI: disable web build (whisper_flutter_new requires dart:ffi)
+- CI: clear pub cache before web build to remove cached ffi
+- CI: delete pubspec.lock before web build to ensure clean ffi removal
+- CI: fix CLI and Web build failures
+- Voice-to-text: skip idle state, start recording immediately
+- Android: F-Droid compliance fixes
+- Docs: add voice recognition documentation
+- Voice-to-text: fix download and WAV recording for Whisper
+- Contacts: improve merge duplicates tool
+- Contacts: add "Clear Cache & Metrics" tool option
+- Contacts: fix back button to navigate up folder hierarchy
+- Contacts: ignore system folders at root level, support nested groups
+- Contacts: simplify folder structure (remove nested contacts/contacts)
+- Events: add contacts feature and consolidate event editing
+- Contacts: add Short message interaction and auto-capitalize text fields
+- Contacts: add email action icons and metrics tracking
+- Contacts: consolidate QR sharing to use single ContactQrPage
+- CI: fix sed syntax for macOS
+- CI: try macOS runner for Android build (Maven Central issue)
+- Add privacy policy for Google Play Store
+- CI: remove conflicting Maven repository configs
+- CI: add Maven mirrors and retry logic for Android builds
+- Android: add Maven repository fallbacks
+- CI: add Gradle caching for Android builds
+- Contacts: add multi-select, merge tool, and Quick Access grid
+- Contacts: add QR code sharing and scanning
+- Contacts: fix empty state and improve loading feedback
+- Contacts: add Event interaction to associate contacts with events
+- Contacts: make group names translatable
+- Contacts: implement folder-style navigation for groups
+- Add Import Contacts option to empty contacts state on Android
+- Fix Import Contacts layout: move Select All buttons below app bar
+- Improve Contacts loading and Location/Place interactions
+- Fix Software Updates: race condition causing "Up to Date" with update available
+- Fix web build: add missing io_stub exports
+- Fix Console: use default station URL when no station connected
+- Fix Console: embed JSLinux scripts from local cache
+- Fix Console VM: remove Content-Disposition header for JS files
+- Fix Console: improve JSLinux loading and use better icon
+- Fix web build: add stubs for PTY/terminal and missing stub methods
+- Add Console VM app with bundled TinyEMU for Linux
+- Add place map view and fix theme settings crash
+- Improve places filtering with exponential radius slider and local caching
+- Fix web build: use file_helper for cross-platform image handling
+- Enhance contacts with social handles, location types, and UI improvements
+- Update app icons and add video playback to event media
+- Add video playback support to PhotoViewerPage and fix event file refresh
+- Add radius filter for station places and UI improvements
+- Add first-launch offline map pre-download
+- Add Linux desktop update procedure and centralize location services
+- Update Android notification icon
+- Add callsign generator to profile creation dialog and improve Log app
+- Remove AUTHOR and GROUPS from event.txt generation
+- Sync Edit Event UI with Create Event improvements
+- Fix redundant station name in Android notification
+- Fix window icon path to be relative to executable
+- Wrap LogPage content in Scaffold for proper structure
+- Fix duplicate events folder in path structure
+- Add photos section to Create Event with cover photo selection
+- Fix _isOnline reference - use _locationType instead
+- Improve Create Event UI: location dropdown, move agenda to Updates tab
+- Fix EventFilesSection Row overflow on narrow screens
+- Replace Events header + button with bottom-right FAB
+
+
 ## 2026-01-03 - v1.6.65
 
 ### Changes

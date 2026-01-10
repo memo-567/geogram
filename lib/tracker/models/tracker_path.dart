@@ -212,6 +212,49 @@ class TrackerPath {
   /// Distance in kilometers
   double get totalDistanceKm => totalDistanceMeters / 1000.0;
 
+  /// Get user-defined tags (excludes system tags like type:*)
+  List<String> get userTags => tags.where((t) => !t.contains(':')).toList();
+
+  /// Add a user tag (returns new instance with tag added)
+  TrackerPath addUserTag(String tag) {
+    final normalized = tag.toLowerCase().trim().replaceAll('#', '');
+    if (normalized.isEmpty || tags.contains(normalized)) return this;
+    return copyWith(tags: [...tags, normalized]);
+  }
+
+  /// Remove a user tag (returns new instance with tag removed)
+  TrackerPath removeUserTag(String tag) {
+    return copyWith(tags: tags.where((t) => t != tag).toList());
+  }
+
+  /// Set all user tags (preserves system tags like type:*)
+  TrackerPath withUserTags(List<String> newUserTags) {
+    final systemTags = tags.where((t) => t.contains(':')).toList();
+    final normalizedUserTags = newUserTags
+        .map((t) => t.toLowerCase().trim().replaceAll('#', ''))
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList();
+    return copyWith(tags: [...systemTags, ...normalizedUserTags]);
+  }
+
+  /// Check if path matches search query
+  bool matchesSearch(String query) {
+    final q = query.toLowerCase().trim();
+    if (q.isEmpty) return true;
+
+    // Check if searching for tag with #
+    if (q.startsWith('#')) {
+      final tagQuery = q.substring(1);
+      return userTags.any((t) => t.contains(tagQuery));
+    }
+
+    // Search in title, description, and tags
+    return (title?.toLowerCase().contains(q) ?? false) ||
+        (description?.toLowerCase().contains(q) ?? false) ||
+        userTags.any((t) => t.contains(q));
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         if (title != null) 'title': title,

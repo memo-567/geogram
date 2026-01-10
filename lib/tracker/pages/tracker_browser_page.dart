@@ -77,6 +77,8 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   List<int> _pathYears = [];
   final Set<String> _expandedYearKeys = {};
   final Set<String> _expandedWeekKeys = {};
+  final TextEditingController _pathSearchController = TextEditingController();
+  String _pathSearchQuery = '';
   List<String> _exerciseTypes = [];
   List<String> _measurementTypes = [];
   Map<String, int> _weeklyTotals = {}; // Used for both exercises and measurements
@@ -261,6 +263,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     _tabController.dispose();
     _changesSub?.cancel();
     _recordingService.removeListener(_onRecordingChanged);
+    _pathSearchController.dispose();
     super.dispose();
   }
 
@@ -542,6 +545,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     }
 
     final hasPaths = _pathsByYear.isNotEmpty;
+    final hasSearch = _pathSearchQuery.isNotEmpty;
 
     return Column(
       children: [
@@ -554,9 +558,43 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             onTap: _openActivePath,
           ),
 
+        // Search box
+        if (hasPaths || hasSearch)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextField(
+              controller: _pathSearchController,
+              decoration: InputDecoration(
+                hintText: widget.i18n.t('tracker_search_paths'),
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: hasSearch
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _pathSearchController.clear();
+                          setState(() => _pathSearchQuery = '');
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                isDense: true,
+              ),
+              onChanged: (value) => setState(() => _pathSearchQuery = value),
+            ),
+          ),
+
+        // Popular tags (only when not searching)
+        if (hasPaths && !hasSearch) _buildPopularTags(),
+
+        // Search results summary
+        if (hasSearch) _buildSearchSummary(),
+
         // Path list
         Expanded(
-          child: !hasPaths && !_recordingService.hasActiveRecording
+          child: !hasPaths && !_recordingService.hasActiveRecording && !hasSearch
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -570,12 +608,134 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
                     ],
                   ),
                 )
-              : ListView(
-                  padding: const EdgeInsets.all(8),
-                  children: _buildPathGroups(),
-                ),
+              : hasSearch
+                  ? _buildSearchResults()
+                  : ListView(
+                      padding: const EdgeInsets.all(8),
+                      children: _buildPathGroups(),
+                    ),
         ),
       ],
+    );
+  }
+
+  /// Get the most used tags across all paths (up to 10)
+  List<String> _getPopularTags() {
+    final tagCounts = <String, int>{};
+    for (final paths in _pathsByYear.values) {
+      for (final path in paths) {
+        for (final tag in path.userTags) {
+          tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+        }
+      }
+    }
+    final sortedTags = tagCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sortedTags.take(10).map((e) => e.key).toList();
+  }
+
+  /// Build popular tags row
+  Widget _buildPopularTags() {
+    final popularTags = _getPopularTags();
+    if (popularTags.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: popularTags.map((tag) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ActionChip(
+                label: Text('#$tag'),
+                onPressed: () {
+                  _pathSearchController.text = '#$tag';
+                  setState(() => _pathSearchQuery = '#$tag');
+                },
+                visualDensity: VisualDensity.compact,
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  /// Build flat search results list (no year/week grouping)
+  Widget _buildSearchResults() {
+    final filteredPaths = _getFilteredPaths();
+    if (filteredPaths.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              widget.i18n.t('tracker_no_paths'),
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Sort by date descending
+    filteredPaths.sort((a, b) => b.startedAtDateTime.compareTo(a.startedAtDateTime));
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: filteredPaths.length,
+      itemBuilder: (context, index) {
+        final path = filteredPaths[index];
+        final year = path.startedAtDateTime.year;
+        return _buildPathTile(path, year);
+      },
+    );
+  }
+
+  /// Get filtered paths based on search query
+  List<TrackerPath> _getFilteredPaths() {
+    final allPaths = _pathsByYear.values.expand((paths) => paths).toList();
+    if (_pathSearchQuery.isEmpty) return allPaths;
+    return allPaths.where((path) => path.matchesSearch(_pathSearchQuery)).toList();
+  }
+
+  /// Build search results summary widget
+  Widget _buildSearchSummary() {
+    final filteredPaths = _getFilteredPaths();
+    final pathCount = filteredPaths.length;
+    final totalDistance = filteredPaths.fold<double>(
+      0,
+      (sum, path) => sum + path.totalDistanceMeters,
+    );
+    final totalPoints = filteredPaths.fold<int>(
+      0,
+      (sum, path) => sum + path.totalPoints,
+    );
+    final totalDuration = filteredPaths.fold<int>(
+      0,
+      (sum, path) => sum + (path.durationSeconds ?? 0),
+    );
+
+    final distanceKm = (totalDistance / 1000).toStringAsFixed(1);
+    final durationStr = _formatDurationCompact(Duration(seconds: totalDuration));
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        '$pathCount ${widget.i18n.t('tracker_paths').toLowerCase()} • $distanceKm km • $durationStr • $totalPoints ${widget.i18n.t('tracker_points')}',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+        textAlign: TextAlign.center,
+      ),
     );
   }
 
@@ -1555,10 +1715,12 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
           i18n: widget.i18n,
         );
         if (result == null) return;
-        final updated = path.copyWith(
-          title: result.title,
-          description: result.description,
-        );
+        final updated = path
+            .copyWith(
+              title: result.title,
+              description: result.description,
+            )
+            .withUserTags(result.tags);
         await _service.updatePath(updated, year: year);
         _loadCurrentTab();
         return;
