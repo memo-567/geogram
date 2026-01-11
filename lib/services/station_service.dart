@@ -40,7 +40,7 @@ class StationService {
   final WebSocketService _wsService = WebSocketService();
 
   /// Default stations
-  static final List<Station> _defaultRelays = [
+  static final List<Station> _defaultStations = [
     Station(
       url: 'wss://p2p.radio',
       name: 'P2P Radio',
@@ -84,7 +84,7 @@ class StationService {
     final preferredStation = getPreferredStation();
     if (preferredStation != null && preferredStation.url.isNotEmpty) {
       LogService().log('Auto-connecting to preferred station: ${preferredStation.name}');
-      connectRelay(preferredStation.url);
+      connectStation(preferredStation.url);
     }
   }
 
@@ -95,6 +95,13 @@ class StationService {
     if (config.containsKey('stations')) {
       final stationsData = config['stations'] as List<dynamic>;
       _stations = stationsData.map((data) => Station.fromJson(data as Map<String, dynamic>)).toList();
+
+      // Filter out client devices (X1 callsigns) - only stations (X3) should be listed
+      final beforeFilterCount = _stations.length;
+      _stations = _stations.where((s) => !_isClientCallsign(s.callsign)).toList();
+      if (_stations.length < beforeFilterCount) {
+        LogService().log('Removed ${beforeFilterCount - _stations.length} client device(s) from station list');
+      }
 
       // Reset connection state - connection status shouldn't persist across app restarts
       for (var i = 0; i < _stations.length; i++) {
@@ -109,14 +116,18 @@ class StationService {
       _stations = _deduplicateStations(_stations);
       if (_stations.length < beforeCount) {
         LogService().log('Merged ${beforeCount - _stations.length} duplicate station entries');
-        _saveStations(); // Save deduplicated list
+      }
+
+      // Save if we filtered or deduplicated
+      if (_stations.length < beforeFilterCount) {
+        _saveStations();
       }
 
       print('DEBUG StationService: After reset, stations=${_stations.map((r) => "${r.name}:${r.isConnected}").toList()}');
       LogService().log('Loaded ${_stations.length} stations from config');
     } else {
       // First time - use default stations
-      _stations = _defaultRelays.map((r) => r.copyWith()).toList();
+      _stations = _defaultStations.map((r) => r.copyWith()).toList();
 
       // Set first as preferred
       if (_stations.isNotEmpty) {
@@ -230,8 +241,14 @@ class StationService {
   }
 
   /// Add a new station
-  /// Returns true if station was added, false if it already exists
+  /// Returns true if station was added, false if it already exists or is a client
   Future<bool> addStation(Station station) async {
+    // Reject client devices (X1 callsigns) - only stations (X3) can be added
+    if (_isClientCallsign(station.callsign)) {
+      LogService().log('Rejected client device: ${station.callsign} (only stations allowed)');
+      return false;
+    }
+
     // Check if URL already exists
     final existsByUrl = _stations.any((r) => r.url == station.url);
     if (existsByUrl) {
@@ -404,11 +421,11 @@ class StationService {
   }
 
   /// Connect to station with hello handshake
-  Future<bool> connectRelay(String url) async {
+  Future<bool> connectStation(String url) async {
     try {
       LogService().log('');
       LogService().log('══════════════════════════════════════');
-      LogService().log('RELAY CONNECTION REQUEST');
+      LogService().log('STATION CONNECTION REQUEST');
       LogService().log('══════════════════════════════════════');
       LogService().log('URL: $url');
 
@@ -551,7 +568,7 @@ class StationService {
   /// Get currently connected station
   /// First checks Station model's isConnected flag, then falls back to checking
   /// actual WebSocket connection state (handles auto-connect scenarios)
-  Station? getConnectedRelay() {
+  Station? getConnectedStation() {
     // First try to find a station marked as connected
     try {
       return _stations.firstWhere((r) => r.isConnected);
@@ -1320,12 +1337,19 @@ class StationService {
   }
 
   /// Fetch chat rooms from connected station
-  Future<List<StationChatRoom>> fetchConnectedRelayChatRooms() async {
-    final station = getConnectedRelay();
+  Future<List<StationChatRoom>> fetchConnectedStationChatRooms() async {
+    final station = getConnectedStation();
     if (station == null) {
       LogService().log('No station connected');
       return [];
     }
     return fetchChatRooms(station.url);
+  }
+
+  /// Check if a callsign indicates a client device (X1 prefix)
+  /// X1 = client (reject), X3 = station (allow)
+  bool _isClientCallsign(String? callsign) {
+    if (callsign == null || callsign.isEmpty) return false;
+    return callsign.toUpperCase().startsWith('X1');
   }
 }

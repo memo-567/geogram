@@ -65,12 +65,15 @@ class StationDiscoveryService {
 
   Timer? _discoveryTimer;
   bool _isScanning = false;
-  final List<int> _ports = [3456, 8080, 80, 8081, 3000, 5000]; // Standard geogram port (3456) first, then common station ports
+  // Primary ports scanned first (most common station ports)
+  final List<int> _primaryPorts = [3456, 8080];
+  // Secondary ports scanned after primary phase
+  final List<int> _secondaryPorts = [80, 8081, 3000, 5000];
   final Duration _scanInterval = const Duration(minutes: 5);
-  final Duration _requestTimeout = const Duration(milliseconds: 1500); // Increased timeout for reliability
+  final Duration _requestTimeout = const Duration(milliseconds: 400); // Fast timeout for LAN
   final Duration _startupDelay = const Duration(seconds: 5);
   final Duration _localhostScanDelay = const Duration(seconds: 10); // Longer delay when scanning localhost for other instances
-  static const int _maxConcurrentConnections = 30; // Limit concurrent connections to avoid "too many open files"
+  static const int _maxConcurrentConnections = 50; // Increased for faster scanning
 
   /// Start automatic discovery
   void start() {
@@ -119,11 +122,12 @@ class StationDiscoveryService {
     _isScanning = false;
   }
 
-  /// Manual scan with progress callback - returns list of found devices
+  /// Manual scan with progress callback - returns list of found stations
+  /// Uses phased scanning: primary ports (3456, 8080) first, then secondary ports
   Future<List<NetworkScanResult>> scanWithProgress({
     ScanProgressCallback? onProgress,
     ScanCancelCheck? shouldCancel,
-    int timeoutMs = 500,
+    int timeoutMs = 400,
   }) async {
     if (kIsWeb) {
       onProgress?.call('Network scanning not supported on web', 0, 0, []);
@@ -140,8 +144,11 @@ class StationDiscoveryService {
     final results = <NetworkScanResult>[];
     final seenKeys = <String, int>{}; // Maps key -> index in results
 
-    // Helper to add result with real-time deduplication
+    // Helper to add result with real-time deduplication (stations only)
     void addResult(NetworkScanResult result) {
+      // Only add stations, ignore clients/desktops
+      if (result.type != 'station') return;
+
       String key;
       if (result.callsign != null && result.callsign!.isNotEmpty) {
         key = '${result.callsign}:${result.port}';
@@ -172,10 +179,12 @@ class StationDiscoveryService {
         type: InternetAddressType.IPv4,
       );
 
-      // Calculate total hosts to scan
+      // Collect network ranges to scan
       final ranges = <String>{};
       for (var interface in interfaces) {
+        LogService().log('ScanWithProgress: Interface: ${interface.name}');
         for (var addr in interface.addresses) {
+          LogService().log('ScanWithProgress:   Address: ${addr.address}');
           final subnet = _getSubnet(addr.address);
           if (subnet != null) {
             ranges.add(subnet);
@@ -183,139 +192,144 @@ class StationDiscoveryService {
         }
       }
 
-      // Check if localhost port range scanning is enabled via --scan-localhost flag
-      final localhostPortRange = AppArgs().scanLocalhostPorts;
-      final localhostRangeSize = localhostPortRange != null
-          ? (localhostPortRange.$2 - localhostPortRange.$1 + 1)
-          : 0;
+      // Fallback: if no interfaces detected (common on Android), try to detect subnet
+      if (ranges.isEmpty) {
+        LogService().log('ScanWithProgress: No network interfaces detected, trying fallback detection');
+        onProgress?.call('Detecting network...', 0, 0, results);
 
-      // Total: localhost ports (x2 for both localhost and 127.0.0.1) + localhost range + (254 hosts * ports per range)
-      final totalHosts = (_ports.length * 2) + localhostRangeSize + (ranges.length * 254 * _ports.length);
+        final fallbackSubnet = await _detectSubnetFromConnectivity();
+        if (fallbackSubnet != null) {
+          ranges.add(fallbackSubnet);
+          LogService().log('ScanWithProgress: Detected subnet from connectivity: $fallbackSubnet');
+        } else {
+          // Add common home network ranges as last resort
+          ranges.add('192.168.1');
+          ranges.add('192.168.0');
+          ranges.add('192.168.178'); // Common Fritz!Box range
+          ranges.add('10.0.0');
+          LogService().log('ScanWithProgress: Using common fallback ranges: ${ranges.join(", ")}');
+        }
+      }
+
+      // Calculate total hosts for progress
+      // Primary phase: localhost (2 hosts × 2 ports) + LAN (254 × 2 ports per range)
+      // Secondary phase: LAN (254 × 4 ports per range)
+      final primaryHosts = 4 + (ranges.length * 254 * _primaryPorts.length);
+      final secondaryHosts = ranges.length * 254 * _secondaryPorts.length;
+      final totalHosts = primaryHosts + secondaryHosts;
       int scannedHosts = 0;
 
-      LogService().log('StationDiscovery: Scanning standard localhost ports: ${_ports.join(", ")}');
-      onProgress?.call('Scanning localhost...', scannedHosts, totalHosts, results);
+      LogService().log('StationDiscovery: === PHASE 1: PRIMARY PORTS (${_primaryPorts.join(", ")}) ===');
 
-      // Always scan localhost first - try both 'localhost' hostname and '127.0.0.1'
-      // Some systems resolve localhost to IPv6 ::1, so we need to check both
-      int standardLocalhostFound = 0;
+      // PHASE 1: Localhost on primary ports first (fastest check)
+      onProgress?.call('Scanning localhost...', scannedHosts, totalHosts, results);
       for (var host in ['localhost', '127.0.0.1']) {
-        for (var port in _ports) {
+        for (var port in _primaryPorts) {
           if (shouldCancel?.call() == true) break;
           final result = await _checkGeogramDevice(host, port, timeoutMs);
-          if (result != null) {
-            standardLocalhostFound++;
-            LogService().log('StationDiscovery: Found device at $host:$port - callsign: ${result.callsign ?? "unknown"}, type: ${result.type}');
+          if (result != null && result.type == 'station') {
+            LogService().log('StationDiscovery: Found station at $host:$port - ${result.callsign ?? result.displayName}');
             addResult(result);
-            onProgress?.call('Found: ${result.type} at $host:$port', scannedHosts, totalHosts, results);
+            onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
           }
           scannedHosts++;
         }
       }
-      LogService().log('StationDiscovery: Standard localhost scan found $standardLocalhostFound device(s)');
 
-      // Scan extended localhost port range if --scan-localhost flag is set
-      // This is useful for testing with multiple Geogram instances on the same machine
-      if (localhostPortRange != null) {
-        final (startPort, endPort) = localhostPortRange;
-        final portCount = endPort - startPort + 1;
-        LogService().log('StationDiscovery: === LOCALHOST SCAN START ===');
-        LogService().log('StationDiscovery: Scanning localhost ports $startPort-$endPort ($portCount ports) for other Geogram instances');
-        onProgress?.call('Scanning localhost ports $startPort-$endPort...', scannedHosts, totalHosts, results);
-
-        // Build list of localhost ports to scan
-        final localhostTargets = <int>[];
-        for (int port = startPort; port <= endPort; port++) {
-          // Skip ports we already scanned in the standard ports list
-          if (!_ports.contains(port)) {
-            localhostTargets.add(port);
-          }
-        }
-
-        LogService().log('StationDiscovery: Will scan ${localhostTargets.length} localhost ports (excluding standard ports)');
-        int foundCount = 0;
-
-        // Process localhost ports in batches
-        for (int batchStart = 0; batchStart < localhostTargets.length; batchStart += _maxConcurrentConnections) {
-          if (shouldCancel?.call() == true) {
-            LogService().log('StationDiscovery: Localhost scan cancelled');
-            break;
-          }
-
-          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, localhostTargets.length);
-          final batch = localhostTargets.sublist(batchStart, batchEnd);
-
-          final futures = batch.map((port) async {
-            final result = await _checkGeogramDevice('127.0.0.1', port, timeoutMs);
-            if (result != null) {
-              foundCount++;
-              LogService().log('StationDiscovery: FOUND Geogram instance at localhost:$port - callsign: ${result.callsign ?? "unknown"}, type: ${result.type}');
-              addResult(result);
-              onProgress?.call('Found: ${result.type} at localhost:$port', scannedHosts, totalHosts, results);
-            }
-          }).toList();
-
-          await Future.wait(futures).timeout(
-            Duration(milliseconds: timeoutMs * 3),
-            onTimeout: () => [],
-          );
-
-          scannedHosts += batch.length;
-          onProgress?.call('Scanning localhost ports...', scannedHosts, totalHosts, results);
-        }
-
-        LogService().log('StationDiscovery: === LOCALHOST SCAN COMPLETE === Found $foundCount device(s)');
-      } else {
-        LogService().log('StationDiscovery: Localhost port range scanning not enabled (use --scan-localhost=START-END)');
-      }
-
-      // Scan each network range
-      outerLoop:
+      // PHASE 2: LAN on primary ports (fast parallel scan)
       for (var range in ranges) {
         if (shouldCancel?.call() == true) break;
-        onProgress?.call('Scanning $range.0/24...', scannedHosts, totalHosts, results);
+        onProgress?.call('Scanning $range.x (ports ${_primaryPorts.join(", ")})...', scannedHosts, totalHosts, results);
 
-        // Build list of targets for this range
+        // Build targets: all IPs on primary ports
         final targets = <MapEntry<String, int>>[];
         for (int i = 1; i < 255; i++) {
-          final ip = '$range.$i';
-          for (var port in _ports) {
-            targets.add(MapEntry(ip, port));
+          for (var port in _primaryPorts) {
+            targets.add(MapEntry('$range.$i', port));
           }
         }
 
-        // Process in batches
+        // Process in batches of 50 for faster scanning
         for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
-          if (shouldCancel?.call() == true) break outerLoop;
+          if (shouldCancel?.call() == true) break;
 
           final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
           final batch = targets.sublist(batchStart, batchEnd);
 
           final futures = batch.map((target) async {
             final result = await _checkGeogramDevice(target.key, target.value, timeoutMs);
-            if (result != null) {
+            if (result != null && result.type == 'station') {
+              LogService().log('StationDiscovery: Found station at ${target.key}:${target.value}');
               addResult(result);
-              onProgress?.call('Found: ${result.type} at ${result.ip}:${result.port}', scannedHosts, totalHosts, results);
+              onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
             }
           }).toList();
 
           await Future.wait(futures).timeout(
-            Duration(milliseconds: timeoutMs * 3),
+            Duration(milliseconds: timeoutMs * 2),
             onTimeout: () => [],
           );
 
           scannedHosts += batch.length;
-          onProgress?.call('Scanning...', scannedHosts, totalHosts, results);
+          final stationCount = results.length;
+          onProgress?.call('Scanning... ($stationCount station${stationCount == 1 ? "" : "s"} found)', scannedHosts, totalHosts, results);
         }
       }
 
-      // Results are already deduplicated in real-time via addResult()
-      final wasCancelled = shouldCancel?.call() == true;
-      final message = wasCancelled
-          ? 'Scan stopped: ${results.length} device(s) found'
-          : 'Scan complete: ${results.length} device(s) found';
-      onProgress?.call(message, scannedHosts, totalHosts, results);
+      LogService().log('StationDiscovery: Primary phase complete: ${results.length} station(s) found');
 
+      // PHASE 3: Secondary ports (only if not cancelled)
+      if (shouldCancel?.call() != true) {
+        LogService().log('StationDiscovery: === PHASE 2: SECONDARY PORTS (${_secondaryPorts.join(", ")}) ===');
+
+        for (var range in ranges) {
+          if (shouldCancel?.call() == true) break;
+          onProgress?.call('Scanning $range.x (secondary ports)...', scannedHosts, totalHosts, results);
+
+          // Build targets: all IPs on secondary ports
+          final targets = <MapEntry<String, int>>[];
+          for (int i = 1; i < 255; i++) {
+            for (var port in _secondaryPorts) {
+              targets.add(MapEntry('$range.$i', port));
+            }
+          }
+
+          // Process in batches
+          for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
+            if (shouldCancel?.call() == true) break;
+
+            final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
+            final batch = targets.sublist(batchStart, batchEnd);
+
+            final futures = batch.map((target) async {
+              final result = await _checkGeogramDevice(target.key, target.value, timeoutMs);
+              if (result != null && result.type == 'station') {
+                LogService().log('StationDiscovery: Found station at ${target.key}:${target.value}');
+                addResult(result);
+                onProgress?.call('Found: ${result.displayName}', scannedHosts, totalHosts, results);
+              }
+            }).toList();
+
+            await Future.wait(futures).timeout(
+              Duration(milliseconds: timeoutMs * 2),
+              onTimeout: () => [],
+            );
+
+            scannedHosts += batch.length;
+            onProgress?.call('Scanning secondary ports...', scannedHosts, totalHosts, results);
+          }
+        }
+      }
+
+      // Final status
+      final wasCancelled = shouldCancel?.call() == true;
+      final stationCount = results.length;
+      final message = wasCancelled
+          ? 'Scan stopped: $stationCount station${stationCount == 1 ? "" : "s"} found'
+          : 'Scan complete: $stationCount station${stationCount == 1 ? "" : "s"} found';
+      onProgress?.call(message, totalHosts, totalHosts, results);
+
+      LogService().log('StationDiscovery: === SCAN COMPLETE: ${results.length} station(s) ===');
       return results;
 
     } catch (e) {
@@ -390,7 +404,8 @@ class StationDiscoveryService {
     return scoreA > scoreB;
   }
 
-  /// Check if a host:port is a geogram device
+  /// Check if a host:port is a geogram station (only returns stations, ignores clients/desktops)
+  /// Stations have X3 callsigns, clients have X1 callsigns
   Future<NetworkScanResult?> _checkGeogramDevice(String ip, int port, int timeoutMs) async {
     try {
       final client = http.Client();
@@ -404,26 +419,20 @@ class StationDiscoveryService {
         if (response.statusCode == 200) {
           final body = response.body;
           final data = jsonDecode(body) as Map<String, dynamic>;
+          final callsign = data['callsign'] as String? ?? data['stationCallsign'] as String?;
 
-          String type = 'unknown';
-          final serviceField = data['service'];
+          // Only return if it's a station (X3 callsign or station service)
+          final isStation = _isStationCallsign(callsign) ||
+              body.contains('Geogram Station Server') ||
+              data['service'] == 'Geogram Station Server';
 
-          if (body.contains('Geogram Station') || body.contains('geogram-station') ||
-              serviceField == 'Geogram Station Server') {
-            type = 'station';
-          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop') || body.contains('Geogram') || body.contains('geogram')) {
-            type = 'desktop';
-          } else if (body.contains('Geogram') || body.contains('geogram')) {
-            type = 'client';
-          }
-
-          if (type != 'unknown') {
+          if (isStation) {
             client.close();
             return NetworkScanResult(
               ip: ip,
               port: port,
-              type: type,
-              callsign: data['callsign'] as String? ?? data['stationCallsign'] as String?,
+              type: 'station',
+              callsign: callsign,
               name: data['name'] as String?,
               version: data['version'] as String?,
               description: data['description'] as String?,
@@ -433,27 +442,34 @@ class StationDiscoveryService {
               connectedDevices: data['connected_devices'] as int?,
             );
           }
+          // Ignore clients (X1 callsigns) - return null
         }
       } catch (_) {
         // Try next endpoint
       }
 
       try {
-        // Try /station/status endpoint (legacy)
+        // Try /station/status endpoint (legacy - only stations have this)
         final stationStatusUrl = Uri.parse('http://$ip:$port/station/status');
         final response = await client.get(stationStatusUrl).timeout(timeout);
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
-          return NetworkScanResult(
-            ip: ip,
-            port: port,
-            type: 'station',
-            callsign: data['callsign'] as String?,
-            name: data['name'] as String?,
-            description: data['description'] as String?,
-            connectedDevices: data['connected_devices'] as int?,
-          );
+          final callsign = data['callsign'] as String?;
+
+          // Verify it's a station callsign
+          if (_isStationCallsign(callsign)) {
+            client.close();
+            return NetworkScanResult(
+              ip: ip,
+              port: port,
+              type: 'station',
+              callsign: callsign,
+              name: data['name'] as String?,
+              description: data['description'] as String?,
+              connectedDevices: data['connected_devices'] as int?,
+            );
+          }
         }
       } catch (_) {
         // Try next endpoint
@@ -467,40 +483,31 @@ class StationDiscoveryService {
         if (response.statusCode == 200) {
           final body = response.body;
 
-          // Check if it's a geogram service
-          if (body.contains('Geogram Station Server') || body.contains('geogram-station')) {
-            final data = jsonDecode(body) as Map<String, dynamic>;
-            return NetworkScanResult(
-              ip: ip,
-              port: port,
-              type: 'station',
-              callsign: data['callsign'] as String?,
-              name: data['name'] as String?,
-              version: data['version'] as String?,
-              description: data['description'] as String?,
-              location: _buildLocation(data),
-              latitude: _getDouble(data, 'location.latitude'),
-              longitude: _getDouble(data, 'location.longitude'),
-              connectedDevices: data['connected_devices'] as int?,
-            );
-          } else if (body.contains('Geogram Desktop') || body.contains('geogram-desktop') || body.contains('Geogram') || body.contains('geogram')) {
+          // Only check if it looks like a Geogram service
+          if (body.contains('Geogram') || body.contains('geogram')) {
             try {
               final data = jsonDecode(body) as Map<String, dynamic>;
-              return NetworkScanResult(
-                ip: ip,
-                port: port,
-                type: 'desktop',
-                callsign: data['callsign'] as String?,
-                name: data['name'] as String?,
-                version: data['version'] as String?,
-                description: data['description'] as String?,
-              );
+              final callsign = data['callsign'] as String?;
+
+              // Only return if it's a station (X3 callsign)
+              if (_isStationCallsign(callsign)) {
+                client.close();
+                return NetworkScanResult(
+                  ip: ip,
+                  port: port,
+                  type: 'station',
+                  callsign: callsign,
+                  name: data['name'] as String?,
+                  version: data['version'] as String?,
+                  description: data['description'] as String?,
+                  location: _buildLocation(data),
+                  latitude: _getDouble(data, 'location.latitude'),
+                  longitude: _getDouble(data, 'location.longitude'),
+                  connectedDevices: data['connected_devices'] as int?,
+                );
+              }
             } catch (_) {
-              return NetworkScanResult(
-                ip: ip,
-                port: port,
-                type: 'desktop',
-              );
+              // JSON parse failed
             }
           }
         }
@@ -516,6 +523,13 @@ class StationDiscoveryService {
     return null;
   }
 
+  /// Check if a callsign indicates a station (X3 prefix)
+  /// X1 = client, X3 = station
+  bool _isStationCallsign(String? callsign) {
+    if (callsign == null || callsign.isEmpty) return false;
+    return callsign.toUpperCase().startsWith('X3');
+  }
+
   /// Discover stations on local network
   Future<void> discover() async {
     // Network interface scanning not supported on web
@@ -529,7 +543,7 @@ class StationDiscoveryService {
     _isScanning = true;
     LogService().log('');
     LogService().log('══════════════════════════════════════');
-    LogService().log('RELAY AUTO-DISCOVERY');
+    LogService().log('STATION AUTO-DISCOVERY');
     LogService().log('══════════════════════════════════════');
 
     try {
@@ -542,7 +556,9 @@ class StationDiscoveryService {
       // Get local IP ranges to scan
       final ranges = <String>{};
       for (var interface in interfaces) {
+        LogService().log('  Interface: ${interface.name}');
         for (var addr in interface.addresses) {
+          LogService().log('    Address: ${addr.address}');
           final subnet = _getSubnet(addr.address);
           if (subnet != null) {
             ranges.add(subnet);
@@ -550,51 +566,33 @@ class StationDiscoveryService {
         }
       }
 
-      LogService().log('Scanning localhost and ${ranges.length} network ranges...');
-
-      // Always scan localhost first
-      int foundCount = 0;
-      LogService().log('  Scanning localhost (127.0.0.1) on standard ports...');
-      for (var port in _ports) {
-        final station = await _checkRelay('127.0.0.1', port);
-        if (station != null) {
-          foundCount++;
-          LogService().log('    Found device at localhost:$port');
+      // Fallback: if no interfaces detected (common on Android), try common private network ranges
+      if (ranges.isEmpty) {
+        LogService().log('  No network interfaces detected, adding common private network ranges as fallback');
+        // Try to detect subnet from a test connection
+        final fallbackSubnet = await _detectSubnetFromConnectivity();
+        if (fallbackSubnet != null) {
+          ranges.add(fallbackSubnet);
+          LogService().log('  Detected subnet from connectivity: $fallbackSubnet');
+        } else {
+          // Add common home network ranges as last resort
+          ranges.add('192.168.1');
+          ranges.add('192.168.0');
+          ranges.add('192.168.178'); // Common Fritz!Box range
+          LogService().log('  Using common fallback ranges: ${ranges.join(", ")}');
         }
       }
 
-      // Scan extended localhost port range if --scan-localhost flag is set
-      final localhostPortRange = AppArgs().scanLocalhostPorts;
-      if (localhostPortRange != null) {
-        final (startPort, endPort) = localhostPortRange;
-        final portCount = endPort - startPort + 1;
-        LogService().log('  Scanning localhost ports $startPort-$endPort ($portCount ports)...');
+      LogService().log('Scanning localhost and ${ranges.length} network ranges: ${ranges.join(", ")}');
 
-        // Build list of localhost ports to scan (excluding standard ports)
-        final localhostTargets = <int>[];
-        for (int port = startPort; port <= endPort; port++) {
-          if (!_ports.contains(port)) {
-            localhostTargets.add(port);
-          }
-        }
-
-        // Process localhost ports in batches
-        for (int batchStart = 0; batchStart < localhostTargets.length; batchStart += _maxConcurrentConnections) {
-          final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, localhostTargets.length);
-          final batch = localhostTargets.sublist(batchStart, batchEnd);
-
-          final futures = batch.map((port) async {
-            final station = await _checkRelay('127.0.0.1', port);
-            if (station != null) {
-              foundCount++;
-              LogService().log('    Found Geogram instance at localhost:$port');
-            }
-          }).toList();
-
-          await Future.wait(futures).timeout(
-            const Duration(seconds: 5),
-            onTimeout: () => [],
-          );
+      // Always scan localhost first on primary ports
+      int foundCount = 0;
+      LogService().log('  Scanning localhost (127.0.0.1) on primary ports: ${_primaryPorts.join(", ")}...');
+      for (var port in _primaryPorts) {
+        final station = await _checkRelay('127.0.0.1', port);
+        if (station != null) {
+          foundCount++;
+          LogService().log('    Found station at localhost:$port');
         }
       }
 
@@ -625,22 +623,23 @@ class StationDiscoveryService {
 
   /// Scan a network range for stations
   /// Uses batched connections to avoid exhausting file descriptors
+  /// Scans primary ports first, then secondary ports
   Future<int> _scanRange(String subnet) async {
     int foundCount = 0;
 
-    // Build list of all IP:port combinations to scan
-    final targets = <MapEntry<String, int>>[];
+    // Scan primary ports first (fast)
+    final primaryTargets = <MapEntry<String, int>>[];
     for (int i = 1; i < 255; i++) {
       final ip = '$subnet.$i';
-      for (var port in _ports) {
-        targets.add(MapEntry(ip, port));
+      for (var port in _primaryPorts) {
+        primaryTargets.add(MapEntry(ip, port));
       }
     }
 
-    // Process in batches to avoid "too many open files" error
-    for (int batchStart = 0; batchStart < targets.length; batchStart += _maxConcurrentConnections) {
-      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, targets.length);
-      final batch = targets.sublist(batchStart, batchEnd);
+    // Process primary ports in batches
+    for (int batchStart = 0; batchStart < primaryTargets.length; batchStart += _maxConcurrentConnections) {
+      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, primaryTargets.length);
+      final batch = primaryTargets.sublist(batchStart, batchEnd);
 
       final futures = batch.map((target) async {
         final station = await _checkRelay(target.key, target.value);
@@ -649,13 +648,35 @@ class StationDiscoveryService {
         }
       }).toList();
 
-      // Wait for this batch to complete before starting the next
       await Future.wait(futures).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          // Silently continue on timeout
-          return [];
-        },
+        const Duration(seconds: 5),
+        onTimeout: () => [],
+      );
+    }
+
+    // Scan secondary ports
+    final secondaryTargets = <MapEntry<String, int>>[];
+    for (int i = 1; i < 255; i++) {
+      final ip = '$subnet.$i';
+      for (var port in _secondaryPorts) {
+        secondaryTargets.add(MapEntry(ip, port));
+      }
+    }
+
+    for (int batchStart = 0; batchStart < secondaryTargets.length; batchStart += _maxConcurrentConnections) {
+      final batchEnd = (batchStart + _maxConcurrentConnections).clamp(0, secondaryTargets.length);
+      final batch = secondaryTargets.sublist(batchStart, batchEnd);
+
+      final futures = batch.map((target) async {
+        final station = await _checkRelay(target.key, target.value);
+        if (station != null) {
+          foundCount++;
+        }
+      }).toList();
+
+      await Future.wait(futures).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => [],
       );
     }
 
@@ -845,4 +866,61 @@ class StationDiscoveryService {
 
   /// Get discovery status
   bool get isScanning => _isScanning;
+
+  /// Try to detect the local subnet using local-only methods (no internet required)
+  /// This works completely off-grid by using UDP broadcast sockets
+  Future<String?> _detectSubnetFromConnectivity() async {
+    // Method 1: Bind a UDP socket to broadcast address to detect local IP
+    try {
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      // Try to "connect" to broadcast - this doesn't send anything, just sets the route
+      socket.broadcastEnabled = true;
+
+      // Get the local address that would be used for LAN communication
+      // by checking what interface handles broadcast
+      final localAddress = socket.address.address;
+      socket.close();
+
+      if (localAddress != '0.0.0.0' && localAddress != '127.0.0.1') {
+        LogService().log('  Local IP detected via UDP socket: $localAddress');
+        return _getSubnet(localAddress);
+      }
+    } catch (e) {
+      LogService().log('  Could not detect subnet via UDP socket: $e');
+    }
+
+    // Method 2: Try connecting to common gateway addresses (local only, no internet)
+    // These are typical router IPs on private networks
+    final commonGateways = [
+      '192.168.1.1',
+      '192.168.0.1',
+      '192.168.178.1', // Fritz!Box
+      '10.0.0.1',
+      '192.168.2.1',
+      '192.168.10.1',
+      '172.16.0.1',
+    ];
+
+    for (final gateway in commonGateways) {
+      try {
+        final socket = await Socket.connect(
+          gateway,
+          80, // Try HTTP port on router
+          timeout: const Duration(milliseconds: 200),
+        );
+        final localAddress = socket.address.address;
+        socket.destroy();
+
+        if (localAddress != '127.0.0.1') {
+          LogService().log('  Local IP detected via gateway $gateway: $localAddress');
+          return _getSubnet(localAddress);
+        }
+      } catch (_) {
+        // Gateway not reachable, try next
+      }
+    }
+
+    LogService().log('  Could not auto-detect subnet, will use common ranges');
+    return null;
+  }
 }

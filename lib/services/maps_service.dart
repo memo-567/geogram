@@ -362,7 +362,7 @@ class MapsService {
       final preferred = stationService.getPreferredStation();
       final station = (preferred != null && preferred.url.isNotEmpty)
           ? preferred
-          : stationService.getConnectedRelay();
+          : stationService.getConnectedStation();
       if (station == null || station.url.isEmpty) {
         LogService().log('MapsService: No station configured for events');
         return _cachedStationEvents ?? [];

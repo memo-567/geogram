@@ -583,25 +583,38 @@ class CollectionService {
     try {
       // Read from tree.json (which should already be generated/validated)
       final treeJsonFile = File('${folder.path}/extra/tree.json');
+      bool usedTreeJson = false;
 
       if (await treeJsonFile.exists()) {
         final content = await treeJsonFile.readAsString();
-        final entries = json.decode(content) as List<dynamic>;
 
-        // Count files recursively from nested tree.json structure
-        void countRecursive(List<dynamic> items) {
-          for (var entry in items) {
-            if (entry['type'] == 'file') {
-              fileCount++;
-              totalSize += entry['size'] as int? ?? 0;
-            } else if (entry['type'] == 'directory' && entry['children'] != null) {
-              countRecursive(entry['children'] as List<dynamic>);
+        // Only try to parse if content is not empty
+        if (content.trim().isNotEmpty) {
+          try {
+            final entries = json.decode(content) as List<dynamic>;
+
+            // Count files recursively from nested tree.json structure
+            void countRecursive(List<dynamic> items) {
+              for (var entry in items) {
+                if (entry['type'] == 'file') {
+                  fileCount++;
+                  totalSize += entry['size'] as int? ?? 0;
+                } else if (entry['type'] == 'directory' && entry['children'] != null) {
+                  countRecursive(entry['children'] as List<dynamic>);
+                }
+              }
             }
+            countRecursive(entries);
+            usedTreeJson = true;
+          } catch (parseError) {
+            // JSON parse failed, will fallback to directory scan
+            stderr.writeln('Warning: Could not parse tree.json, falling back to directory scan');
           }
         }
-        countRecursive(entries);
-      } else {
-        // Fallback: scan filesystem directly if tree.json doesn't exist
+      }
+
+      if (!usedTreeJson) {
+        // Fallback: scan filesystem directly if tree.json doesn't exist or is invalid
         await _scanDirectoryForCount(folder, (count, size) {
           fileCount += count;
           totalSize += size;

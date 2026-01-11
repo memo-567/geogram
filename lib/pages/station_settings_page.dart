@@ -14,10 +14,10 @@ class StationSettingsPage extends StatefulWidget {
   const StationSettingsPage({super.key});
 
   @override
-  State<StationSettingsPage> createState() => _RelaySettingsPageState();
+  State<StationSettingsPage> createState() => _StationSettingsPageState();
 }
 
-class _RelaySettingsPageState extends State<StationSettingsPage> {
+class _StationSettingsPageState extends State<StationSettingsPage> {
   final StationNodeService _stationNodeService = StationNodeService();
 
   late StationNodeConfig _config;
@@ -133,8 +133,8 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
     _radiusKm = _config.coverage?.radiusKm ?? 50.0;
 
     // Default network settings (will be overridden by async load)
-    _httpPort = 8080;
-    _httpsPort = 8443;
+    _httpPort = 3456;  // Standard Geogram port
+    _httpsPort = 3457;
     _enableSsl = false;
     _sslAutoRenew = true;
 
@@ -223,7 +223,7 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('RELAY IDENTITY', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('STATION IDENTITY', style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 12),
             _buildInfoRow('Name', node.name),
             _buildInfoRow('Type', node.typeDisplay),
@@ -290,7 +290,7 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                     ),
                     controller: _httpPortController,
                     onChanged: (v) {
-                      _httpPort = int.tryParse(v) ?? 8080;
+                      _httpPort = int.tryParse(v) ?? 3456;
                       _hasChanges = true;
                       setState(() {});
                     },
@@ -333,7 +333,7 @@ class _RelaySettingsPageState extends State<StationSettingsPage> {
                       ),
                       controller: _httpsPortController,
                       onChanged: (v) {
-                        _httpsPort = int.tryParse(v) ?? 8443;
+                        _httpsPort = int.tryParse(v) ?? 3457;
                         _hasChanges = true;
                         setState(() {});
                       },

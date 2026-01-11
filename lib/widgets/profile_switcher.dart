@@ -121,7 +121,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: const Text(
-                                'RELAY',
+                                'STATION',
                                 style: TextStyle(
                                   fontSize: 9,
                                   fontWeight: FontWeight.bold,
@@ -233,7 +233,7 @@ class _ProfileSwitcherState extends State<ProfileSwitcher> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
-                          'RELAY',
+                          'STATION',
                           style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.bold,

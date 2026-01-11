@@ -301,7 +301,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     // Connect to station via WebSocket
-    final success = await _stationService.connectRelay(stationUrl);
+    final success = await _stationService.connectStation(stationUrl);
 
     if (success) {
       // Small delay to ensure WebSocket is ready
@@ -2482,7 +2482,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         deviceCallsign = widget.remoteDeviceCallsign;
       } else {
         final stationName = _stationRooms.first.stationName;
-        final connectedStation = _stationService.getConnectedRelay();
+        final connectedStation = _stationService.getConnectedStation();
         deviceName = stationName.isNotEmpty ? stationName : (connectedStation?.name ?? 'Station');
         deviceCallsign = connectedStation?.callsign;
       }

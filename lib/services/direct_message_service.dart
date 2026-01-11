@@ -458,7 +458,7 @@ class DirectMessageService {
 
     final devicesService = DevicesService();
     final device = devicesService.getDevice(normalizedCallsign);
-    final station = StationService().getConnectedRelay();
+    final station = StationService().getConnectedStation();
     final hasStationProxy = station != null;
     final hasDirectConnection = device != null && device.isOnline && device.url != null;
     final hasBleConnection = device != null &&

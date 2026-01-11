@@ -111,10 +111,10 @@ class StationTopologyPage extends StatefulWidget {
   const StationTopologyPage({super.key});
 
   @override
-  State<StationTopologyPage> createState() => _RelayTopologyPageState();
+  State<StationTopologyPage> createState() => _StationTopologyPageState();
 }
 
-class _RelayTopologyPageState extends State<StationTopologyPage> {
+class _StationTopologyPageState extends State<StationTopologyPage> {
   final StationNodeService _stationNodeService = StationNodeService();
 
   Map<String, TopologyNode> _nodes = {};

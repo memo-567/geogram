@@ -38,7 +38,7 @@ import '../util/event_bus.dart';
 import '../version.dart';
 
 /// Station server settings
-class RelayServerSettings {
+class StationServerSettings {
   int port;
   bool enabled;
   bool tileServerEnabled;
@@ -55,8 +55,8 @@ class RelayServerSettings {
   String? lastMirroredVersion;   // Track what version has been downloaded
   String updateMirrorUrl;        // GitHub API URL for releases (can be changed for different repos)
 
-  RelayServerSettings({
-    this.port = 8080,
+  StationServerSettings({
+    this.port = 3456,  // Standard Geogram port
     this.enabled = false,
     this.tileServerEnabled = true,
     this.osmFallbackEnabled = true,
@@ -72,9 +72,9 @@ class RelayServerSettings {
     this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
   });
 
-  factory RelayServerSettings.fromJson(Map<String, dynamic> json) {
-    return RelayServerSettings(
-      port: json['port'] as int? ?? 8080,
+  factory StationServerSettings.fromJson(Map<String, dynamic> json) {
+    return StationServerSettings(
+      port: json['port'] as int? ?? 3456,
       enabled: json['enabled'] as bool? ?? false,
       tileServerEnabled: json['tileServerEnabled'] as bool? ?? true,
       osmFallbackEnabled: json['osmFallbackEnabled'] as bool? ?? true,
@@ -108,7 +108,7 @@ class RelayServerSettings {
         'updateMirrorUrl': updateMirrorUrl,
       };
 
-  RelayServerSettings copyWith({
+  StationServerSettings copyWith({
     int? port,
     bool? enabled,
     bool? tileServerEnabled,
@@ -124,7 +124,7 @@ class RelayServerSettings {
     String? lastMirroredVersion,
     String? updateMirrorUrl,
   }) {
-    return RelayServerSettings(
+    return StationServerSettings(
       port: port ?? this.port,
       enabled: enabled ?? this.enabled,
       tileServerEnabled: tileServerEnabled ?? this.tileServerEnabled,
@@ -367,7 +367,7 @@ class StationServerService {
   StationServerService._internal();
 
   HttpServer? _httpServer;
-  RelayServerSettings _settings = RelayServerSettings();
+  StationServerSettings _settings = StationServerSettings();
   final Map<String, ConnectedClient> _clients = {};
   final Map<String, _BackupProviderEntry> _backupProviders = {};
   static const Duration _backupProviderTtl = Duration(seconds: 90);
@@ -437,7 +437,7 @@ class StationServerService {
 
   bool get isRunning => _running;
   int get connectedDevices => _clients.length;
-  RelayServerSettings get settings => _settings;
+  StationServerSettings get settings => _settings;
   DateTime? get startTime => _startTime;
 
   /// Get the actual port the station server is running on
@@ -462,13 +462,19 @@ class StationServerService {
     await _loadCachedRelease();
 
     LogService().log('StationServerService initialized');
+
+    // Auto-start station server if it was enabled
+    if (_settings.enabled) {
+      LogService().log('Station server auto-start enabled, starting...');
+      await start();
+    }
   }
 
   /// Load settings from config
   Future<void> _loadSettings() async {
     final config = ConfigService().getAll();
     if (config.containsKey('stationServer')) {
-      _settings = RelayServerSettings.fromJson(
+      _settings = StationServerSettings.fromJson(
           config['stationServer'] as Map<String, dynamic>);
     }
   }
@@ -479,7 +485,7 @@ class StationServerService {
   }
 
   /// Update settings
-  Future<void> updateSettings(RelayServerSettings settings) async {
+  Future<void> updateSettings(StationServerSettings settings) async {
     final wasRunning = _running;
     final oldPort = _settings.port;
 
@@ -501,14 +507,12 @@ class StationServerService {
     }
 
     try {
-      // Determine the port to use:
-      // - If custom port set in settings (not default 8080), use that
-      // - Otherwise, use AppArgs().port + 1 to avoid conflicts
+      // Persist the enabled preference
+      _settings.enabled = true;
+      _saveSettings();
+
+      // Use the configured port directly (default is 3456, the standard Geogram port)
       int serverPort = _settings.port;
-      if (_settings.port == 8080 && AppArgs().isInitialized) {
-        // Use the main API port + 1 to keep station server on predictable port
-        serverPort = AppArgs().port + 1;
-      }
 
       _httpServer = await HttpServer.bind(
         InternetAddress.anyIPv4,
@@ -546,6 +550,10 @@ class StationServerService {
   /// Stop the station server
   Future<void> stop() async {
     if (!_running) return;
+
+    // Persist the disabled preference
+    _settings.enabled = false;
+    _saveSettings();
 
     // Stop update polling
     _updatePollTimer?.cancel();
@@ -1096,20 +1104,21 @@ class StationServerService {
   /// Handle /api/status endpoint
   Future<void> _handleStatus(HttpRequest request) async {
     final profile = ProfileService().getProfile();
-    final isRelay = CallsignGenerator.isStationCallsign(profile.callsign);
+    final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
 
     final uptime = _startTime != null
         ? DateTime.now().difference(_startTime!).inSeconds
         : 0;
 
     final status = {
-      'name': 'Geogram Desktop Station',
+      'service': 'Geogram Station Server',  // Required for station discovery
+      'name': _settings.description ?? profile.callsign ?? 'Geogram Station',
       'version': appVersion,
       'callsign': profile.callsign,
-      'description': _settings.description ?? 'Geogram Desktop Station Server',
+      'description': _settings.description ?? 'Geogram Station Server',
       'connected_devices': _clients.length,
       'uptime': uptime,
-      'station_mode': isRelay,
+      'station_mode': isStation,
       'location': _settings.location,
       'latitude': _settings.latitude,
       'longitude': _settings.longitude,

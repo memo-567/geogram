@@ -5,12 +5,16 @@
 
 import 'dart:async';
 import 'dart:isolate';
-import 'package:flutter/foundation.dart' show kIsWeb, compute;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
 import '../util/nostr_key_generator.dart';
+import '../util/nostr_crypto.dart';
 
 /// Parameters for vanity key generation in isolate
 class _VanityGenParams {
@@ -79,6 +83,12 @@ void _vanityGeneratorIsolate(SendPort mainSendPort) {
   });
 }
 
+/// Station setup mode
+enum StationSetupMode {
+  createLocal,
+  connectRemote,
+}
+
 /// Full-screen page for creating a new profile
 class NewProfilePage extends StatefulWidget {
   const NewProfilePage({super.key});
@@ -101,11 +111,29 @@ class _NewProfilePageState extends State<NewProfilePage> {
   final TextEditingController _nicknameController = TextEditingController();
   final TextEditingController _vanityPatternController = TextEditingController();
 
+  // Station-specific controllers
+  final TextEditingController _stationNameController = TextEditingController();
+  final TextEditingController _stationDescriptionController = TextEditingController();
+  final TextEditingController _remoteUrlController = TextEditingController();
+  final TextEditingController _remoteNsecController = TextEditingController();
+
   ProfileType _selectedType = ProfileType.client;
   bool _useExtension = false;
   bool _extensionAvailable = false;
   bool _checkingExtension = true;
   bool _hasExistingStation = false;
+
+  // Station setup mode
+  StationSetupMode _stationMode = StationSetupMode.createLocal;
+  int _allocatedMb = 10000;
+  bool _obscureNsec = true;
+
+  // Remote connection state
+  bool _isTestingConnection = false;
+  bool _connectionTested = false;
+  bool _connectionSuccess = false;
+  String? _testError;
+  Map<String, dynamic>? _remoteStatus;
 
   // Pre-generated keys for callsign preview
   NostrKeys? _generatedKeys;
@@ -139,6 +167,10 @@ class _NewProfilePageState extends State<NewProfilePage> {
     _vanityPatternController.removeListener(_onVanityPatternChanged);
     _nicknameController.dispose();
     _vanityPatternController.dispose();
+    _stationNameController.dispose();
+    _stationDescriptionController.dispose();
+    _remoteUrlController.dispose();
+    _remoteNsecController.dispose();
     super.dispose();
   }
 
@@ -309,22 +341,172 @@ class _NewProfilePageState extends State<NewProfilePage> {
     });
   }
 
-  void _create() {
-    final activeKeys = _getActiveKeys();
-    if (activeKeys == null && !_useExtension) return;
+  void _resetConnectionTest() {
+    if (_connectionTested) {
+      setState(() {
+        _connectionTested = false;
+        _connectionSuccess = false;
+        _testError = null;
+        _remoteStatus = null;
+      });
+    }
+  }
 
-    Navigator.pop(context, {
-      'type': _selectedType,
-      'useExtension': _useExtension,
-      'nickname': _nicknameController.text.trim().isEmpty
-          ? null
-          : _nicknameController.text.trim(),
-      if (!_useExtension && activeKeys != null) ...{
-        'npub': activeKeys.npub,
-        'nsec': activeKeys.nsec,
-        'callsign': _getDisplayCallsign(),
-      },
+  Future<void> _testRemoteConnection() async {
+    final url = _remoteUrlController.text.trim();
+    final nsec = _remoteNsecController.text.trim();
+
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a station URL')),
+      );
+      return;
+    }
+
+    if (nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter the station NSEC')),
+      );
+      return;
+    }
+
+    if (!nsec.startsWith('nsec1')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid NSEC format. It should start with "nsec1"')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isTestingConnection = true;
+      _connectionTested = false;
+      _testError = null;
     });
+
+    try {
+      // Convert URL to HTTP if needed for status check
+      var statusUrl = url;
+      if (statusUrl.startsWith('wss://')) {
+        statusUrl = statusUrl.replaceFirst('wss://', 'https://');
+      } else if (statusUrl.startsWith('ws://')) {
+        statusUrl = statusUrl.replaceFirst('ws://', 'http://');
+      }
+      if (!statusUrl.endsWith('/')) {
+        statusUrl += '/';
+      }
+      statusUrl += 'api/status';
+
+      LogService().log('Testing connection to: $statusUrl');
+
+      final response = await http.get(
+        Uri.parse(statusUrl),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final status = json.decode(response.body) as Map<String, dynamic>;
+
+        // Verify NSEC is valid by attempting to decode it
+        try {
+          final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+          NostrCrypto.derivePublicKey(privateKeyHex);
+
+          setState(() {
+            _connectionTested = true;
+            _connectionSuccess = true;
+            _remoteStatus = status;
+          });
+        } catch (e) {
+          setState(() {
+            _connectionTested = true;
+            _connectionSuccess = false;
+            _testError = 'Invalid NSEC: $e';
+          });
+        }
+      } else {
+        setState(() {
+          _connectionTested = true;
+          _connectionSuccess = false;
+          _testError = 'Server returned status ${response.statusCode}';
+        });
+      }
+    } catch (e) {
+      LogService().log('Connection test failed: $e');
+      setState(() {
+        _connectionTested = true;
+        _connectionSuccess = false;
+        _testError = e.toString();
+      });
+    } finally {
+      setState(() => _isTestingConnection = false);
+    }
+  }
+
+  bool _canCreate() {
+    if (_selectedType == ProfileType.client) {
+      return _getActiveKeys() != null || _useExtension;
+    } else {
+      // Station profile
+      if (_stationMode == StationSetupMode.createLocal) {
+        return _getActiveKeys() != null && _stationNameController.text.trim().isNotEmpty;
+      } else {
+        // Connect remote
+        return _connectionSuccess && _remoteStatus != null;
+      }
+    }
+  }
+
+  void _create() {
+    if (!_canCreate()) return;
+
+    if (_selectedType == ProfileType.client) {
+      final activeKeys = _getActiveKeys();
+      Navigator.pop(context, {
+        'type': _selectedType,
+        'useExtension': _useExtension,
+        'nickname': _nicknameController.text.trim().isEmpty
+            ? null
+            : _nicknameController.text.trim(),
+        if (!_useExtension && activeKeys != null) ...{
+          'npub': activeKeys.npub,
+          'nsec': activeKeys.nsec,
+          'callsign': _getDisplayCallsign(),
+        },
+      });
+    } else {
+      // Station profile
+      if (_stationMode == StationSetupMode.createLocal) {
+        final activeKeys = _getActiveKeys();
+        Navigator.pop(context, {
+          'type': _selectedType,
+          'stationMode': 'local',
+          'stationName': _stationNameController.text.trim(),
+          'stationDescription': _stationDescriptionController.text.trim(),
+          'allocatedMb': _allocatedMb,
+          'npub': activeKeys!.npub,
+          'nsec': activeKeys.nsec,
+          'callsign': _getDisplayCallsign(),
+        });
+      } else {
+        // Connect remote - derive keys from the remote's nsec
+        final nsec = _remoteNsecController.text.trim();
+        final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+        final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
+        final npub = NostrCrypto.encodeNpub(publicKeyHex);
+        final callsign = NostrKeyGenerator.deriveStationCallsign(npub);
+
+        Navigator.pop(context, {
+          'type': _selectedType,
+          'stationMode': 'remote',
+          'remoteUrl': _remoteUrlController.text.trim(),
+          'remoteNsec': nsec,
+          'remoteStatus': _remoteStatus,
+          'npub': npub,
+          'nsec': nsec,
+          'callsign': callsign,
+        });
+      }
+    }
   }
 
   String _formatDuration(Duration d) {
@@ -337,6 +519,13 @@ class _NewProfilePageState extends State<NewProfilePage> {
     return '${seconds}.${tenths}s';
   }
 
+  String _formatStorage(int mb) {
+    if (mb >= 1000) {
+      return '${(mb / 1000).toStringAsFixed(1)} GB';
+    }
+    return '$mb MB';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -346,7 +535,7 @@ class _NewProfilePageState extends State<NewProfilePage> {
         title: Text(_i18n.t('create_profile')),
         actions: [
           FilledButton.icon(
-            onPressed: (_getActiveKeys() != null || _useExtension) ? _create : null,
+            onPressed: _canCreate() ? _create : null,
             icon: const Icon(Icons.check, size: 18),
             label: Text(_i18n.t('create')),
             style: FilledButton.styleFrom(
@@ -404,67 +593,482 @@ class _NewProfilePageState extends State<NewProfilePage> {
             ),
             const SizedBox(height: 32),
 
-            // Callsign preview with regenerate button
-            Text(
-              _i18n.t('your_callsign'),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _getDisplayCallsign(),
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: _selectedVanityMatch != null
-                            ? Colors.green
-                            : theme.colorScheme.primary,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                  IconButton.filledTonal(
-                    onPressed: _vanityRunning ? null : _generateNewCallsign,
-                    icon: const Icon(Icons.refresh),
-                    tooltip: _i18n.t('generate_new'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 32),
-
-            // Nickname field
-            Text(
-              _i18n.t('nickname_optional'),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _nicknameController,
-              decoration: InputDecoration(
-                hintText: _i18n.t('enter_nickname'),
-                border: const OutlineInputBorder(),
-              ),
-              maxLength: 50,
-            ),
-            const SizedBox(height: 32),
-
-            // Vanity Generator Section
-            _buildVanityGenerator(theme),
+            // Show different content based on profile type
+            if (_selectedType == ProfileType.client)
+              _buildClientOptions(theme)
+            else
+              _buildStationOptions(theme),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildClientOptions(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Callsign preview with regenerate button
+        Text(
+          _i18n.t('your_callsign'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _getDisplayCallsign(),
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: _selectedVanityMatch != null
+                        ? Colors.green
+                        : theme.colorScheme.primary,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              IconButton.filledTonal(
+                onPressed: _vanityRunning ? null : _generateNewCallsign,
+                icon: const Icon(Icons.refresh),
+                tooltip: _i18n.t('generate_new'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 32),
+
+        // Nickname field
+        Text(
+          _i18n.t('nickname_optional'),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _nicknameController,
+          decoration: InputDecoration(
+            hintText: _i18n.t('enter_nickname'),
+            border: const OutlineInputBorder(),
+          ),
+          maxLength: 50,
+        ),
+        const SizedBox(height: 32),
+
+        // Vanity Generator Section
+        _buildVanityGenerator(theme),
+      ],
+    );
+  }
+
+  Widget _buildStationOptions(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Station mode selection
+        Text(
+          'Station Setup',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildStationModeOption(
+                theme: theme,
+                mode: StationSetupMode.createLocal,
+                icon: Icons.hub,
+                title: 'Create Local',
+                description: 'Run station on this device',
+                color: Colors.green,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildStationModeOption(
+                theme: theme,
+                mode: StationSetupMode.connectRemote,
+                icon: Icons.cloud,
+                title: 'Connect Remote',
+                description: 'Manage a remote station',
+                color: Colors.blue,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+
+        if (_stationMode == StationSetupMode.createLocal)
+          _buildLocalStationOptions(theme)
+        else
+          _buildRemoteStationOptions(theme),
+      ],
+    );
+  }
+
+  Widget _buildStationModeOption({
+    required ThemeData theme,
+    required StationSetupMode mode,
+    required IconData icon,
+    required String title,
+    required String description,
+    required Color color,
+  }) {
+    final isSelected = _stationMode == mode;
+
+    return InkWell(
+      onTap: () => setState(() {
+        _stationMode = mode;
+        _resetConnectionTest();
+      }),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isSelected ? color : Colors.grey[300]!,
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          color: isSelected ? color.withOpacity(0.1) : null,
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              size: 32,
+              color: isSelected ? color : Colors.grey[600],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                color: isSelected ? color : null,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              description,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLocalStationOptions(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Station name
+        Text(
+          'Station Name *',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _stationNameController,
+          decoration: const InputDecoration(
+            hintText: 'e.g., My Community Station',
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 16),
+
+        // Description
+        Text(
+          'Description (optional)',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _stationDescriptionController,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            hintText: 'Describe your station...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Storage allocation
+        Text(
+          'Storage Allocation',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(child: Text('Disk space for cached data')),
+                  const SizedBox(width: 8),
+                  Text(
+                    _formatStorage(_allocatedMb),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Slider(
+                value: _allocatedMb.toDouble(),
+                min: 500,
+                max: 50000,
+                divisions: 99,
+                label: _formatStorage(_allocatedMb),
+                onChanged: (value) {
+                  setState(() => _allocatedMb = value.round());
+                },
+              ),
+              Text(
+                'This space will be used to cache messages and media',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Callsign preview
+        Text(
+          'Station Callsign',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _getDisplayCallsign(),
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: _selectedVanityMatch != null
+                        ? Colors.green
+                        : Colors.orange,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              IconButton.filledTonal(
+                onPressed: _vanityRunning ? null : _generateNewCallsign,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Generate new',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Station callsigns start with X3',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+        ),
+        const SizedBox(height: 24),
+
+        // Vanity generator
+        _buildVanityGenerator(theme),
+      ],
+    );
+  }
+
+  Widget _buildRemoteStationOptions(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Info card
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue[400], size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Connect to a station server running on another device. '
+                  'You\'ll need the station URL and its NSEC (private key).',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // URL field
+        Text(
+          'Station URL',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _remoteUrlController,
+          decoration: const InputDecoration(
+            hintText: 'https://station.example.com',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.link),
+          ),
+          onChanged: (_) => _resetConnectionTest(),
+        ),
+        const SizedBox(height: 16),
+
+        // NSEC field
+        Text(
+          'Station NSEC',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _remoteNsecController,
+          obscureText: _obscureNsec,
+          decoration: InputDecoration(
+            hintText: 'nsec1...',
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.key),
+            suffixIcon: IconButton(
+              icon: Icon(_obscureNsec ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _obscureNsec = !_obscureNsec),
+            ),
+          ),
+          onChanged: (_) => _resetConnectionTest(),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.orange.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.warning_amber, color: Colors.orange[400], size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Keep your NSEC private. It grants full control over the station.',
+                  style: TextStyle(fontSize: 11, color: Colors.orange[300]),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Test connection button
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _isTestingConnection ? null : _testRemoteConnection,
+            icon: _isTestingConnection
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.wifi_find),
+            label: Text(_isTestingConnection ? 'Testing...' : 'Test Connection'),
+          ),
+        ),
+
+        // Connection status
+        if (_connectionTested) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _connectionSuccess
+                  ? Colors.green.withOpacity(0.1)
+                  : Colors.red.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: _connectionSuccess ? Colors.green : Colors.red,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _connectionSuccess ? Icons.check_circle : Icons.error,
+                      color: _connectionSuccess ? Colors.green : Colors.red,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _connectionSuccess ? 'Connection successful!' : 'Connection failed',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: _connectionSuccess ? Colors.green : Colors.red,
+                      ),
+                    ),
+                  ],
+                ),
+                if (_connectionSuccess && _remoteStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text('Name: ${_remoteStatus!['name'] ?? 'Unknown'}'),
+                  Text('Callsign: ${_remoteStatus!['callsign'] ?? 'Unknown'}'),
+                ],
+                if (!_connectionSuccess && _testError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _testError!,
+                    style: TextStyle(color: Colors.red[300], fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -661,7 +1265,9 @@ class _NewProfilePageState extends State<NewProfilePage> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        match.keys.callsign,
+                                        _selectedType == ProfileType.station
+                                            ? NostrKeyGenerator.deriveStationCallsign(match.keys.npub)
+                                            : match.keys.callsign,
                                         style: theme.textTheme.titleMedium?.copyWith(
                                           fontWeight: FontWeight.bold,
                                           fontFamily: 'monospace',
@@ -836,7 +1442,15 @@ class _NewProfilePageState extends State<NewProfilePage> {
     return InkWell(
       onTap: isDisabled
           ? null
-          : () => setState(() => _selectedType = type),
+          : () {
+              setState(() {
+                _selectedType = type;
+                // Reset vanity matches when switching types
+                _vanityMatches.clear();
+                _selectedVanityMatch = null;
+                _generateNewCallsign();
+              });
+            },
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(16),

@@ -578,7 +578,7 @@ class MapTileService {
             if (response.statusCode == 200 && response.bodyBytes.length > 100) {
               tileResult['source'] = 'STATION';
               tileResult['bytes'] = response.bodyBytes.length;
-              LogService().log('TEST [$z/$x/$y] SUCCESS from RELAY (${response.bodyBytes.length} bytes)');
+              LogService().log('TEST [$z/$x/$y] SUCCESS from STATION (${response.bodyBytes.length} bytes)');
               (results['tiles'] as List).add(tileResult);
               continue;
             } else {

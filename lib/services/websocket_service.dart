@@ -53,17 +53,27 @@ class WebSocketService {
   /// Connect to station and send hello
   Future<bool> connectAndHello(String url) async {
     try {
+      // Normalize URL to WebSocket protocol
+      var wsUrl = url;
+      if (wsUrl.startsWith('http://')) {
+        wsUrl = wsUrl.replaceFirst('http://', 'ws://');
+      } else if (wsUrl.startsWith('https://')) {
+        wsUrl = wsUrl.replaceFirst('https://', 'wss://');
+      } else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        wsUrl = 'ws://$wsUrl';
+      }
+
       // Store URL for reconnection
-      _stationUrl = url;
+      _stationUrl = wsUrl;
       _shouldReconnect = true;
 
       LogService().log('══════════════════════════════════════');
-      LogService().log('CONNECTING TO RELAY');
+      LogService().log('CONNECTING TO STATION');
       LogService().log('══════════════════════════════════════');
-      LogService().log('URL: $url');
+      LogService().log('URL: $wsUrl');
 
       // Connect to WebSocket
-      final uri = Uri.parse(url);
+      final uri = Uri.parse(wsUrl);
       LogService().log('Platform: ${kIsWeb ? "Web" : "Native"}');
       LogService().log('Connecting to WebSocket at: $uri');
 
@@ -199,7 +209,7 @@ class WebSocketService {
             }
 
             LogService().log('');
-            LogService().log('RECEIVED MESSAGE FROM RELAY');
+            LogService().log('RECEIVED MESSAGE FROM STATION');
             LogService().log('══════════════════════════════════════');
             LogService().log('Raw message: ${rawMessage.length > 500 ? "${rawMessage.substring(0, 500)}..." : rawMessage}');
 

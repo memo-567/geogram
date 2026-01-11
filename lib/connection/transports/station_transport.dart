@@ -67,7 +67,7 @@ class StationTransport extends Transport with TransportMixin {
     // Station transport can potentially reach any device if we're connected to a station
     // The actual delivery depends on whether the target device is also connected
     // We return true if we have a station connection, and let the send() handle failures
-    final station = _stationService.getConnectedRelay();
+    final station = _stationService.getConnectedStation();
     if (station == null) return false;
 
     // If we're connected to a station, we can attempt to reach any device
@@ -105,7 +105,7 @@ class StationTransport extends Transport with TransportMixin {
 
     try {
       // Check station connection
-      final station = _stationService.getConnectedRelay();
+      final station = _stationService.getConnectedStation();
       if (station == null) {
         return TransportResult.failure(
           error: 'No station connected',
@@ -403,11 +403,11 @@ class StationTransport extends Transport with TransportMixin {
 
   /// Check if connected to a station
   bool get isConnectedToStation {
-    return _stationService.getConnectedRelay() != null && _wsService.isConnected;
+    return _stationService.getConnectedStation() != null && _wsService.isConnected;
   }
 
   /// Get the currently connected station
   String? get connectedStationUrl {
-    return _stationService.getConnectedRelay()?.url;
+    return _stationService.getConnectedStation()?.url;
   }
 }

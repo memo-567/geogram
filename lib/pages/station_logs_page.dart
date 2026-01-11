@@ -17,20 +17,20 @@ enum StationLogType {
 }
 
 /// A log entry
-class RelayLogEntry {
+class StationLogEntry {
   final DateTime timestamp;
   final String message;
   final String? level;
   final String? source;
 
-  RelayLogEntry({
+  StationLogEntry({
     required this.timestamp,
     required this.message,
     this.level,
     this.source,
   });
 
-  factory RelayLogEntry.parse(String line) {
+  factory StationLogEntry.parse(String line) {
     // Parse log lines in format: [2025-11-26 15:30:00] [INFO] [source] message
     final timestampMatch = RegExp(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]').firstMatch(line);
     final levelMatch = RegExp(r'\[(INFO|WARN|ERROR|DEBUG)\]').firstMatch(line);
@@ -45,7 +45,7 @@ class RelayLogEntry {
       timestamp = DateTime.now();
     }
 
-    return RelayLogEntry(
+    return StationLogEntry(
       timestamp: timestamp,
       message: line,
       level: levelMatch?.group(1),
@@ -59,16 +59,16 @@ class StationLogsPage extends StatefulWidget {
   const StationLogsPage({super.key});
 
   @override
-  State<StationLogsPage> createState() => _RelayLogsPageState();
+  State<StationLogsPage> createState() => _StationLogsPageState();
 }
 
-class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProviderStateMixin {
+class _StationLogsPageState extends State<StationLogsPage> with SingleTickerProviderStateMixin {
   final StationNodeService _stationNodeService = StationNodeService();
 
   late TabController _tabController;
-  List<RelayLogEntry> _connectionLogs = [];
-  List<RelayLogEntry> _moderationLogs = [];
-  List<RelayLogEntry> _syncLogs = [];
+  List<StationLogEntry> _connectionLogs = [];
+  List<StationLogEntry> _moderationLogs = [];
+  List<StationLogEntry> _syncLogs = [];
   bool _isLoading = true;
   String? _error;
 
@@ -122,7 +122,7 @@ class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProvid
     }
   }
 
-  Future<List<RelayLogEntry>> _loadLogFile(String filePath) async {
+  Future<List<StationLogEntry>> _loadLogFile(String filePath) async {
     final file = File(filePath);
     if (!await file.exists()) {
       return [];
@@ -132,7 +132,7 @@ class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProvid
       final lines = await file.readAsLines();
       return lines
           .where((line) => line.isNotEmpty)
-          .map((line) => RelayLogEntry.parse(line))
+          .map((line) => StationLogEntry.parse(line))
           .toList()
           .reversed
           .toList(); // Most recent first
@@ -228,7 +228,7 @@ class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProvid
     );
   }
 
-  Widget _buildLogList(List<RelayLogEntry> logs, String emptyMessage) {
+  Widget _buildLogList(List<StationLogEntry> logs, String emptyMessage) {
     final filtered = logs.where((log) {
       if (_searchQuery.isNotEmpty && !log.message.toLowerCase().contains(_searchQuery)) {
         return false;
@@ -261,7 +261,7 @@ class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProvid
     );
   }
 
-  Widget _buildLogEntry(RelayLogEntry entry) {
+  Widget _buildLogEntry(StationLogEntry entry) {
     Color levelColor;
     IconData levelIcon;
 
@@ -303,7 +303,7 @@ class _RelayLogsPageState extends State<StationLogsPage> with SingleTickerProvid
     );
   }
 
-  void _showLogDetail(RelayLogEntry entry) {
+  void _showLogDetail(StationLogEntry entry) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(

@@ -15,6 +15,7 @@ import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
 import 'services/station_service.dart';
+import 'services/station_node_service.dart';
 import 'services/station_discovery_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
@@ -619,6 +620,7 @@ class _HomePageState extends State<HomePage> {
   int _unreadDmCount = 0;
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
+  StreamSubscription? _stationStateSubscription;
   EventSubscription<NavigateToHomeEvent>? _navigateHomeSubscription;
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
@@ -671,6 +673,17 @@ class _HomePageState extends State<HomePage> {
       }
     });
 
+    // Subscribe to station state changes to update the icon
+    _stationStateSubscription = StationNodeService().stateStream.listen((_) {
+      if (mounted) {
+        setState(() {});  // Rebuild to update station icon
+      }
+    });
+    // Force initial rebuild to show current station state (station may already be running)
+    Future.microtask(() {
+      if (mounted) setState(() {});
+    });
+
     // Check for first launch and show profile setup
     _checkFirstLaunch();
   }
@@ -685,6 +698,7 @@ class _HomePageState extends State<HomePage> {
     _debugActionSubscription?.cancel();
     _navigateHomeSubscription?.cancel();
     _unreadSubscription?.cancel();
+    _stationStateSubscription?.cancel();
     super.dispose();
   }
 
@@ -1102,6 +1116,12 @@ class _HomePageState extends State<HomePage> {
       // Don't allow back gesture to exit app when on Collections (index 0)
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
+        // Close settings drawer if it's open
+        final scaffoldState = Scaffold.maybeOf(context);
+        if (scaffoldState?.isEndDrawerOpen == true) {
+          scaffoldState?.closeEndDrawer();
+          return;
+        }
         // Check if DevicesBrowserPage needs to handle back (viewing device details)
         if (_selectedIndex == 2 && DevicesBrowserPage.onBackPressed != null) {
           // Let DevicesBrowserPage handle it - it will clear the selected device
@@ -1120,6 +1140,8 @@ class _HomePageState extends State<HomePage> {
         // If already on Collections, do nothing (stay there)
       },
       child: Scaffold(
+        // Disable swipe gesture to open settings drawer - only open via menu icon
+        endDrawerEnableOpenDragGesture: false,
         // Show AppBar only on Apps panel (index 0) for full-screen Map/Devices
         appBar: _selectedIndex == 0
             ? AppBar(
@@ -1129,7 +1151,10 @@ class _HomePageState extends State<HomePage> {
                   // Show station indicator if current profile is a station
                   if (_profileService.getProfile().isRelay)
                     IconButton(
-                      icon: const Icon(Icons.cell_tower),
+                      icon: Icon(
+                        Icons.cell_tower,
+                        color: StationNodeService().isRunning ? Colors.green : null,
+                      ),
                       tooltip: _i18n.t('station_dashboard'),
                       onPressed: () {
                         Navigator.push(

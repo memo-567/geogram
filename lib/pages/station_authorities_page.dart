@@ -90,10 +90,10 @@ class StationAuthoritiesPage extends StatefulWidget {
   const StationAuthoritiesPage({super.key});
 
   @override
-  State<StationAuthoritiesPage> createState() => _RelayAuthoritiesPageState();
+  State<StationAuthoritiesPage> createState() => _StationAuthoritiesPageState();
 }
 
-class _RelayAuthoritiesPageState extends State<StationAuthoritiesPage> with SingleTickerProviderStateMixin {
+class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with SingleTickerProviderStateMixin {
   final StationNodeService _stationNodeService = StationNodeService();
 
   late TabController _tabController;

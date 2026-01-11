@@ -15,6 +15,7 @@ class MainActivity : FlutterActivity() {
     private val ARGS_CHANNEL = "dev.geogram/args"
     private val BLE_CHANNEL = "dev.geogram/ble_service"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
+    private var wifiDirectPlugin: WifiDirectPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -22,6 +23,10 @@ class MainActivity : FlutterActivity() {
         // Initialize Bluetooth Classic plugin for BLE+ functionality
         bluetoothClassicPlugin = BluetoothClassicPlugin(this, flutterEngine)
         bluetoothClassicPlugin?.initialize()
+
+        // Initialize Wi-Fi Direct plugin for hotspot functionality
+        wifiDirectPlugin = WifiDirectPlugin(this, flutterEngine)
+        wifiDirectPlugin?.initialize()
 
         // BLE foreground service channel with bidirectional communication
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
@@ -207,6 +212,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         bluetoothClassicPlugin?.dispose()
         bluetoothClassicPlugin = null
+        wifiDirectPlugin?.dispose()
+        wifiDirectPlugin = null
         super.onDestroy()
     }
 }

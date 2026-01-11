@@ -48,7 +48,7 @@ class StationStorageConfig {
   final int resolvedReportRetentionDays;
 
   const StationStorageConfig({
-    this.allocatedMb = 500,
+    this.allocatedMb = 10000,
     this.binaryPolicy = BinaryPolicy.textOnly,
     this.thumbnailMaxKb = 10,
     this.retentionDays = 365,
@@ -58,7 +58,7 @@ class StationStorageConfig {
 
   factory StationStorageConfig.fromJson(Map<String, dynamic> json) {
     return StationStorageConfig(
-      allocatedMb: json['allocatedMb'] as int? ?? 500,
+      allocatedMb: json['allocatedMb'] as int? ?? 10000,
       binaryPolicy: BinaryPolicy.values.firstWhere(
         (e) => e.name == json['binaryPolicy'],
         orElse: () => BinaryPolicy.textOnly,
@@ -366,6 +366,10 @@ class StationNode {
   final DateTime created;
   final DateTime updated;
 
+  // Remote station management fields
+  final bool isRemote;           // True if this is a remote station we're managing
+  final String? remoteUrl;       // URL of the remote station (wss:// or https://)
+
   const StationNode({
     required this.id,
     required this.name,
@@ -385,6 +389,8 @@ class StationNode {
     this.errorMessage,
     required this.created,
     required this.updated,
+    this.isRemote = false,
+    this.remoteUrl,
   });
 
   /// Backwards compatibility: returns station callsign
@@ -465,6 +471,8 @@ class StationNode {
       errorMessage: json['errorMessage'] as String?,
       created: DateTime.parse(json['created'] as String),
       updated: DateTime.parse(json['updated'] as String),
+      isRemote: json['isRemote'] as bool? ?? false,
+      remoteUrl: json['remoteUrl'] as String?,
     );
   }
 
@@ -488,6 +496,8 @@ class StationNode {
       if (errorMessage != null) 'errorMessage': errorMessage,
       'created': created.toIso8601String(),
       'updated': updated.toIso8601String(),
+      'isRemote': isRemote,
+      if (remoteUrl != null) 'remoteUrl': remoteUrl,
     };
   }
 
@@ -510,6 +520,8 @@ class StationNode {
     String? errorMessage,
     DateTime? created,
     DateTime? updated,
+    bool? isRemote,
+    String? remoteUrl,
   }) {
     return StationNode(
       id: id ?? this.id,
@@ -530,6 +542,8 @@ class StationNode {
       errorMessage: errorMessage ?? this.errorMessage,
       created: created ?? this.created,
       updated: updated ?? this.updated,
+      isRemote: isRemote ?? this.isRemote,
+      remoteUrl: remoteUrl ?? this.remoteUrl,
     );
   }
 }

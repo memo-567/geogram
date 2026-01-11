@@ -12,10 +12,10 @@ class StationsPage extends StatefulWidget {
   const StationsPage({super.key});
 
   @override
-  State<StationsPage> createState() => _RelaysPageState();
+  State<StationsPage> createState() => _StationsPageState();
 }
 
-class _RelaysPageState extends State<StationsPage> {
+class _StationsPageState extends State<StationsPage> {
   final StationService _stationService = StationService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
@@ -107,24 +107,24 @@ class _RelaysPageState extends State<StationsPage> {
     }
   }
 
-  Future<void> _addCustomRelay() async {
+  Future<void> _addCustomStation() async {
     final result = await showDialog<Map<String, String>>(
       context: context,
-      builder: (context) => const _AddRelayDialog(),
+      builder: (context) => const _AddStationDialog(),
     );
 
     if (result != null) {
       try {
         // Auto-set as preferred if this is the first station
-        final existingRelays = _stationService.getAllStations();
-        final isFirstRelay = existingRelays.isEmpty;
+        final existingStations = _stationService.getAllStations();
+        final isFirstStation = existingStations.isEmpty;
 
         final station = Station(
           url: result['url']!,
           name: result['name']!,
           callsign: result['callsign'],
           description: result['description'],
-          status: isFirstRelay ? 'preferred' : 'available',
+          status: isFirstStation ? 'preferred' : 'available',
           location: result['location'],
           latitude: result['latitude'] != null ? double.tryParse(result['latitude']!) : null,
           longitude: result['longitude'] != null ? double.tryParse(result['longitude']!) : null,
@@ -134,7 +134,7 @@ class _RelaysPageState extends State<StationsPage> {
 
         if (mounted) {
           if (added) {
-            final message = isFirstRelay
+            final message = isFirstStation
                 ? 'Added ${station.name} as preferred station'
                 : _i18n.t('added_station', params: [station.name]);
             ScaffoldMessenger.of(context).showSnackBar(
@@ -257,7 +257,7 @@ class _RelaysPageState extends State<StationsPage> {
     }
   }
 
-  Future<void> _clearAllRelays() async {
+  Future<void> _clearAllStations() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -330,8 +330,8 @@ class _RelaysPageState extends State<StationsPage> {
     );
 
     try {
-      // Use new connectRelay method with hello handshake
-      final success = await _stationService.connectRelay(station.url);
+      // Use new connectStation method with hello handshake
+      final success = await _stationService.connectStation(station.url);
       _loadStations();
 
       if (mounted) {
@@ -375,7 +375,7 @@ class _RelaysPageState extends State<StationsPage> {
       });
   }
 
-  List<Station> get _availableRelays {
+  List<Station> get _availableStations {
     return _allStations.where((r) => r.status == 'available').toList();
   }
 
@@ -392,7 +392,7 @@ class _RelaysPageState extends State<StationsPage> {
           ),
           IconButton(
             icon: const Icon(Icons.delete_sweep),
-            onPressed: _clearAllRelays,
+            onPressed: _clearAllStations,
             tooltip: _i18n.t('clear_all_stations'),
           ),
         ],
@@ -481,7 +481,7 @@ class _RelaysPageState extends State<StationsPage> {
                   else
                     ..._selectedStations.map((station) {
                       final profile = _profileService.getProfile();
-                      return _RelayCard(
+                      return _StationCard(
                         station: station,
                         userLatitude: profile.latitude,
                         userLongitude: profile.longitude,
@@ -495,7 +495,7 @@ class _RelaysPageState extends State<StationsPage> {
 
                   const SizedBox(height: 32),
 
-                  // Available Relays Section
+                  // Available Stations Section
                   Row(
                     children: [
                       Icon(
@@ -514,7 +514,7 @@ class _RelaysPageState extends State<StationsPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  if (_availableRelays.isEmpty)
+                  if (_availableStations.isEmpty)
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
@@ -529,9 +529,9 @@ class _RelaysPageState extends State<StationsPage> {
                       ),
                     )
                   else
-                    ..._availableRelays.map((station) {
+                    ..._availableStations.map((station) {
                       final profile = _profileService.getProfile();
-                      return _RelayCard(
+                      return _StationCard(
                         station: station,
                         userLatitude: profile.latitude,
                         userLongitude: profile.longitude,
@@ -540,7 +540,7 @@ class _RelaysPageState extends State<StationsPage> {
                         onSetAvailable: null, // Already available
                         onDelete: () => _deleteStation(station),
                         onTest: () => _testConnection(station),
-                        isAvailableRelay: true,
+                        isAvailableStation: true,
                       );
                     }),
 
@@ -549,7 +549,7 @@ class _RelaysPageState extends State<StationsPage> {
               ),
             ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCustomRelay,
+        onPressed: _addCustomStation,
         icon: const Icon(Icons.add),
         label: Text(_i18n.t('add_station')),
       ),
@@ -558,7 +558,7 @@ class _RelaysPageState extends State<StationsPage> {
 }
 
 // Station Card Widget
-class _RelayCard extends StatelessWidget {
+class _StationCard extends StatelessWidget {
   final Station station;
   final double? userLatitude;
   final double? userLongitude;
@@ -567,9 +567,9 @@ class _RelayCard extends StatelessWidget {
   final VoidCallback? onSetAvailable;
   final VoidCallback onDelete;
   final VoidCallback onTest;
-  final bool isAvailableRelay;
+  final bool isAvailableStation;
 
-  const _RelayCard({
+  const _StationCard({
     required this.station,
     this.userLatitude,
     this.userLongitude,
@@ -578,7 +578,7 @@ class _RelayCard extends StatelessWidget {
     required this.onSetAvailable,
     required this.onDelete,
     required this.onTest,
-    this.isAvailableRelay = false,
+    this.isAvailableStation = false,
   });
 
   I18nService get _i18n => I18nService();
@@ -742,7 +742,7 @@ class _RelayCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (!isAvailableRelay)
+                if (!isAvailableStation)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
@@ -768,7 +768,7 @@ class _RelayCard extends StatelessWidget {
             const SizedBox(height: 12),
 
             // Connection Status (hide for available stations)
-            if (station.lastChecked != null && !isAvailableRelay)
+            if (station.lastChecked != null && !isAvailableStation)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Column(
@@ -893,14 +893,14 @@ class _RelayCard extends StatelessWidget {
 }
 
 // Add Station Dialog - simplified to just IP:port input
-class _AddRelayDialog extends StatefulWidget {
-  const _AddRelayDialog();
+class _AddStationDialog extends StatefulWidget {
+  const _AddStationDialog();
 
   @override
-  State<_AddRelayDialog> createState() => _AddRelayDialogState();
+  State<_AddStationDialog> createState() => _AddStationDialogState();
 }
 
-class _AddRelayDialogState extends State<_AddRelayDialog> {
+class _AddStationDialogState extends State<_AddStationDialog> {
   final _addressController = TextEditingController();
   bool _isConnecting = false;
   String? _statusMessage;
@@ -1200,7 +1200,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
         }
       },
       shouldCancel: () => _stopRequested,
-      timeoutMs: 1500, // Increased timeout for reliability
+      timeoutMs: 400, // Fast timeout for LAN scanning
     );
 
     if (mounted) {
@@ -1210,8 +1210,8 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
         _results = results;
       });
 
-      // Auto-add found stations
-      for (var result in results.where((r) => r.type == 'station')) {
+      // Auto-add found stations (all results are stations now)
+      for (var result in results) {
         await _addStation(result);
       }
     }
@@ -1258,31 +1258,11 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
     }
   }
 
-  IconData _getDeviceIcon(String type) {
-    switch (type) {
-      case 'station':
-        return Icons.cloud;
-      case 'desktop':
-        return Icons.computer;
-      case 'client':
-        return Icons.smartphone;
-      default:
-        return Icons.device_unknown;
-    }
-  }
+  // Station icon (all results are stations now)
+  IconData get _stationIcon => Icons.cell_tower;
 
-  Color _getDeviceColor(String type) {
-    switch (type) {
-      case 'station':
-        return Colors.blue;
-      case 'desktop':
-        return Colors.green;
-      case 'client':
-        return Colors.orange;
-      default:
-        return Colors.grey;
-    }
-  }
+  // Station color
+  Color get _stationColor => Colors.blue;
 
   @override
   Widget build(BuildContext context) {
@@ -1326,7 +1306,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
             // Results section
             if (_results.isNotEmpty) ...[
               Text(
-                'Found ${_results.length} device(s):',
+                'Found ${_results.length} station${_results.length == 1 ? "" : "s"}:',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -1346,10 +1326,10 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
                     return ListTile(
                       dense: true,
                       leading: CircleAvatar(
-                        backgroundColor: _getDeviceColor(result.type).withOpacity(0.2),
+                        backgroundColor: _stationColor.withOpacity(0.2),
                         child: Icon(
-                          _getDeviceIcon(result.type),
-                          color: _getDeviceColor(result.type),
+                          _stationIcon,
+                          color: _stationColor,
                           size: 20,
                         ),
                       ),
@@ -1387,7 +1367,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
                             ),
                           if (result.connectedDevices != null)
                             Text(
-                              '${result.connectedDevices} device(s) connected',
+                              '${result.connectedDevices} connected',
                               style: TextStyle(
                                 color: theme.colorScheme.tertiary,
                                 fontSize: 11,
@@ -1395,21 +1375,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
                             ),
                         ],
                       ),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _getDeviceColor(result.type).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          result.type.toUpperCase(),
-                          style: TextStyle(
-                            color: _getDeviceColor(result.type),
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
+                      trailing: Icon(_stationIcon, color: _stationColor, size: 20),
                     );
                   },
                 ),
@@ -1425,7 +1391,7 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'No devices found on local network',
+                      'No stations found on local network',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -1433,9 +1399,9 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
                     const SizedBox(height: 8),
                     Text(
                       'Tips:\n'
-                      '  - Make sure devices are powered on\n'
+                      '  - Make sure stations are running\n'
                       '  - Check firewall settings\n'
-                      '  - Ensure devices are on the same network',
+                      '  - Ensure stations are on the same network',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -1445,14 +1411,14 @@ class _NetworkScanDialogState extends State<_NetworkScanDialog> {
               ),
             ],
 
-            if (_scanComplete && _results.where((r) => r.type == 'station').isNotEmpty) ...[
+            if (_scanComplete && _results.isNotEmpty) ...[
               const SizedBox(height: 16),
               Row(
                 children: [
                   Icon(Icons.check_circle, color: Colors.green, size: 16),
                   const SizedBox(width: 8),
                   Text(
-                    'Found stations have been added automatically',
+                    'Stations have been added automatically',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: Colors.green,
                       fontWeight: FontWeight.w500,

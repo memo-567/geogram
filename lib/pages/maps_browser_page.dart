@@ -537,7 +537,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     }
 
     final station = stationService.getPreferredStation() ??
-        stationService.getConnectedRelay();
+        stationService.getConnectedStation();
     if (station == null) return null;
 
     final identifier = (station.callsign != null && station.callsign!.isNotEmpty)

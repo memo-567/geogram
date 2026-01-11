@@ -34,7 +34,7 @@ class AlertFeedbackService {
     final preferred = _stationService.getPreferredStation();
     final station = (preferred != null && preferred.url.isNotEmpty)
         ? preferred
-        : _stationService.getConnectedRelay();
+        : _stationService.getConnectedStation();
     if (station == null || station.url.isEmpty) return null;
 
     var baseUrl = station.url;

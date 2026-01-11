@@ -71,7 +71,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     _currentUserNpub = profile.npub;
 
     // Get station URL and profile identifier for shareable blog URLs
-    final connectedRelay = _stationService.getConnectedRelay();
+    final connectedRelay = _stationService.getConnectedStation();
     _stationUrl = connectedRelay?.url;
     // Use nickname if available, otherwise callsign
     _profileIdentifier = profile.nickname.isNotEmpty

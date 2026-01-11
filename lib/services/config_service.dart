@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../util/nostr_key_generator.dart';
 import '../platform/web_storage.dart' if (dart.library.io) '../platform/web_storage_stub.dart';
 import 'storage_config.dart';
@@ -263,5 +264,47 @@ class ConfigService {
     }
 
     return owned;
+  }
+
+  /// Get auto-start on boot setting (defaults to true)
+  bool get autoStartOnBoot {
+    return getNestedValue('settings.autoStartOnBoot', true) as bool;
+  }
+
+  /// Set auto-start on boot setting
+  /// Also syncs to SharedPreferences for native BootReceiver access
+  Future<void> setAutoStartOnBoot(bool value) async {
+    setNestedValue('settings.autoStartOnBoot', value);
+
+    // Sync to SharedPreferences for native Java BootReceiver access
+    if (!kIsWeb) {
+      try {
+        // Use method channel to sync to SharedPreferences
+        // This is handled by the platform channel in MainActivity
+        await _syncAutoStartToNative(value);
+      } catch (e) {
+        LogService().log('ConfigService: Error syncing auto-start to native: $e');
+      }
+    }
+  }
+
+  /// Sync auto-start setting to native SharedPreferences
+  Future<void> _syncAutoStartToNative(bool value) async {
+    // Import shared_preferences dynamically to avoid web issues
+    final prefs = await _getSharedPreferences();
+    if (prefs != null) {
+      await prefs.setBool('auto_start_on_boot', value);
+    }
+  }
+
+  /// Get SharedPreferences instance (lazy import to avoid web issues)
+  Future<dynamic> _getSharedPreferences() async {
+    try {
+      // Using dynamic import pattern
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      return prefs;
+    } catch (e) {
+      return null;
+    }
   }
 }

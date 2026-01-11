@@ -10,9 +10,13 @@ import '../models/profile.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/station_node_service.dart';
+import '../models/station_node.dart';
+import '../models/station_network.dart';
 import '../dialogs/import_export_profiles_dialog.dart';
 import 'profile_page.dart';
 import 'station_dashboard_page.dart';
+import 'station_setup_root_page.dart';
 import 'new_profile_page.dart';
 
 /// Page for managing multiple profiles
@@ -148,6 +152,98 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
               backgroundColor: Colors.green,
             ),
           );
+
+          // Handle station setup based on mode
+          if (type == ProfileType.station) {
+            final stationMode = result['stationMode'] as String?;
+
+            if (stationMode == 'local') {
+              // Create local station directly with the provided options
+              final stationName = result['stationName'] as String;
+              final stationDescription = result['stationDescription'] as String? ?? '';
+              final allocatedMb = result['allocatedMb'] as int? ?? 10000;
+              final callsign = result['callsign'] as String;
+
+              await Future.delayed(const Duration(milliseconds: 100));
+              final stationNodeService = StationNodeService();
+
+              // Use sensible defaults for config
+              final config = StationNodeConfig(
+                storage: StationStorageConfig(
+                  allocatedMb: allocatedMb,
+                  binaryPolicy: BinaryPolicy.thumbnailsOnly,
+                  retentionDays: 0, // Forever
+                  chatRetentionDays: 0, // Forever
+                ),
+                supportedCollections: ['reports', 'places', 'events', 'forum', 'chat'],
+              );
+
+              final policy = NetworkPolicy(
+                nodeRegistration: NodeRegistrationPolicy.open,
+                userRegistration: UserRegistrationPolicy.open,
+                enableCommunityFlagging: false,
+                flagThresholdHide: 5,
+                allowFederation: true,
+              );
+
+              final collections = NetworkCollections(
+                community: ['reports', 'places', 'events'],
+                public: ['forum', 'chat'],
+                userApprovalRequired: [],
+              );
+
+              await stationNodeService.createRootStation(
+                networkName: stationName,
+                networkDescription: stationDescription,
+                operatorCallsign: callsign,
+                config: config,
+                policy: policy,
+                collections: collections,
+              );
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Station "$stationName" created'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            } else if (stationMode == 'remote') {
+              // Connect to remote station
+              final remoteUrl = result['remoteUrl'] as String;
+              final remoteNsec = result['remoteNsec'] as String;
+              final remoteStatus = result['remoteStatus'] as Map<String, dynamic>;
+              final remoteName = remoteStatus['name'] as String? ?? 'Remote Station';
+
+              await Future.delayed(const Duration(milliseconds: 100));
+              final stationNodeService = StationNodeService();
+              await stationNodeService.connectToRemoteStation(
+                url: remoteUrl,
+                nsec: remoteNsec,
+                name: remoteName,
+                remoteStatus: remoteStatus,
+              );
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Connected to remote station "$remoteName"'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            } else {
+              // Legacy: launch station setup wizard if no mode specified
+              await Future.delayed(const Duration(milliseconds: 100));
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const StationSetupRootPage()),
+                );
+              }
+            }
+          }
         }
       } catch (e) {
         LogService().log('Error creating profile: $e');
@@ -563,7 +659,14 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                               value: 'station',
                               child: Row(
                                 children: [
-                                  const Icon(Icons.cell_tower),
+                                  Icon(
+                                    StationNodeService().stationServer?.isRunning == true
+                                        ? Icons.cell_tower
+                                        : Icons.portable_wifi_off,
+                                    color: StationNodeService().stationServer?.isRunning == true
+                                        ? Colors.green
+                                        : Colors.grey,
+                                  ),
                                   const SizedBox(width: 8),
                                   Text(_i18n.t('station_dashboard')),
                                 ],
@@ -670,7 +773,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
-        profile.isRelay ? 'RELAY' : 'CLIENT',
+        profile.isRelay ? 'STATION' : 'CLIENT',
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.bold,
@@ -681,19 +784,20 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
   }
 
   Widget _buildRelayQuickActions(Profile profile, bool isActive) {
+    final isStationRunning = StationNodeService().stationServer?.isRunning == true;
     return Row(
       children: [
         Icon(
-          Icons.cell_tower,
+          isStationRunning ? Icons.cell_tower : Icons.portable_wifi_off,
           size: 16,
-          color: Colors.orange[700],
+          color: isStationRunning ? Colors.green : Colors.grey,
         ),
         const SizedBox(width: 8),
         Text(
-          _i18n.t('station_profile'),
+          isStationRunning ? _i18n.t('station_running') : _i18n.t('station_stopped'),
           style: TextStyle(
             fontSize: 12,
-            color: Colors.orange[700],
+            color: isStationRunning ? Colors.green : Colors.grey,
             fontWeight: FontWeight.w500,
           ),
         ),

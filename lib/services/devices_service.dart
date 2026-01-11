@@ -1345,7 +1345,7 @@ class DevicesService {
     }
 
     // Fall back to station proxy (or go directly to station proxy in internet-only mode)
-    final station = _stationService.getConnectedRelay();
+    final station = _stationService.getConnectedStation();
     if (station == null) {
       LogService().log(
         'DevicesService: No station connected for proxy to $normalizedCallsign',
@@ -1438,7 +1438,7 @@ class DevicesService {
 
     // Check if this device IS the connected station
     // For the connected station, WebSocket state is the source of truth
-    final connectedStation = _stationService.getConnectedRelay();
+    final connectedStation = _stationService.getConnectedStation();
     final isConnectedStation =
         connectedStation != null &&
         connectedStation.callsign != null &&
@@ -1523,7 +1523,7 @@ class DevicesService {
   /// Check device via station proxy
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
     // Get connected station
-    final station = _stationService.getConnectedRelay();
+    final station = _stationService.getConnectedStation();
     if (station == null || !station.isConnected) {
       // No active station WebSocket connection - remove 'internet' from connectionMethods
       device.connectionMethods = device.connectionMethods
@@ -1882,7 +1882,7 @@ class DevicesService {
     String? eventUrl,
   }) async {
     try {
-      final station = _stationService.getConnectedRelay();
+      final station = _stationService.getConnectedStation();
 
       // Use event data if station isn't ready yet
       final callsign = station?.callsign ?? eventCallsign;
@@ -2095,7 +2095,7 @@ class DevicesService {
   Future<void> _fetchStationClients() async {
     try {
       // Try connected station first, fall back to preferred station
-      var station = _stationService.getConnectedRelay();
+      var station = _stationService.getConnectedStation();
       if (station == null) {
         // No connected station - try preferred station for device list
         // This allows showing station devices even before WebSocket connects

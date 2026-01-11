@@ -409,7 +409,7 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
     if (!stationService.isInitialized) {
       await stationService.initialize();
     }
-    final connected = stationService.getConnectedRelay();
+    final connected = stationService.getConnectedStation();
     final preferred = stationService.getPreferredStation();
     final station = connected ?? (preferred != null && preferred.url.isNotEmpty ? preferred : null);
     if (station == null || station.url.isEmpty) return null;

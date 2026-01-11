@@ -16,10 +16,10 @@ class StationSetupNodePage extends StatefulWidget {
   const StationSetupNodePage({super.key});
 
   @override
-  State<StationSetupNodePage> createState() => _RelaySetupNodePageState();
+  State<StationSetupNodePage> createState() => _StationSetupNodePageState();
 }
 
-class _RelaySetupNodePageState extends State<StationSetupNodePage> {
+class _StationSetupNodePageState extends State<StationSetupNodePage> {
   final StationNodeService _stationNodeService = StationNodeService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
@@ -40,7 +40,7 @@ class _RelaySetupNodePageState extends State<StationSetupNodePage> {
   double _radiusKm = 50;
 
   // Step 3: Storage & Channels
-  int _allocatedMb = 500;
+  int _allocatedMb = 10000;
   BinaryPolicy _binaryPolicy = BinaryPolicy.textOnly;
   bool _internetEnabled = true;
   bool _wifiLanEnabled = true;
@@ -326,10 +326,10 @@ class _RelaySetupNodePageState extends State<StationSetupNodePage> {
           SizedBox(height: 24),
           Text('Communication Channels', style: TextStyle(fontWeight: FontWeight.bold)),
           SizedBox(height: 8),
-          _buildChannelSwitch('Internet (WebSocket)', 'Available', _internetEnabled, true, (v) {}),
+          _buildChannelSwitch('Internet (WebSocket)', 'Required (always on)', _internetEnabled, false, (v) {}),
           _buildChannelSwitch('Local WiFi', 'Available', _wifiLanEnabled, true, (v) => setState(() => _wifiLanEnabled = v)),
-          _buildChannelSwitch('Bluetooth LE', 'Not available', _bluetoothEnabled, false, (v) {}),
-          _buildChannelSwitch('LoRa', 'Not detected', _loraEnabled, false, (v) {}),
+          _buildChannelSwitch('Bluetooth LE', 'Coming soon', _bluetoothEnabled, false, (v) {}),
+          _buildChannelSwitch('LoRa', 'Coming soon', _loraEnabled, false, (v) {}),
         ],
       ),
     );
@@ -511,41 +511,10 @@ class _RelaySetupNodePageState extends State<StationSetupNodePage> {
       return;
     }
 
-    setState(() => _isConnecting = true);
-
-    try {
-      // TODO: Actually connect to the root station and fetch network info
-      // For now, create a mock network
-      await Future.delayed(Duration(seconds: 1));
-
-      final mockNetwork = StationNetwork(
-        id: 'mock-network-id',
-        name: 'Demo Network',
-        description: 'A demo station network',
-        rootNpub: 'npub1demo...',
-        rootCallsign: 'DEMO1',
-        rootUrl: url,
-        policy: NetworkPolicy(),
-        collections: NetworkCollections(),
-        founded: DateTime.now(),
-        updated: DateTime.now(),
-      );
-
-      setState(() {
-        _selectedNetwork = mockNetwork;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Connected to ${mockNetwork.name}')),
-      );
-    } catch (e) {
-      LogService().log('Error connecting to root: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to connect: $e')),
-      );
-    } finally {
-      setState(() => _isConnecting = false);
-    }
+    // Network discovery is not yet implemented
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Network discovery coming soon. Please create a root station first.')),
+    );
   }
 
   Future<void> _joinNetwork() async {

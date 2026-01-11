@@ -3,7 +3,7 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:io' show Directory, File, NetworkInterface, InternetAddressType, Platform, exit;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -14,6 +14,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/app_args.dart';
 import '../services/storage_config.dart';
+import '../services/config_service.dart';
 
 /// Page for managing security and privacy settings
 class SecuritySettingsPage extends StatefulWidget {
@@ -26,15 +27,18 @@ class SecuritySettingsPage extends StatefulWidget {
 class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   final SecurityService _securityService = SecurityService();
   final LogApiService _logApiService = LogApiService();
+  final ConfigService _configService = ConfigService();
   final I18nService _i18n = I18nService();
 
   String? _localIpAddress;
   bool _isLoadingIp = true;
+  bool _autoStartOnBoot = true;
 
   @override
   void initState() {
     super.initState();
     _loadLocalIpAddress();
+    _autoStartOnBoot = _configService.autoStartOnBoot;
   }
 
   Future<void> _loadLocalIpAddress() async {
@@ -127,6 +131,14 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           // Location Granularity
           _buildLocationGranularityTile(theme),
           const SizedBox(height: 24),
+
+          // Section: Background (Android only)
+          if (!kIsWeb && Platform.isAndroid) ...[
+            _buildSectionHeader(theme, _i18n.t('background'), Icons.sync),
+            const SizedBox(height: 8),
+            _buildAutoStartTile(theme),
+            const SizedBox(height: 24),
+          ],
 
           // Section: Storage (only on desktop/mobile, not web)
           if (!kIsWeb) ...[
@@ -400,6 +412,45 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildAutoStartTile(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _i18n.t('auto_start_on_boot'),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _i18n.t('auto_start_on_boot_description'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: _autoStartOnBoot,
+              onChanged: (value) async {
+                setState(() {
+                  _autoStartOnBoot = value;
+                });
+                await _configService.setAutoStartOnBoot(value);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 

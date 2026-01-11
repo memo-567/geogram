@@ -462,7 +462,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
       // Step 2: Try to connect to preferred station if not already connected
       LogService().log('DevicesBrowserPage: Step 2 - Checking station connection');
-      final connectedStation = _stationService.getConnectedRelay();
+      final connectedStation = _stationService.getConnectedStation();
       if (connectedStation == null || !connectedStation.isConnected) {
         // Find preferred station
         final allStations = _stationService.getAllStations();
@@ -470,11 +470,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
         if (preferredStation != null) {
           LogService().log('DevicesBrowserPage: Connecting to preferred station: ${preferredStation.name}');
-          await _stationService.connectRelay(preferredStation.url);
+          await _stationService.connectStation(preferredStation.url);
         } else if (allStations.isNotEmpty) {
           // Connect to first available station if no preferred
           LogService().log('DevicesBrowserPage: Connecting to first available station: ${allStations.first.name}');
-          await _stationService.connectRelay(allStations.first.url);
+          await _stationService.connectStation(allStations.first.url);
         }
       }
 

@@ -6,11 +6,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:isolate';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/station_node.dart';
 import '../models/station_network.dart';
 import '../util/nostr_key_generator.dart';
+import '../util/nostr_crypto.dart';
 import '../cli/pure_station.dart';
 import '../cli/pure_storage_config.dart';
 import 'config_service.dart';
@@ -36,6 +38,14 @@ class StationNodeService {
   DateTime? _startedAt;
   Timer? _statsTimer;
 
+  // Storage measurement cache
+  int _cachedStorageUsedMb = 0;
+  DateTime? _lastStorageMeasurement;
+  static const _storageMeasurementInterval = Duration(days: 1);
+
+  // Remote stations management
+  List<StationNode> _remoteStations = [];
+
   /// Get the underlying station server
   PureStationServer? get stationServer => _stationServer;
 
@@ -50,23 +60,50 @@ class StationNodeService {
   StationNetwork? get network => _network;
 
   /// Check if station mode is enabled
-  bool get isRelayEnabled => _stationNode != null;
+  bool get isStationEnabled => _stationNode != null;
 
   /// Check if station is running
   bool get isRunning => _stationNode?.isRunning ?? false;
+
+  /// Get local station (if exists)
+  StationNode? get localStation => _stationNode?.isRemote == false ? _stationNode : null;
+
+  /// Get list of remote stations
+  List<StationNode> get remoteStations => List.unmodifiable(_remoteStations);
+
+  /// Get all stations (local + remote)
+  List<StationNode> get allStations {
+    final stations = <StationNode>[];
+    if (_stationNode != null && !_stationNode!.isRemote) {
+      stations.add(_stationNode!);
+    }
+    stations.addAll(_remoteStations);
+    return stations;
+  }
 
   /// Initialize the station node service
   Future<void> initialize() async {
     if (_initialized) return;
 
     try {
-      await _loadRelayConfig();
+      await _loadStationConfig();
       _initialized = true;
       LogService().log('StationNodeService initialized');
 
-      // Auto-start if was running before
-      if (_stationNode != null && _configService.get('stationAutoStart') == true) {
-        await start();
+      // Load cached storage stats
+      await _loadStorageStats();
+
+      // Trigger storage measurement in background (will skip if measured recently)
+      measureStorageUsage();  // Don't await - runs in background
+
+      // Auto-start if was enabled before (user had explicitly started the station)
+      if (_stationNode != null) {
+        final networkSettings = await loadNetworkSettings();
+        final wasEnabled = networkSettings['enabled'] as bool? ?? false;
+        if (wasEnabled) {
+          LogService().log('Station auto-start: was enabled, starting automatically...');
+          await start();
+        }
       }
     } catch (e) {
       LogService().log('Error initializing StationNodeService: $e');
@@ -74,7 +111,7 @@ class StationNodeService {
   }
 
   /// Load station configuration from storage
-  Future<void> _loadRelayConfig() async {
+  Future<void> _loadStationConfig() async {
     // First try to load from GUI's config
     final stationData = _configService.get('stationNode');
     if (stationData != null) {
@@ -87,7 +124,7 @@ class StationNodeService {
           status: StationNodeStatus.stopped,
           errorMessage: null,
         );
-        _saveRelayConfig();
+        _saveStationConfig();
         LogService().log('Reset station status to stopped (server cannot persist across restarts)');
       }
 
@@ -98,6 +135,15 @@ class StationNodeService {
     if (networkData != null) {
       _network = StationNetwork.fromJson(networkData as Map<String, dynamic>);
       LogService().log('Loaded network: ${_network!.name}');
+    }
+
+    // Load remote stations
+    final remoteStationsData = _configService.get('remoteStations');
+    if (remoteStationsData != null) {
+      _remoteStations = (remoteStationsData as List<dynamic>)
+          .map((s) => StationNode.fromJson(s as Map<String, dynamic>))
+          .toList();
+      LogService().log('Loaded ${_remoteStations.length} remote station(s)');
     }
 
     // If no station config found, check CLI's station_config.json
@@ -154,7 +200,7 @@ class StationNodeService {
         LogService().log('Loaded station from CLI config: ${_stationNode!.name}');
 
         // Save to GUI config format for future loads
-        _saveRelayConfig();
+        _saveStationConfig();
       }
     } catch (e) {
       LogService().log('Error loading CLI station config: $e');
@@ -162,7 +208,7 @@ class StationNodeService {
   }
 
   /// Save station configuration to storage
-  void _saveRelayConfig() {
+  void _saveStationConfig() {
     if (_stationNode != null) {
       _configService.set('stationNode', _stationNode!.toJson());
     } else {
@@ -174,10 +220,17 @@ class StationNodeService {
     } else {
       _configService.remove('stationNetwork');
     }
+
+    // Save remote stations
+    if (_remoteStations.isNotEmpty) {
+      _configService.set('remoteStations', _remoteStations.map((s) => s.toJson()).toList());
+    } else {
+      _configService.remove('remoteStations');
+    }
   }
 
   /// Create a new root station network
-  Future<StationNode> createRootRelay({
+  Future<StationNode> createRootStation({
     required String networkName,
     required String networkDescription,
     required String operatorCallsign,
@@ -229,8 +282,8 @@ class StationNodeService {
       updated: now,
     );
 
-    _saveRelayConfig();
-    await _createRelayDirectories();
+    _saveStationConfig();
+    await _createStationDirectories();
 
     LogService().log('Created root station: $networkName (station: ${stationKeys.callsign}, operator: $operatorCallsign)');
     _stateController.add(_stationNode);
@@ -278,8 +331,8 @@ class StationNodeService {
       updated: now,
     );
 
-    _saveRelayConfig();
-    await _createRelayDirectories();
+    _saveStationConfig();
+    await _createStationDirectories();
 
     LogService().log('Joined network as node: $nodeName (station: ${stationKeys.callsign}, operator: $operatorCallsign)');
     _stateController.add(_stationNode);
@@ -358,7 +411,7 @@ class StationNodeService {
         _stationServer!.settings.latitude = _stationNode!.config.coverage!.latitude;
         _stationServer!.settings.longitude = _stationNode!.config.coverage!.longitude;
       }
-      _stationServer!.settings.maxCacheSizeMB = _stationNode!.config.storage?.allocatedMb ?? 500;
+      _stationServer!.settings.maxCacheSizeMB = _stationNode!.config.storage?.allocatedMb ?? 10000;
 
       // Save settings and start server
       await _stationServer!.saveSettings();
@@ -393,8 +446,11 @@ class StationNodeService {
         _updateStats();
       });
 
-      _saveRelayConfig();
+      _saveStationConfig();
       _stateController.add(_stationNode);
+
+      // Persist that the station should auto-start on next app launch
+      await updateNetworkSettings(enabled: true);
 
       LogService().log('Station started successfully on port ${_stationServer!.settings.httpPort}');
     } catch (e) {
@@ -440,8 +496,11 @@ class StationNodeService {
       );
       _startedAt = null;
 
-      _saveRelayConfig();
+      _saveStationConfig();
       _stateController.add(_stationNode);
+
+      // Persist that the station should NOT auto-start on next app launch
+      await updateNetworkSettings(enabled: false);
 
       LogService().log('Station stopped');
     } catch (e) {
@@ -466,7 +525,7 @@ class StationNodeService {
       updated: DateTime.now(),
     );
 
-    _saveRelayConfig();
+    _saveStationConfig();
     _stateController.add(_stationNode);
 
     LogService().log('Station config updated');
@@ -482,6 +541,7 @@ class StationNodeService {
     String? sslEmail,
     bool? sslAutoRenew,
     int? maxConnections,
+    bool? enabled,
   }) async {
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) {
@@ -509,13 +569,14 @@ class StationNodeService {
     if (sslEmail != null) settings['sslEmail'] = sslEmail;
     if (sslAutoRenew != null) settings['sslAutoRenew'] = sslAutoRenew;
     if (maxConnections != null) settings['maxConnectedDevices'] = maxConnections;
+    if (enabled != null) settings['enabled'] = enabled;
 
     // Save to file
     await configFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(settings),
     );
 
-    LogService().log('Network settings saved to file (httpPort: ${settings['httpPort']})');
+    LogService().log('Network settings saved to file (httpPort: ${settings['httpPort']}, enabled: ${settings['enabled']})');
 
     // Also update server settings if server is running
     if (_stationServer != null) {
@@ -526,6 +587,7 @@ class StationNodeService {
       if (sslEmail != null) _stationServer!.settings.sslEmail = sslEmail;
       if (sslAutoRenew != null) _stationServer!.settings.sslAutoRenew = sslAutoRenew;
       if (maxConnections != null) _stationServer!.settings.maxConnectedDevices = maxConnections;
+      if (enabled != null) _stationServer!.settings.enabled = enabled;
     }
   }
 
@@ -545,13 +607,14 @@ class StationNodeService {
       final content = await configFile.readAsString();
       final settings = jsonDecode(content) as Map<String, dynamic>;
       return {
-        'httpPort': settings['httpPort'] ?? 8080,
-        'httpsPort': settings['httpsPort'] ?? 8443,
+        'httpPort': settings['httpPort'] ?? 3456,
+        'httpsPort': settings['httpsPort'] ?? 3457,
         'enableSsl': settings['enableSsl'] ?? false,
         'sslDomain': settings['sslDomain'] ?? '',
         'sslEmail': settings['sslEmail'] ?? '',
         'sslAutoRenew': settings['sslAutoRenew'] ?? true,
         'maxConnectedDevices': settings['maxConnectedDevices'] ?? 100,
+        'enabled': settings['enabled'] ?? false,
       };
     } catch (e) {
       LogService().log('Error loading network settings: $e');
@@ -561,13 +624,14 @@ class StationNodeService {
 
   Map<String, dynamic> _defaultNetworkSettings() {
     return {
-      'httpPort': 8080,
-      'httpsPort': 8443,
+      'httpPort': 3456,
+      'httpsPort': 3457,
       'enableSsl': false,
       'sslDomain': '',
       'sslEmail': '',
       'sslAutoRenew': true,
       'maxConnectedDevices': 100,
+      'enabled': false,
     };
   }
 
@@ -588,10 +652,57 @@ class StationNodeService {
     _stationNode = null;
     _network = null;
 
-    _saveRelayConfig();
+    _saveStationConfig();
     _stateController.add(null);
 
     LogService().log('Station deleted');
+  }
+
+  /// Connect to a remote station for management
+  Future<StationNode> connectToRemoteStation({
+    required String url,
+    required String nsec,
+    required String name,
+    required Map<String, dynamic> remoteStatus,
+  }) async {
+    final profile = _profileService.getProfile();
+    final now = DateTime.now();
+
+    // Get station info from remote status
+    final stationCallsign = remoteStatus['callsign'] as String? ?? 'REMOTE';
+    final privateKeyHex = NostrCrypto.decodeNsec(nsec);
+    final publicKeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
+    final stationNpub = NostrCrypto.encodeNpub(publicKeyHex);
+
+    final remoteNode = StationNode(
+      id: 'remote_${now.millisecondsSinceEpoch}',
+      name: name,
+      stationCallsign: stationCallsign,
+      stationNpub: stationNpub,
+      stationNsec: nsec,
+      operatorCallsign: profile.callsign ?? 'OPERATOR',
+      operatorNpub: profile.npub ?? '',
+      type: StationType.root,
+      status: StationNodeStatus.running, // Remote is running since we connected
+      created: now,
+      updated: now,
+      isRemote: true,
+      remoteUrl: url,
+    );
+
+    _remoteStations.add(remoteNode);
+    _saveStationConfig();
+
+    LogService().log('Connected to remote station: $name at $url');
+
+    return remoteNode;
+  }
+
+  /// Remove a remote station
+  Future<void> removeRemoteStation(String stationId) async {
+    _remoteStations.removeWhere((s) => s.id == stationId);
+    _saveStationConfig();
+    LogService().log('Removed remote station: $stationId');
   }
 
   /// Get station data directory
@@ -601,7 +712,7 @@ class StationNodeService {
   }
 
   /// Create station directories
-  Future<void> _createRelayDirectories() async {
+  Future<void> _createStationDirectories() async {
     final stationDir = await getStationDirectory();
 
     final directories = [
@@ -666,8 +777,8 @@ class StationNodeService {
 # ROOT: ${_network!.name}
 
 ## Station Identity (X3)
-RELAY_CALLSIGN: ${_stationNode!.stationCallsign}
-RELAY_NPUB: ${_stationNode!.stationNpub}
+STATION_CALLSIGN: ${_stationNode!.stationCallsign}
+STATION_NPUB: ${_stationNode!.stationNpub}
 
 ## Operator Identity (X1)
 OPERATOR_CALLSIGN: ${_stationNode!.operatorCallsign}
@@ -691,6 +802,107 @@ The station (${_stationNode!.stationCallsign}) is managed by operator ${_station
     }
   }
 
+  /// Get the storage stats cache file path
+  Future<File> _getStorageStatsFile() async {
+    final storageConfig = StorageConfig();
+    final statsPath = path.join(storageConfig.baseDir, 'storage_stats.json');
+    return File(statsPath);
+  }
+
+  /// Load cached storage measurement from file
+  Future<void> _loadStorageStats() async {
+    try {
+      final file = await _getStorageStatsFile();
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        _cachedStorageUsedMb = json['usedMb'] as int? ?? 0;
+        final lastMeasured = json['lastMeasured'] as String?;
+        if (lastMeasured != null) {
+          _lastStorageMeasurement = DateTime.tryParse(lastMeasured);
+        }
+        LogService().log('Loaded cached storage stats: ${_cachedStorageUsedMb}MB');
+      }
+    } catch (e) {
+      LogService().log('Error loading storage stats: $e');
+    }
+  }
+
+  /// Save storage measurement to file
+  Future<void> _saveStorageStats() async {
+    try {
+      final file = await _getStorageStatsFile();
+      final json = {
+        'usedMb': _cachedStorageUsedMb,
+        'lastMeasured': _lastStorageMeasurement?.toIso8601String(),
+      };
+      await file.writeAsString(const JsonEncoder.withIndent('  ').convert(json));
+      LogService().log('Saved storage stats: ${_cachedStorageUsedMb}MB');
+    } catch (e) {
+      LogService().log('Error saving storage stats: $e');
+    }
+  }
+
+  /// Calculate folder size in an isolate (background thread)
+  static Future<int> _calculateFolderSizeInIsolate(String folderPath) async {
+    return await Isolate.run(() {
+      int totalBytes = 0;
+      try {
+        final dir = Directory(folderPath);
+        if (dir.existsSync()) {
+          for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+            if (entity is File) {
+              try {
+                totalBytes += entity.lengthSync();
+              } catch (_) {
+                // Skip files we can't access
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Return 0 on error
+      }
+      return totalBytes;
+    });
+  }
+
+  /// Measure actual storage used by the profile folder
+  Future<void> measureStorageUsage({bool force = false}) async {
+    // Check if we need to measure (once a day unless forced)
+    if (!force && _lastStorageMeasurement != null) {
+      final timeSinceLast = DateTime.now().difference(_lastStorageMeasurement!);
+      if (timeSinceLast < _storageMeasurementInterval) {
+        LogService().log('Skipping storage measurement - last measured ${timeSinceLast.inHours}h ago');
+        return;
+      }
+    }
+
+    LogService().log('Starting storage measurement in background...');
+
+    try {
+      final storageConfig = StorageConfig();
+      final profileDir = storageConfig.baseDir;
+
+      // Run in isolate to not block UI
+      final totalBytes = await _calculateFolderSizeInIsolate(profileDir);
+
+      // Convert to MB
+      _cachedStorageUsedMb = (totalBytes / (1024 * 1024)).round();
+      _lastStorageMeasurement = DateTime.now();
+
+      // Save to file
+      await _saveStorageStats();
+
+      LogService().log('Storage measurement complete: ${_cachedStorageUsedMb}MB used');
+    } catch (e) {
+      LogService().log('Error measuring storage: $e');
+    }
+  }
+
+  /// Get current storage used in MB (from cache)
+  int get storageUsedMb => _cachedStorageUsedMb;
+
   /// Update station statistics
   void _updateStats() {
     if (_stationNode == null || !_stationNode!.isRunning) return;
@@ -705,7 +917,7 @@ The station (${_stationNode!.stationCallsign}) is managed by operator ${_station
       connectedDevices: _stationServer?.connectedDevices ?? 0,
       messagesRelayed: serverStats?.totalMessages ?? 0,
       collectionsServed: serverStats?.totalApiRequests ?? 0,
-      storageUsedMb: _stationNode!.config.storage?.allocatedMb ?? 0,
+      storageUsedMb: _cachedStorageUsedMb,  // Use cached measurement
       lastActivity: DateTime.now(),
       uptime: uptime,
     );

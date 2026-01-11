@@ -89,7 +89,7 @@ class WebRTCTransport extends Transport with TransportMixin {
 
     // WebRTC requires signaling through the station
     // Check if we're connected to a station
-    final station = _stationService.getConnectedRelay();
+    final station = _stationService.getConnectedStation();
     if (station == null) {
       return false;
     }
@@ -133,7 +133,7 @@ class WebRTCTransport extends Transport with TransportMixin {
 
       // Avoid signaling when offline (no station connection and no active peer)
       if (!_peerManager.hasActiveConnection(callsign) &&
-          _stationService.getConnectedRelay() == null) {
+          _stationService.getConnectedStation() == null) {
         stopwatch.stop();
         final result = TransportResult.failure(
           error: 'WebRTC signaling unavailable (no station connection)',
