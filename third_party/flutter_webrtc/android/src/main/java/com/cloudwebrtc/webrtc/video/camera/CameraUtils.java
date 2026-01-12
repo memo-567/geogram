@@ -48,6 +48,14 @@ public class CameraUtils {
     this.deviceOrientationManager.start();
   }
 
+  /** Dispose and clean up resources. Must be called when the Activity is destroyed. */
+  public void dispose() {
+    if (deviceOrientationManager != null) {
+      deviceOrientationManager.stop();
+      deviceOrientationManager = null;
+    }
+  }
+
   public void setFocusMode(MethodCall call, AnyThreadResult result) {
     String trackId = call.argument("trackId");
     String mode = call.argument("mode");

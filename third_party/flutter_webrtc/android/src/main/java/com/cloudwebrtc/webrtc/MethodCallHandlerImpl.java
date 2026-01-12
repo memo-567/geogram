@@ -145,7 +145,21 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     Log.d(TAG, errorMsg);
   }
 
+  /** Called when the Activity is detached. Cleans up Activity-bound resources to prevent leaks. */
+  void onActivityDetached() {
+    // Dispose camera utils to unregister broadcast receiver registered with Activity context
+    if (cameraUtils != null) {
+      cameraUtils.dispose();
+      cameraUtils = null;
+    }
+  }
+
   void dispose() {
+    // Dispose camera utils to unregister broadcast receiver and prevent leaks
+    if (cameraUtils != null) {
+      cameraUtils.dispose();
+      cameraUtils = null;
+    }
     for (final MediaStream mediaStream : localStreams.values()) {
       streamDispose(mediaStream);
       mediaStream.dispose();

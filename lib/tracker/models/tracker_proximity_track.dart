@@ -250,6 +250,18 @@ class ProximityTrack {
         npub: npub,
       );
 
+  /// Generate a consistent ID for a place track.
+  /// This should be used when looking up or creating place tracks to ensure consistency.
+  static String generatePlaceId(String displayName, double lat, double lon) {
+    final sanitizedName = displayName
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    final latStr = lat.toStringAsFixed(2).replaceAll('.', '_');
+    final lonStr = lon.toStringAsFixed(2).replaceAll('.', '_').replaceAll('-', 'n');
+    return 'place_${sanitizedName}_${latStr}_$lonStr';
+  }
+
   /// Create a place track
   factory ProximityTrack.forPlace({
     required String placeId,
@@ -258,14 +270,7 @@ class ProximityTrack {
     required double lon,
     required PlaceSource source,
   }) {
-    // Generate a sanitized ID from name and coordinates
-    final sanitizedName = displayName
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
-    final latStr = lat.toStringAsFixed(2).replaceAll('.', '_');
-    final lonStr = lon.toStringAsFixed(2).replaceAll('.', '_').replaceAll('-', 'n');
-    final id = 'place_${sanitizedName}_${latStr}_$lonStr';
+    final id = generatePlaceId(displayName, lat, lon);
 
     return ProximityTrack(
       id: id,

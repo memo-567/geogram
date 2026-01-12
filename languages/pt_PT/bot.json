@@ -118,5 +118,6 @@
   "transcription_failed": "Transcrição falhou",
   "unknown_error": "Erro desconhecido",
   "up_to_seconds": "Até {0} segundos",
+  "voice_model_loading_one_time": "Aguarde enquanto o reconhecimento de voz carrega (apenas uma vez)",
   "voice_to_text": "Voz para texto"
 }

@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/storage_config.dart';
+import '../services/storage_stats_service.dart';
 
 /// Where the storage path is rooted
 enum StorageRoot {
@@ -252,66 +254,121 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
   final I18nService _i18n = I18nService();
   final StorageConfig _storageConfig = StorageConfig();
   final ProfileService _profileService = ProfileService();
+  final StorageStatsService _storageStatsService = StorageStatsService();
 
-  final Map<String, int> _categorySizes = {};
+  Map<String, int> _categorySizes = {};
   final Map<String, bool> _categoryLoading = {};
   final Map<String, String> _categoryPaths = {};
-  bool _isLoading = true;
+  bool _isRefreshing = false;
   int _totalSize = 0;
 
   String? _appSupportDir;
   String? _cacheDir;
 
+  StreamSubscription<Map<String, int>>? _sizesSubscription;
+
   @override
   void initState() {
     super.initState();
-    _loadStorageSizes();
+    _initializeStorage();
   }
 
-  Future<void> _loadStorageSizes() async {
-    if (kIsWeb) {
-      setState(() => _isLoading = false);
-      return;
+  Future<void> _initializeStorage() async {
+    if (kIsWeb) return;
+
+    // Initialize the stats service
+    await _storageStatsService.initialize();
+
+    // Load cached sizes immediately (non-blocking)
+    final cached = _storageStatsService.getCachedSizes();
+    if (cached != null) {
+      setState(() {
+        _categorySizes = cached;
+        _totalSize = cached.values.fold(0, (sum, size) => sum + size);
+      });
     }
 
-    setState(() => _isLoading = true);
+    // Resolve paths for category display
+    await _resolvePaths();
 
-    // Get platform-specific directories
+    // Subscribe to size updates
+    _sizesSubscription = _storageStatsService.sizesStream.listen((sizes) {
+      if (mounted) {
+        setState(() {
+          _categorySizes = sizes;
+          _totalSize = sizes.values.fold(0, (sum, size) => sum + size);
+          _isRefreshing = false;
+        });
+      }
+    });
+
+    // Trigger background refresh
+    _refreshSizes();
+  }
+
+  @override
+  void dispose() {
+    _sizesSubscription?.cancel();
+    super.dispose();
+  }
+
+  /// Resolve platform directories and category paths
+  Future<void> _resolvePaths() async {
     try {
       if (Platform.isAndroid || Platform.isIOS) {
         final appSupportDir = await getApplicationSupportDirectory();
         _appSupportDir = appSupportDir.path;
       } else {
-        // On desktop, app support is same as base dir
         _appSupportDir = _storageConfig.baseDir;
       }
 
       final cacheDir = await getTemporaryDirectory();
       _cacheDir = cacheDir.path;
 
-      // On Android, use the app's cache directory instead
       if (Platform.isAndroid) {
         final appCacheDir = await getApplicationCacheDirectory();
         _cacheDir = appCacheDir.path;
       }
+
+      // Cache paths for each category
+      for (final category in _storageCategories) {
+        final fullPath = _getFullPath(category);
+        _categoryPaths[category.id] = fullPath ?? '';
+      }
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error getting directories: $e');
+      LogService().log('StorageSettingsPage: Error resolving paths: $e');
     }
+  }
 
-    int total = 0;
-    for (final category in _storageCategories) {
-      final fullPath = _getFullPath(category);
-      _categoryPaths[category.id] = fullPath ?? '';
+  /// Trigger background refresh of sizes
+  void _refreshSizes() {
+    if (_isRefreshing) return;
 
-      final size = await _calculateSize(category, fullPath);
-      _categorySizes[category.id] = size;
-      total += size;
+    setState(() => _isRefreshing = true);
+
+    // Convert StorageCategory to StorageCategoryDef for the service
+    final categoryDefs = _storageCategories.map((cat) => StorageCategoryDef(
+      id: cat.id,
+      relativePath: cat.relativePath,
+      root: _convertRoot(cat.root),
+      isFile: cat.isFile,
+      isRemoteCache: cat.isRemoteCache,
+      isPerCallsign: cat.isPerCallsign,
+    )).toList();
+
+    _storageStatsService.refreshSizes(categoryDefs);
+  }
+
+  /// Convert StorageRoot enum to StorageRootType
+  StorageRootType _convertRoot(StorageRoot root) {
+    switch (root) {
+      case StorageRoot.baseDir:
+        return StorageRootType.baseDir;
+      case StorageRoot.appSupport:
+        return StorageRootType.appSupport;
+      case StorageRoot.cache:
+        return StorageRootType.cache;
     }
-
-    setState(() {
-      _totalSize = total;
-      _isLoading = false;
-    });
   }
 
   String? _getFullPath(StorageCategory category) {
@@ -644,16 +701,24 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
       appBar: AppBar(
         title: Text(_i18n.t('storage')),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : _loadStorageSizes,
-            tooltip: _i18n.t('refresh'),
-          ),
+          if (_isRefreshing)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _refreshSizes,
+              tooltip: _i18n.t('refresh'),
+            ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
+      body: ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 // Total storage card

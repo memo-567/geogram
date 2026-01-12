@@ -413,9 +413,10 @@ class BLEDiscoveryService {
       final advertisingData = identityService.buildAdvertisingData();
 
       // Start advertising with our service UUID and data
+      // Note: We don't set localName to avoid changing the user's Bluetooth device name
+      // Device identification is done via manufacturerData containing callsign
       await BlePeripheral.startAdvertising(
         services: [serviceUUID],
-        localName: Platform.isAndroid ? null : 'Geogram',
         manufacturerData: ManufacturerData(
           manufacturerId: 0xFFFF, // Test manufacturer ID
           data: advertisingData,

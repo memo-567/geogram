@@ -22,6 +22,7 @@ import 'proximity_detail_page.dart';
 import '../../services/i18n_service.dart';
 import '../../services/config_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/log_service.dart';
 
 /// Tab type for the tracker browser
 enum TrackerTab {
@@ -116,14 +117,17 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   void _setProximityTrackingEnabled(bool enabled) {
+    LogService().log('TrackerBrowser: _setProximityTrackingEnabled($enabled) called');
     setState(() => _proximityTrackingEnabled = enabled);
     _configService.setNestedValue('tracker.proximityTrackingEnabled', enabled);
 
     if (enabled) {
       // Store collection path for auto-start on app restart
       _configService.setNestedValue('tracker.proximityCollectionPath', widget.collectionPath);
+      LogService().log('TrackerBrowser: Calling ProximityDetectionService().start()');
       ProximityDetectionService().start(_service);
     } else {
+      LogService().log('TrackerBrowser: Calling ProximityDetectionService().stop()');
       ProximityDetectionService().stop();
     }
   }
@@ -287,7 +291,9 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     await _recordingService.checkAndResumeRecording();
 
     // Start proximity detection service if enabled
+    LogService().log('TrackerBrowser: _initializeService checking proximity: $_proximityTrackingEnabled');
     if (_proximityTrackingEnabled) {
+      LogService().log('TrackerBrowser: Starting ProximityDetectionService from _initializeService');
       ProximityDetectionService().start(_service);
     }
 

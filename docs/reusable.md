@@ -49,6 +49,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [LocationService](#locationservice) - City lookup from coordinates
 - [LocationProviderService](#locationproviderservice) - Shared GPS positioning for all apps
 - [PathRecordingService](#pathrecordingservice) - GPS path recording (uses LocationProviderService)
+- [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
 
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
@@ -1801,6 +1802,125 @@ if (_recordingService.hasActiveRecording)
 
 ---
 
+### PlaceService.findPlacesWithinRadius
+
+**File:** `lib/services/place_service.dart`
+
+Find all saved places within a given radius from GPS coordinates. Uses disk cache for fast lookups that auto-updates when places change.
+
+**Static Method:**
+```dart
+static Future<List<PlaceWithDistance>> findPlacesWithinRadius({
+  required double lat,
+  required double lon,
+  required double radiusMeters,
+})
+```
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lat` | double | Yes | Latitude of search center |
+| `lon` | double | Yes | Longitude of search center |
+| `radiusMeters` | double | Yes | Search radius in meters |
+
+**Returns:** `List<PlaceWithDistance>` - Places found within the radius
+
+**PlaceWithDistance Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Place name |
+| `lat` | double | Place latitude |
+| `lon` | double | Place longitude |
+| `folderPath` | String | Full path to the place folder |
+| `distanceMeters` | double | Distance from search center |
+
+**Usage:**
+```dart
+final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
+  lat: 52.428919,
+  lon: 10.800239,
+  radiusMeters: 100,
+);
+
+for (final place in nearbyPlaces) {
+  print('${place.name} is ${place.distanceMeters.toStringAsFixed(0)}m away');
+  print('Location: ${place.lat}, ${place.lon}');
+  print('Folder: ${place.folderPath}');
+}
+```
+
+**Caching:**
+- Cache stored at `{baseDir}/places/cache.json`
+- Automatically updates when places are added/removed (compares folder paths)
+- First call scans all device folders and creates cache
+- Subsequent calls use cache (faster)
+- Call `PlaceService.refreshPlacesCache()` to force refresh
+
+**Debug Logging:**
+The function logs detailed information for troubleshooting:
+```
+PlaceService.findPlacesWithinRadius: Searching at (52.43, 10.80) with radius 100m
+PlaceService.findPlacesWithinRadius: Loaded 15 places from cache
+PlaceService.findPlacesWithinRadius: "My Place" is 45m away (within range)
+PlaceService.findPlacesWithinRadius: Found 2 places within 100m
+```
+
+**Directory Structure Supported:**
+The function scans both directory structures:
+- `{devicesDir}/{callsign}/places/places/...` (nested structure)
+- `{devicesDir}/{callsign}/places/...` (flat structure)
+
+**Force Refresh Cache:**
+```dart
+// Force rescan all places and update cache
+await PlaceService.refreshPlacesCache();
+```
+
+**CachedPlaceEntry Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Place name |
+| `lat` | double | Place latitude |
+| `lon` | double | Place longitude |
+| `folderPath` | String | Full path to place folder |
+
+**Cache File Format:**
+```json
+{
+  "updated": "2026-01-12T10:30:00.000Z",
+  "places": [
+    {
+      "name": "My Place",
+      "lat": 52.428919,
+      "lon": 10.800239,
+      "folderPath": "/data/.../places/Germany/Lower_Saxony/Wolfsburg/my_place"
+    }
+  ]
+}
+```
+
+**Algorithm:** Uses Haversine formula for accurate distance calculation on Earth's surface.
+
+**Example: Proximity Detection in Tracker:**
+```dart
+// Check for nearby places every scan
+Future<void> _checkNearbyPlaces(double lat, double lon) async {
+  final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
+    lat: lat,
+    lon: lon,
+    radiusMeters: 100, // 100 meter radius
+  );
+
+  for (final place in nearbyPlaces) {
+    // Record proximity detection for each nearby place
+    await recordPlaceProximity(place);
+  }
+}
+```
+
+---
+
 ## QR Widgets
 
 ### QrShareReceiveWidget
@@ -2092,5 +2212,6 @@ TextFormField(
 | LocationService | services/ | Service | City lookup from coordinates |
 | LocationProviderService | services/ | Service | Shared GPS positioning for all apps |
 | PathRecordingService | tracker/services/ | Service | GPS path recording (uses LocationProviderService) |
+| PlaceService.findPlacesWithinRadius | services/ | Service | Find places within GPS radius |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |

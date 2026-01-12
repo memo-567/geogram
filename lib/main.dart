@@ -1311,6 +1311,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('profile')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const ProfilePage()),
@@ -1322,6 +1324,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('location')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const LocationPage()),
@@ -1333,6 +1337,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('security')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const SecuritySettingsPage()),
@@ -1344,6 +1350,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('storage')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const StorageSettingsPage()),
@@ -1355,6 +1363,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('connections')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const StationsPage()),
@@ -1367,6 +1377,8 @@ class _HomePageState extends State<HomePage> {
                     title: Text(_i18n.t('station_settings')),
                     onTap: () {
                       Navigator.pop(context);
+                      // Switch to Settings panel so back returns to Settings
+                      setState(() => _selectedIndex = 3);
                       Navigator.push(
                         context,
                         MaterialPageRoute(builder: (context) => const StationDashboardPage()),
@@ -1417,6 +1429,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('app_theme')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
@@ -1428,6 +1442,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('software_updates')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => const UpdatePage()),
@@ -1439,6 +1455,8 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('about')),
                   onTap: () {
                     Navigator.pop(context);
+                    // Switch to Settings panel so back returns to Settings
+                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => AboutPage()),

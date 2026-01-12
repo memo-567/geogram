@@ -5,9 +5,9 @@ import 'dart:ui';
 import '../models/tracker_proximity_track.dart';
 import 'tracker_service.dart';
 import '../../services/log_service.dart';
-import '../../services/location_service.dart';
 import '../../services/location_provider_service.dart';
 import '../../services/devices_service.dart';
+import '../../services/place_service.dart';
 
 /// Service for detecting nearby devices (via Bluetooth) and places (via GPS).
 /// Registers as a consumer of LocationProviderService to get GPS updates.
@@ -23,48 +23,51 @@ class ProximityDetectionService {
   VoidCallback? _locationConsumerDispose;
   LockedPosition? _lastPosition;
 
-  /// Cached places list (refreshed every 5 minutes)
-  List<_CachedPlace> _cachedPlaces = [];
-  DateTime? _placesLastRefreshed;
-  static const _placesRefreshInterval = Duration(minutes: 5);
-
   /// Active proximity sessions (id -> last detection time)
   final Map<String, DateTime> _activeSessions = {};
   static const _sessionTimeout = Duration(minutes: 2);
 
-  /// Radius in meters for place detection
-  static const double placeRadiusMeters = 50;
+  /// Radius in meters for place detection (100m accounts for GPS error margin)
+  static const double placeRadiusMeters = 100;
 
   bool get isRunning => _isRunning;
 
   /// Start the proximity detection service
   Future<void> start(TrackerService trackerService) async {
+    LogService().log('ProximityDetectionService: start() called');
+
     if (_isRunning) {
       LogService().log('ProximityDetectionService: Already running');
       return;
     }
 
-    _trackerService = trackerService;
-    _isRunning = true;
+    try {
+      _trackerService = trackerService;
+      _isRunning = true;
 
-    // Register as a consumer of LocationProviderService to get GPS updates
-    _locationConsumerDispose = await LocationProviderService().registerConsumer(
-      intervalSeconds: 60,
-      onPosition: (position) {
-        _lastPosition = position;
-        LogService().log('ProximityDetectionService: Got position update: ${position.latitude}, ${position.longitude}');
-      },
-    );
+      // Register as a consumer of LocationProviderService to get GPS updates
+      _locationConsumerDispose = await LocationProviderService().registerConsumer(
+        intervalSeconds: 60,
+        onPosition: (position) {
+          _lastPosition = position;
+          LogService().log('ProximityDetectionService: Got position update: ${position.latitude}, ${position.longitude}');
+        },
+      );
 
-    // Run initial scan immediately
-    _scanNearbyDevices();
-
-    // Then scan every 60 seconds using a simple timer
-    _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      // Run initial scan immediately
       _scanNearbyDevices();
-    });
 
-    LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
+      // Then scan every 60 seconds using a simple timer
+      _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+        _scanNearbyDevices();
+      });
+
+      LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
+    } catch (e, stack) {
+      LogService().log('ProximityDetectionService: Failed to start: $e');
+      LogService().log('ProximityDetectionService: Stack: $stack');
+      _isRunning = false;
+    }
   }
 
   /// Stop the proximity detection service
@@ -130,8 +133,7 @@ class ProximityDetectionService {
 
       // Also check for nearby places if we have a location
       if (lat != 0.0 || lon != 0.0) {
-        _checkNearbyPlaces(lat, lon);
-        _refreshPlacesIfNeeded();
+        await _checkNearbyPlaces(lat, lon);
       }
 
       // Clean up stale sessions
@@ -142,63 +144,40 @@ class ProximityDetectionService {
     }
   }
 
-  /// Refresh cached places list if stale
-  Future<void> _refreshPlacesIfNeeded() async {
-    final now = DateTime.now();
-    if (_placesLastRefreshed != null &&
-        now.difference(_placesLastRefreshed!) < _placesRefreshInterval) {
-      return; // Cache is still fresh
-    }
-
-    await _refreshPlaces();
-    _placesLastRefreshed = now;
-  }
-
-  /// Refresh the cached places list from all sources
-  Future<void> _refreshPlaces() async {
-    final places = <_CachedPlace>[];
-
-    try {
-      final locationService = LocationService();
-      await locationService.init();
-
-      // TODO: Load places from:
-      // 1. Internal Places collections
-      // 2. Station server places (cached)
-      // 3. Connect places (from other devices)
-
-      _cachedPlaces = places;
-    } catch (e) {
-      LogService().log('ProximityDetectionService: Error refreshing places: $e');
-    }
-  }
-
-  /// Check for nearby places within the radius
+  /// Check for nearby places within the radius using PlaceService
   Future<void> _checkNearbyPlaces(double lat, double lon) async {
+    // Use the reusable PlaceService function with disk caching
+    final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
+      lat: lat,
+      lon: lon,
+      radiusMeters: placeRadiusMeters,
+    );
+
+    LogService().log('ProximityDetectionService: Found ${nearbyPlaces.length} places within ${placeRadiusMeters}m');
+
+    if (nearbyPlaces.isEmpty) return;
+
     final now = DateTime.now();
     final year = now.year;
     final week = getWeekNumber(now);
     final timestamp = now.toUtc().toIso8601String();
 
-    for (final place in _cachedPlaces) {
-      final distance = _calculateDistance(lat, lon, place.lat, place.lon);
-
-      if (distance <= placeRadiusMeters) {
-        await _recordProximity(
-          id: place.trackId,
-          type: ProximityTargetType.place,
-          displayName: place.name,
-          lat: lat,
-          lon: lon,
-          timestamp: timestamp,
-          year: year,
-          week: week,
-          placeId: place.placeId,
-          placeSource: place.source,
-          placeLat: place.lat,
-          placeLon: place.lon,
-        );
-      }
+    for (final place in nearbyPlaces) {
+      final trackId = ProximityTrack.generatePlaceId(place.name, place.lat, place.lon);
+      await _recordProximity(
+        id: trackId,
+        type: ProximityTargetType.place,
+        displayName: place.name,
+        lat: lat,
+        lon: lon,
+        timestamp: timestamp,
+        year: year,
+        week: week,
+        placeId: place.folderPath,
+        placeSource: PlaceSource.internal,
+        placeLat: place.lat,
+        placeLon: place.lon,
+      );
     }
   }
 
@@ -387,23 +366,4 @@ class ProximityDetectionService {
       npub: npub,
     );
   }
-}
-
-/// Cached place data for quick proximity checks
-class _CachedPlace {
-  final String trackId;
-  final String placeId;
-  final String name;
-  final double lat;
-  final double lon;
-  final PlaceSource source;
-
-  const _CachedPlace({
-    required this.trackId,
-    required this.placeId,
-    required this.name,
-    required this.lat,
-    required this.lon,
-    required this.source,
-  });
 }

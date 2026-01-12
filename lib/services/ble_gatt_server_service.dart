@@ -211,9 +211,9 @@ class BLEGattServerService {
       ]);
 
       // Start advertising
+      // Note: We don't set localName to avoid changing the user's Bluetooth device name
       await BlePeripheral.startAdvertising(
         services: [serviceUUID],
-        localName: Platform.isAndroid ? null : 'Geogram',
         manufacturerData: ManufacturerData(
           manufacturerId: 0xFFFF,
           data: serviceData,

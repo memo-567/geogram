@@ -96,6 +96,8 @@ public class FlutterWebRTCPlugin implements FlutterPlugin, ActivityAware, EventC
 
     @Override
     public void onDetachedFromActivity() {
+        // Clean up Activity-bound resources (like broadcast receivers) to prevent leaks
+        methodCallHandler.onActivityDetached();
         methodCallHandler.setActivity(null);
         if (this.observer != null) {
             this.lifecycle.removeObserver(this.observer);

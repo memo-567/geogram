@@ -33,6 +33,33 @@ enum _TileDownloadResult {
   failed,     // Download failed
 }
 
+/// Priority levels for tile download requests
+enum _TilePriority { high, low }
+
+/// A tile download request in the queue
+class _TileRequest {
+  final int z;
+  final int x;
+  final int y;
+  final MapLayerType layer;
+  final _TilePriority priority;
+  final int maxAgeDays;
+  final Completer<_TileDownloadResult>? completer;
+
+  _TileRequest({
+    required this.z,
+    required this.x,
+    required this.y,
+    required this.layer,
+    required this.priority,
+    this.maxAgeDays = 90,
+    this.completer,
+  });
+
+  /// Unique key for deduplication
+  String get key => '${layer.name}/$z/$x/$y';
+}
+
 /// Status of tile loading operations
 class TileLoadingStatus {
   final int loadingCount;
@@ -123,6 +150,11 @@ class MapTileService {
   /// Timer to auto-clear failure status after a delay
   Timer? _failureClearTimer;
 
+  /// Priority queue for tile downloads
+  final List<_TileRequest> _downloadQueue = [];
+  final Set<String> _queuedKeys = {};  // O(1) deduplication check
+  bool _queueProcessorRunning = false;
+
   /// Increment loading count
   void _startLoading() {
     statusNotifier.value = statusNotifier.value.copyWith(
@@ -158,6 +190,76 @@ class MapTileService {
   void clearStatus() {
     _failureClearTimer?.cancel();
     statusNotifier.value = const TileLoadingStatus();
+  }
+
+  /// Add a tile to the download queue
+  /// High priority tiles go to the front, low priority to the back
+  Future<_TileDownloadResult> _enqueueDownload(_TileRequest request) {
+    // Skip if already queued - return a future that completes when existing request does
+    if (_queuedKeys.contains(request.key)) {
+      // Find existing request and return its completer's future
+      final existing = _downloadQueue.firstWhere(
+        (r) => r.key == request.key,
+        orElse: () => request,
+      );
+      return existing.completer?.future ?? Future.value(_TileDownloadResult.skipped);
+    }
+
+    // Create completer for async result
+    final completer = Completer<_TileDownloadResult>();
+    final requestWithCompleter = _TileRequest(
+      z: request.z,
+      x: request.x,
+      y: request.y,
+      layer: request.layer,
+      priority: request.priority,
+      maxAgeDays: request.maxAgeDays,
+      completer: completer,
+    );
+
+    _queuedKeys.add(request.key);
+
+    if (request.priority == _TilePriority.high) {
+      // Insert at front for immediate processing
+      _downloadQueue.insert(0, requestWithCompleter);
+    } else {
+      // Add to back for background processing
+      _downloadQueue.add(requestWithCompleter);
+    }
+
+    // Start processor if not running
+    if (!_queueProcessorRunning) {
+      _processQueue();
+    }
+
+    return completer.future;
+  }
+
+  /// Process the download queue
+  Future<void> _processQueue() async {
+    if (_queueProcessorRunning) return;
+    _queueProcessorRunning = true;
+
+    while (_downloadQueue.isNotEmpty) {
+      final request = _downloadQueue.removeAt(0);
+      _queuedKeys.remove(request.key);
+
+      try {
+        final result = await _downloadAndCacheTileWithAge(
+          request.z,
+          request.x,
+          request.y,
+          request.layer,
+          maxAgeDays: request.maxAgeDays,
+        );
+        request.completer?.complete(result);
+      } catch (e) {
+        LogService().log('MapTileService: Queue tile failed: ${request.key}: $e');
+        request.completer?.complete(_TileDownloadResult.failed);
+      }
+    }
+
+    _queueProcessorRunning = false;
   }
 
   /// Get the tiles storage path
@@ -1070,18 +1172,20 @@ class MapTileService {
     }
 
     final total = tilesToDownload.length;
-    LogService().log('MapTileService: Pre-downloading $total tiles for ${radiusKm}km radius');
+    LogService().log('MapTileService: Pre-downloading $total tiles for ${radiusKm}km radius (via priority queue)');
 
-    // Download tiles sequentially to avoid overwhelming the network
+    // Download tiles via priority queue (low priority for background downloads)
+    // This allows live UI tile requests to jump ahead in the queue
     for (final tile in tilesToDownload) {
       try {
-        final result = await _downloadAndCacheTileWithAge(
-          tile.z,
-          tile.x,
-          tile.y,
-          tile.layer,
-          maxAgeDays: maxAgeDays,
-        );
+        final result = await _enqueueDownload(_TileRequest(
+          z: tile.z,
+          x: tile.x,
+          y: tile.y,
+          layer: tile.layer,
+          priority: _TilePriority.low,
+          maxAgeDays: maxAgeDays ?? 90,
+        ));
         if (result == _TileDownloadResult.downloaded) {
           downloaded++;
         } else if (result == _TileDownloadResult.skipped) {
@@ -1393,90 +1497,6 @@ class MapTileService {
 
     return _TileDownloadResult.failed;
   }
-
-  /// Download a single tile and cache it to disk
-  /// Returns true if tile was successfully cached (or already existed)
-  Future<bool> _downloadAndCacheTile(int z, int x, int y, MapLayerType layer) async {
-    if (_tilesPath == null) return false;
-
-    final cachePath = _getCachePath(z, x, y, layer);
-    final file = File(cachePath);
-
-    // Skip if already cached
-    if (await file.exists()) {
-      return true;
-    }
-
-    final allowStation = canUseStation;
-    final allowInternet = canUseInternet;
-    if (!allowStation && !allowInternet) {
-      return false;
-    }
-
-    // Build tile URL based on layer
-    String directUrl;
-    if (layer == MapLayerType.satellite) {
-      // Esri uses z/y/x order
-      directUrl = satelliteTileUrl
-          .replaceAll('{z}', '$z')
-          .replaceAll('{y}', '$y')
-          .replaceAll('{x}', '$x');
-    } else {
-      // OSM uses z/x/y order
-      directUrl = osmTileUrl
-          .replaceAll('{z}', '$z')
-          .replaceAll('{x}', '$x')
-          .replaceAll('{y}', '$y');
-    }
-
-    // Try station first if available
-    if (allowStation) {
-      final stationUrl = getStationTileUrl(layer);
-      if (stationUrl != null) {
-        try {
-          final url = stationUrl
-              .replaceAll('{z}', '$z')
-              .replaceAll('{x}', '$x')
-              .replaceAll('{y}', '$y');
-          final response = await httpClient
-              .get(Uri.parse(url))
-              .timeout(const Duration(seconds: 5));
-          if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-            // Validate tile before caching
-            if (await validateTileData(response.bodyBytes)) {
-              await file.parent.create(recursive: true);
-              await file.writeAsBytes(response.bodyBytes);
-              return true;
-            }
-          }
-        } catch (_) {
-          // Station failed, try direct internet
-        }
-      }
-    }
-
-    // Fallback to direct internet
-    if (allowInternet) {
-      try {
-        final response = await httpClient
-            .get(Uri.parse(directUrl), headers: {'User-Agent': 'dev.geogram'})
-            .timeout(const Duration(seconds: 10));
-
-        if (response.statusCode == 200 && response.bodyBytes.length > 100) {
-          // Validate tile before caching
-          if (await validateTileData(response.bodyBytes)) {
-            await file.parent.create(recursive: true);
-            await file.writeAsBytes(response.bodyBytes);
-            return true;
-          }
-        }
-      } catch (e) {
-        LogService().log('MapTileService: Direct download failed for $z/$x/$y: $e');
-      }
-    }
-
-    return false;
-  }
 }
 
 /// Custom tile provider with fallback logic:
@@ -1578,7 +1598,6 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     final y = coordinates.y.toInt();
 
     bool needsNetworkFetch = true;
-    Uint8List? tileData;
 
     // Helper to safely decode transparent tile - never throws
     Future<ui.Codec> safeTransparent() async {
@@ -1663,103 +1682,49 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
         return safeTransparent();
       }
 
-      // Network fetch needed - track loading status
+      // Network fetch needed - use priority queue with HIGH priority
+      // This ensures live UI tile requests jump ahead of background downloads
       if (needsNetworkFetch) {
         mapTileService._startLoading();
       }
 
       try {
-        bool networkFailed = false; // Track if network is completely unavailable
+        // 2. Enqueue download with HIGH priority (jumps ahead of background downloads)
+        final downloadResult = await mapTileService._enqueueDownload(_TileRequest(
+          z: z,
+          x: x,
+          y: y,
+          layer: layerType,
+          priority: _TilePriority.high,
+          maxAgeDays: 90,  // Use default age for live requests
+        ));
 
-        // 2. Try station if available (supports both standard and satellite tiles)
-        if (allowStation && !networkFailed) {
-          final stationUrl = mapTileService.getStationTileUrl(layerType);
-          if (stationUrl != null) {
-            final url = stationUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{x}', x.toString())
-                .replaceAll('{y}', y.toString());
-            try {
-              final response = await httpClient
-                  .get(Uri.parse(url))
-                  .timeout(const Duration(seconds: 5));
-
-              if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-                tileData = response.bodyBytes;
-                // Cache the tile for future use
-                await _cacheTile(z, x, y, tileData);
+        // 3. After queue processes, tile should be in cache - read and decode
+        if (downloadResult == _TileDownloadResult.downloaded ||
+            downloadResult == _TileDownloadResult.skipped) {
+          final cachePath = _getTileCachePath(z, x, y);
+          final cacheFile = File(cachePath);
+          if (await cacheFile.exists()) {
+            final cachedBytes = Uint8List.fromList(await cacheFile.readAsBytes());
+            if (cachedBytes.isNotEmpty && _isValidImageData(cachedBytes)) {
+              try {
+                final buffer = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                final codec = await decode(buffer);
+                final validated = await validateCodec(codec);
+                if (validated != null) {
+                  final buffer2 = await ui.ImmutableBuffer.fromUint8List(cachedBytes);
+                  return decode(buffer2);
+                }
+              } catch (e) {
+                // Decode failed
               }
-            } catch (e) {
-              // Check for DNS/network failures - fail fast
-              final errorStr = e.toString().toLowerCase();
-              if (errorStr.contains('socketexception') ||
-                  errorStr.contains('failed host lookup') ||
-                  errorStr.contains('network is unreachable') ||
-                  errorStr.contains('no address associated')) {
-                networkFailed = true;
-              }
             }
           }
         }
 
-        // 3. Try direct internet if station failed and network seems available
-        if (tileData == null && allowInternet && !networkFailed) {
-          try {
-            String url;
-            if (layerType == MapLayerType.satellite) {
-              // Esri satellite uses z/y/x order
-              url = MapTileService.satelliteTileUrl
-                  .replaceAll('{z}', z.toString())
-                  .replaceAll('{y}', y.toString())
-                  .replaceAll('{x}', x.toString());
-            } else {
-              // OSM uses z/x/y order
-              url = MapTileService.osmTileUrl
-                  .replaceAll('{z}', z.toString())
-                  .replaceAll('{x}', x.toString())
-                  .replaceAll('{y}', y.toString());
-            }
-
-            final response = await httpClient
-                .get(
-                  Uri.parse(url),
-                  headers: {'User-Agent': 'dev.geogram'},
-                )
-                .timeout(const Duration(seconds: 10));
-
-            if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-              tileData = response.bodyBytes;
-              // Cache the tile for future use
-              await _cacheTile(z, x, y, tileData);
-            }
-          } catch (e) {
-            // Network failed - silent, will return transparent
-          }
-        }
-
-        // Return fetched tile or transparent placeholder on failure
-        if (tileData == null || tileData.isEmpty || !_isValidImageData(tileData)) {
-          mapTileService._recordFailure();
-          return safeTransparent();
-        }
-
-        // Try to decode the tile and validate it
-        try {
-          final buffer = await ui.ImmutableBuffer.fromUint8List(tileData);
-          final codec = await decode(buffer);
-          // Validate by decompressing first frame
-          final validated = await validateCodec(codec);
-          if (validated != null) {
-            // Re-decode since we consumed the frame
-            final buffer2 = await ui.ImmutableBuffer.fromUint8List(tileData);
-            return decode(buffer2);
-          } else {
-            return safeTransparent();
-          }
-        } catch (e) {
-          // Decode failed, return transparent placeholder
-          return safeTransparent();
-        }
+        // Download or decode failed - return transparent placeholder
+        mapTileService._recordFailure();
+        return safeTransparent();
       } finally {
         if (needsNetworkFetch) {
           mapTileService._finishLoading();
@@ -1768,117 +1733,6 @@ class GeogramTileImageProvider extends ImageProvider<GeogramTileImageProvider> {
     } catch (e) {
       // Catch-all: any unhandled exception returns transparent
       return safeTransparent();
-    }
-  }
-
-  /// Cache the tile data to a file
-  Future<void> _cacheTile(int z, int x, int y, Uint8List data) async {
-    try {
-      final cachePath = _getTileCachePath(z, x, y);
-      final cacheFile = File(cachePath);
-
-      // Create parent directories if they don't exist
-      final cacheDir = cacheFile.parent;
-      if (!await cacheDir.exists()) {
-        await cacheDir.create(recursive: true);
-      }
-
-      // Write tile data to file
-      await cacheFile.writeAsBytes(data);
-
-      // Prefetch the alternate layer tile in the background for instant switching
-      _prefetchAlternateLayer(z, x, y);
-    } catch (e) {
-      // Silently ignore cache write errors - not critical
-      LogService().log('MapTileService: Failed to cache tile $z/$x/$y: $e');
-    }
-  }
-
-  /// Prefetch the alternate layer tile (standard <-> satellite) for instant layer switching
-  void _prefetchAlternateLayer(int z, int x, int y) async {
-    try {
-      final tilesPath = mapTileService.tilesPath;
-      if (tilesPath == null) return;
-
-      final allowStation = mapTileService.canUseStation;
-      final allowInternet = mapTileService.canUseInternet;
-      if (!allowStation && !allowInternet) return;
-
-      final alternateLayerType = layerType == MapLayerType.satellite
-          ? MapLayerType.standard
-          : MapLayerType.satellite;
-      final alternateLayer = alternateLayerType == MapLayerType.satellite
-          ? 'satellite'
-          : 'standard';
-      final cachePath = '$tilesPath/cache/$alternateLayer/$z/$x/$y.png';
-      final cacheFile = File(cachePath);
-
-      // Skip if already cached
-      if (await cacheFile.exists()) return;
-
-      Uint8List? tileBytes;
-
-      if (allowStation) {
-        final stationUrl = mapTileService.getStationTileUrl(alternateLayerType);
-        if (stationUrl != null) {
-          try {
-            final url = stationUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{x}', x.toString())
-                .replaceAll('{y}', y.toString());
-            final response = await httpClient
-                .get(Uri.parse(url))
-                .timeout(const Duration(seconds: 10));
-            if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-              tileBytes = response.bodyBytes;
-            }
-          } catch (_) {
-            // Ignore and fall back to internet
-          }
-        }
-      }
-
-      if (tileBytes == null && allowInternet) {
-        try {
-          String url;
-          if (alternateLayerType == MapLayerType.satellite) {
-            // Prefetch satellite (Esri uses z/y/x)
-            url = MapTileService.satelliteTileUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{y}', y.toString())
-                .replaceAll('{x}', x.toString());
-          } else {
-            // Prefetch standard (OSM)
-            url = MapTileService.osmTileUrl
-                .replaceAll('{z}', z.toString())
-                .replaceAll('{x}', x.toString())
-                .replaceAll('{y}', y.toString());
-          }
-
-          final response = await httpClient
-              .get(Uri.parse(url), headers: {'User-Agent': 'dev.geogram'})
-              .timeout(const Duration(seconds: 15));
-
-          if (response.statusCode == 200 && _isValidImageData(response.bodyBytes)) {
-            tileBytes = response.bodyBytes;
-          }
-        } catch (_) {
-          // Ignore and skip prefetch
-        }
-      }
-
-      if (tileBytes != null) {
-        // Validate tile before caching
-        if (await MapTileService.validateTileData(tileBytes)) {
-          final cacheDir = cacheFile.parent;
-          if (!await cacheDir.exists()) {
-            await cacheDir.create(recursive: true);
-          }
-          await cacheFile.writeAsBytes(tileBytes);
-        }
-      }
-    } catch (e) {
-      // Silently ignore prefetch failures - not critical
     }
   }
 

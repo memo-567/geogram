@@ -3,11 +3,64 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:math';
 import '../models/place.dart';
 import '../util/place_parser.dart';
 import 'location_service.dart';
 import 'log_service.dart';
+import 'storage_config.dart';
+
+// ============================================================================
+// Place Proximity Lookup - Reusable classes and methods
+// ============================================================================
+
+/// Cached place entry for fast proximity lookups
+class CachedPlaceEntry {
+  final String name;
+  final double lat;
+  final double lon;
+  final String folderPath;
+
+  const CachedPlaceEntry({
+    required this.name,
+    required this.lat,
+    required this.lon,
+    required this.folderPath,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'lat': lat,
+    'lon': lon,
+    'folderPath': folderPath,
+  };
+
+  factory CachedPlaceEntry.fromJson(Map<String, dynamic> json) => CachedPlaceEntry(
+    name: json['name'] as String,
+    lat: (json['lat'] as num).toDouble(),
+    lon: (json['lon'] as num).toDouble(),
+    folderPath: json['folderPath'] as String,
+  );
+}
+
+/// Place with distance from a reference point
+class PlaceWithDistance {
+  final String name;
+  final double lat;
+  final double lon;
+  final String folderPath;
+  final double distanceMeters;
+
+  const PlaceWithDistance({
+    required this.name,
+    required this.lat,
+    required this.lon,
+    required this.folderPath,
+    required this.distanceMeters,
+  });
+}
 
 /// Service for managing places collection
 class PlaceService {
@@ -324,5 +377,234 @@ class PlaceService {
         .where((p) => p.type != null)
         .map((p) => p.type!)
         .toSet();
+  }
+
+  // ==========================================================================
+  // Static methods for proximity lookup with disk caching
+  // ==========================================================================
+
+  /// Cache file path: {baseDir}/places/cache.json
+  static String get _cacheFilePath {
+    final storageConfig = StorageConfig();
+    return '${storageConfig.baseDir}/places/cache.json';
+  }
+
+  /// Find all places within a radius of a coordinate.
+  /// Uses disk cache for fast lookups, updates cache if places changed.
+  ///
+  /// Usage:
+  /// ```dart
+  /// final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
+  ///   lat: 52.428919,
+  ///   lon: 10.800239,
+  ///   radiusMeters: 100,
+  /// );
+  /// ```
+  static Future<List<PlaceWithDistance>> findPlacesWithinRadius({
+    required double lat,
+    required double lon,
+    required double radiusMeters,
+  }) async {
+    LogService().log('PlaceService.findPlacesWithinRadius: Searching at ($lat, $lon) with radius ${radiusMeters}m');
+
+    // Load or update cache
+    final allPlaces = await _loadOrUpdateCache();
+    LogService().log('PlaceService.findPlacesWithinRadius: Loaded ${allPlaces.length} places from cache');
+
+    // Filter by distance
+    final results = <PlaceWithDistance>[];
+    for (final place in allPlaces) {
+      final distance = _haversineDistance(lat, lon, place.lat, place.lon);
+      if (distance <= radiusMeters) {
+        results.add(PlaceWithDistance(
+          name: place.name,
+          lat: place.lat,
+          lon: place.lon,
+          folderPath: place.folderPath,
+          distanceMeters: distance,
+        ));
+        LogService().log('PlaceService.findPlacesWithinRadius: "${place.name}" is ${distance.toStringAsFixed(0)}m away (within range)');
+      }
+    }
+
+    LogService().log('PlaceService.findPlacesWithinRadius: Found ${results.length} places within ${radiusMeters}m');
+    return results;
+  }
+
+  /// Load cache from disk, or scan and create if doesn't exist
+  static Future<List<CachedPlaceEntry>> _loadOrUpdateCache() async {
+    try {
+      final storageConfig = StorageConfig();
+      if (!storageConfig.isInitialized) {
+        LogService().log('PlaceService: StorageConfig not initialized');
+        return [];
+      }
+
+      // Ensure places directory exists
+      final placesDir = Directory('${storageConfig.baseDir}/places');
+      if (!await placesDir.exists()) {
+        await placesDir.create(recursive: true);
+      }
+
+      final cacheFile = File(_cacheFilePath);
+      List<CachedPlaceEntry> cachedPlaces = [];
+
+      // Load existing cache if available
+      if (await cacheFile.exists()) {
+        try {
+          final content = await cacheFile.readAsString();
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          final entries = json['places'] as List<dynamic>? ?? [];
+          cachedPlaces = entries
+              .map((e) => CachedPlaceEntry.fromJson(e as Map<String, dynamic>))
+              .toList();
+          LogService().log('PlaceService: Loaded ${cachedPlaces.length} places from cache');
+        } catch (e) {
+          LogService().log('PlaceService: Cache corrupted, will rebuild: $e');
+          cachedPlaces = [];
+        }
+      }
+
+      // Scan disk for actual places
+      final diskPlaces = await _scanAllPlaces();
+      LogService().log('PlaceService: Scanned disk, found ${diskPlaces.length} places');
+
+      // Check if cache needs update (compare folder paths)
+      final cacheSet = cachedPlaces.map((p) => p.folderPath).toSet();
+      final diskSet = diskPlaces.map((p) => p.folderPath).toSet();
+
+      if (cacheSet.length != diskSet.length || !cacheSet.containsAll(diskSet)) {
+        // Mismatch - update cache
+        await _saveCache(diskPlaces);
+        LogService().log('PlaceService: Updated cache (${diskPlaces.length} places)');
+        return diskPlaces;
+      }
+
+      return cachedPlaces;
+    } catch (e) {
+      LogService().log('PlaceService: Cache error: $e');
+      return [];
+    }
+  }
+
+  /// Scan all device folders for places
+  static Future<List<CachedPlaceEntry>> _scanAllPlaces() async {
+    final results = <CachedPlaceEntry>[];
+
+    try {
+      final storageConfig = StorageConfig();
+      final devicesDir = Directory(storageConfig.devicesDir);
+      if (!await devicesDir.exists()) {
+        LogService().log('PlaceService: Devices directory not found: ${storageConfig.devicesDir}');
+        return results;
+      }
+
+      await for (final callsignEntity in devicesDir.list()) {
+        if (callsignEntity is! Directory) continue;
+
+        // Check both directory structures (places/places and places)
+        for (final placesPath in [
+          '${callsignEntity.path}/places/places',
+          '${callsignEntity.path}/places',
+        ]) {
+          final placesDir = Directory(placesPath);
+          if (await placesDir.exists()) {
+            await _scanForPlacesRecursive(placesDir, results);
+            break; // Found places folder, don't check other path
+          }
+        }
+      }
+    } catch (e) {
+      LogService().log('PlaceService: Scan error: $e');
+    }
+
+    return results;
+  }
+
+  /// Recursively scan directory for place.txt files
+  static Future<void> _scanForPlacesRecursive(Directory dir, List<CachedPlaceEntry> results) async {
+    try {
+      await for (final entity in dir.list()) {
+        if (entity is Directory) {
+          final placeFile = File('${entity.path}/place.txt');
+          if (await placeFile.exists()) {
+            final place = await _parsePlaceFileForCache(placeFile);
+            if (place != null) results.add(place);
+          } else {
+            await _scanForPlacesRecursive(entity, results);
+          }
+        }
+      }
+    } catch (e) {
+      // Skip inaccessible directories
+    }
+  }
+
+  /// Parse a place.txt file for caching
+  static Future<CachedPlaceEntry?> _parsePlaceFileForCache(File placeFile) async {
+    try {
+      final content = await placeFile.readAsString();
+      String? name;
+      double? lat, lon;
+
+      for (final line in content.split('\n')) {
+        if (line.startsWith('# PLACE:')) {
+          name = line.substring('# PLACE:'.length).trim();
+        } else if (line.startsWith('# PLACE_') && name == null) {
+          final colonIdx = line.indexOf(':', 8);
+          if (colonIdx > 0) name = line.substring(colonIdx + 1).trim();
+        } else if (line.startsWith('COORDINATES:')) {
+          final coords = line.substring('COORDINATES:'.length).trim().split(',');
+          if (coords.length == 2) {
+            lat = double.tryParse(coords[0].trim());
+            lon = double.tryParse(coords[1].trim());
+          }
+        }
+      }
+
+      if (name != null && lat != null && lon != null) {
+        return CachedPlaceEntry(
+          name: name,
+          lat: lat,
+          lon: lon,
+          folderPath: placeFile.parent.path,
+        );
+      }
+    } catch (e) {
+      // Skip unparseable files
+    }
+    return null;
+  }
+
+  /// Save cache to disk
+  static Future<void> _saveCache(List<CachedPlaceEntry> places) async {
+    try {
+      final cacheFile = File(_cacheFilePath);
+      final json = {
+        'updated': DateTime.now().toIso8601String(),
+        'places': places.map((p) => p.toJson()).toList(),
+      };
+      await cacheFile.writeAsString(jsonEncode(json));
+    } catch (e) {
+      LogService().log('PlaceService: Error saving cache: $e');
+    }
+  }
+
+  /// Haversine distance calculation in meters
+  static double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371000.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLon = (lon2 - lon1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
+        sin(dLon / 2) * sin(dLon / 2);
+    return earthRadius * 2 * atan2(sqrt(a), sqrt(1 - a));
+  }
+
+  /// Force refresh the places cache
+  static Future<void> refreshPlacesCache() async {
+    final places = await _scanAllPlaces();
+    await _saveCache(places);
+    LogService().log('PlaceService: Force refreshed cache (${places.length} places)');
   }
 }

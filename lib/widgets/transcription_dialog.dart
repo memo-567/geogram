@@ -179,6 +179,8 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
           _modelReady = true;
           _modelLoading = false;
         });
+        // Model already loaded, start recording immediately
+        _startRecording();
       }
       return;
     }
@@ -210,6 +212,10 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
               _errorMessage = widget.i18n.t('transcription_failed');
             }
           });
+          // Model loaded, start recording automatically
+          if (_modelReady) {
+            _startRecording();
+          }
         }
       } catch (e) {
         LogService().log('TranscriptionDialog: Background load error: $e');
@@ -230,23 +236,13 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
       return;
     }
 
-    if (!mounted) {
-      return;
+    // Wait for model to finish loading, then start recording
+    if (_modelLoadFuture != null) {
+      await _modelLoadFuture;
+      if (_modelReady && mounted) {
+        await _startRecording();
+      }
     }
-
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(widget.i18n.t('please_wait')),
-        content: Text(widget.i18n.t('checking_speech_model')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(widget.i18n.t('ok')),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _startRecording() async {
@@ -596,6 +592,23 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
   }
 
   Widget _buildIdleUI() {
+    // When model is loading, show loading UI (recording will auto-start when ready)
+    if (_modelLoading) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 16),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            widget.i18n.t('voice_model_loading_one_time'),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      );
+    }
+
+    // Fallback UI (should rarely be seen since recording auto-starts)
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -618,16 +631,6 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
         ),
-        if (_modelLoading) ...[
-          const SizedBox(height: 8),
-          Text(
-            widget.i18n.t('checking_speech_model'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
       ],
     );
   }
@@ -739,6 +742,16 @@ class _TranscriptionDialogState extends State<TranscriptionDialog>
         ];
 
       case _DialogState.idle:
+        // When model is loading, only show Cancel (recording will auto-start)
+        if (_modelLoading) {
+          return [
+            TextButton(
+              onPressed: _cancel,
+              child: Text(widget.i18n.t('cancel')),
+            ),
+          ];
+        }
+        // Fallback: show Start button if model ready but recording hasn't started
         return [
           TextButton(
             onPressed: _cancel,
