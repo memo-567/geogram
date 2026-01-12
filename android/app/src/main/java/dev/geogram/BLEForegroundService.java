@@ -42,7 +42,11 @@ public class BLEForegroundService extends Service {
     // to ensure we always beat the server's idle timeout)
     private static final long KEEPALIVE_INTERVAL_MS = 55 * 1000;
 
+    // Restart delay after crash
+    private static final long RESTART_DELAY_MS = 3000; // 3 seconds
+
     private PowerManager.WakeLock wakeLock;
+    private Handler restartHandler;
     private Handler keepAliveHandler;
     private Runnable keepAliveRunnable;
     private boolean keepAliveEnabled = false;
@@ -140,8 +144,9 @@ public class BLEForegroundService extends Service {
         createNotificationChannel();
         acquireWakeLock();
 
-        // Initialize keep-alive handler on main looper
+        // Initialize handlers on main looper
         keepAliveHandler = new Handler(Looper.getMainLooper());
+        restartHandler = new Handler(Looper.getMainLooper());
         keepAliveRunnable = new Runnable() {
             @Override
             public void run() {
@@ -196,11 +201,14 @@ public class BLEForegroundService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // Handle keep-alive enable/disable actions
+        // Handle actions
         if ("ENABLE_KEEPALIVE".equals(action)) {
             startKeepAlive();
         } else if ("DISABLE_KEEPALIVE".equals(action)) {
             stopKeepAlive();
+        } else if ("SCHEDULE_RESTART".equals(action)) {
+            scheduleAppRestart();
+            return START_STICKY;
         }
 
         // Keep the service running
@@ -257,6 +265,49 @@ public class BLEForegroundService extends Service {
             // Update notification to reflect disconnected state
             updateNotification();
         }
+    }
+
+    /**
+     * Schedule app restart from the foreground service.
+     * Called when a crash is detected and the service is still running.
+     * Shows a notification indicating restart is in progress.
+     */
+    private void scheduleAppRestart() {
+        Log.d(TAG, "Scheduling app restart from foreground service");
+
+        // Update notification to show restart in progress
+        NotificationManager notificationManager = getSystemService(NotificationManager.class);
+        if (notificationManager != null) {
+            Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Geogram")
+                .setContentText("Recovering from error...")
+                .setSmallIcon(R.drawable.ic_notification)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build();
+            notificationManager.notify(NOTIFICATION_ID, notification);
+        }
+
+        // Mark that we're recovering from a crash
+        GeogramApplication app = GeogramApplication.getInstance();
+        if (app != null) {
+            app.markRecoveredFromCrash();
+        }
+
+        // Delay restart to allow crash logging to complete
+        restartHandler.postDelayed(() -> {
+            try {
+                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+                                          Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    startActivity(launchIntent);
+                    Log.d(TAG, "App restart initiated");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to restart app", e);
+            }
+        }, RESTART_DELAY_MS);
     }
 
     /**

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
+import 'services/crash_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart'
@@ -136,7 +138,15 @@ void main() async {
     }
   }
 
+  // Initialize crash handling BEFORE Flutter binding
+  // This ensures we catch crashes during initialization
+  await CrashService().initialize();
+  _setupCrashHandlers();
+
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Re-initialize CrashService with proper paths now that binding is ready
+  await CrashService().reinitialize();
 
   // Apply Android intent extras (test mode, etc.)
   await AppArgs().applyAndroidExtras();
@@ -321,6 +331,15 @@ void main() async {
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
+      // Check if app recovered from a crash
+      if (!kIsWeb && Platform.isAndroid) {
+        final recoveredFromCrash = await CrashService().didRecoverFromCrash();
+        if (recoveredFromCrash) {
+          LogService().warn('App recovered from a previous crash - check crash logs in Settings > Security for details');
+          await CrashService().clearRecoveredFromCrash();
+        }
+      }
+
       // Initialize location service (GPS on mobile, IP-based on desktop/web)
       // Must run after ProfileService to load saved location
       await UserLocationService().initialize();
@@ -476,6 +495,35 @@ void main() async {
     }
   });
   return; // Early return since runApp is already called
+}
+
+/// Set up global crash handlers for Flutter errors
+void _setupCrashHandlers() {
+  // Handle Flutter framework errors (widget build errors, etc.)
+  FlutterError.onError = (FlutterErrorDetails details) {
+    // Log the error
+    CrashService().logCrashSync(
+      'FlutterError',
+      details.exceptionAsString(),
+      details.stack,
+    );
+
+    // Present error in debug mode
+    FlutterError.presentError(details);
+
+    // For fatal errors, notify native for potential restart
+    if (details.silent != true) {
+      CrashService().notifyNativeCrash(details.exceptionAsString());
+    }
+  };
+
+  // Handle async errors that escape zones (platform dispatcher errors)
+  PlatformDispatcher.instance.onError = (error, stack) {
+    CrashService().logCrashSync('PlatformDispatcher', error, stack);
+    CrashService().notifyNativeCrash(error.toString());
+    // Return true to prevent the error from propagating
+    return true;
+  };
 }
 
 class GeogramApp extends StatefulWidget {

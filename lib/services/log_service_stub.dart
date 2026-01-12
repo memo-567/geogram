@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'dart:io';
 
 /// Log levels for filtering
 enum LogLevel { debug, info, warn, error }
@@ -86,9 +85,9 @@ class LogService {
       _logMessages.removeFirst();
     }
 
-    // Console output for CLI
+    // Console output for errors
     if (level == LogLevel.error) {
-      stderr.writeln(logEntry);
+      print(logEntry);
     }
 
     for (var listener in _listeners) {

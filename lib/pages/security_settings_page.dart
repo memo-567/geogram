@@ -15,6 +15,7 @@ import '../services/log_service.dart';
 import '../services/app_args.dart';
 import '../services/storage_config.dart';
 import '../services/config_service.dart';
+import '../services/crash_service.dart';
 
 /// Page for managing security and privacy settings
 class SecuritySettingsPage extends StatefulWidget {
@@ -145,6 +146,14 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
             _buildSectionHeader(theme, _i18n.t('storage'), Icons.folder),
             const SizedBox(height: 8),
             _buildWorkingFolderTile(theme),
+            const SizedBox(height: 24),
+          ],
+
+          // Section: Diagnostics (only on Android, where crash recovery is available)
+          if (!kIsWeb && Platform.isAndroid) ...[
+            _buildSectionHeader(theme, _i18n.t('diagnostics'), Icons.bug_report),
+            const SizedBox(height: 8),
+            _buildCrashLogsTile(theme),
           ],
         ],
       ),
@@ -515,6 +524,151 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildCrashLogsTile(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _i18n.t('crash_logs'),
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _i18n.t('crash_logs_description'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.visibility, size: 18),
+                  label: Text(_i18n.t('view_logs')),
+                  onPressed: _showCrashLogs,
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: Text(_i18n.t('clear_logs')),
+                  onPressed: _clearCrashLogs,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showCrashLogs() async {
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final crashLogs = await CrashService().readAllCrashLogs();
+
+    if (!mounted) return;
+    Navigator.pop(context); // Close loading
+
+    if (crashLogs == null || crashLogs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('no_crash_logs')),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // Show crash logs in a dialog
+    showDialog(
+      context: context,
+      builder: (context) {
+        final theme = Theme.of(context);
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.bug_report, size: 24),
+              const SizedBox(width: 8),
+              Text(_i18n.t('crash_logs')),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 400,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                crashLogs,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              icon: const Icon(Icons.copy, size: 18),
+              label: Text(_i18n.t('copy')),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: crashLogs));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_i18n.t('copied_to_clipboard')),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_i18n.t('close')),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _clearCrashLogs() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('clear_logs')),
+        content: Text(_i18n.t('clear_logs_confirmation')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_i18n.t('clear')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await CrashService().clearAllCrashLogs();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_i18n.t('logs_cleared')),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _changeWorkingFolder() async {

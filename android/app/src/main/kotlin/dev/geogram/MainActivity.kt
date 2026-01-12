@@ -14,6 +14,7 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "dev.geogram/updates"
     private val ARGS_CHANNEL = "dev.geogram/args"
     private val BLE_CHANNEL = "dev.geogram/ble_service"
+    private val CRASH_CHANNEL = "dev.geogram/crash"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
 
@@ -55,6 +56,47 @@ class MainActivity : FlutterActivity() {
                 "disableKeepAlive" -> {
                     // Disable WebSocket keep-alive in the foreground service
                     BLEForegroundService.disableKeepAlive(this)
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Crash handling channel for Flutter-Native crash communication
+        val crashChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CRASH_CHANNEL)
+        GeogramApplication.setCrashChannel(crashChannel)
+
+        crashChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "onFlutterCrash" -> {
+                    val error = call.argument<String>("error") ?: "Unknown error"
+                    val timestamp = call.argument<Long>("timestamp") ?: System.currentTimeMillis()
+                    GeogramApplication.onFlutterCrash(error, timestamp)
+                    result.success(true)
+                }
+                "setRestartOnCrash" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    GeogramApplication.setRestartOnCrash(enabled)
+                    result.success(true)
+                }
+                "getCrashLogs" -> {
+                    val app = GeogramApplication.getInstance()
+                    val logs = app?.readCrashLogs()
+                    result.success(logs)
+                }
+                "clearNativeCrashLogs" -> {
+                    val app = GeogramApplication.getInstance()
+                    val success = app?.clearCrashLogs() ?: false
+                    result.success(success)
+                }
+                "didRecoverFromCrash" -> {
+                    val app = GeogramApplication.getInstance()
+                    val recovered = app?.didRecoverFromCrash() ?: false
+                    result.success(recovered)
+                }
+                "clearRecoveredFromCrash" -> {
+                    val app = GeogramApplication.getInstance()
+                    app?.clearRecoveredFromCrash()
                     result.success(true)
                 }
                 else -> result.notImplemented()

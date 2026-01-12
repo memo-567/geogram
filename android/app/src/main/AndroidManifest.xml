@@ -47,7 +47,7 @@
 
     <application
         android:label="Geogram"
-        android:name="${applicationName}"
+        android:name=".GeogramApplication"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
         <activity
