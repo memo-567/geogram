@@ -1435,6 +1435,56 @@ Get an attached file from a blog post.
 
 **Response (404 Not Found):** File not found.
 
+#### POST /api/blog/{postId}/like
+
+Toggle like on a blog post using a NOSTR-signed event. Requires a NIP-07 compatible browser extension (e.g., Alby, nos2x) for signing.
+
+**Request Body:** A NOSTR kind 7 reaction event signed by the user's extension:
+```json
+{
+  "pubkey": "hex_public_key",
+  "created_at": 1736784000,
+  "kind": 7,
+  "tags": [
+    ["p", "author_npub"],
+    ["e", "post_id"],
+    ["type", "likes"]
+  ],
+  "content": "like",
+  "id": "event_id_hash",
+  "sig": "schnorr_signature"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "liked": true,
+  "like_count": 5
+}
+```
+
+The `liked` field indicates the new state after toggling:
+- `true` - User's like was added
+- `false` - User's like was removed (unliked)
+
+**Error Responses:**
+- `400` - Invalid event format or missing signature
+- `401` - Signature verification failed
+- `404` - Post not found
+
+**Web Browser Integration:**
+
+When viewing a blog post in a web browser with a NOSTR extension installed:
+1. The page detects the extension via `window.nostr` (NIP-07)
+2. User clicks the Like button
+3. Extension prompts for signature approval
+4. Signed event is sent to this endpoint
+5. UI updates to show liked state (filled heart)
+
+The like state persists across page refreshes - users see a filled heart icon if they've already liked the post.
+
 ---
 
 ### Events

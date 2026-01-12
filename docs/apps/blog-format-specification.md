@@ -1,7 +1,7 @@
 # Blog Format Specification
 
-**Version**: 1.4
-**Last Updated**: 2025-12-24
+**Version**: 1.5
+**Last Updated**: 2026-01-13
 **Status**: Active
 
 ## Table of Contents
@@ -483,6 +483,64 @@ Recommended limits (configurable):
 - Author identified only by callsign
 - Still functional, less secure
 - Can be modified by anyone with access
+
+### Web Browser Likes (NIP-07)
+
+Blog posts can receive likes from web browser users via NOSTR browser extensions (NIP-07). This enables cryptographically verified reactions without requiring a Geogram account.
+
+**How It Works:**
+
+1. User views a blog post in their web browser
+2. Page detects NOSTR extension via `window.nostr` (e.g., Alby, nos2x)
+3. Like button appears when extension is detected
+4. User clicks Like button
+5. Extension prompts user to sign a kind 7 reaction event
+6. Signed event is sent to the blog API
+7. Server verifies signature and stores the like
+
+**Like Event Format (NIP-25):**
+
+```json
+{
+  "pubkey": "user_hex_pubkey",
+  "created_at": 1736784000,
+  "kind": 7,
+  "tags": [
+    ["p", "author_npub"],
+    ["e", "post_id"],
+    ["type", "likes"]
+  ],
+  "content": "like",
+  "id": "event_id",
+  "sig": "schnorr_signature"
+}
+```
+
+**Storage:**
+
+Likes are stored in `feedback/likes.txt` within the post folder. Each line contains the npub of a user who liked the post:
+
+```
+feedback/likes.txt:
+npub1abc123...
+npub1def456...
+npub1ghi789...
+```
+
+**Like State Persistence:**
+
+When a user with a NOSTR extension visits a blog post they've previously liked:
+1. Server reads the likes.txt file
+2. Converts stored npubs to hex pubkeys
+3. Includes the list in the page JavaScript
+4. When extension provides user's pubkey, checks against the list
+5. If found, displays filled heart icon (already liked state)
+
+**Toggle Behavior:**
+
+The like endpoint toggles the like state:
+- If user hasn't liked → adds like, returns `{"liked": true}`
+- If user already liked → removes like, returns `{"liked": false}`
 
 ## Complete Examples
 
@@ -1214,6 +1272,14 @@ See [API Documentation](../../api/API.md#blog-api) for complete technical detail
 - [NOSTR Protocol](https://github.com/nostr-protocol/nostr)
 
 ## Change Log
+
+### Version 1.5 (2026-01-13)
+
+- Added NOSTR-based likes for blog posts via browser extensions (NIP-07)
+- Likes use NIP-25 reaction events (kind 7) signed by user's extension
+- Like state persists across page refreshes (shows filled heart when already liked)
+- Added POST /api/blog/{postId}/like endpoint for toggling likes
+- Documented likes.txt storage format in feedback folder
 
 ### Version 1.4 (2025-12-24)
 
