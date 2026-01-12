@@ -15,6 +15,7 @@ import '../models/blog_post.dart';
 import '../models/event.dart';
 import '../models/report.dart';
 import '../services/event_service.dart';
+import '../util/app_constants.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
@@ -6144,7 +6145,18 @@ class PureStationServer {
     final path = request.uri.path;
     final parts = path.substring(1).split('/');
     final identifier = parts.first.toLowerCase();
-    final filePath = parts.length > 1 ? parts.sublist(1).join('/') : 'index.html';
+
+    // Redirect /{identifier} to /{identifier}/ for proper relative path resolution
+    // This ensures that relative links like ./blog/ work correctly in the browser
+    if (parts.length == 1 && !path.endsWith('/')) {
+      request.response.statusCode = 301;
+      request.response.headers.add('Location', '$path/');
+      return;
+    }
+
+    // Get file path - filter out empty parts from trailing slashes
+    final subParts = parts.sublist(1).where((p) => p.isNotEmpty).toList();
+    final filePath = subParts.isNotEmpty ? subParts.join('/') : 'index.html';
 
     // Find the client by callsign or nickname (case-insensitive)
     PureConnectedClient? foundClient;
@@ -6169,13 +6181,27 @@ class PureStationServer {
 
     final client = foundClient;
 
-    // Proxy to device's www collection
+    // Route to the appropriate collection based on the first path segment
+    // Use centralized app types list from app_constants.dart
+    // Path format: /{app}/{rest} (e.g., /blog/index.html, /www/index.html)
+    String collectionPath;
+    if (subParts.isNotEmpty && knownAppTypesConst.contains(subParts.first.toLowerCase())) {
+      // Route to specific app collection: /{app}/{rest}
+      final app = subParts.first.toLowerCase();
+      final rest = subParts.length > 1 ? subParts.sublist(1).join('/') : '';
+      collectionPath = '/$app/${rest.isEmpty ? "index.html" : rest}';
+    } else {
+      // Default to www collection
+      collectionPath = '/www/$filePath';
+    }
+
+    // Proxy to device
     final requestId = DateTime.now().millisecondsSinceEpoch.toString();
     final proxyRequest = {
       'type': 'HTTP_REQUEST',
       'requestId': requestId,
       'method': 'GET',
-      'path': '/collections/www/$filePath',
+      'path': collectionPath,
       'headers': '',
       'body': '',
     };
@@ -6195,8 +6221,8 @@ class PureStationServer {
       final body = response['responseBody'] ?? '';
       final isBase64 = response['isBase64'] == true;
 
-      // Set content type based on file extension
-      final ext = filePath.split('.').last.toLowerCase();
+      // Set content type based on file extension (use collectionPath which has the actual filename)
+      final ext = collectionPath.split('.').last.toLowerCase();
       final contentTypes = {
         'html': 'text/html',
         'htm': 'text/html',

@@ -2542,10 +2542,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   String _getDisplayTitle(RemoteCollection collection) {
     final name = collection.name;
     // Check if name matches a known collection type and translate it
-    final knownTypes = ['chat', 'blog', 'forum', 'contacts', 'events', 'places',
-                        'news', 'www', 'postcards', 'market', 'alerts', 'groups',
-                        'station', 'documents', 'photos', 'files'];
-    if (knownTypes.contains(name.toLowerCase())) {
+    if (CollectionService.knownAppTypes.contains(name.toLowerCase())) {
       return _getCollectionTypeLabel(name.toLowerCase());
     }
     // Fallback: capitalize first letter

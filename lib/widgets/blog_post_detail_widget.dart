@@ -347,6 +347,12 @@ class BlogPostDetailWidget extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
+                  icon: const Icon(Icons.open_in_browser, size: 18),
+                  onPressed: () => _openUrl(context, shareableUrl!),
+                  tooltip: i18n.t('open_in_browser'),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
                   icon: const Icon(Icons.copy, size: 18),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: shareableUrl!));

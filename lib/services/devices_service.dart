@@ -34,6 +34,7 @@ import '../util/event_bus.dart';
 import '../models/profile.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/lan_transport.dart';
+import '../tracker/services/proximity_detection_service.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -689,6 +690,7 @@ class DevicesService {
 
   /// Handle BLE discovered devices
   void _handleBLEDevices(List<BLEDevice> bleDevices) {
+    LogService().log('DevicesService: _handleBLEDevices called with ${bleDevices.length} devices');
     final pairingService = BluetoothClassicPairingService();
 
     // Track which callsigns are currently visible via BLE
@@ -793,6 +795,10 @@ class DevicesService {
         );
       }
     }
+
+    // Trigger proximity tracking scan (piggy-back on BLE scan cycle)
+    // This handles both device and place proximity detection
+    ProximityDetectionService().triggerScan();
 
     _notifyListeners();
   }

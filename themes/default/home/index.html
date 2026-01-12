@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div>
+          <h1 class="header-title">{{COLLECTION_NAME}}</h1>
+          <p class="header-subtitle">{{COLLECTION_DESCRIPTION}}</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <!-- Navigation Cards -->
+      <section class="home-nav">
+        <a href="blog/" class="nav-card">
+          <span class="nav-card-icon">&#128221;</span>
+          <span class="nav-card-title">Blog</span>
+          <span class="nav-card-desc">Articles and posts</span>
+        </a>
+        <a href="chat/" class="nav-card">
+          <span class="nav-card-icon">&#128172;</span>
+          <span class="nav-card-title">Chat</span>
+          <span class="nav-card-desc">Join conversations</span>
+        </a>
+        <a href="events/" class="nav-card">
+          <span class="nav-card-icon">&#128197;</span>
+          <span class="nav-card-title">Events</span>
+          <span class="nav-card-desc">Upcoming activities</span>
+        </a>
+        <a href="places/" class="nav-card">
+          <span class="nav-card-icon">&#128205;</span>
+          <span class="nav-card-title">Places</span>
+          <span class="nav-card-desc">Locations and spots</span>
+        </a>
+        <a href="files/" class="nav-card">
+          <span class="nav-card-icon">&#128193;</span>
+          <span class="nav-card-title">Files</span>
+          <span class="nav-card-desc">Downloads and media</span>
+        </a>
+        <a href="alerts/" class="nav-card">
+          <span class="nav-card-icon">&#128680;</span>
+          <span class="nav-card-title">Alerts</span>
+          <span class="nav-card-desc">Notifications and warnings</span>
+        </a>
+      </section>
+
+      <!-- Recent Blog Posts -->
+      <section class="home-section" id="blog-section">
+        <div class="section-header">
+          <h2>Recent Posts</h2>
+          <a href="blog/" class="btn btn-secondary">View all</a>
+        </div>
+        <div class="posts-grid" id="recent-posts">
+          {{RECENT_POSTS}}
+        </div>
+      </section>
+
+      <!-- Upcoming Events -->
+      <section class="home-section" id="events-section">
+        <div class="section-header">
+          <h2>Upcoming Events</h2>
+          <a href="events/" class="btn btn-secondary">View all</a>
+        </div>
+        <div class="events-list" id="upcoming-events">
+          {{UPCOMING_EVENTS}}
+        </div>
+      </section>
+
+      <!-- Places Summary -->
+      <section class="home-section" id="places-section">
+        <div class="section-header">
+          <h2>Places</h2>
+          <a href="places/" class="btn btn-secondary">Browse all</a>
+        </div>
+        <div class="places-summary">
+          <p class="places-count">{{PLACES_COUNT}} public places available</p>
+          {{FEATURED_PLACES}}
+        </div>
+      </section>
+
+      <!-- Chat Rooms -->
+      <section class="home-section" id="chat-section">
+        <div class="section-header">
+          <h2>Chat Rooms</h2>
+          <a href="chat/" class="btn btn-secondary">Join a room</a>
+        </div>
+        <div class="chat-rooms-list" id="chat-rooms">
+          {{CHAT_ROOMS}}
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Generated on {{GENERATED_DATE}}</p>
+    </div>
+  </footer>
+
+  <script>
+    window.GEOGRAM_DATA = {{DATA_JSON}};
+    {{SCRIPTS}}
+  </script>
+  <script>
+    // Hide empty sections
+    document.addEventListener('DOMContentLoaded', function() {
+      const data = window.GEOGRAM_DATA || {};
+
+      // Hide blog section if no posts
+      if (!data.recentPosts || data.recentPosts.length === 0) {
+        const blogSection = document.getElementById('blog-section');
+        if (blogSection) blogSection.style.display = 'none';
+      }
+
+      // Hide events section if no events
+      if (!data.upcomingEvents || data.upcomingEvents.length === 0) {
+        const eventsSection = document.getElementById('events-section');
+        if (eventsSection) eventsSection.style.display = 'none';
+      }
+
+      // Hide places section if no places
+      if (!data.placesCount || data.placesCount === 0) {
+        const placesSection = document.getElementById('places-section');
+        if (placesSection) placesSection.style.display = 'none';
+      }
+
+      // Hide chat section if no rooms
+      if (!data.chatRooms || data.chatRooms.length === 0) {
+        const chatSection = document.getElementById('chat-section');
+        if (chatSection) chatSection.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

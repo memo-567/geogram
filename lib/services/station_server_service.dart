@@ -581,9 +581,9 @@ class StationServerService {
     final method = request.method;
 
     try {
-      // Log all blog-related requests for debugging
-      if (path.contains('/blog/')) {
-        LogService().log('Incoming request: $method $path');
+      // Log requests that might be device content
+      if (_isCallsignPath(path) || _isDeviceContentPath(path)) {
+        LogService().log('Incoming request: $method $path (isCallsignPath=${_isCallsignPath(path)}, isDeviceContentPath=${_isDeviceContentPath(path)})');
       }
 
       // WebSocket upgrade
@@ -675,6 +675,15 @@ class StationServerService {
       } else if (_isDeviceProxyPath(path)) {
         // Proxy API requests to connected devices: /{callsign}/api/*
         await _handleDeviceProxyRequest(request);
+      } else if (_isCallsignPath(path)) {
+        // Redirect /{callsign} to /{callsign}/ to ensure relative paths work correctly
+        LogService().log('Redirecting $path to $path/');
+        request.response.statusCode = 301;
+        request.response.headers.add('Location', '$path/');
+      } else if (_isDeviceContentPath(path)) {
+        // Proxy content requests to connected devices: /{callsign}/ or /{callsign}/{collection}/
+        LogService().log('Device content path: $path');
+        await _handleDeviceContentRequest(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -2911,6 +2920,28 @@ class StationServerService {
     return parts.length >= 3 && parts[1] == 'api';
   }
 
+  /// Check if path is a callsign root path without trailing slash (/{callsign})
+  /// Used to redirect to /{callsign}/ for proper relative path resolution
+  bool _isCallsignPath(String path) {
+    // Pattern: /{callsign} - single segment, alphanumeric, no trailing slash
+    final regex = RegExp(r'^/[A-Za-z0-9]+$');
+    return regex.hasMatch(path);
+  }
+
+  /// Check if path is a device content path (/{callsign}/ or /{callsign}/{path})
+  /// Excludes API paths which are handled by _isDeviceProxyPath
+  bool _isDeviceContentPath(String path) {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return false;
+    // Must start with alphanumeric callsign
+    if (!RegExp(r'^[A-Za-z0-9]+$').hasMatch(parts[0])) return false;
+    // Exclude API paths (handled by _isDeviceProxyPath)
+    if (parts.length >= 2 && parts[1] == 'api') return false;
+    // Exclude blog HTML paths (handled by _isBlogPath)
+    if (path.contains('/blog/') && path.endsWith('.html')) return false;
+    return true;
+  }
+
   /// Check if path is a chat file upload path
   /// Pattern: POST /api/chat/rooms/{roomId}/files
   bool _isChatFileUploadPath(String path, String method) {
@@ -4933,6 +4964,127 @@ class StationServerService {
     }
   }
 
+  /// Handle content requests to connected devices: /{callsign}/ or /{callsign}/{collection}/
+  Future<void> _handleDeviceContentRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    // Parse path: /{callsign}/ or /{callsign}/{collection}/{file}
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.write('Invalid device content path');
+      return;
+    }
+
+    final targetCallsign = parts[0].toUpperCase();
+
+    // Convert path to collections format for the device
+    // /{callsign}/ -> /collections/www/
+    // /{callsign}/blog/ -> /collections/blog/
+    String collectionPath;
+    if (parts.length == 1) {
+      // Root path /{callsign}/ -> serve www collection
+      collectionPath = '/collections/www/';
+    } else {
+      // /{callsign}/{collection}/{rest} -> /collections/{collection}/{rest}
+      collectionPath = '/collections/${parts.sublist(1).join('/')}';
+      if (!collectionPath.endsWith('/') && !collectionPath.contains('.')) {
+        collectionPath += '/';
+      }
+    }
+
+    LogService().log('Device content request: $method $path -> $targetCallsign $collectionPath');
+
+    // Find connected client by callsign
+    ConnectedClient? targetClient;
+    for (final client in _clients.values) {
+      if (client.callsign?.toUpperCase() == targetCallsign) {
+        targetClient = client;
+        break;
+      }
+    }
+
+    if (targetClient == null) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.html;
+      request.response.write('<html><body><h1>Device Not Connected</h1><p>The device $targetCallsign is not currently connected.</p></body></html>');
+      return;
+    }
+
+    // Generate unique request ID
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}-content-${targetCallsign.hashCode}';
+
+    // Create completer for the response
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingHttpRequests[requestId] = completer;
+
+    try {
+      // Send HTTP_REQUEST to the target client via WebSocket
+      final httpRequestMessage = {
+        'type': 'HTTP_REQUEST',
+        'requestId': requestId,
+        'method': method,
+        'path': collectionPath,
+        'headers': jsonEncode({}),
+        'body': null,
+      };
+
+      targetClient.socket.add(jsonEncode(httpRequestMessage));
+      LogService().log('Sent content HTTP_REQUEST to $targetCallsign: $method $collectionPath (requestId: $requestId)');
+
+      // Wait for response with timeout
+      final response = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          LogService().log('Content proxy timeout for $targetCallsign $collectionPath');
+          return {
+            'statusCode': 504,
+            'responseHeaders': '{"Content-Type": "text/html"}',
+            'responseBody': '<html><body><h1>Gateway Timeout</h1><p>Device $targetCallsign did not respond in time.</p></body></html>',
+            'isBase64': false,
+          };
+        },
+      );
+
+      // Process response
+      final statusCode = response['statusCode'] as int? ?? 500;
+      final responseHeaders = response['responseHeaders'] as String? ?? '{}';
+      final responseBody = response['responseBody'] as String? ?? '';
+      final isBase64 = response['isBase64'] as bool? ?? false;
+
+      request.response.statusCode = statusCode;
+
+      // Set response headers
+      try {
+        final headers = jsonDecode(responseHeaders) as Map<String, dynamic>;
+        for (final entry in headers.entries) {
+          if (entry.key.toLowerCase() == 'content-type') {
+            final ct = entry.value.toString();
+            if (ct.contains('json')) {
+              request.response.headers.contentType = ContentType.json;
+            } else if (ct.contains('html')) {
+              request.response.headers.contentType = ContentType.html;
+            } else if (ct.contains('text')) {
+              request.response.headers.contentType = ContentType.text;
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Write response body
+      if (isBase64) {
+        request.response.add(base64Decode(responseBody));
+      } else {
+        request.response.write(responseBody);
+      }
+
+      LogService().log('Device content response: $statusCode for $targetCallsign $collectionPath');
+    } finally {
+      _pendingHttpRequests.remove(requestId);
+    }
+  }
+
   /// Handle HTTP_RESPONSE from a connected client
   void _handleHttpResponse(Map<String, dynamic> message) {
     final requestId = message['requestId'] as String?;
@@ -5010,14 +5162,27 @@ class StationServerService {
       final devicesDir = StorageConfig().devicesDir;
       final blogDir = Directory('$devicesDir/$callsign');
 
-      // Find collection with blog posts
+      // Find blog collection with posts
       BlogPost? foundPost;
       String? collectionName;
 
       if (await blogDir.exists()) {
         await for (final entity in blogDir.list()) {
           if (entity is Directory) {
-            final blogPath = '${entity.path}/blog/$year/$filename.md';
+            // Check if this is a blog collection by looking for collection.js
+            final collectionFile = File('${entity.path}/collection.js');
+            if (await collectionFile.exists()) {
+              try {
+                final collectionJson = await collectionFile.readAsString();
+                final collectionData = jsonDecode(collectionJson) as Map<String, dynamic>;
+                if (collectionData['type'] != 'blog') continue;
+              } catch (_) {
+                continue;
+              }
+            }
+
+            // Blog structure: {collectionPath}/{year}/{postId}/post.md
+            final blogPath = '${entity.path}/$year/$filename/post.md';
             final blogFile = File(blogPath);
             if (await blogFile.exists()) {
               try {
@@ -5044,6 +5209,27 @@ class StationServerService {
         return;
       }
 
+      // Load feedback counts
+      final blogPath = '$devicesDir/$callsign/$collectionName/$year/$filename';
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(blogPath);
+      foundPost = foundPost.copyWith(
+        likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+        dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+        pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+      );
+
+      // Read liked npubs and convert to hex pubkeys for client-side checking
+      final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+        blogPath,
+        FeedbackFolderUtils.feedbackTypeLikes,
+      );
+      final likedHexPubkeys = <String>[];
+      for (final npub in likedNpubs) {
+        try {
+          likedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
+        } catch (_) {}
+      }
+
       // Only serve published posts
       if (foundPost.isDraft) {
         request.response.statusCode = 403;
@@ -5058,7 +5244,7 @@ class StationServerService {
       );
 
       // Build full HTML page
-      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier);
+      final html = _buildBlogHtmlPage(foundPost, htmlContent, identifier, likedHexPubkeys);
 
       request.response.headers.contentType = ContentType.html;
       request.response.write(html);
@@ -5216,7 +5402,7 @@ class StationServerService {
   }
 
   /// Build HTML page for blog post
-  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
+  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
     final tagsHtml = post.tags.isNotEmpty
         ? post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')
         : '';
@@ -5331,6 +5517,36 @@ class StationServerService {
       text-align: center;
     }
     .footer a { color: var(--primary); text-decoration: none; }
+    .feedback-section {
+      margin-top: 1.5rem;
+      padding: 1rem 0;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+    }
+    .like-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 8px 16px;
+      background: none;
+      border: 1px solid var(--primary);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 1rem;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: background-color 0.2s ease;
+    }
+    .like-button:hover { background: rgba(233, 69, 96, 0.2); }
+    .like-button.liked { background: var(--primary); color: #fff; }
+    .like-button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .like-count { color: var(--text-muted); font-size: 0.95rem; }
+    .nostr-notice { font-size: 0.85rem; color: var(--text-muted); }
+    .nostr-notice a { color: var(--primary); }
   </style>
 </head>
 <body>
@@ -5347,10 +5563,138 @@ class StationServerService {
       $htmlContent
     </div>
     $signedBadge
+    <div class="feedback-section" id="feedback-section" style="display: none;">
+      <button class="like-button" id="like-button" onclick="toggleLike()">
+        <span id="like-icon">♡</span>
+        <span>Like</span>
+      </button>
+      <span class="like-count" id="like-count">${post.likesCount > 0 ? "${post.likesCount} like${post.likesCount != 1 ? "s" : ""}" : ""}</span>
+    </div>
+    <div class="nostr-notice" id="nostr-notice" style="display: none;">
+      <a href="https://getalby.com" target="_blank">Install a NOSTR extension</a> to like this post
+    </div>
     <div class="footer">
       Published via <a href="https://geogram.io">Geogram</a>
     </div>
   </div>
+<script>
+(function() {
+  const postId = '${_escapeHtml(post.id)}';
+  const authorNpub = '${_escapeHtml(post.npub ?? '')}';
+  const apiBase = '../api/blog';
+  const likedPubkeys = ${_toJsonArray(likedHexPubkeys)};
+  let userPubkey = null;
+  let isLiked = false;
+
+  function onNostrAvailable() {
+    document.getElementById('feedback-section').style.display = 'flex';
+    window.nostr.getPublicKey().then(function(pk) {
+      userPubkey = pk;
+      // Check if user already liked this post
+      if (likedPubkeys.includes(pk)) {
+        isLiked = true;
+        updateUI(${post.likesCount});
+      }
+    }).catch(function(e) {
+      console.log('User denied public key access');
+    });
+  }
+
+  function init() {
+    if (typeof window.nostr !== 'undefined') {
+      onNostrAvailable();
+      return;
+    }
+
+    var _nostr;
+    Object.defineProperty(window, 'nostr', {
+      configurable: true,
+      enumerable: true,
+      get: function() { return _nostr; },
+      set: function(value) {
+        _nostr = value;
+        Object.defineProperty(window, 'nostr', {
+          value: _nostr,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+        onNostrAvailable();
+      }
+    });
+
+    setTimeout(function() {
+      if (typeof window.nostr === 'undefined') {
+        document.getElementById('nostr-notice').style.display = 'block';
+      }
+    }, 3000);
+  }
+
+  window.toggleLike = async function() {
+    if (!userPubkey) {
+      try {
+        userPubkey = await window.nostr.getPublicKey();
+      } catch (e) {
+        alert('Please allow access to your NOSTR public key');
+        return;
+      }
+    }
+
+    const button = document.getElementById('like-button');
+    button.disabled = true;
+
+    try {
+      const unsignedEvent = {
+        pubkey: userPubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 7,
+        tags: [
+          ['p', authorNpub],
+          ['e', postId],
+          ['type', 'likes']
+        ],
+        content: 'like'
+      };
+
+      const signedEvent = await window.nostr.signEvent(unsignedEvent);
+
+      if (!signedEvent || !signedEvent.sig) {
+        throw new Error('Signing cancelled or failed');
+      }
+
+      const response = await fetch(apiBase + '/' + encodeURIComponent(postId) + '/like', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(signedEvent)
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        isLiked = result.liked;
+        updateUI(result.like_count);
+      } else if (result.error) {
+        console.error('API error:', result.error);
+      }
+    } catch (e) {
+      console.error('Error toggling like:', e);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  function updateUI(count) {
+    const button = document.getElementById('like-button');
+    const icon = document.getElementById('like-icon');
+    const countEl = document.getElementById('like-count');
+
+    button.classList.toggle('liked', isLiked);
+    icon.textContent = isLiked ? '♥' : '♡';
+    countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
 </body>
 </html>
 ''';
@@ -5364,6 +5708,13 @@ class StationServerService {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+  }
+
+  /// Convert a list of strings to a JavaScript array literal
+  String _toJsonArray(List<String> items) {
+    if (items.isEmpty) return '[]';
+    final escaped = items.map((s) => '"${s.replaceAll('"', '\\"')}"').join(',');
+    return '[$escaped]';
   }
 
   /// Handle DM sync API requests

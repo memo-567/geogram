@@ -14,6 +14,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
+import 'collection_service.dart';
 
 /// Model for chat security (reused for blog)
 class ChatSecurity {
@@ -519,6 +520,12 @@ class BlogService {
       }
 
       LogService().log('BlogService: Created post: $postId');
+
+      // Regenerate blog cache
+      if (_collectionPath != null) {
+        await CollectionService().generateBlogCache(_collectionPath!);
+      }
+
       return signedPost;
     } catch (e) {
       LogService().log('BlogService: Error creating post: $e');
@@ -643,6 +650,12 @@ class BlogService {
       }
 
       LogService().log('BlogService: Updated post: $postId');
+
+      // Regenerate blog cache
+      if (_collectionPath != null) {
+        await CollectionService().generateBlogCache(_collectionPath!);
+      }
+
       return true;
     } catch (e) {
       LogService().log('BlogService: Error updating post: $e');
@@ -677,23 +690,29 @@ class BlogService {
       final year = post.year;
       final postFolderPath = '$_collectionPath/$year/$postId';
 
+      bool deleted = false;
       if (kIsWeb) {
         final fs = FileSystemService.instance;
         if (await fs.exists(postFolderPath)) {
           await fs.delete(postFolderPath, recursive: true);
           LogService().log('BlogService: Deleted post folder: $postId');
-          return true;
+          deleted = true;
         }
       } else {
         final postDir = Directory(postFolderPath);
         if (await postDir.exists()) {
           await postDir.delete(recursive: true);
           LogService().log('BlogService: Deleted post folder: $postId');
-          return true;
+          deleted = true;
         }
       }
 
-      return false;
+      // Regenerate blog cache if post was deleted
+      if (deleted && _collectionPath != null) {
+        await CollectionService().generateBlogCache(_collectionPath!);
+      }
+
+      return deleted;
     } catch (e) {
       LogService().log('BlogService: Error deleting post: $e');
       return false;

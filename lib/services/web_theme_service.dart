@@ -18,12 +18,14 @@ class WebThemeService {
 
   /// List of app types that have theme templates
   static const List<String> appTypes = [
-    'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files'
+    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files'
   ];
 
   /// Bundled theme assets to extract
   static const List<String> _bundledAssets = [
     'themes/default/styles.css',
+    'themes/default/home/index.html',
+    'themes/default/home/styles.css',
     'themes/default/chat/index.html',
     'themes/default/chat/styles.css',
     'themes/default/www/index.html',
@@ -31,6 +33,7 @@ class WebThemeService {
     'themes/default/forum/index.html',
     'themes/default/forum/styles.css',
     'themes/default/blog/index.html',
+    'themes/default/blog/post.html',
     'themes/default/blog/styles.css',
     'themes/default/events/index.html',
     'themes/default/events/styles.css',
@@ -68,11 +71,9 @@ class WebThemeService {
       await themesDir.create(recursive: true);
     }
 
-    // Extract bundled themes if default theme doesn't exist
-    final defaultThemeDir = Directory('$_themesDir/default');
-    if (!await defaultThemeDir.exists()) {
-      await _extractBundledThemes();
-    }
+    // Always extract bundled themes to ensure they're up-to-date
+    // This ensures theme updates are applied when the app is updated
+    await _extractBundledThemes();
 
     _initialized = true;
     LogService().log('WebThemeService initialized: $_themesDir');

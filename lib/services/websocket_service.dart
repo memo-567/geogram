@@ -21,8 +21,11 @@ import '../services/station_service.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
+import '../util/feedback_folder_utils.dart';
+import '../util/nostr_crypto.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
+import '../models/collection.dart';
 
 /// WebSocket service for station connections (singleton)
 class WebSocketService {
@@ -684,34 +687,58 @@ class WebSocketService {
       }
 
       // Handle blog HTML requests with device identifier prefix
-      // Path format: /{callsign}/blog/{filename}.html
-      if (path.contains('/blog/') && path.endsWith('.html')) {
+      // Path format: /{callsign}/blog/{filename}.html (from _handleBlogRequest)
+      // Static blog files start with /blog/ (from _handleCallsignOrNicknameWww)
+      // Only forward to API if path has callsign prefix (not starting with /blog/)
+      if (path.contains('/blog/') && path.endsWith('.html') && !path.startsWith('/blog/')) {
         await _forwardToLocalApi(requestId, method, path, headersJson, body);
         return;
       }
 
-      // Parse path: should be /collections/{collectionName}/{filePath}
+      // Parse path: should be /{collectionName}/{filePath}
+      // e.g., /blog/index.html, /www/index.html
       final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-      if (parts.length < 2 || parts[0] != 'collections') {
+      if (parts.isEmpty) {
         throw Exception('Invalid path format: $path');
       }
 
-      final collectionName = parts[1];
-      final filePath = parts.length > 2 ? '/${parts.sublist(2).join('/')}' : '/';
+      final collectionName = parts[0];
+      final filePath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
 
       // Load collection - match by folder name (last segment of storagePath)
-      final collections = await CollectionService().loadCollections();
-      final collection = collections.firstWhere(
+      final collectionService = CollectionService();
+      var collections = await collectionService.loadCollections();
+      var collection = collections.cast<Collection?>().firstWhere(
         (c) {
-          if (c.storagePath != null) {
-            final segments = c.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
+          if (c?.storagePath != null) {
+            final segments = c!.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
             final folderName = segments.isNotEmpty ? segments.last : '';
             return folderName == collectionName;
           }
-          return c.title == collectionName;
+          return c?.title == collectionName;
         },
-        orElse: () => throw Exception('Collection not found: $collectionName'),
+        orElse: () => null,
       );
+
+      // If www collection not found, create it on-demand
+      if (collection == null && collectionName == 'www') {
+        LogService().log('Creating www collection on-demand...');
+        try {
+          collection = await collectionService.createCollection(
+            title: 'Www',
+            description: '',
+            type: 'www',
+          );
+          // Generate default index.html
+          await collectionService.generateDefaultWwwIndex(collection);
+          LogService().log('Created www collection on-demand: ${collection.storagePath}');
+        } catch (e) {
+          LogService().log('Error creating www collection on-demand: $e');
+          throw Exception('Collection not found: $collectionName');
+        }
+      } else if (collection == null) {
+        throw Exception('Collection not found: $collectionName');
+      }
 
       // Security check: reject access to private collections
       if (collection.visibility == 'private') {
@@ -723,6 +750,47 @@ class WebSocketService {
       final storagePath = collection.storagePath;
       if (storagePath == null) {
         throw Exception('Collection has no storage path: $collectionName');
+      }
+
+      // For www collection requesting index.html, regenerate it dynamically
+      // This ensures the page always reflects the current state of available apps
+      if (collectionName == 'www' && (filePath == '/' || filePath == '/index.html')) {
+        LogService().log('Regenerating www index.html dynamically...');
+        await collectionService.generateDefaultWwwIndex(collection);
+      }
+
+      // For blog collection requesting index.html, regenerate it dynamically
+      if (collectionName == 'blog' && (filePath == '/' || filePath == '/index.html')) {
+        LogService().log('Regenerating blog index.html dynamically...');
+        await collectionService.generateBlogIndex(storagePath);
+      }
+
+      // For chat collection requesting index.html, regenerate it dynamically
+      if (collectionName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
+        LogService().log('Regenerating chat index.html dynamically...');
+        // Chat uses the chat collection path from CollectionService
+        final collectionsDir = collectionService.collectionsDirectory;
+        final chatPath = '${collectionsDir.path}/chat';
+        await collectionService.generateChatIndex(chatPath);
+        // Update storagePath to point to chat collection
+        final chatDir = Directory(chatPath);
+        if (await chatDir.exists()) {
+          final fullChatPath = '$chatPath$filePath';
+          final chatFile = File(fullChatPath);
+          if (await chatFile.exists()) {
+            final fileBytes = await chatFile.readAsBytes();
+            final fileContent = base64Encode(fileBytes);
+            _sendHttpResponse(
+              requestId,
+              200,
+              {'Content-Type': 'text/html'},
+              fileContent,
+              isBase64: true,
+            );
+            LogService().log('Sent chat HTTP response: 200 OK (${fileBytes.length} bytes)');
+            return;
+          }
+        }
       }
 
       // Construct file path
@@ -781,19 +849,22 @@ class WebSocketService {
       }
       final year = yearMatch.group(1)!;
 
-      // Search for blog post in all public collections
+      // Search for blog post in all public blog collections
       final collections = await CollectionService().loadCollections();
       BlogPost? foundPost;
       String? collectionName;
+      List<String> foundPostLikedHexPubkeys = [];
 
       for (final collection in collections) {
-        // Skip private collections
+        // Skip private collections and non-blog collections
         if (collection.visibility == 'private') continue;
+        if (collection.type != 'blog') continue;
 
         final storagePath = collection.storagePath;
         if (storagePath == null) continue;
 
-        final blogPath = '$storagePath/blog/$year/$filename.md';
+        // Blog structure: {storagePath}/{year}/{postId}/post.md
+        final blogPath = '$storagePath/$year/$filename/post.md';
         final blogFile = File(blogPath);
 
         if (await blogFile.exists()) {
@@ -801,6 +872,27 @@ class WebSocketService {
             final content = await blogFile.readAsString();
             foundPost = BlogPost.fromText(content, filename);
             collectionName = collection.title;
+
+            // Load feedback counts
+            final postFolderPath = '$storagePath/$year/$filename';
+            final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(postFolderPath);
+            foundPost = foundPost.copyWith(
+              likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,
+              dislikesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0,
+              pointsCount: feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0,
+            );
+
+            // Read liked npubs and convert to hex pubkeys for client-side checking
+            final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
+              postFolderPath,
+              FeedbackFolderUtils.feedbackTypeLikes,
+            );
+            foundPostLikedHexPubkeys = <String>[];
+            for (final npub in likedNpubs) {
+              try {
+                foundPostLikedHexPubkeys.add(NostrCrypto.decodeNpub(npub));
+              } catch (_) {}
+            }
             break;
           } catch (e) {
             LogService().log('Error parsing blog file: $e');
@@ -830,7 +922,7 @@ class WebSocketService {
       );
 
       // Build full HTML page
-      final html = _buildBlogHtmlPage(foundPost, htmlContent, author);
+      final html = _buildBlogHtmlPage(foundPost, htmlContent, author, foundPostLikedHexPubkeys);
 
       _sendHttpResponse(requestId, 200, {'Content-Type': 'text/html'}, html);
       LogService().log('Sent blog post: ${foundPost.title} (${html.length} bytes)');
@@ -890,7 +982,7 @@ class WebSocketService {
   }
 
   /// Build HTML page for blog post
-  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author) {
+  String _buildBlogHtmlPage(BlogPost post, String htmlContent, String author, [List<String> likedHexPubkeys = const []]) {
     final tagsHtml = post.tags.isNotEmpty
         ? '<div class="tags">${post.tags.map((t) => '<span class="tag">#$t</span>').join(' ')}</div>'
         : '';
@@ -966,6 +1058,36 @@ class WebSocketService {
       font-size: 12px;
       color: #999;
     }
+    .feedback-section {
+      margin-top: 30px;
+      padding: 20px 0;
+      border-top: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      gap: 30px;
+    }
+    .like-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: none;
+      border: 1px solid #0066cc;
+      color: #333;
+      font-family: inherit;
+      font-size: 1rem;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: background-color 0.2s ease;
+    }
+    .like-button:hover { background: #e0f0ff; }
+    .like-button.liked { background: #0066cc; color: #fff; }
+    .like-button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .like-count { color: #666; font-size: 0.95rem; }
+    .nostr-notice { font-size: 0.85rem; color: #666; }
+    .nostr-notice a { color: #0066cc; }
   </style>
 </head>
 <body>
@@ -980,10 +1102,138 @@ class WebSocketService {
     <div class="content">
       $htmlContent
     </div>
+    <div class="feedback-section" id="feedback-section" style="display: none;">
+      <button class="like-button" id="like-button" onclick="toggleLike()">
+        <span id="like-icon">♡</span>
+        <span>Like</span>
+      </button>
+      <span class="like-count" id="like-count">${post.likesCount > 0 ? "${post.likesCount} like${post.likesCount != 1 ? "s" : ""}" : ""}</span>
+    </div>
+    <div class="nostr-notice" id="nostr-notice" style="display: none;">
+      <a href="https://getalby.com" target="_blank">Install a NOSTR extension</a> to like this post
+    </div>
   </article>
   <footer>
     Powered by <a href="https://geogram.radio">geogram</a>
   </footer>
+<script>
+(function() {
+  const postId = '${_escapeHtml(post.id)}';
+  const authorNpub = '${_escapeHtml(post.npub ?? '')}';
+  const apiBase = '../api/blog';
+  const likedPubkeys = ${_toJsonArray(likedHexPubkeys)};
+  let userPubkey = null;
+  let isLiked = false;
+
+  function onNostrAvailable() {
+    document.getElementById('feedback-section').style.display = 'flex';
+    window.nostr.getPublicKey().then(function(pk) {
+      userPubkey = pk;
+      // Check if user already liked this post
+      if (likedPubkeys.includes(pk)) {
+        isLiked = true;
+        updateUI(${post.likesCount});
+      }
+    }).catch(function(e) {
+      console.log('User denied public key access');
+    });
+  }
+
+  function init() {
+    if (typeof window.nostr !== 'undefined') {
+      onNostrAvailable();
+      return;
+    }
+
+    var _nostr;
+    Object.defineProperty(window, 'nostr', {
+      configurable: true,
+      enumerable: true,
+      get: function() { return _nostr; },
+      set: function(value) {
+        _nostr = value;
+        Object.defineProperty(window, 'nostr', {
+          value: _nostr,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+        onNostrAvailable();
+      }
+    });
+
+    setTimeout(function() {
+      if (typeof window.nostr === 'undefined') {
+        document.getElementById('nostr-notice').style.display = 'block';
+      }
+    }, 3000);
+  }
+
+  window.toggleLike = async function() {
+    if (!userPubkey) {
+      try {
+        userPubkey = await window.nostr.getPublicKey();
+      } catch (e) {
+        alert('Please allow access to your NOSTR public key');
+        return;
+      }
+    }
+
+    const button = document.getElementById('like-button');
+    button.disabled = true;
+
+    try {
+      const unsignedEvent = {
+        pubkey: userPubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 7,
+        tags: [
+          ['p', authorNpub],
+          ['e', postId],
+          ['type', 'likes']
+        ],
+        content: 'like'
+      };
+
+      const signedEvent = await window.nostr.signEvent(unsignedEvent);
+
+      if (!signedEvent || !signedEvent.sig) {
+        throw new Error('Signing cancelled or failed');
+      }
+
+      const response = await fetch(apiBase + '/' + encodeURIComponent(postId) + '/like', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(signedEvent)
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        isLiked = result.liked;
+        updateUI(result.like_count);
+      } else if (result.error) {
+        console.error('API error:', result.error);
+      }
+    } catch (e) {
+      console.error('Error toggling like:', e);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  function updateUI(count) {
+    const button = document.getElementById('like-button');
+    const icon = document.getElementById('like-icon');
+    const countEl = document.getElementById('like-count');
+
+    button.classList.toggle('liked', isLiked);
+    icon.textContent = isLiked ? '♥' : '♡';
+    countEl.textContent = count > 0 ? count + ' like' + (count !== 1 ? 's' : '') : '';
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
 </body>
 </html>''';
   }
@@ -996,6 +1246,13 @@ class WebSocketService {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+  }
+
+  /// Convert a list of strings to a JavaScript array literal
+  String _toJsonArray(List<String> items) {
+    if (items.isEmpty) return '[]';
+    final escaped = items.map((s) => '"${s.replaceAll('"', '\\"')}"').join(',');
+    return '[$escaped]';
   }
 
   /// Send HTTP response to station

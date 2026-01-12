@@ -742,6 +742,7 @@
   "signed_with_nostr": "Assinado com NOSTR",
   "url_copied": "URL copiado para a área de transferência",
   "copy_url": "Copiar URL",
+  "open_in_browser": "Abrir no navegador",
   "image": "Imagem",
   "cannot_open_url": "Não é possível abrir o URL",
   "invalid_url": "URL inválido: {0}",

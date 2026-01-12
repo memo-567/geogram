@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-  <title>Chat - {{COLLECTION_NAME}}</title>
+  <title>{{POST_TITLE}} - {{COLLECTION_NAME}}</title>
   <style>{{GLOBAL_STYLES}}</style>
   <style>{{APP_STYLES}}</style>
 </head>
@@ -20,28 +20,31 @@
     <nav class="menu">
       <ul class="menu__inner">
         <li><a href="../">home</a></li>
-        <li><a href="../blog/">blog</a></li>
-        <li class="active"><a href="./">chat</a></li>
+        <li class="active"><a href="./">blog</a></li>
+        <li><a href="../chat/">chat</a></li>
       </ul>
     </nav>
   </header>
 
   <div class="content">
-    <div class="chat-layout">
-      <!-- Channels sidebar -->
-      <aside class="channels-sidebar" id="channels">
-        <div class="channels-header">Channels</div>
-        {{CHANNELS_LIST}}
-      </aside>
+    <div class="post">
+      <h1 class="post-title"><a href="#">{{POST_TITLE}}</a></h1>
+      <div class="post-meta-inline">
+        <span class="post-date">{{POST_DATE}}</span>
+      </div>
+      {{TAGS}}
 
-      <!-- Messages area -->
-      <div class="messages-area">
-        <div class="messages-header">
-          <span class="room-name">#<span id="current-room">main</span></span>
-          <span class="read-only-badge">read-only</span>
-        </div>
-        <div class="messages-list" id="messages">
-          {{CONTENT}}
+      <div class="post-content">
+        {{CONTENT}}
+      </div>
+
+      {{COMMENTS}}
+
+      <div class="pagination">
+        <div class="pagination__buttons">
+          <span class="button">
+            <a href="./">← Back to blog</a>
+          </span>
         </div>
       </div>
     </div>
@@ -55,10 +58,5 @@
     </div>
   </footer>
 </div>
-
-<script>
-  window.GEOGRAM_DATA = {{DATA_JSON}};
-  {{SCRIPTS}}
-</script>
 </body>
 </html>

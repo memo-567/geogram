@@ -50,6 +50,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [LocationProviderService](#locationproviderservice) - Shared GPS positioning for all apps
 - [PathRecordingService](#pathrecordingservice) - GPS path recording (uses LocationProviderService)
 - [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
+- [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
 
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
@@ -1918,6 +1919,97 @@ Future<void> _checkNearbyPlaces(double lat, double lon) async {
   }
 }
 ```
+
+---
+
+### CollectionService.generateBlogCache
+
+**File:** `lib/services/collection_service.dart`
+
+Scans a blog collection folder and generates a `cache.json` file containing metadata for all blog posts. This cache is used by the www homepage to display links to available blogs.
+
+**Signature:**
+```dart
+Future<Map<String, dynamic>> generateBlogCache(String blogCollectionPath) async
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `blogCollectionPath` | String | Absolute path to the blog collection folder |
+
+**Returns:** `Map<String, dynamic>` containing all posts metadata
+
+**Output File:** `{blogCollectionPath}/cache.json`
+
+**Cache JSON Structure:**
+```json
+{
+  "generated": "2025-01-12T10:30:00.000Z",
+  "totalPosts": 5,
+  "publishedCount": 3,
+  "draftCount": 2,
+  "posts": [
+    {
+      "id": "2025-01-10_my-first-post",
+      "title": "My First Post",
+      "author": "CR7BBQ",
+      "created": "2025-01-10 10:00_00",
+      "edited": null,
+      "description": "A short description",
+      "status": "published",
+      "tags": ["welcome", "intro"],
+      "year": "2025",
+      "path": "2025/2025-01-10_my-first-post/post.md"
+    }
+  ]
+}
+```
+
+**Post Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Post folder name |
+| `title` | string | Post title from `# BLOG: <title>` |
+| `author` | string | Author callsign |
+| `created` | string | Creation timestamp |
+| `edited` | string? | Edit timestamp (null if never edited) |
+| `description` | string? | Post description |
+| `status` | string | "published" or "draft" |
+| `tags` | string[] | Post tags |
+| `year` | string | Year subdirectory |
+| `path` | string | Relative path to post.md |
+
+**Usage:**
+```dart
+final collectionService = CollectionService();
+final cache = await collectionService.generateBlogCache('/path/to/blog');
+
+// Get published posts only
+final published = (cache['posts'] as List)
+    .where((p) => p['status'] == 'published')
+    .toList();
+print('Found ${published.length} published posts');
+```
+
+**Blog Folder Structure:**
+```
+blog/
+├── cache.json              # Generated cache file
+├── collection.js
+├── 2024/
+│   └── 2024-12-20_year-review/
+│       └── post.md
+└── 2025/
+    └── 2025-01-10_my-first-post/
+        └── post.md
+```
+
+**Notes:**
+- Cache is regenerated on each call
+- Only folders containing `post.md` are included
+- Posts sorted by created date (newest first)
+- Used by www homepage to display blog links
 
 ---
 

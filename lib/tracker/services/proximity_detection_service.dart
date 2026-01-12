@@ -87,9 +87,19 @@ class ProximityDetectionService {
     LogService().log('ProximityDetectionService: Stopped');
   }
 
+  /// Public method to trigger a proximity scan from external code (e.g., BLE handler).
+  /// This allows piggy-backing on the BLE scan cycle which is known to work.
+  Future<void> triggerScan() async {
+    LogService().log('ProximityDetectionService: triggerScan() called (isRunning=$_isRunning)');
+    await _scanNearbyDevices();
+  }
+
   /// Scan for nearby BLE devices (detected via bleRssi != null)
   Future<void> _scanNearbyDevices() async {
-    if (!_isRunning || _trackerService == null) return;
+    if (!_isRunning || _trackerService == null) {
+      LogService().log('ProximityDetectionService: _scanNearbyDevices skipped (running=$_isRunning, tracker=${_trackerService != null})');
+      return;
+    }
 
     try {
       final now = DateTime.now();
@@ -101,6 +111,8 @@ class ProximityDetectionService {
       final currentPos = _lastPosition ?? LocationProviderService().currentPosition;
       final lat = currentPos?.latitude ?? 0.0;
       final lon = currentPos?.longitude ?? 0.0;
+
+      LogService().log('ProximityDetectionService: Scanning at GPS ($lat, $lon)');
 
       if (lat == 0.0 && lon == 0.0) {
         LogService().log('ProximityDetectionService: No GPS position available yet');
@@ -114,7 +126,7 @@ class ProximityDetectionService {
         device.bleRssi != null
       ).toList();
 
-      LogService().log('ProximityDetectionService: Found ${nearbyDevices.length} nearby BLE devices');
+      LogService().log('ProximityDetectionService: Found ${nearbyDevices.length} BLE devices (of ${allDevices.length} total)');
 
       for (final device in nearbyDevices) {
         await _recordProximity(
@@ -133,19 +145,24 @@ class ProximityDetectionService {
 
       // Also check for nearby places if we have a location
       if (lat != 0.0 || lon != 0.0) {
+        LogService().log('ProximityDetectionService: Checking places at ($lat, $lon)');
         await _checkNearbyPlaces(lat, lon);
+      } else {
+        LogService().log('ProximityDetectionService: Skipping place check - no GPS');
       }
 
       // Clean up stale sessions
       _cleanupStaleSessions(now);
 
     } catch (e) {
-      LogService().log('ProximityDetectionService: Error scanning devices: $e');
+      LogService().log('ProximityDetectionService: Error scanning: $e');
     }
   }
 
   /// Check for nearby places within the radius using PlaceService
   Future<void> _checkNearbyPlaces(double lat, double lon) async {
+    LogService().log('ProximityDetectionService: _checkNearbyPlaces called at ($lat, $lon)');
+
     // Use the reusable PlaceService function with disk caching
     final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
       lat: lat,
@@ -153,7 +170,7 @@ class ProximityDetectionService {
       radiusMeters: placeRadiusMeters,
     );
 
-    LogService().log('ProximityDetectionService: Found ${nearbyPlaces.length} places within ${placeRadiusMeters}m');
+    LogService().log('ProximityDetectionService: PlaceService returned ${nearbyPlaces.length} places within ${placeRadiusMeters}m');
 
     if (nearbyPlaces.isEmpty) return;
 

@@ -10,12 +10,17 @@ import '../models/chat_security.dart';
 import '../models/chat_settings.dart';
 import '../models/forum_section.dart';
 import '../platform/file_system_service.dart';
+import '../util/app_constants.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
+import 'web_theme_service.dart';
+import 'blog_service.dart' hide ChatSecurity;
+import 'event_service.dart';
+import 'place_service.dart';
 
 /// Service for managing collections on disk (or in memory for web)
 class CollectionService {
@@ -140,9 +145,14 @@ class CollectionService {
     callsignNotifier.value++;
   }
 
+  /// All known app/collection types that can be routed to via URL
+  /// Re-exported from app_constants.dart for convenience
+  static List<String> get knownAppTypes => knownAppTypesConst;
+
   /// Default app types that should be created for every profile
   /// These are the core apps that users expect to be available
   static const List<String> _defaultAppTypes = [
+    'www',
     'chat',
     'contacts',
     'places',
@@ -167,17 +177,683 @@ class CollectionService {
       if (!existingTypes.contains(type)) {
         try {
           stderr.writeln('Creating default collection: $type');
-          await createCollection(
+          final collection = await createCollection(
             title: type[0].toUpperCase() + type.substring(1), // Capitalize
             description: '',
             type: type,
           );
           stderr.writeln('Created default collection: $type');
+
+          // Generate default index.html for www collection
+          if (type == 'www' && collection.storagePath != null) {
+            await generateDefaultWwwIndex(collection);
+          }
         } catch (e) {
           stderr.writeln('Error creating default collection $type: $e');
         }
       }
     }
+  }
+
+  /// Generate default index.html for www collection using the default theme
+  /// This is public so it can be called from WebsocketService for on-demand creation
+  Future<void> generateDefaultWwwIndex(Collection collection) async {
+    if (kIsWeb) return; // Skip on web platform
+
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+
+      // Get the www template
+      final template = await themeService.getTemplate('www');
+      if (template == null) {
+        stderr.writeln('Warning: www template not found, skipping index.html generation');
+        return;
+      }
+
+      // Get styles
+      final globalStyles = await themeService.getGlobalStyles() ?? '';
+      final appStyles = await themeService.getAppStyles('www') ?? '';
+
+      // Use callsign as the display name
+      final displayName = _currentCallsign ?? 'My Website';
+      final description = 'A personal website published via geogram';
+
+      // Derive collections directory from the www collection's storage path
+      final collectionsPath = collection.storagePath != null
+          ? Directory(collection.storagePath!).parent.path
+          : null;
+
+      // Build dynamic content
+      final contentBuffer = StringBuffer();
+
+      // Check for blog with public posts
+      final blogInfo = await _getPublicBlogInfo(collectionsPath);
+      List<Map<String, dynamic>> recentPosts = [];
+
+      if (blogInfo != null && blogInfo['postCount'] > 0) {
+        // Generate blog index page
+        await generateBlogIndex(blogInfo['collectionPath'] as String);
+
+        // Get recent posts for homepage
+        final cache = await getBlogCacheOrRegenerate(blogInfo['collectionPath'] as String);
+        final posts = (cache['posts'] as List?) ?? [];
+        recentPosts = posts
+            .where((p) => p['status'] == 'published')
+            .take(5)
+            .cast<Map<String, dynamic>>()
+            .toList();
+      }
+
+      // Posts section using Terminimal theme structure
+      contentBuffer.writeln('<div class="posts">');
+
+      if (recentPosts.isNotEmpty) {
+        for (final post in recentPosts) {
+          final title = _escapeHtml(post['title'] as String? ?? 'Untitled');
+          final excerpt = _escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
+          final created = post['created'] as String? ?? '';
+          final postId = post['id'] as String? ?? '';
+
+          contentBuffer.writeln('''
+<div class="post on-list">
+  <h1 class="post-title"><a href="./blog/$postId.html">$title</a></h1>
+  <div class="post-meta-inline">
+    <span class="post-date">$created</span>
+  </div>
+  ${excerpt.isNotEmpty ? '<div class="post-content"><p>$excerpt</p><a class="read-more" href="./blog/$postId.html">Read more →</a></div>' : ''}
+</div>''');
+        }
+      } else {
+        contentBuffer.writeln('<div class="post"><p>No posts yet.</p></div>');
+      }
+
+      contentBuffer.writeln('</div>');
+
+      // Process template with dynamic content
+      final html = themeService.processTemplate(template, {
+        'TITLE': displayName,
+        'GLOBAL_STYLES': globalStyles,
+        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': displayName,
+        'COLLECTION_DESCRIPTION': description,
+        'CONTENT': contentBuffer.toString(),
+        'DATA_JSON': '{"files": []}',
+        'SCRIPTS': '',
+        'GENERATED_DATE': DateTime.now().toIso8601String(),
+      });
+
+      // Write index.html to the collection folder
+      final indexFile = File('${collection.storagePath}/index.html');
+      await indexFile.writeAsString(html);
+      stderr.writeln('Generated default www index.html: ${indexFile.path}');
+    } catch (e) {
+      stderr.writeln('Error generating default www index.html: $e');
+    }
+  }
+
+  /// Get device type string based on platform
+  String _getDeviceType() {
+    if (kIsWeb) return 'Web';
+    try {
+      if (Platform.isAndroid) return 'Android';
+      if (Platform.isIOS) return 'iOS';
+      if (Platform.isLinux) return 'Linux';
+      if (Platform.isMacOS) return 'macOS';
+      if (Platform.isWindows) return 'Windows';
+      return 'Device';
+    } catch (_) {
+      return 'Device';
+    }
+  }
+
+  /// Get month name
+  String _getMonthName(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
+  /// Generate blog cache - scans all posts and writes cache.json
+  /// Returns the cache data and writes it to {blogCollectionPath}/cache.json
+  Future<Map<String, dynamic>> generateBlogCache(String blogCollectionPath) async {
+    final posts = <Map<String, dynamic>>[];
+    final blogDir = Directory(blogCollectionPath);
+
+    if (!await blogDir.exists()) {
+      return _writeBlogCache(blogCollectionPath, posts);
+    }
+
+    // Scan year directories (2024, 2025, etc.)
+    await for (final yearEntity in blogDir.list()) {
+      if (yearEntity is Directory) {
+        final yearName = yearEntity.path.split('/').last;
+        // Skip non-year directories
+        if (!RegExp(r'^\d{4}$').hasMatch(yearName)) continue;
+
+        // Scan post folders inside year directory
+        await for (final postEntity in yearEntity.list()) {
+          if (postEntity is Directory) {
+            final postFile = File('${postEntity.path}/post.md');
+            if (await postFile.exists()) {
+              final postData = await _parsePostMetadata(postFile, yearName);
+              if (postData != null) {
+                posts.add(postData);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Sort by created date (newest first)
+    posts.sort((a, b) => (b['created'] as String).compareTo(a['created'] as String));
+
+    return _writeBlogCache(blogCollectionPath, posts);
+  }
+
+  /// Parse post.md file and extract metadata
+  Future<Map<String, dynamic>?> _parsePostMetadata(File postFile, String year) async {
+    try {
+      final content = await postFile.readAsString();
+      final lines = content.split('\n');
+
+      if (lines.isEmpty || !lines[0].startsWith('# BLOG: ')) {
+        return null;
+      }
+
+      final postFolder = postFile.parent.path.split('/').last;
+      String? title = lines[0].substring(8).trim();
+      String? author;
+      String? created;
+      String? edited;
+      String? description;
+      String status = 'draft';
+      List<String> tags = [];
+
+      for (final line in lines.skip(1)) {
+        if (line.startsWith('AUTHOR: ')) {
+          author = line.substring(8).trim();
+        } else if (line.startsWith('CREATED: ')) {
+          created = line.substring(9).trim();
+        } else if (line.startsWith('EDITED: ')) {
+          edited = line.substring(8).trim();
+        } else if (line.startsWith('DESCRIPTION: ')) {
+          description = line.substring(13).trim();
+        } else if (line.startsWith('STATUS: ')) {
+          status = line.substring(8).trim().toLowerCase();
+        } else if (line.startsWith('--> tags: ')) {
+          tags = line.substring(10).split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+        } else if (line.isEmpty && author != null && created != null) {
+          // End of header
+          break;
+        }
+      }
+
+      if (title.isEmpty || author == null || created == null) {
+        return null;
+      }
+
+      // Extract excerpt from content (first 200 chars after header)
+      String? excerpt;
+      final headerEndIndex = lines.indexWhere((line) => line.isEmpty && author != null);
+      if (headerEndIndex > 0 && headerEndIndex < lines.length - 1) {
+        final contentLines = lines.sublist(headerEndIndex + 1).where((l) => l.trim().isNotEmpty).toList();
+        if (contentLines.isNotEmpty) {
+          final fullContent = contentLines.take(3).join(' ');
+          excerpt = fullContent.length > 200 ? '${fullContent.substring(0, 200)}...' : fullContent;
+        }
+      }
+
+      return {
+        'id': postFolder,
+        'title': title,
+        'author': author,
+        'created': created,
+        'edited': edited,
+        'description': description,
+        'excerpt': excerpt ?? description,
+        'status': status,
+        'tags': tags,
+        'year': year,
+        'path': '$year/$postFolder/post.md',
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Write cache.json file and return the cache data
+  Future<Map<String, dynamic>> _writeBlogCache(String blogPath, List<Map<String, dynamic>> posts) async {
+    final publishedCount = posts.where((p) => p['status'] == 'published').length;
+    final draftCount = posts.where((p) => p['status'] == 'draft').length;
+
+    final cache = {
+      'generated': DateTime.now().toIso8601String(),
+      'totalPosts': posts.length,
+      'publishedCount': publishedCount,
+      'draftCount': draftCount,
+      'posts': posts,
+    };
+
+    // Write cache.json
+    final cacheFile = File('$blogPath/cache.json');
+    await cacheFile.writeAsString(jsonEncode(cache));
+
+    return cache;
+  }
+
+  /// Generate blog index.html listing all published posts
+  Future<void> generateBlogIndex(String blogCollectionPath) async {
+    if (kIsWeb) return;
+
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+
+      // Get the blog template
+      final template = await themeService.getTemplate('blog');
+      if (template == null) return;
+
+      // Get styles
+      final globalStyles = await themeService.getGlobalStyles() ?? '';
+      final appStyles = await themeService.getAppStyles('blog') ?? '';
+
+      // Get cache data
+      final cache = await getBlogCacheOrRegenerate(blogCollectionPath);
+      final posts = (cache['posts'] as List?) ?? [];
+
+      // Filter only published posts
+      final publishedPosts = posts
+          .where((p) => p['status'] == 'published')
+          .toList();
+
+      // Build posts list HTML using Terminimal theme structure
+      final postsHtml = StringBuffer();
+      if (publishedPosts.isEmpty) {
+        postsHtml.writeln('<div class="post"><p>No posts yet.</p></div>');
+      } else {
+        for (final post in publishedPosts) {
+          final title = _escapeHtml(post['title'] as String? ?? 'Untitled');
+          final excerpt = _escapeHtml(post['excerpt'] as String? ?? post['description'] as String? ?? '');
+          final created = post['created'] as String? ?? '';
+          final postId = post['id'] as String? ?? '';
+
+          postsHtml.writeln('''
+<div class="post on-list">
+  <h1 class="post-title"><a href="$postId.html">$title</a></h1>
+  <div class="post-meta-inline">
+    <span class="post-date">$created</span>
+  </div>
+  ${excerpt.isNotEmpty ? '<div class="post-content"><p>$excerpt</p><a class="read-more" href="$postId.html">Read more →</a></div>' : ''}
+</div>''');
+        }
+      }
+
+      // Process template
+      final html = themeService.processTemplate(template, {
+        'TITLE': _currentCallsign ?? 'Blog',
+        'GLOBAL_STYLES': globalStyles,
+        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': _currentCallsign ?? 'Blog',
+        'COLLECTION_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
+        'CONTENT': postsHtml.toString(),
+        'DATA_JSON': jsonEncode({'posts': publishedPosts}),
+      });
+
+      // Write index.html
+      final indexFile = File('$blogCollectionPath/index.html');
+      await indexFile.writeAsString(html);
+    } catch (e) {
+      stderr.writeln('Error generating blog index: $e');
+    }
+  }
+
+  /// Get info about public blog posts using the cache
+  /// [collectionsPath] - Optional path to the collections directory. If null, uses _collectionsDir
+  Future<Map<String, dynamic>?> _getPublicBlogInfo([String? collectionsPath]) async {
+    final dirPath = collectionsPath ?? _collectionsDir?.path;
+    if (dirPath == null) return null;
+
+    final collectionsDir = Directory(dirPath);
+    if (!await collectionsDir.exists()) return null;
+
+    try {
+      // Look for blog collections
+      await for (final entity in collectionsDir.list()) {
+        if (entity is Directory) {
+          final folderName = entity.path.split('/').last;
+          final collectionJs = File('${entity.path}/collection.js');
+
+          if (await collectionJs.exists()) {
+            final content = await collectionJs.readAsString();
+
+            // Check if this is a blog collection
+            final isBlog = content.contains('"type": "blog"') ||
+                          content.contains('"type":"blog"') ||
+                          folderName == 'blog';
+
+            if (isBlog) {
+              // Check collection visibility
+              try {
+                final collectionData = jsonDecode(content) as Map<String, dynamic>;
+                if (collectionData['visibility'] == 'private') continue;
+              } catch (_) {}
+
+              // Read cache if recent, otherwise regenerate
+              final cache = await getBlogCacheOrRegenerate(entity.path);
+              final publishedCount = cache['publishedCount'] as int? ?? 0;
+
+              if (publishedCount > 0) {
+                return {
+                  'postCount': publishedCount,
+                  'collectionPath': entity.path,
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Silent fail
+    }
+
+    return null;
+  }
+
+  /// Generate chat index.html with IRC-style retro interface
+  /// This is public so it can be called from WebsocketService for on-demand creation
+  Future<void> generateChatIndex(String chatCollectionPath) async {
+    if (kIsWeb) return;
+
+    try {
+      final themeService = WebThemeService();
+      await themeService.init();
+
+      // Get the chat template
+      final template = await themeService.getTemplate('chat');
+      if (template == null) return;
+
+      // Get styles
+      final globalStyles = await themeService.getGlobalStyles() ?? '';
+      final appStyles = await themeService.getAppStyles('chat') ?? '';
+
+      // Get chat rooms
+      final chatService = ChatService();
+      if (chatService.collectionPath == null) {
+        await chatService.initializeCollection(chatCollectionPath, creatorNpub: ProfileService().getProfile().npub);
+      }
+
+      final channels = chatService.channels;
+
+      // Build channel list HTML for sidebar
+      final channelsHtml = StringBuffer();
+      final defaultRoom = channels.isNotEmpty ? channels.first.id : 'main';
+
+      for (final channel in channels) {
+        final isActive = channel.id == defaultRoom;
+        channelsHtml.writeln('''
+<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${_escapeHtml(channel.id)}">
+  <span class="channel-name">#${_escapeHtml(channel.name ?? channel.id)}</span>
+</div>''');
+      }
+
+      // Get recent messages for the default room
+      final messages = await chatService.loadMessages(defaultRoom);
+      final recentMessages = messages.take(50).toList();
+
+      // Build messages HTML in IRC style
+      final messagesHtml = StringBuffer();
+      String? currentDate;
+
+      for (final msg in recentMessages) {
+        // Add date separator if date changed
+        final msgDate = msg.timestamp.split(' ').first;
+        if (currentDate != msgDate) {
+          currentDate = msgDate;
+          messagesHtml.writeln('<div class="date-separator">$msgDate</div>');
+        }
+
+        // Format time from timestamp
+        final time = msg.timestamp.split(' ').length > 1
+            ? msg.timestamp.split(' ')[1].replaceAll('_', ':').substring(0, 5)
+            : '00:00';
+        final author = _escapeHtml(msg.author ?? 'anonymous');
+        final content = _escapeHtml(msg.content ?? '');
+
+        messagesHtml.writeln('''
+<div class="message" data-timestamp="${_escapeHtml(msg.timestamp)}">
+  <div class="message-header">
+    <span class="message-author">$author</span>
+    <span class="message-time">$time</span>
+  </div>
+  <div class="message-content">$content</div>
+</div>''');
+      }
+
+      // Build data JSON for JavaScript
+      // Use relative path so API calls go to the device, not the station
+      final channelsList = channels.map((c) => <String, dynamic>{
+        'id': c.id,
+        'name': c.name ?? c.id,
+        'type': c.type.name,
+      }).toList();
+      final dataJson = jsonEncode({
+        'channels': channelsList,
+        'currentRoom': defaultRoom,
+        'apiBasePath': '../api/chat/rooms',
+      });
+
+      // Process template
+      final html = themeService.processTemplate(template, {
+        'TITLE': _currentCallsign ?? 'Chat',
+        'GLOBAL_STYLES': globalStyles,
+        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': _currentCallsign ?? 'Chat',
+        'COLLECTION_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
+        'CONTENT': messagesHtml.toString(),
+        'CHANNELS_LIST': channelsHtml.toString(),
+        'DATA_JSON': dataJson,
+        'SCRIPTS': _getChatScripts(),
+        'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
+      });
+
+      // Write index.html
+      final indexFile = File('$chatCollectionPath/index.html');
+      await indexFile.writeAsString(html);
+    } catch (e) {
+      stderr.writeln('Error generating chat index: $e');
+    }
+  }
+
+  /// Get JavaScript for chat page interactivity
+  String _getChatScripts() {
+    return '''
+    (function() {
+      const data = window.GEOGRAM_DATA || {};
+      let currentRoom = data.currentRoom || 'main';
+      let lastTimestamp = null;
+      let pollInterval = null;
+
+      // Initialize channel click handlers
+      function initChannels() {
+        document.querySelectorAll('.channel-item').forEach(item => {
+          item.addEventListener('click', function() {
+            const roomId = this.dataset.roomId;
+            switchRoom(roomId);
+          });
+        });
+      }
+
+      // Switch to a different room
+      function switchRoom(roomId) {
+        // Skip if already on this room
+        if (roomId === currentRoom && lastTimestamp !== null) {
+          return;
+        }
+
+        currentRoom = roomId;
+        lastTimestamp = null;
+
+        // Update active state
+        document.querySelectorAll('.channel-item').forEach(item => {
+          item.classList.toggle('active', item.dataset.roomId === roomId);
+        });
+
+        // Update room name in header
+        document.getElementById('current-room').textContent = roomId;
+
+        // Clear messages and load new room
+        document.getElementById('messages').innerHTML = '<div class="status-message">Loading messages...</div>';
+        loadMessages();
+      }
+
+      // Load messages for current room
+      async function loadMessages() {
+        try {
+          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages';
+          const response = await fetch(url);
+          if (!response.ok) {
+            document.getElementById('messages').innerHTML = '<div class="empty-state">Failed to load messages</div>';
+            return;
+          }
+
+          const result = await response.json();
+          let messages = [];
+          if (Array.isArray(result)) {
+            messages = result;
+          } else if (result && Array.isArray(result.messages)) {
+            messages = result.messages;
+          }
+
+          const container = document.getElementById('messages');
+          container.innerHTML = '';
+
+          if (messages.length === 0) {
+            container.innerHTML = '<div class="empty-state">No messages yet</div>';
+            return;
+          }
+
+          let currentDate = null;
+          messages.forEach(msg => {
+            // Add date separator
+            const msgDate = msg.timestamp.split(' ')[0];
+            if (currentDate !== msgDate) {
+              currentDate = msgDate;
+              const sep = document.createElement('div');
+              sep.className = 'date-separator';
+              sep.textContent = msgDate;
+              container.appendChild(sep);
+            }
+
+            appendMessage(msg);
+            lastTimestamp = msg.timestamp;
+          });
+
+          // Scroll to bottom
+          container.scrollTop = container.scrollHeight;
+        } catch (e) {
+          console.error('Error loading messages:', e);
+          document.getElementById('messages').innerHTML = '<div class="empty-state">Error loading messages</div>';
+        }
+      }
+
+      // Append a single message
+      function appendMessage(msg) {
+        const container = document.getElementById('messages');
+        const div = document.createElement('div');
+        div.className = 'message';
+        div.dataset.timestamp = msg.timestamp;
+
+        const timeParts = msg.timestamp.split(' ');
+        const time = timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
+        const author = msg.author || 'anonymous';
+        const content = msg.content || '';
+
+        div.innerHTML = '<div class="message-header">' +
+                       '<span class="message-author">' + escapeHtml(author) + '</span>' +
+                       '<span class="message-time">' + time + '</span>' +
+                       '</div>' +
+                       '<div class="message-content">' + escapeHtml(content) + '</div>';
+
+        container.appendChild(div);
+      }
+
+      // Poll for new messages
+      async function pollNewMessages() {
+        if (!lastTimestamp) return;
+
+        try {
+          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages?after=' + encodeURIComponent(lastTimestamp);
+          const response = await fetch(url);
+          if (!response.ok) return;
+
+          const result = await response.json();
+          let messages = [];
+          if (Array.isArray(result)) {
+            messages = result;
+          } else if (result && Array.isArray(result.messages)) {
+            messages = result.messages;
+          }
+
+          if (messages.length > 0) {
+            const container = document.getElementById('messages');
+            messages.forEach(msg => {
+              if (msg.timestamp > lastTimestamp) {
+                appendMessage(msg);
+                lastTimestamp = msg.timestamp;
+              }
+            });
+            container.scrollTop = container.scrollHeight;
+          }
+        } catch (e) {
+          console.error('Error polling messages:', e);
+        }
+      }
+
+      // Escape HTML
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // Start polling
+      function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(pollNewMessages, 5000);
+      }
+
+      // Initialize on load
+      document.addEventListener('DOMContentLoaded', function() {
+        initChannels();
+        startPolling();
+      });
+    })();
+    ''';
+  }
+
+  /// Get blog cache - reads existing if less than a day old, otherwise regenerates
+  Future<Map<String, dynamic>> getBlogCacheOrRegenerate(String blogPath) async {
+    final cacheFile = File('$blogPath/cache.json');
+
+    if (await cacheFile.exists()) {
+      final stat = await cacheFile.stat();
+      final age = DateTime.now().difference(stat.modified);
+
+      // If cache is less than a day old, use it
+      if (age.inHours < 24) {
+        try {
+          final content = await cacheFile.readAsString();
+          return jsonDecode(content) as Map<String, dynamic>;
+        } catch (_) {
+          // Cache corrupted, regenerate
+        }
+      }
+    }
+
+    // Cache doesn't exist or is too old, regenerate
+    return generateBlogCache(blogPath);
   }
 
   /// Sanitize callsign for use as folder name
@@ -3139,5 +3815,392 @@ window.COLLECTION_DATA_FULL = $jsonData;
       await _generateAndSaveDataJs(folder);
       await _generateAndSaveIndexHtml(folder);
     }
+  }
+
+  /// Generate homepage index.html that aggregates content from all apps
+  ///
+  /// Creates a landing page with:
+  /// - Navigation cards to all apps
+  /// - Recent blog posts
+  /// - Upcoming events
+  /// - Places summary
+  /// - Chat rooms list
+  Future<void> generateHomepage({
+    String? callsign,
+    String? title,
+    String? description,
+  }) async {
+    if (kIsWeb) {
+      stderr.writeln('Homepage generation not supported on web');
+      return;
+    }
+
+    final targetCallsign = callsign ?? _currentCallsign;
+    if (targetCallsign == null) {
+      stderr.writeln('No callsign specified for homepage generation');
+      return;
+    }
+
+    final callsignDir = Directory('${_devicesDir!.path}/$targetCallsign');
+    if (!await callsignDir.exists()) {
+      stderr.writeln('Callsign directory not found: ${callsignDir.path}');
+      return;
+    }
+
+    try {
+      // Initialize WebThemeService if needed
+      final themeService = WebThemeService();
+      await themeService.init();
+
+      // Get template
+      final template = await themeService.getTemplate('home');
+      if (template == null) {
+        stderr.writeln('Home template not found');
+        return;
+      }
+
+      // Get styles
+      final globalStyles = await themeService.getGlobalStyles() ?? '';
+      final appStyles = await themeService.getAppStyles('home') ?? '';
+
+      // Aggregate data from collections
+      final recentPosts = await _getRecentBlogPosts(targetCallsign, limit: 5);
+      final upcomingEvents = await _getUpcomingEvents(targetCallsign, limit: 5);
+      final placesCount = await _getPlacesCount(targetCallsign);
+      final chatRooms = await _getChatRoomsList(targetCallsign);
+
+      // Build data object for JavaScript
+      final dataObject = {
+        'recentPosts': recentPosts,
+        'upcomingEvents': upcomingEvents,
+        'placesCount': placesCount,
+        'chatRooms': chatRooms,
+      };
+
+      // Build HTML content for each section
+      final recentPostsHtml = _buildRecentPostsHtml(recentPosts);
+      final upcomingEventsHtml = _buildUpcomingEventsHtml(upcomingEvents);
+      final featuredPlacesHtml = ''; // Can be expanded later
+      final chatRoomsHtml = _buildChatRoomsHtml(chatRooms);
+
+      // Process template
+      final html = themeService.processTemplate(template, {
+        'TITLE': title ?? targetCallsign,
+        'COLLECTION_NAME': title ?? targetCallsign,
+        'COLLECTION_DESCRIPTION': description ?? 'Welcome to $targetCallsign',
+        'GLOBAL_STYLES': globalStyles,
+        'APP_STYLES': appStyles,
+        'RECENT_POSTS': recentPostsHtml,
+        'UPCOMING_EVENTS': upcomingEventsHtml,
+        'PLACES_COUNT': placesCount.toString(),
+        'FEATURED_PLACES': featuredPlacesHtml,
+        'CHAT_ROOMS': chatRoomsHtml,
+        'DATA_JSON': json.encode(dataObject),
+        'GENERATED_DATE': DateTime.now().toIso8601String(),
+        'SCRIPTS': '',
+      });
+
+      // Write to file
+      final indexFile = File('${callsignDir.path}/index.html');
+      await indexFile.writeAsString(html);
+      stderr.writeln('Generated homepage: ${indexFile.path}');
+    } catch (e) {
+      stderr.writeln('Error generating homepage: $e');
+    }
+  }
+
+  /// Get recent blog posts from all blog collections
+  Future<List<Map<String, dynamic>>> _getRecentBlogPosts(String callsign, {int limit = 5}) async {
+    final posts = <Map<String, dynamic>>[];
+
+    try {
+      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      if (!await callsignDir.exists()) return posts;
+
+      // Look for blog collections
+      await for (final entity in callsignDir.list()) {
+        if (entity is Directory) {
+          final collectionJs = File('${entity.path}/collection.js');
+          if (await collectionJs.exists()) {
+            final content = await collectionJs.readAsString();
+            if (content.contains('"type": "blog"')) {
+              // This is a blog collection - load posts
+              final blogService = BlogService();
+              await blogService.initializeCollection(entity.path);
+              final blogPosts = await blogService.loadPosts(publishedOnly: true);
+
+              for (final post in blogPosts.take(limit - posts.length)) {
+                // Parse timestamp (format: YYYY-MM-DD HH:MM_ss) to get date and year
+                final postDate = post.timestamp.length >= 10 ? post.timestamp.substring(0, 10) : '';
+                final postYear = post.timestamp.length >= 4 ? post.timestamp.substring(0, 4) : '';
+                posts.add({
+                  'title': post.title,
+                  'slug': post.id,
+                  'date': postDate,
+                  'author': post.author,
+                  'excerpt': _truncateText(post.content, 150),
+                  'url': '${entity.path.split('/').last}/$postYear/${post.id}.html',
+                });
+              }
+            }
+          }
+        }
+        if (posts.length >= limit) break;
+      }
+
+      // Sort by date (newest first)
+      posts.sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
+    } catch (e) {
+      stderr.writeln('Error loading blog posts: $e');
+    }
+
+    return posts.take(limit).toList();
+  }
+
+  /// Get upcoming events from all event collections
+  Future<List<Map<String, dynamic>>> _getUpcomingEvents(String callsign, {int limit = 5}) async {
+    final events = <Map<String, dynamic>>[];
+    final now = DateTime.now();
+
+    try {
+      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      if (!await callsignDir.exists()) return events;
+
+      // Look for events collections
+      await for (final entity in callsignDir.list()) {
+        if (entity is Directory) {
+          final collectionJs = File('${entity.path}/collection.js');
+          if (await collectionJs.exists()) {
+            final content = await collectionJs.readAsString();
+            if (content.contains('"type": "events"')) {
+              // This is an events collection - load events
+              final eventService = EventService();
+              await eventService.initializeCollection(entity.path);
+              final loadedEvents = await eventService.loadEvents();
+
+              for (final event in loadedEvents) {
+                // Only include public future events
+                if (event.visibility != 'public') continue;
+
+                // Parse startDate string to DateTime
+                DateTime? eventStartDate;
+                if (event.startDate != null) {
+                  try {
+                    eventStartDate = DateTime.parse(event.startDate!);
+                  } catch (_) {}
+                }
+                if (eventStartDate != null && eventStartDate.isAfter(now)) {
+                  events.add({
+                    'id': event.id,
+                    'title': event.title,
+                    'date': event.startDate ?? '',
+                    'location': event.location,
+                    'description': _truncateText(event.content, 100),
+                    'url': '${entity.path.split('/').last}/${event.id}.html',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by date (soonest first)
+      events.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+    } catch (e) {
+      stderr.writeln('Error loading events: $e');
+    }
+
+    return events.take(limit).toList();
+  }
+
+  /// Get count of public places
+  Future<int> _getPlacesCount(String callsign) async {
+    int count = 0;
+
+    try {
+      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      if (!await callsignDir.exists()) return count;
+
+      // Look for places collections
+      await for (final entity in callsignDir.list()) {
+        if (entity is Directory) {
+          final collectionJs = File('${entity.path}/collection.js');
+          if (await collectionJs.exists()) {
+            final content = await collectionJs.readAsString();
+            if (content.contains('"type": "places"')) {
+              // Count public place folders only
+              await for (final placeEntity in entity.list()) {
+                if (placeEntity is Directory) {
+                  final placeJson = File('${placeEntity.path}/place.json');
+                  if (await placeJson.exists()) {
+                    // Check visibility is public
+                    try {
+                      final placeContent = await placeJson.readAsString();
+                      final placeData = jsonDecode(placeContent) as Map<String, dynamic>;
+                      if (placeData['visibility'] == 'public') {
+                        count++;
+                      }
+                    } catch (_) {
+                      // Skip places that can't be parsed
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      stderr.writeln('Error counting places: $e');
+    }
+
+    return count;
+  }
+
+  /// Get list of public chat rooms
+  Future<List<Map<String, dynamic>>> _getChatRoomsList(String callsign) async {
+    final rooms = <Map<String, dynamic>>[];
+
+    try {
+      final callsignDir = Directory('${_devicesDir!.path}/$callsign');
+      if (!await callsignDir.exists()) return rooms;
+
+      // Look for chat collections
+      await for (final entity in callsignDir.list()) {
+        if (entity is Directory) {
+          final collectionJs = File('${entity.path}/collection.js');
+          if (await collectionJs.exists()) {
+            final content = await collectionJs.readAsString();
+            if (content.contains('"type": "chat"')) {
+              // This is a chat collection - load channels
+              final chatService = ChatService();
+              await chatService.initializeCollection(entity.path);
+
+              for (final channel in chatService.channels) {
+                // Check if channel is public (via config or by having '*' in participants)
+                final isPublic = channel.config?.visibility == 'PUBLIC' ||
+                    channel.participants.contains('*');
+                if (isPublic) {
+                  rooms.add({
+                    'id': channel.id,
+                    'name': channel.name,
+                    'description': channel.description ?? '',
+                    'url': '${entity.path.split('/').last}/#${channel.id}',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      stderr.writeln('Error loading chat rooms: $e');
+    }
+
+    return rooms;
+  }
+
+  /// Build HTML for recent posts section
+  String _buildRecentPostsHtml(List<Map<String, dynamic>> posts) {
+    if (posts.isEmpty) {
+      return '<p class="empty-message">No recent posts</p>';
+    }
+
+    final buffer = StringBuffer();
+    for (final post in posts) {
+      final date = post['date'] != null && post['date'].isNotEmpty
+          ? DateTime.tryParse(post['date'])
+          : null;
+      final dateStr = date != null
+          ? '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'
+          : '';
+
+      buffer.writeln('''
+        <div class="post-card">
+          <h3 class="post-card-title"><a href="${_escapeHtml(post['url'] ?? '')}">${_escapeHtml(post['title'] ?? 'Untitled')}</a></h3>
+          <p class="post-card-meta">${_escapeHtml(post['author'] ?? '')} &middot; $dateStr</p>
+          <p class="post-card-excerpt">${_escapeHtml(post['excerpt'] ?? '')}</p>
+        </div>
+      ''');
+    }
+    return buffer.toString();
+  }
+
+  /// Build HTML for upcoming events section
+  String _buildUpcomingEventsHtml(List<Map<String, dynamic>> events) {
+    if (events.isEmpty) {
+      return '<p class="empty-message">No upcoming events</p>';
+    }
+
+    final buffer = StringBuffer();
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    for (final event in events) {
+      final date = event['date'] != null && event['date'].isNotEmpty
+          ? DateTime.tryParse(event['date'])
+          : null;
+      final dayStr = date?.day.toString() ?? '';
+      final monthStr = date != null ? months[date.month - 1] : '';
+
+      buffer.writeln('''
+        <div class="event-item">
+          <div class="event-date">
+            <span class="event-date-day">$dayStr</span>
+            <span class="event-date-month">$monthStr</span>
+          </div>
+          <div class="event-details">
+            <h3 class="event-title"><a href="${_escapeHtml(event['url'] ?? '')}">${_escapeHtml(event['title'] ?? 'Untitled')}</a></h3>
+            <p class="event-info">${_escapeHtml(event['location'] ?? '')}</p>
+          </div>
+        </div>
+      ''');
+    }
+    return buffer.toString();
+  }
+
+  /// Build HTML for chat rooms section
+  String _buildChatRoomsHtml(List<Map<String, dynamic>> rooms) {
+    if (rooms.isEmpty) {
+      return '<p class="empty-message">No public chat rooms</p>';
+    }
+
+    final buffer = StringBuffer();
+    for (final room in rooms) {
+      buffer.writeln('''
+        <a href="${_escapeHtml(room['url'] ?? '')}" class="chat-room-card">
+          <div class="chat-room-icon">&#128172;</div>
+          <div class="chat-room-info">
+            <div class="chat-room-name">${_escapeHtml(room['name'] ?? 'Unnamed')}</div>
+          </div>
+        </a>
+      ''');
+    }
+    return buffer.toString();
+  }
+
+  /// Truncate text to specified length
+  String _truncateText(String text, int maxLength) {
+    // Remove markdown formatting
+    final cleanText = text
+        .replaceAll(RegExp(r'#{1,6}\s'), '')  // Headers
+        .replaceAll(RegExp(r'\*{1,2}([^*]+)\*{1,2}'), r'$1')  // Bold/italic
+        .replaceAll(RegExp(r'\[([^\]]+)\]\([^)]+\)'), r'$1')  // Links
+        .replaceAll(RegExp(r'`[^`]+`'), '')  // Inline code
+        .replaceAll(RegExp(r'\n+'), ' ')  // Newlines
+        .trim();
+
+    if (cleanText.length <= maxLength) return cleanText;
+    return '${cleanText.substring(0, maxLength)}...';
+  }
+
+  /// Escape HTML special characters
+  String _escapeHtml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
   }
 }
