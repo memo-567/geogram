@@ -11,6 +11,8 @@ import 'package:file_picker/file_picker.dart';
 import '../services/collection_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../util/app_constants.dart';
+import '../util/app_type_theme.dart';
 
 /// Full-page UI for creating a new collection
 /// Features a two-column layout: type selector on left, details panel on right
@@ -51,6 +53,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('blog', Icons.article),
     _CollectionTypeInfo('chat', Icons.chat),
     _CollectionTypeInfo('contacts', Icons.contacts),
+    _CollectionTypeInfo('email', Icons.email),
     _CollectionTypeInfo('events', Icons.event),
     // _CollectionTypeInfo('forum', Icons.forum),  // Hidden: not ready
     _CollectionTypeInfo('alerts', Icons.campaign),
@@ -69,11 +72,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('tracker', Icons.track_changes),
   ];
 
-  // Single-instance types (all except 'files')
-  static const Set<String> _singleInstanceTypes = {
-    'forum', 'chat', 'blog', 'events', 'news', 'www',
-    'postcards', 'places', 'market', 'alerts', 'groups', 'backup', 'transfer', 'inventory', 'wallet', 'log', 'console', 'tracker'
-  };
+  // Single-instance types - use centralized constant from app_constants.dart
+  static const Set<String> _singleInstanceTypes = singleInstanceTypesConst;
 
   @override
   void initState() {
@@ -220,121 +220,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   /// Get a gradient for the app type icon
   LinearGradient _getTypeGradient(String type, ThemeData theme) {
-    final isDark = theme.brightness == Brightness.dark;
-    switch (type) {
-      case 'chat':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
-              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
-        );
-      case 'blog':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
-              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
-        );
-      case 'places':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
-              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
-        );
-      case 'events':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
-              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
-        );
-      case 'alerts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
-              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
-        );
-      case 'backup':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00838F), const Color(0xFF006064)]
-              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
-        );
-      case 'inventory':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
-              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
-        );
-      case 'wallet':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
-              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
-        );
-      case 'contacts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
-              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
-        );
-      case 'groups':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
-              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
-        );
-      case 'files':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
-              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
-        );
-      case 'log':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF37474F), const Color(0xFF263238)]
-              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
-        );
-      case 'console':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1A237E), const Color(0xFF0D47A1)]
-              : [const Color(0xFF3F51B5), const Color(0xFF303F9F)],
-        );
-      default:
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [theme.colorScheme.primary.withValues(alpha: 0.8), theme.colorScheme.primary]
-              : [theme.colorScheme.primary.withValues(alpha: 0.8), theme.colorScheme.primary],
-        );
-    }
+    return getAppTypeGradient(type, theme.brightness == Brightness.dark);
   }
 
   Widget _buildAppListItem(_CollectionTypeInfo typeInfo) {
@@ -809,6 +695,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Publish articles and posts for sharing your thoughts, tutorials, or updates. Supports rich content with images and formatting.';
       case 'events':
         return 'Create and manage events with dates, times, locations, and attendee registration. Great for organizing meetups or activities.';
+      case 'email':
+        return 'Decentralized email with NOSTR-based identity for cryptographic signatures. Send and receive emails through your station.';
       case 'news':
         return 'Share news and announcements with your network. Keep your community informed about updates and important information.';
       case 'www':
@@ -882,6 +770,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Location mapping',
           'Registration',
           'Reminders',
+        ];
+      case 'email':
+        return [
+          'NOSTR signature verification',
+          'Threaded conversations',
+          'Attachments with deduplication',
+          'Labels and folders',
+          'Multi-station identities',
         ];
       case 'news':
         return [

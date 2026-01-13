@@ -19,6 +19,9 @@ import '../util/app_constants.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
+import '../services/nip05_registry_service.dart';
+import '../services/email_relay_service.dart';
+import '../services/smtp_server.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
@@ -81,6 +84,14 @@ class PureRelaySettings {
   String? lastMirroredVersion;
   String updateMirrorUrl;
 
+  // SMTP configuration
+  bool smtpEnabled;
+  bool smtpServerEnabled;
+  int smtpPort;
+
+  // DKIM configuration (RSA private key in PEM format, base64 encoded)
+  String? dkimPrivateKey;
+
   PureRelaySettings({
     this.httpPort = 8080,
     this.enabled = false,
@@ -114,6 +125,10 @@ class PureRelaySettings {
     this.updateCheckIntervalSeconds = 120,
     this.lastMirroredVersion,
     this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
+    this.smtpEnabled = false,
+    this.smtpServerEnabled = false,
+    this.smtpPort = 2525,
+    this.dkimPrivateKey,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
 
@@ -159,6 +174,10 @@ class PureRelaySettings {
       updateCheckIntervalSeconds: json['updateCheckIntervalSeconds'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
       updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram/releases/latest',
+      smtpEnabled: json['smtpEnabled'] as bool? ?? false,
+      smtpServerEnabled: json['smtpServerEnabled'] as bool? ?? false,
+      smtpPort: json['smtpPort'] as int? ?? 2525,
+      dkimPrivateKey: json['dkimPrivateKey'] as String?,
     );
   }
 
@@ -197,6 +216,10 @@ class PureRelaySettings {
         'updateCheckIntervalSeconds': updateCheckIntervalSeconds,
         'lastMirroredVersion': lastMirroredVersion,
         'updateMirrorUrl': updateMirrorUrl,
+        'smtpEnabled': smtpEnabled,
+        'smtpServerEnabled': smtpServerEnabled,
+        'smtpPort': smtpPort,
+        'dkimPrivateKey': dkimPrivateKey,
       };
 
   PureRelaySettings copyWith({
@@ -232,6 +255,10 @@ class PureRelaySettings {
     int? updateCheckIntervalSeconds,
     String? lastMirroredVersion,
     String? updateMirrorUrl,
+    bool? smtpEnabled,
+    bool? smtpServerEnabled,
+    int? smtpPort,
+    String? dkimPrivateKey,
   }) {
     return PureRelaySettings(
       httpPort: httpPort ?? this.httpPort,
@@ -266,6 +293,10 @@ class PureRelaySettings {
       updateCheckIntervalSeconds: updateCheckIntervalSeconds ?? this.updateCheckIntervalSeconds,
       lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
       updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
+      smtpEnabled: smtpEnabled ?? this.smtpEnabled,
+      smtpServerEnabled: smtpServerEnabled ?? this.smtpServerEnabled,
+      smtpPort: smtpPort ?? this.smtpPort,
+      dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
     );
   }
 
@@ -596,6 +627,7 @@ class PureTileCache {
 class PureStationServer {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
+  SMTPServer? _smtpServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
   final PureTileCache _tileCache = PureTileCache();
@@ -1319,6 +1351,9 @@ class PureStationServer {
       return true;
     }
 
+    // Reload settings to pick up any config changes
+    await _loadSettings();
+
     try {
       // Start HTTP server
       _httpServer = await HttpServer.bind(
@@ -1329,6 +1364,17 @@ class PureStationServer {
 
       _running = true;
       _startTime = DateTime.now();
+
+      // Initialize NIP-05 registry for identity verification
+      final nip05Registry = Nip05RegistryService();
+      if (_dataDir != null) {
+        nip05Registry.setProfileDirectory(_dataDir!);
+      }
+      await nip05Registry.init();
+      // Set station owner for reserved nicknames
+      if (_settings.npub != null) {
+        nip05Registry.setStationOwner(_settings.npub!);
+      }
 
       _log('INFO', 'HTTP server started on port ${_settings.httpPort}');
 
@@ -1344,6 +1390,36 @@ class PureStationServer {
 
       // Download console VM files in background
       downloadAllConsoleVmFiles();
+
+      // Configure email relay settings
+      final emailRelay = EmailRelayService();
+      emailRelay.settings.stationDomain = _settings.sslDomain ?? 'localhost';
+      emailRelay.settings.smtpPort = _settings.smtpPort;
+      emailRelay.settings.smtpEnabled = _settings.smtpEnabled;
+      emailRelay.settings.dkimPrivateKey = _settings.dkimPrivateKey;
+      emailRelay.settings.dkimSelector = 'geogram';
+
+      _log('INFO', 'SMTP config: enabled=${_settings.smtpEnabled}, serverEnabled=${_settings.smtpServerEnabled}, port=${_settings.smtpPort}, domain=${_settings.sslDomain}');
+
+      // Start SMTP server if enabled
+      if (_settings.smtpServerEnabled && _settings.sslDomain != null) {
+        _smtpServer = SMTPServer(
+          port: _settings.smtpPort,
+          domain: _settings.sslDomain!,
+        );
+
+        // Set up mail delivery callback
+        _smtpServer!.onMailReceived = _handleIncomingEmail;
+        _smtpServer!.validateRecipient = _validateLocalRecipient;
+
+        final started = await _smtpServer!.start();
+        if (started) {
+          _log('INFO', 'SMTP server started on port ${_settings.smtpPort} for domain ${_settings.sslDomain}');
+        } else {
+          _log('WARN', 'Failed to start SMTP server on port ${_settings.smtpPort}');
+          _smtpServer = null;
+        }
+      }
 
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
@@ -1499,6 +1575,10 @@ class PureStationServer {
 
     await _httpsServer?.close(force: true);
     _httpsServer = null;
+
+    // Stop SMTP server
+    await _smtpServer?.stop();
+    _smtpServer = null;
 
     _running = false;
     _startTime = null;
@@ -1986,6 +2066,8 @@ class PureStationServer {
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
         // Handle alert feedback: /api/alerts/{alertId}/{action}
         await _handleAlertFeedback(request);
+      } else if (path == '/.well-known/nostr.json') {
+        await _handleWellKnownNostr(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else if (_isAlertFileUploadPath(path) && method == 'POST') {
@@ -2146,6 +2228,49 @@ class PureStationServer {
               break;
             }
 
+            // SECURITY: Check for NIP-05 callsign collision before proceeding
+            // This prevents email impersonation and misdelivery
+            if (callsign != null) {
+              final registry = Nip05RegistryService();
+              final conflictingNpub = registry.checkCollision(callsign, npub);
+              if (conflictingNpub != null) {
+                final response = {
+                  'type': 'hello_ack',
+                  'success': false,
+                  'error': 'callsign_npub_mismatch',
+                  'message': 'Callsign "$callsign" is registered to a different identity',
+                  'station_id': _settings.callsign,
+                };
+                client.socket.add(jsonEncode(response));
+                _log('SECURITY', 'HELLO rejected: callsign "$callsign" collision - '
+                    'attempting npub ${npub.substring(0, 20)}... but registered to '
+                    '${conflictingNpub.substring(0, 20)}...');
+                _removeClient(client.id, reason: 'callsign_npub_mismatch');
+                break;
+              }
+            }
+
+            // SECURITY: Check for NIP-05 nickname collision if different from callsign
+            if (nickname != null && nickname.toLowerCase() != callsign?.toLowerCase()) {
+              final registry = Nip05RegistryService();
+              final conflictingNpub = registry.checkCollision(nickname, npub);
+              if (conflictingNpub != null) {
+                final response = {
+                  'type': 'hello_ack',
+                  'success': false,
+                  'error': 'nickname_npub_mismatch',
+                  'message': 'Nickname "$nickname" is registered to a different identity',
+                  'station_id': _settings.callsign,
+                };
+                client.socket.add(jsonEncode(response));
+                _log('SECURITY', 'HELLO rejected: nickname "$nickname" collision - '
+                    'attempting npub ${npub.substring(0, 20)}... but registered to '
+                    '${conflictingNpub.substring(0, 20)}...');
+                _removeClient(client.id, reason: 'nickname_npub_mismatch');
+                break;
+              }
+            }
+
             client.callsign = callsign;
             client.nickname = nickname;
             client.color = color;
@@ -2154,6 +2279,21 @@ class PureStationServer {
             client.version = version;
             client.latitude = latitude;
             client.longitude = longitude;
+
+            // Register for NIP-05 identity verification
+            if (callsign != null && npub != null) {
+              final registry = Nip05RegistryService();
+              // Always register callsign (prevents callsign spoofing)
+              if (!registry.registerNickname(callsign, npub)) {
+                _log('WARN', 'NIP-05: Callsign $callsign already registered to different npub');
+              }
+              // Also register nickname if different from callsign
+              if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
+                if (!registry.registerNickname(nickname, npub)) {
+                  _log('WARN', 'NIP-05: Nickname $nickname already registered to different npub');
+                }
+              }
+            }
 
             // Send hello_ack (expected by desktop/mobile clients)
             final response = {
@@ -2167,6 +2307,11 @@ class PureStationServer {
             client.socket.add(jsonEncode(response));
             final nicknameInfo = client.nickname != null ? ' [${client.nickname}]' : '';
             _log('INFO', 'Hello from: ${client.callsign ?? "unknown"}$nicknameInfo (${client.deviceType ?? "unknown"}) npub=${npub.substring(0, 20)}...');
+
+            // Deliver any pending emails for this client
+            if (callsign != null) {
+              _deliverPendingEmails(client, callsign);
+            }
             break;
 
           case 'PING':
@@ -2372,6 +2517,11 @@ class PureStationServer {
             _handleWebRTCSignaling(client, message);
             break;
 
+          // Email relay - forward emails between connected clients
+          case 'email_send':
+            _handleEmailSend(client, message);
+            break;
+
           default:
             // Check for NOSTR event format (used by desktop/mobile clients)
             // Format: {"nostr_event": ["EVENT", {...event object...}]}
@@ -2441,6 +2591,149 @@ class PureStationServer {
         'session_id': sessionId,
       }));
     }
+  }
+
+  /// Handle email send request using shared EmailRelayService
+  void _handleEmailSend(PureConnectedClient client, Map<String, dynamic> message) {
+    final emailRelay = EmailRelayService();
+
+    emailRelay.handleEmailSend(
+      message: message,
+      senderCallsign: client.callsign ?? 'unknown',
+      senderId: client.id,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        if (target != null) {
+          return _safeSocketSend(target, msg);
+        }
+        return false;
+      },
+      findClientByCallsign: (callsign) {
+        try {
+          final target = _clients.values.firstWhere(
+            (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
+          );
+          return target.id;
+        } catch (_) {
+          return null;
+        }
+      },
+      getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
+    );
+  }
+
+  /// Deliver pending emails to a newly connected client
+  void _deliverPendingEmails(PureConnectedClient client, String callsign) {
+    final emailRelay = EmailRelayService();
+
+    emailRelay.deliverPendingEmails(
+      clientId: client.id,
+      callsign: callsign,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        if (target != null) {
+          return _safeSocketSend(target, msg);
+        }
+        return false;
+      },
+      getStationDomain: () => _settings.sslDomain ?? _settings.callsign.toLowerCase(),
+    );
+  }
+
+  /// Handle incoming email from external SMTP server
+  ///
+  /// Called by SMTPServer when a message is received.
+  /// Parses the MIME message and delivers to local recipients via WebSocket.
+  Future<bool> _handleIncomingEmail(
+    String from,
+    List<String> to,
+    String rawMessage,
+  ) async {
+    try {
+      _log('INFO', 'Received external email from $from to ${to.join(", ")}');
+
+      // Parse the MIME message
+      final parser = MIMEParser(rawMessage);
+      final subject = parser.subject ?? '(No Subject)';
+      final body = parser.body;
+
+      // Create thread ID from message ID or generate one
+      final messageId = parser.messageId ?? DateTime.now().millisecondsSinceEpoch.toString();
+      final threadId = 'ext_${messageId.hashCode.abs()}';
+
+      // Deliver to each local recipient
+      bool anyDelivered = false;
+      for (final recipient in to) {
+        final callsign = _extractCallsign(recipient);
+
+        // Find connected client
+        PureConnectedClient? target;
+        try {
+          target = _clients.values.firstWhere(
+            (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
+          );
+        } catch (_) {
+          // Recipient not connected
+        }
+
+        if (target != null) {
+          // Deliver via WebSocket
+          final deliveryMessage = jsonEncode({
+            'type': 'email_receive',
+            'from': from,
+            'thread_id': threadId,
+            'subject': subject,
+            'content': base64Encode(utf8.encode(body)),
+            'external': true,
+            'delivered_at': DateTime.now().toUtc().toIso8601String(),
+          });
+
+          if (_safeSocketSend(target, deliveryMessage)) {
+            anyDelivered = true;
+            _log('INFO', 'External email delivered to $callsign');
+          }
+        } else {
+          // Queue for later delivery
+          _log('INFO', 'Recipient $callsign not connected, email queued');
+          // TODO: Store in pending queue when recipient reconnects
+          anyDelivered = true; // Accept the message anyway
+        }
+      }
+
+      return anyDelivered;
+    } catch (e) {
+      _log('ERROR', 'Failed to process incoming email: $e');
+      return false;
+    }
+  }
+
+  /// Validate if an email address is for a local user
+  ///
+  /// Used by SMTPServer to verify recipients before accepting mail.
+  bool _validateLocalRecipient(String email) {
+    final callsign = _extractCallsign(email);
+
+    // Check if we know this callsign (either connected or registered)
+    // For now, accept all callsigns at our domain
+    // TODO: Check against NIP-05 registry for registered users
+
+    // Simple validation: callsign must be non-empty and alphanumeric
+    if (callsign.isEmpty) return false;
+    if (!RegExp(r'^[A-Z0-9]+$', caseSensitive: false).hasMatch(callsign)) {
+      return false;
+    }
+
+    _log('DEBUG', 'Validating recipient: $email (callsign: $callsign) - accepted');
+    return true;
+  }
+
+  /// Extract callsign from email address (user part before @)
+  String _extractCallsign(String email) {
+    final atIndex = email.indexOf('@');
+    if (atIndex > 0) {
+      return email.substring(0, atIndex).toUpperCase();
+    }
+    return email.toUpperCase();
   }
 
   /// Handle incoming NOSTR event from WebSocket
@@ -6357,6 +6650,56 @@ class PureStationServer {
       }));
     } finally {
       _pendingProxyRequests.remove(requestId);
+    }
+  }
+
+  /// Handle /.well-known/nostr.json endpoint for NIP-05 verification
+  Future<void> _handleWellKnownNostr(HttpRequest request) async {
+    request.response.headers.contentType = ContentType.json;
+    request.response.headers.add('Access-Control-Allow-Origin', '*');
+
+    final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+    final registry = Nip05RegistryService();
+
+    try {
+      if (nameParam != null) {
+        // Query for specific name
+        final reg = registry.getRegistration(nameParam);
+        if (reg == null) {
+          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
+          return;
+        }
+
+        final hexPubkey = NostrKeyGenerator.getPublicKeyHex(reg.npub);
+        if (hexPubkey == null) {
+          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
+          return;
+        }
+
+        request.response.write(jsonEncode({
+          'names': {nameParam: hexPubkey},
+          'relays': {hexPubkey: ['wss://p2p.radio']},
+        }));
+      } else {
+        // Return all valid registrations
+        final validRegs = registry.getAllValidRegistrations();
+        final names = <String, String>{};
+        final relays = <String, List<String>>{};
+
+        for (final entry in validRegs.entries) {
+          final hexPubkey = NostrKeyGenerator.getPublicKeyHex(entry.value);
+          if (hexPubkey != null) {
+            names[entry.key] = hexPubkey;
+            relays[hexPubkey] = ['wss://p2p.radio'];
+          }
+        }
+
+        request.response.write(jsonEncode({'names': names, 'relays': relays}));
+      }
+    } catch (e) {
+      _log('ERROR', 'NIP-05 handler error: $e');
+      request.response.statusCode = 500;
+      request.response.write(jsonEncode({'error': 'Internal error'}));
     }
   }
 

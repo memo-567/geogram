@@ -7,6 +7,7 @@ const List<String> knownAppTypesConst = [
   'www',
   'blog',
   'chat',
+  'email',
   'forum',
   'events',
   'alerts',
@@ -20,4 +21,36 @@ const List<String> knownAppTypesConst = [
   'station',
   'documents',
   'photos',
+  'inventory',
+  'wallet',
+  'log',
+  'backup',
+  'console',
+  'tracker',
 ];
+
+/// App types that can only have a single instance per profile
+/// Used by CreateCollectionPage to prevent duplicate creation
+/// and by main.dart to show default apps
+const Set<String> singleInstanceTypesConst = {
+  'forum',
+  'chat',
+  'blog',
+  'email',
+  'events',
+  'news',
+  'www',
+  'postcards',
+  'places',
+  'market',
+  'alerts',
+  'groups',
+  'backup',
+  'transfer',
+  'inventory',
+  'wallet',
+  'log',
+  'console',
+  'tracker',
+  'contacts',
+};

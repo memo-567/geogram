@@ -29,6 +29,7 @@ import '../services/group_sync_service.dart';
 import '../services/collection_service.dart';
 import '../services/debug_controller.dart';
 import '../util/event_bus.dart';
+import '../util/app_type_theme.dart';
 import 'chat_browser_page.dart';
 import 'device_detail_page.dart';
 import 'remote_chat_browser_page.dart';
@@ -2552,25 +2553,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     return name;
   }
 
-  IconData _getCollectionIcon(String type) {
-    switch (type) {
-      case 'chat': return Icons.chat;
-      case 'blog': return Icons.article;
-      case 'forum': return Icons.forum;
-      case 'contacts': return Icons.contacts;
-      case 'events': return Icons.event;
-      case 'places': return Icons.place;
-      case 'news': return Icons.newspaper;
-      case 'www': return Icons.language;
-      case 'documents': return Icons.description;
-      case 'photos': return Icons.photo_library;
-      case 'alerts': return Icons.campaign;
-      case 'market': return Icons.store;
-      case 'groups': return Icons.group;
-      case 'postcards': return Icons.mail;
-      default: return Icons.folder;
-    }
-  }
+  IconData _getCollectionIcon(String type) => getAppTypeIcon(type);
 
   String _getCollectionTypeLabel(String type) {
     final key = 'collection_type_$type';

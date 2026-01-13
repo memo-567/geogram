@@ -1,5 +1,6 @@
 // Pure Dart console for CLI mode (no Flutter dependencies)
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_console/dart_console.dart';
@@ -18,6 +19,7 @@ import 'game/game_engine.dart';
 import 'game/game_screen.dart';
 import 'pure_storage_config.dart';
 import '../util/nostr_key_generator.dart';
+import '../services/email_dns_service.dart';
 
 /// Completion candidate
 class Candidate {
@@ -329,6 +331,12 @@ class PureConsole {
     // Handle --version
     if (_cliArgs.showVersion) {
       CliArgs.printVersion();
+      exit(0);
+    }
+
+    // Handle --email-dns (run diagnostics and exit)
+    if (_cliArgs.emailDnsCheck) {
+      await _runEmailDnsDiagnosticsCommand();
       exit(0);
     }
 
@@ -4119,6 +4127,121 @@ class PureConsole {
     if (d.inMinutes < 60) return '${d.inMinutes}m';
     if (d.inHours < 24) return '${d.inHours}h';
     return '${d.inDays}d';
+  }
+
+  /// Run email DNS diagnostics command (handles auto-detection)
+  Future<void> _runEmailDnsDiagnosticsCommand() async {
+    String? domain = _cliArgs.emailDnsDomain;
+    String? dkimPrivateKey;
+    Map<String, dynamic>? configJson;
+    String? configPath;
+
+    // Initialize storage to find config file
+    await PureStorageConfig().init(
+      customBaseDir: _cliArgs.dataDir,
+      createDirectories: false,
+    );
+
+    configPath = PureStorageConfig().stationConfigPath;
+    final configFile = File(configPath);
+
+    // If no domain specified, try to read from station config
+    if (domain == null || domain.isEmpty) {
+      stdout.writeln('\x1B[36mNo domain specified, checking station configuration...\x1B[0m');
+
+      if (await configFile.exists()) {
+        try {
+          final content = await configFile.readAsString();
+          configJson = jsonDecode(content) as Map<String, dynamic>;
+          domain = configJson['sslDomain'] as String?;
+          dkimPrivateKey = configJson['dkimPrivateKey'] as String?;
+
+          if (domain != null && domain.isNotEmpty) {
+            stdout.writeln('\x1B[32mFound domain in config: $domain\x1B[0m');
+          }
+        } catch (e) {
+          stdout.writeln('\x1B[33mWarning: Could not read station config: $e\x1B[0m');
+        }
+      } else {
+        stdout.writeln('\x1B[33mNo station config found at: $configPath\x1B[0m');
+      }
+    } else {
+      // Domain specified on command line, but still need to read config for DKIM key
+      if (await configFile.exists()) {
+        try {
+          final content = await configFile.readAsString();
+          configJson = jsonDecode(content) as Map<String, dynamic>;
+          dkimPrivateKey = configJson['dkimPrivateKey'] as String?;
+        } catch (_) {}
+      }
+    }
+
+    // If still no domain, show error
+    if (domain == null || domain.isEmpty) {
+      stdout.writeln();
+      stdout.writeln('\x1B[31mError: No domain configured.\x1B[0m');
+      stdout.writeln();
+      stdout.writeln('Please either:');
+      stdout.writeln('  1. Specify a domain: geogram-cli --email-dns=example.com');
+      stdout.writeln('  2. Configure your station domain first:');
+      stdout.writeln('     geogram-cli');
+      stdout.writeln('     > ssl domain example.com');
+      stdout.writeln();
+      return;
+    }
+
+    // Generate DKIM key only if not present
+    bool needsNewKey = dkimPrivateKey == null || dkimPrivateKey.isEmpty;
+
+    if (needsNewKey) {
+      stdout.writeln();
+      stdout.writeln('\x1B[36mGenerating 1024-bit RSA key pair for DKIM...\x1B[0m');
+
+      try {
+        // Use 1024-bit for DNS provider compatibility (shorter public key)
+        final keyPair = DkimKeyGenerator.generate(bitLength: 1024);
+        dkimPrivateKey = keyPair.privateKeyPem;
+
+        // Save to config
+        configJson ??= {};
+        configJson['dkimPrivateKey'] = dkimPrivateKey;
+
+        await configFile.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(configJson),
+        );
+
+        stdout.writeln('\x1B[32mDKIM private key generated and saved to station config.\x1B[0m');
+      } catch (e) {
+        stdout.writeln('\x1B[31mError generating DKIM key: $e\x1B[0m');
+      }
+    } else {
+      stdout.writeln('\x1B[32mUsing existing DKIM key from station config.\x1B[0m');
+    }
+
+    await _runEmailDnsDiagnostics(domain, dkimPrivateKey: dkimPrivateKey);
+  }
+
+  /// Run email DNS diagnostics for a domain
+  Future<void> _runEmailDnsDiagnostics(String domain, {String? dkimPrivateKey}) async {
+    stdout.writeln();
+    stdout.writeln('\x1B[36mRunning email DNS diagnostics for: $domain\x1B[0m');
+    stdout.writeln('Please wait...');
+
+    try {
+      final service = EmailDnsService(dkimPrivateKey: dkimPrivateKey);
+      final report = await service.diagnose(domain);
+      service.printReport(report);
+
+      // If there are missing records, offer to print a zone file template
+      if (!report.allPassed && report.serverIp != null) {
+        stdout.writeln();
+        stdout.writeln('\x1B[1mSuggested DNS Zone Records:\x1B[0m');
+        stdout.writeln();
+        stdout.writeln(service.generateDnsZone(domain, report.serverIp!));
+      }
+    } catch (e) {
+      stdout.writeln('\x1B[31mError running diagnostics: $e\x1B[0m');
+    }
   }
 
   void _printError(String message) {

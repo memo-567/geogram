@@ -55,6 +55,12 @@ class CliArgs {
   /// Run in daemon mode (station command as first arg)
   final bool daemonMode;
 
+  /// Email DNS diagnostics - true if flag present, domain is optional
+  final bool emailDnsCheck;
+
+  /// Email DNS diagnostics domain (optional - auto-detects from config if not specified)
+  final String? emailDnsDomain;
+
   /// Remaining positional arguments
   final List<String> positionalArgs;
 
@@ -75,6 +81,8 @@ class CliArgs {
     this.showVersion = false,
     this.forceSetup = false,
     this.daemonMode = false,
+    this.emailDnsCheck = false,
+    this.emailDnsDomain,
     this.positionalArgs = const [],
   });
 
@@ -96,6 +104,8 @@ class CliArgs {
     bool showVersion = false;
     bool forceSetup = false;
     bool daemonMode = false;
+    bool emailDnsCheck = false;
+    String? emailDnsDomain;
     final positionalArgs = <String>[];
 
     for (int i = 0; i < args.length; i++) {
@@ -175,6 +185,17 @@ class CliArgs {
       else if (arg == '--setup' || arg == '-s') {
         forceSetup = true;
       }
+      // --email-dns or --email-dns=DOMAIN
+      else if (arg == '--email-dns') {
+        emailDnsCheck = true;
+        // Check if next arg is a domain (not another flag)
+        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          emailDnsDomain = args[++i];
+        }
+      } else if (arg.startsWith('--email-dns=')) {
+        emailDnsCheck = true;
+        emailDnsDomain = arg.substring('--email-dns='.length);
+      }
       // Positional arguments (first one might be 'station' for daemon mode)
       else if (!arg.startsWith('-')) {
         if (positionalArgs.isEmpty && arg == 'station') {
@@ -201,6 +222,8 @@ class CliArgs {
       showVersion: showVersion,
       forceSetup: forceSetup,
       daemonMode: daemonMode,
+      emailDnsCheck: emailDnsCheck,
+      emailDnsDomain: emailDnsDomain,
       positionalArgs: positionalArgs,
     );
   }
@@ -226,6 +249,7 @@ Options:
   --no-update                Disable automatic update checks
   --verbose                  Enable verbose logging
   --setup, -s                Force setup wizard
+  --email-dns[=DOMAIN]       Run email DNS diagnostics and exit (auto-detects domain)
   --help, -h                 Show this help message
   --version, -v              Show version information
 
@@ -244,6 +268,12 @@ Examples:
 
   # Start with fresh identity for testing
   geogram-cli --new-identity --skip-intro --data-dir=/tmp/test
+
+  # Check email DNS configuration (auto-detects domain from config)
+  geogram-cli --email-dns
+
+  # Check email DNS for a specific domain
+  geogram-cli --email-dns=example.com
 
 For more information, see docs/command-line-switches.md
 ''');
@@ -266,6 +296,6 @@ For more information, see docs/command-line-switches.md
         'debugApi: $debugApi, newIdentity: $newIdentity, identityType: $identityType, '
         'nickname: $nickname, skipIntro: $skipIntro, scanLocalhost: $scanLocalhost, '
         'internetOnly: $internetOnly, noUpdate: $noUpdate, verbose: $verbose, '
-        'daemonMode: $daemonMode)';
+        'daemonMode: $daemonMode, emailDnsCheck: $emailDnsCheck, emailDnsDomain: $emailDnsDomain)';
   }
 }

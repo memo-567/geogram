@@ -16,6 +16,7 @@ import '../services/signing_service.dart';
 import '../services/user_location_service.dart';
 import '../services/security_service.dart';
 import '../services/backup_service.dart';
+import '../services/email_service.dart';
 import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
 import '../util/nostr_event.dart';
@@ -315,6 +316,14 @@ class WebSocketService {
               // Status change notification from provider
               LogService().log('✓ Received backup status change');
               BackupService().handleStatusChange(data);
+            } else if (data['type'] == 'email_receive') {
+              // Incoming email from station
+              LogService().log('✓ Received email from ${data['from']}');
+              EmailService().receiveEmail(data);
+            } else if (data['type'] == 'email_dsn') {
+              // Delivery status notification
+              LogService().log('✓ Received email DSN: ${data['action']} for ${data['thread_id']}');
+              EmailService().handleDSN(data);
             }
 
             _messageController.add(data);

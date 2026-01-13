@@ -554,6 +554,29 @@ class TransferResumedEvent extends AppEvent {
 class NavigateToHomeEvent extends AppEvent {}
 
 // ============================================================
+// Email Events
+// ============================================================
+
+/// Email notification event for delivery status updates
+/// Fired by EmailService when DSN (Delivery Status Notification) is received
+class EmailNotificationEvent extends AppEvent {
+  final String message;
+  final String action;    // 'delivered', 'failed', 'pending_approval', 'delayed'
+  final String? threadId;
+  final String? recipient;
+
+  EmailNotificationEvent({
+    required this.message,
+    required this.action,
+    this.threadId,
+    this.recipient,
+  });
+
+  @override
+  String toString() => 'EmailNotificationEvent(action: $action, message: $message)';
+}
+
+// ============================================================
 // Location Events
 // ============================================================
 

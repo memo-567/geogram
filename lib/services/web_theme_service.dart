@@ -18,7 +18,7 @@ class WebThemeService {
 
   /// List of app types that have theme templates
   static const List<String> appTypes = [
-    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files'
+    'home', 'chat', 'www', 'forum', 'blog', 'events', 'alerts', 'files', 'station'
   ];
 
   /// Bundled theme assets to extract
@@ -41,6 +41,8 @@ class WebThemeService {
     'themes/default/alerts/styles.css',
     'themes/default/files/index.html',
     'themes/default/files/styles.css',
+    'themes/default/station/index.html',
+    'themes/default/station/styles.css',
   ];
 
   String? _themesDir;

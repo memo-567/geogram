@@ -1949,6 +1949,10 @@ Triggers a debug action.
 | `station_send_chat` | Send a message to a station room (bypasses UI) | `room` (optional): Room ID (default: "general"), `content` (optional): Message text, `image_path` (optional): Absolute path to image file |
 | `open_console` | Open the Console collection and auto-launch the first session | `session_id` (optional): Session ID to focus (default: first session) |
 | `console_status` | Report Console VM status (files present, rootfs extraction marker, recent logs) | None |
+| `email_compose` | Create a draft email | `to` (required): Recipient email(s) comma-separated, `subject` (required): Subject line, `content` (optional): Message body, `cc` (optional): CC recipients comma-separated, `station` (optional): Station domain (default: preferred station or p2p.radio) |
+| `email_send` | Compose and send an email in one action | `to` (required): Recipient email(s), `subject` (required): Subject line, `content` (required): Message body, `cc` (optional): CC recipients, `station` (optional): Station domain |
+| `email_list` | List emails in a folder | `folder` (optional): inbox/sent/outbox/drafts/spam/trash (default: inbox), `station` (optional): Station domain (default: p2p.radio) |
+| `email_status` | Get email service status | None. Returns WebSocket connection status, preferred station, and registered accounts |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
@@ -1993,6 +1997,51 @@ Sample `console_status` response:
     "Console: Initialized",
     "ConsoleVmManager: Rootfs extracted to /home/user/.geogram/console/vm/rootfs"
   ]
+}
+```
+
+**Email automation examples:**
+
+- Compose and send an email to an external address:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"email_send", "to":"test@example.com", "subject":"Hello from Geogram", "content":"This is a test email sent via the debug API."}'
+```
+
+- Create a draft email:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"email_compose", "to":"alice@example.com,bob@example.com", "subject":"Meeting Notes", "cc":"charlie@example.com"}'
+```
+
+- List outbox emails:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"email_list", "folder":"outbox"}'
+```
+
+- Check email service status:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"email_status"}'
+```
+
+Sample `email_send` response:
+```json
+{
+  "success": true,
+  "message": "Email created and queued for delivery",
+  "thread_id": "abc123def456",
+  "from": "user@p2p.radio",
+  "to": ["test@example.com"],
+  "subject": "Hello from Geogram",
+  "station": "p2p.radio",
+  "delivery_status": "sent_to_station",
+  "websocket_connected": true
 }
 ```
 

@@ -45,6 +45,8 @@ import 'station_service.dart';
 import 'station_server_service.dart';
 import 'websocket_service.dart';
 import 'web_theme_service.dart';
+import 'email_service.dart';
+import '../models/email_thread.dart';
 import '../bot/models/music_model_info.dart';
 import '../bot/models/vision_model_info.dart';
 import '../bot/services/music_model_manager.dart';
@@ -1241,6 +1243,11 @@ class LogApiService {
       // Handle contact debug actions
       if (action.toLowerCase().startsWith('contact_')) {
         return await _handleContactDebugAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle email debug actions
+      if (action.toLowerCase().startsWith('email_')) {
+        return await _handleEmailAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -12023,5 +12030,289 @@ ul, ol { margin-left: 30px; padding: 0; }
       'is_overdue': summary.isOverdue,
       'progress': summary.progress,
     };
+  }
+
+  // ============================================================
+  // Debug API - Email Actions
+  // ============================================================
+
+  /// Handle email debug actions asynchronously
+  Future<shelf.Response> _handleEmailAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final emailService = EmailService();
+      await emailService.initialize();
+
+      switch (action) {
+        case 'email_compose':
+          // Create a draft email
+          final to = params['to'] as String?;
+          final subject = params['subject'] as String?;
+          final content = params['content'] as String?;
+          final cc = params['cc'] as String?;
+          final station = params['station'] as String?;
+
+          if (to == null || to.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "to" parameter (email address)',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (subject == null || subject.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "subject" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final stationService = StationService();
+          final preferredStation = stationService.getPreferredStation();
+          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
+
+          final toList = to.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          final ccList = cc?.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList() ?? [];
+
+          // Create draft
+          final thread = await emailService.createDraft(
+            from: fromEmail,
+            to: toList,
+            subject: subject,
+            cc: ccList,
+            station: stationDomain,
+          );
+
+          // Add initial message if content provided
+          if (content != null && content.isNotEmpty) {
+            await emailService.createSignedMessage(
+              thread: thread,
+              content: content,
+            );
+          }
+
+          LogService().log('LogApiService: Email draft created: ${thread.threadId}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Draft email created',
+              'thread_id': thread.threadId,
+              'from': fromEmail,
+              'to': toList,
+              'subject': subject,
+              'station': stationDomain,
+            }),
+            headers: headers,
+          );
+
+        case 'email_send':
+          // Compose and send an email in one action
+          final to = params['to'] as String?;
+          final subject = params['subject'] as String?;
+          final content = params['content'] as String?;
+          final cc = params['cc'] as String?;
+          final station = params['station'] as String?;
+
+          if (to == null || to.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "to" parameter (email address)',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (subject == null || subject.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "subject" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing "content" parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final stationService = StationService();
+          final preferredStation = stationService.getPreferredStation();
+          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
+
+          final toList = to.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          final ccList = cc?.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList() ?? [];
+
+          // Create draft first
+          final thread = await emailService.createDraft(
+            from: fromEmail,
+            to: toList,
+            subject: subject,
+            cc: ccList,
+            station: stationDomain,
+          );
+
+          // Add message content
+          await emailService.createSignedMessage(
+            thread: thread,
+            content: content,
+          );
+
+          // Mark as pending for delivery
+          await emailService.markAsPending(thread);
+
+          // Attempt to send via WebSocket
+          final ws = WebSocketService();
+          bool sent = false;
+          String deliveryStatus = 'pending';
+
+          if (ws.isConnected) {
+            sent = await emailService.sendViaWebSocket(thread);
+            if (sent) {
+              deliveryStatus = 'sent_to_station';
+              LogService().log('LogApiService: Email sent to station: ${thread.threadId}');
+            } else {
+              deliveryStatus = 'queued_locally';
+              LogService().log('LogApiService: Email queued locally: ${thread.threadId}');
+            }
+          } else {
+            deliveryStatus = 'queued_no_connection';
+            LogService().log('LogApiService: Email queued (no station connection): ${thread.threadId}');
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Email created and queued for delivery',
+              'thread_id': thread.threadId,
+              'from': fromEmail,
+              'to': toList,
+              'subject': subject,
+              'station': stationDomain,
+              'delivery_status': deliveryStatus,
+              'websocket_connected': ws.isConnected,
+            }),
+            headers: headers,
+          );
+
+        case 'email_list':
+          // List emails in a folder
+          final folder = params['folder'] as String? ?? 'inbox';
+
+          // Unified folders - station parameter is kept for API compatibility
+          // but all emails are stored in unified folders
+          List<EmailThread> threads;
+          switch (folder.toLowerCase()) {
+            case 'inbox':
+              threads = await emailService.getInbox();
+              break;
+            case 'sent':
+              threads = await emailService.getSent();
+              break;
+            case 'outbox':
+              threads = await emailService.getOutbox();
+              break;
+            case 'drafts':
+              threads = await emailService.getDrafts();
+              break;
+            case 'spam':
+              threads = await emailService.getSpam();
+              break;
+            case 'garbage':
+            case 'trash':
+              threads = await emailService.getGarbage();
+              break;
+            default:
+              threads = await emailService.getInbox();
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': folder,
+              'count': threads.length,
+              'threads': threads.map((t) => {
+                'thread_id': t.threadId,
+                'from': t.from,
+                'to': t.to,
+                'subject': t.subject,
+                'created': t.created,
+                'status': t.status.name,
+                'message_count': t.messages.length,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'email_status':
+          // Get email service status
+          final stationService = StationService();
+          final ws = WebSocketService();
+          final preferredStation = stationService.getPreferredStation();
+
+          final accounts = emailService.accounts;
+          final connectedAccounts = emailService.connectedAccounts;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'service_initialized': true,
+              'websocket_connected': ws.isConnected,
+              'preferred_station': preferredStation?.name,
+              'accounts': accounts.map((a) => {
+                'station': a.station,
+                'email': a.email,
+                'connected': a.isConnected,
+              }).toList(),
+              'connected_account_count': connectedAccounts.length,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown email action: $action',
+              'available_actions': [
+                'email_compose',
+                'email_send',
+                'email_list',
+                'email_status',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Error in email action: $e\n$stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
   }
 }

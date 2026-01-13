@@ -58,6 +58,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Speech Input Widgets
 - [TranscribeButtonWidget](#transcribebuttonwidget) - Voice-to-text for text fields
 
+### Constants
+- [App Constants](#app-constants) - Centralized app type definitions
+- [App Type Theme](#app-type-theme) - Centralized icons and gradients for app types
+
 ---
 
 ## Picker Widgets
@@ -2276,6 +2280,105 @@ TextFormField(
 
 ---
 
+## Constants
+
+### App Constants
+
+**File:** `lib/util/app_constants.dart`
+
+Centralized constants for app/collection types. This file has no Flutter dependencies so it can be used in CLI mode.
+
+**Constants:**
+
+| Constant | Type | Description |
+|----------|------|-------------|
+| `knownAppTypesConst` | `List<String>` | All known app types for URL routing |
+| `singleInstanceTypesConst` | `Set<String>` | App types that can only have one instance per profile |
+
+**knownAppTypesConst:**
+Used for URL routing and collection management. Contains all app types that can be routed to via URL.
+
+```dart
+const List<String> knownAppTypesConst = [
+  'www', 'blog', 'chat', 'email', 'forum', 'events', 'alerts',
+  'places', 'files', 'contacts', 'groups', 'news', 'postcards',
+  'market', 'station', 'documents', 'photos', 'inventory',
+  'wallet', 'log', 'backup', 'console', 'tracker',
+];
+```
+
+**singleInstanceTypesConst:**
+App types that can only have a single instance per profile. Used by `CreateCollectionPage` to prevent duplicate creation and by `main.dart` to show default apps.
+
+```dart
+const Set<String> singleInstanceTypesConst = {
+  'forum', 'chat', 'blog', 'email', 'events', 'news', 'www',
+  'postcards', 'places', 'market', 'alerts', 'groups', 'backup',
+  'transfer', 'inventory', 'wallet', 'log', 'console', 'tracker',
+  'contacts',
+};
+```
+
+**Usage:**
+```dart
+import '../util/app_constants.dart';
+
+// Check if a type is single-instance
+if (singleInstanceTypesConst.contains(collectionType)) {
+  // Only allow one instance
+}
+
+// Check if a type is known/routable
+if (knownAppTypesConst.contains(urlType)) {
+  // Route to the app
+}
+```
+
+**Notes:**
+- `files` is the only multi-instance type (users can create multiple file collections)
+- When adding a new app type, add it to both constants if it should be single-instance
+- This file is used by both Flutter UI and CLI code
+
+---
+
+### App Type Theme
+
+**File:** `lib/util/app_type_theme.dart`
+
+Centralized theming utilities for app/collection types. This file has Flutter dependencies (for Icons and LinearGradient). For pure Dart constants, use `app_constants.dart`.
+
+**Functions:**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `getAppTypeIcon(String type)` | `IconData` | Get the icon for an app/collection type |
+| `getAppTypeGradient(String type, bool isDark)` | `LinearGradient` | Get the gradient colors for an app/collection type |
+
+**Usage:**
+```dart
+import '../util/app_type_theme.dart';
+
+// Get icon for a collection type
+final icon = getAppTypeIcon('email');  // Returns Icons.email
+
+// Get gradient for a collection type
+final gradient = getAppTypeGradient('email', isDark);
+```
+
+**Supported Types:**
+All types from `knownAppTypesConst` are supported with consistent icons and gradients:
+- chat, email, blog, forum, events, alerts, places, contacts
+- groups, inventory, wallet, log, backup, console, tracker
+- files, news, www, market, postcards, station, transfer
+
+**When adding a new app type:**
+1. Add the type to `knownAppTypesConst` in `app_constants.dart`
+2. Add to `singleInstanceTypesConst` if it should be single-instance
+3. Add icon case to `getAppTypeIcon()` in `app_type_theme.dart`
+4. Add gradient case to `getAppTypeGradient()` in `app_type_theme.dart`
+
+---
+
 ## Summary Table
 
 | Component | Location | Type | Main Use |
@@ -2307,3 +2410,5 @@ TextFormField(
 | PlaceService.findPlacesWithinRadius | services/ | Service | Find places within GPS radius |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |
+| App Constants | util/ | Constants | Centralized app type definitions |
+| App Type Theme | util/ | Utility | Centralized icons and gradients for app types |

@@ -51,6 +51,7 @@ import 'connection/transports/webrtc_transport.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'util/event_bus.dart';
+import 'util/app_type_theme.dart';
 import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
@@ -58,6 +59,7 @@ import 'pages/stations_page.dart';
 import 'pages/location_page.dart';
 // import 'pages/notifications_page.dart'; // TODO: Not yet implemented
 import 'pages/chat_browser_page.dart';
+import 'pages/email_browser_page.dart';
 import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
 import 'pages/events_browser_page.dart';
@@ -1549,6 +1551,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _DefaultAppType('places', Icons.place),
     _DefaultAppType('blog', Icons.article),
     _DefaultAppType('chat', Icons.chat),
+    _DefaultAppType('email', Icons.email),
     _DefaultAppType('contacts', Icons.contacts),
     _DefaultAppType('events', Icons.event),
     _DefaultAppType('alerts', Icons.campaign),
@@ -1965,6 +1968,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             ? ChatBrowserPage(
                                                 collection: collection,
                                               )
+                                            : collection.type == 'email'
+                                            ? EmailBrowserPage()
                                             : collection.type == 'forum'
                                             ? ForumBrowserPage(
                                                 collection: collection,
@@ -2160,6 +2165,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             ? ChatBrowserPage(
                                                 collection: collection,
                                               )
+                                            : collection.type == 'email'
+                                            ? EmailBrowserPage()
                                             : collection.type == 'forum'
                                             ? ForumBrowserPage(
                                                 collection: collection,
@@ -2351,234 +2358,10 @@ class _CollectionGridCard extends StatelessWidget {
   }
 
   /// Get appropriate icon based on collection type
-  IconData _getCollectionIcon() {
-    switch (collection.type) {
-      case 'chat':
-        return Icons.chat;
-      case 'forum':
-        return Icons.forum;
-      case 'blog':
-        return Icons.article;
-      case 'events':
-        return Icons.event;
-      case 'news':
-        return Icons.newspaper;
-      case 'www':
-        return Icons.language;
-      case 'postcards':
-        return Icons.credit_card;
-      case 'contacts':
-        return Icons.contacts;
-      case 'places':
-        return Icons.place;
-      case 'market':
-        return Icons.store;
-      case 'inventory':
-        return Icons.inventory_2;
-      case 'tracker':
-        return Icons.track_changes;
-      case 'groups':
-        return Icons.groups;
-      case 'alerts':
-        return Icons.campaign;
-      case 'backup':
-        return Icons.backup;
-      case 'station':
-        return Icons.cell_tower;
-      case 'transfer':
-        return Icons.swap_horiz;
-      case 'wallet':
-        return Icons.account_balance_wallet;
-      case 'log':
-        return Icons.article_outlined;
-      case 'console':
-        return Icons.computer;
-      default:
-        return Icons.folder_special;
-    }
-  }
+  IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
 
   /// Get gradient colors for collection type icon
-  LinearGradient _getTypeGradient(bool isDark) {
-    switch (collection.type) {
-      case 'chat':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
-              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
-        );
-      case 'blog':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
-              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
-        );
-      case 'places':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
-              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
-        );
-      case 'events':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
-              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
-        );
-      case 'alerts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
-              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
-        );
-      case 'backup':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00838F), const Color(0xFF006064)]
-              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
-        );
-      case 'inventory':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
-              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
-        );
-      case 'tracker':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
-              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
-        );
-      case 'wallet':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
-              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
-        );
-      case 'contacts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
-              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
-        );
-      case 'groups':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
-              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
-        );
-      case 'files':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
-              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
-        );
-      case 'log':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF37474F), const Color(0xFF263238)]
-              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
-        );
-      case 'forum':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF512DA8), const Color(0xFF4527A0)]
-              : [const Color(0xFF7E57C2), const Color(0xFF673AB7)],
-        );
-      case 'station':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
-              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
-        );
-      case 'transfer':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1976D2), const Color(0xFF1565C0)]
-              : [const Color(0xFF64B5F6), const Color(0xFF42A5F5)],
-        );
-      case 'www':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF7B1FA2), const Color(0xFF6A1B9A)]
-              : [const Color(0xFFBA68C8), const Color(0xFFAB47BC)],
-        );
-      case 'postcards':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFC2185B), const Color(0xFFAD1457)]
-              : [const Color(0xFFF06292), const Color(0xFFEC407A)],
-        );
-      case 'market':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
-              : [const Color(0xFFFFCA28), const Color(0xFFFFB300)],
-        );
-      case 'news':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF303F9F), const Color(0xFF283593)]
-              : [const Color(0xFF5C6BC0), const Color(0xFF3F51B5)],
-        );
-      case 'console':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF212121), const Color(0xFF000000)]
-              : [const Color(0xFF424242), const Color(0xFF212121)],
-        );
-      default:
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF546E7A), const Color(0xFF455A64)]
-              : [const Color(0xFF90A4AE), const Color(0xFF78909C)],
-        );
-    }
-  }
+  LinearGradient _getTypeGradient(bool isDark) => getAppTypeGradient(collection.type, isDark);
 
   void _showContextMenu(BuildContext context, Offset position) {
     final i18n = I18nService();
@@ -2792,232 +2575,10 @@ class _CollectionCard extends StatelessWidget {
   });
 
   /// Get appropriate icon based on collection type
-  IconData _getCollectionIcon() {
-    switch (collection.type) {
-      case 'chat':
-        return Icons.chat;
-      case 'forum':
-        return Icons.forum;
-      case 'blog':
-        return Icons.article;
-      case 'events':
-        return Icons.event;
-      case 'www':
-        return Icons.language;
-      case 'postcards':
-        return Icons.credit_card;
-      case 'contacts':
-        return Icons.contacts;
-      case 'places':
-        return Icons.place;
-      case 'market':
-        return Icons.store;
-      case 'inventory':
-        return Icons.inventory_2;
-      case 'tracker':
-        return Icons.track_changes;
-      case 'groups':
-        return Icons.groups;
-      case 'alerts':
-        return Icons.campaign;
-      case 'backup':
-        return Icons.backup;
-      case 'station':
-        return Icons.cell_tower;
-      case 'transfer':
-        return Icons.swap_horiz;
-      case 'wallet':
-        return Icons.account_balance_wallet;
-      case 'log':
-        return Icons.article_outlined;
-      case 'console':
-        return Icons.computer;
-      default:
-        return Icons.folder_special;
-    }
-  }
+  IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
 
   /// Get gradient colors for collection type icon
-  LinearGradient _getTypeGradient(bool isDark) {
-    switch (collection.type) {
-      case 'chat':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
-              : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
-        );
-      case 'blog':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFAD1457), const Color(0xFF880E4F)]
-              : [const Color(0xFFEC407A), const Color(0xFFD81B60)],
-        );
-      case 'places':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
-              : [const Color(0xFF66BB6A), const Color(0xFF43A047)],
-        );
-      case 'events':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFE65100), const Color(0xFFBF360C)]
-              : [const Color(0xFFFF9800), const Color(0xFFF57C00)],
-        );
-      case 'alerts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
-              : [const Color(0xFFEF5350), const Color(0xFFE53935)],
-        );
-      case 'backup':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00838F), const Color(0xFF006064)]
-              : [const Color(0xFF26C6DA), const Color(0xFF00ACC1)],
-        );
-      case 'inventory':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
-              : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
-        );
-      case 'tracker':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
-              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
-        );
-      case 'wallet':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF558B2F), const Color(0xFF33691E)]
-              : [const Color(0xFF9CCC65), const Color(0xFF7CB342)],
-        );
-      case 'contacts':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF5D4037), const Color(0xFF4E342E)]
-              : [const Color(0xFF8D6E63), const Color(0xFF6D4C41)],
-        );
-      case 'groups':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
-              : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
-        );
-      case 'files':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF455A64), const Color(0xFF37474F)]
-              : [const Color(0xFF78909C), const Color(0xFF607D8B)],
-        );
-      case 'log':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF37474F), const Color(0xFF263238)]
-              : [const Color(0xFF546E7A), const Color(0xFF455A64)],
-        );
-      case 'forum':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF512DA8), const Color(0xFF4527A0)]
-              : [const Color(0xFF7E57C2), const Color(0xFF673AB7)],
-        );
-      case 'station':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF00695C), const Color(0xFF004D40)]
-              : [const Color(0xFF26A69A), const Color(0xFF00897B)],
-        );
-      case 'transfer':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF1976D2), const Color(0xFF1565C0)]
-              : [const Color(0xFF64B5F6), const Color(0xFF42A5F5)],
-        );
-      case 'www':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF7B1FA2), const Color(0xFF6A1B9A)]
-              : [const Color(0xFFBA68C8), const Color(0xFFAB47BC)],
-        );
-      case 'postcards':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFC2185B), const Color(0xFFAD1457)]
-              : [const Color(0xFFF06292), const Color(0xFFEC407A)],
-        );
-      case 'market':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
-              : [const Color(0xFFFFCA28), const Color(0xFFFFB300)],
-        );
-      case 'news':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF303F9F), const Color(0xFF283593)]
-              : [const Color(0xFF5C6BC0), const Color(0xFF3F51B5)],
-        );
-      case 'console':
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF212121), const Color(0xFF000000)]
-              : [const Color(0xFF424242), const Color(0xFF212121)],
-        );
-      default:
-        return LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [const Color(0xFF546E7A), const Color(0xFF455A64)]
-              : [const Color(0xFF90A4AE), const Color(0xFF78909C)],
-        );
-    }
-  }
+  LinearGradient _getTypeGradient(bool isDark) => getAppTypeGradient(collection.type, isDark);
 
   @override
   Widget build(BuildContext context) {

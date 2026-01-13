@@ -21,6 +21,9 @@ import '../services/event_service.dart';
 import '../services/station_alert_api.dart';
 import '../services/station_place_api.dart';
 import '../services/station_feedback_api.dart';
+import '../services/nip05_registry_service.dart';
+import '../services/web_theme_service.dart';
+import '../util/nostr_key_generator.dart';
 import '../bot/services/vision_model_manager.dart';
 import '../bot/models/vision_model_info.dart';
 import '../bot/models/music_model_info.dart';
@@ -36,6 +39,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/reaction_utils.dart';
 import '../util/event_bus.dart';
 import '../version.dart';
+import 'email_relay_service.dart';
 
 /// Station server settings
 class StationServerSettings {
@@ -526,6 +530,15 @@ class StationServerService {
 
       LogService().log('Station server started on port $serverPort');
 
+      // Initialize NIP-05 registry for identity verification
+      final nip05Registry = Nip05RegistryService();
+      await nip05Registry.init();
+      // Set station owner for reserved nicknames
+      final profile = ProfileService().getProfile();
+      if (profile.npub != null) {
+        nip05Registry.setStationOwner(profile.npub!);
+      }
+
       // Handle incoming connections
       _httpServer!.listen(_handleRequest, onError: (error) {
         LogService().log('Server error: $error');
@@ -684,6 +697,8 @@ class StationServerService {
         // Proxy content requests to connected devices: /{callsign}/ or /{callsign}/{collection}/
         LogService().log('Device content path: $path');
         await _handleDeviceContentRequest(request);
+      } else if (path == '/.well-known/nostr.json') {
+        await _handleWellKnownNostr(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -764,11 +779,55 @@ class StationServerService {
         } else if (type == 'HTTP_RESPONSE') {
           // Response from client for proxied HTTP request
           _handleHttpResponse(message);
+        } else if (type == 'email_send') {
+          // Email relay - forward to recipient or queue
+          _handleEmailSend(client, message);
         }
       }
     } catch (e) {
       LogService().log('WebSocket message error: $e');
     }
+  }
+
+  /// Handle email send request
+  void _handleEmailSend(ConnectedClient client, Map<String, dynamic> message) {
+    final emailRelay = EmailRelayService();
+
+    emailRelay.handleEmailSend(
+      message: message,
+      senderCallsign: client.callsign ?? 'unknown',
+      senderId: client.id,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        if (target != null) {
+          try {
+            target.socket.add(msg);
+            return true;
+          } catch (_) {
+            return false;
+          }
+        }
+        return false;
+      },
+      findClientByCallsign: (callsign) {
+        try {
+          final target = _clients.values.firstWhere(
+            (c) => c.callsign?.toUpperCase() == callsign.toUpperCase(),
+          );
+          return target.id;
+        } catch (_) {
+          return null;
+        }
+      },
+      getStationDomain: _getStationDomain,
+    );
+  }
+
+  /// Get station domain for email addresses
+  String _getStationDomain() {
+    // Use station callsign as domain (e.g., X3ABCD)
+    // In production, this could be configured to use a real domain
+    return ProfileService().getProfile().callsign.toLowerCase();
   }
 
   /// Handle hello message from client
@@ -819,6 +878,21 @@ class StationServerService {
     client.latitude = latitude;
     client.longitude = longitude;
 
+    // Register for NIP-05 identity verification
+    if (callsign != null && npub != null) {
+      final registry = Nip05RegistryService();
+      // Always register callsign (prevents callsign spoofing)
+      if (!registry.registerNickname(callsign, npub)) {
+        LogService().log('NIP-05: Callsign $callsign already registered to different npub');
+      }
+      // Also register nickname if different from callsign
+      if (nickname != null && nickname.toLowerCase() != callsign.toLowerCase()) {
+        if (!registry.registerNickname(nickname, npub)) {
+          LogService().log('NIP-05: Nickname $nickname already registered to different npub');
+        }
+      }
+    }
+
     // Send hello acknowledgment
     final response = {
       'type': 'hello_ack',
@@ -832,12 +906,40 @@ class StationServerService {
 
     LogService().log('Hello from client: $callsign (npub: ${npub?.substring(0, 20)}...)');
 
+    // Deliver any pending emails for this client
+    if (callsign != null) {
+      _deliverPendingEmails(client, callsign);
+    }
+
     // Fire client connected event
     EventBus().fire(ClientConnectedEvent(
       clientId: client.id,
       callsign: callsign,
       npub: npub,
     ));
+  }
+
+  /// Deliver pending emails to newly connected client
+  void _deliverPendingEmails(ConnectedClient client, String callsign) {
+    final emailRelay = EmailRelayService();
+
+    emailRelay.deliverPendingEmails(
+      clientId: client.id,
+      callsign: callsign,
+      sendToClient: (clientId, msg) {
+        final target = _clients[clientId];
+        if (target != null) {
+          try {
+            target.socket.add(msg);
+            return true;
+          } catch (_) {
+            return false;
+          }
+        }
+        return false;
+      },
+      getStationDomain: _getStationDomain,
+    );
   }
 
   void _handleBackupProviderAnnounce(ConnectedClient client, Map<String, dynamic> message) {
@@ -1231,10 +1333,117 @@ class StationServerService {
     request.response.write(jsonEncode({'providers': providers}));
   }
 
+  /// Handle /.well-known/nostr.json endpoint for NIP-05 verification
+  Future<void> _handleWellKnownNostr(HttpRequest request) async {
+    request.response.headers.contentType = ContentType.json;
+    request.response.headers.add('Access-Control-Allow-Origin', '*');
+
+    final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+    final registry = Nip05RegistryService();
+
+    try {
+      if (nameParam != null) {
+        // Query for specific name
+        final reg = registry.getRegistration(nameParam);
+        if (reg == null) {
+          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
+          return;
+        }
+
+        final hexPubkey = NostrKeyGenerator.getPublicKeyHex(reg.npub);
+        if (hexPubkey == null) {
+          request.response.write(jsonEncode({'names': {}, 'relays': {}}));
+          return;
+        }
+
+        request.response.write(jsonEncode({
+          'names': {nameParam: hexPubkey},
+          'relays': {hexPubkey: ['wss://p2p.radio']},
+        }));
+      } else {
+        // Return all valid registrations
+        final validRegs = registry.getAllValidRegistrations();
+        final names = <String, String>{};
+        final relays = <String, List<String>>{};
+
+        for (final entry in validRegs.entries) {
+          final hexPubkey = NostrKeyGenerator.getPublicKeyHex(entry.value);
+          if (hexPubkey != null) {
+            names[entry.key] = hexPubkey;
+            relays[hexPubkey] = ['wss://p2p.radio'];
+          }
+        }
+
+        request.response.write(jsonEncode({'names': names, 'relays': relays}));
+      }
+    } catch (e) {
+      LogService().log('NIP-05 handler error: $e');
+      request.response.statusCode = 500;
+      request.response.write(jsonEncode({'error': 'Internal error'}));
+    }
+  }
+
   /// Handle / root endpoint
   Future<void> _handleRoot(HttpRequest request) async {
     final profile = ProfileService().getProfile();
 
+    try {
+      // Try to use themed template
+      final themeService = WebThemeService();
+      await themeService.init();
+
+      final template = await themeService.getTemplate('station');
+      if (template != null) {
+        final globalStyles = await themeService.getGlobalStyles() ?? '';
+        final appStyles = await themeService.getAppStyles('station') ?? '';
+
+        // Build devices list HTML
+        final devicesHtml = StringBuffer();
+        for (final client in _clients.values) {
+          final callsign = client.callsign ?? client.id;
+          final nickname = client.nickname ?? callsign;
+          final connectionType = client.connectionType.name;
+          final connectionLabel = _getConnectionTypeLabel(client.connectionType);
+          final connectedAgo = _formatTimeAgo(client.connectedAt);
+          final location = (client.latitude != null && client.longitude != null)
+              ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
+              : '';
+
+          devicesHtml.writeln('''
+          <a href="/$callsign/" class="device-card">
+            <div class="device-header">
+              <span class="device-callsign">$callsign</span>
+              <span class="connection-badge $connectionType">$connectionLabel</span>
+            </div>
+            <div class="device-nickname">${_escapeHtml(nickname)}</div>
+            <div class="device-meta">
+              Connected $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
+            </div>
+          </a>
+          ''');
+        }
+
+        // Process template
+        final html = themeService.processTemplate(template, {
+          'STATION_NAME': profile.nickname.isNotEmpty ? profile.nickname : 'Geogram Station',
+          'STATION_DESCRIPTION': 'Relay server for Geogram devices',
+          'VERSION': appVersion,
+          'CALLSIGN': profile.callsign,
+          'CONNECTED_COUNT': _clients.length.toString(),
+          'DEVICES_LIST': devicesHtml.toString(),
+          'GLOBAL_STYLES': globalStyles,
+          'APP_STYLES': appStyles,
+        });
+
+        request.response.headers.contentType = ContentType.html;
+        request.response.write(html);
+        return;
+      }
+    } catch (e) {
+      LogService().log('StationServerService: Error loading station template: $e');
+    }
+
+    // Fallback to simple HTML if template not available
     request.response.headers.contentType = ContentType.html;
     request.response.write('''
 <!DOCTYPE html>
@@ -1260,6 +1469,40 @@ class StationServerService {
 </body>
 </html>
 ''');
+  }
+
+  /// Get human-readable connection type label
+  String _getConnectionTypeLabel(ConnectionType type) {
+    switch (type) {
+      case ConnectionType.localWifi:
+        return 'WiFi';
+      case ConnectionType.internet:
+        return 'Internet';
+      case ConnectionType.bluetooth:
+        return 'Bluetooth';
+      case ConnectionType.lora:
+        return 'LoRa';
+      case ConnectionType.radio:
+        return 'Radio';
+      case ConnectionType.other:
+        return 'Other';
+    }
+  }
+
+  /// Format a DateTime as a human-readable time ago string
+  String _formatTimeAgo(DateTime dateTime) {
+    final now = DateTime.now();
+    final diff = now.difference(dateTime);
+
+    if (diff.inDays > 0) {
+      return '${diff.inDays}d ago';
+    } else if (diff.inHours > 0) {
+      return '${diff.inHours}h ago';
+    } else if (diff.inMinutes > 0) {
+      return '${diff.inMinutes}m ago';
+    } else {
+      return 'just now';
+    }
   }
 
   Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{STATION_NAME}} - Geogram Station</title>
+  <style>{{GLOBAL_STYLES}}</style>
+  <style>{{APP_STYLES}}</style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="header-content">
+        <div class="logo-section">
+          <span class="logo">{{STATION_NAME}}</span>
+        </div>
+        <p class="subtitle">{{STATION_DESCRIPTION}}</p>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="station-info">
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="info-label">Version</span>
+            <span class="info-value">{{VERSION}}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Callsign</span>
+            <span class="info-value">{{CALLSIGN}}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Connected</span>
+            <span class="info-value">{{CONNECTED_COUNT}} devices</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Status</span>
+            <span class="info-value status-online">Running</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="devices-section">
+        <h2>Connected Devices</h2>
+        <div class="devices-grid" id="devices-grid">
+          {{DEVICES_LIST}}
+        </div>
+        <div class="no-devices" id="no-devices" style="display: none;">
+          <p>No devices currently connected.</p>
+          <p class="hint">Devices will appear here when they connect to this station.</p>
+        </div>
+      </section>
+
+      <section class="api-section">
+        <h2>API Endpoints</h2>
+        <div class="api-list">
+          <a href="/api/status" class="api-link">
+            <span class="api-method">GET</span>
+            <span class="api-path">/api/status</span>
+            <span class="api-desc">Station status and info</span>
+          </a>
+          <a href="/api/clients" class="api-link">
+            <span class="api-method">GET</span>
+            <span class="api-path">/api/clients</span>
+            <span class="api-desc">Connected devices list</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <span>Powered by <a href="https://geogram.radio">Geogram</a></span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const devicesGrid = document.getElementById('devices-grid');
+      const noDevices = document.getElementById('no-devices');
+
+      if (!devicesGrid || devicesGrid.children.length === 0 || devicesGrid.innerHTML.trim() === '') {
+        if (devicesGrid) devicesGrid.style.display = 'none';
+        if (noDevices) noDevices.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

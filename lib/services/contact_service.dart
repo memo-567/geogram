@@ -460,6 +460,93 @@ class ContactService {
     _summaryCacheTime = null;
   }
 
+  /// Search contacts that have email addresses
+  /// Returns a list of (displayName, email, callsign, profilePicture) for autocomplete
+  Future<List<Map<String, String?>>> searchContactsWithEmail(String query) async {
+    if (_collectionPath == null) return [];
+
+    final results = <Map<String, String?>>[];
+    final queryLower = query.toLowerCase();
+
+    // Load summaries from fast.json
+    final summaries = await loadContactSummaries();
+    if (summaries == null) return results;
+
+    // Filter summaries where secondaryInfo looks like an email or name matches
+    for (final summary in summaries) {
+      final matchesQuery = summary.displayName.toLowerCase().contains(queryLower) ||
+          summary.callsign.toLowerCase().contains(queryLower) ||
+          (summary.secondaryInfo?.toLowerCase().contains(queryLower) ?? false);
+
+      if (!matchesQuery) continue;
+
+      // Check if secondaryInfo is an email (contains @)
+      if (summary.secondaryInfo != null && summary.secondaryInfo!.contains('@')) {
+        results.add({
+          'displayName': summary.displayName,
+          'email': summary.secondaryInfo,
+          'callsign': summary.callsign,
+          'profilePicture': summary.profilePicture,
+        });
+      } else {
+        // Need to load full contact to get emails
+        final contact = await getContactByCallsign(summary.callsign);
+        if (contact != null && contact.emails.isNotEmpty) {
+          for (final email in contact.emails) {
+            results.add({
+              'displayName': summary.displayName,
+              'email': email,
+              'callsign': summary.callsign,
+              'profilePicture': summary.profilePicture,
+            });
+          }
+        }
+      }
+
+      // Limit results for performance
+      if (results.length >= 10) break;
+    }
+
+    return results;
+  }
+
+  /// Get all contacts with emails (for autocomplete suggestions)
+  /// Returns cached list of (displayName, email, callsign) tuples
+  List<Map<String, String?>>? _emailContactsCache;
+  DateTime? _emailContactsCacheTime;
+
+  Future<List<Map<String, String?>>> getContactsWithEmails() async {
+    if (_collectionPath == null) return [];
+
+    // Return cached if recent (5 minutes)
+    final now = DateTime.now();
+    if (_emailContactsCache != null &&
+        _emailContactsCacheTime != null &&
+        now.difference(_emailContactsCacheTime!).inMinutes < 5) {
+      return _emailContactsCache!;
+    }
+
+    final results = <Map<String, String?>>[];
+
+    // Load all contacts and extract emails
+    final contacts = await loadAllContactsRecursively();
+    for (final contact in contacts) {
+      for (final email in contact.emails) {
+        results.add({
+          'displayName': contact.displayName,
+          'email': email,
+          'callsign': contact.callsign,
+          'profilePicture': contact.profilePicture,
+        });
+      }
+    }
+
+    _emailContactsCache = results;
+    _emailContactsCacheTime = now;
+
+    return results;
+  }
+
   /// Delete all cache and metrics files to reset the contacts app state
   /// This removes: fast.json, .contact_metrics.txt, .click_stats.txt, .favorites.json
   Future<int> deleteAllCacheFiles() async {

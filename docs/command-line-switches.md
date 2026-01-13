@@ -23,6 +23,7 @@ Options:
   --internet-only            Disable local network and BLE, use station proxy only
   --no-update                Disable automatic update checks on startup
   --verbose                  Enable verbose logging
+  --email-dns[=DOMAIN]       Run email DNS diagnostics and exit (auto-detects domain)
   --help, -h                 Show help message
   --version, -v              Show version information
 ```
@@ -271,6 +272,74 @@ Enable verbose logging for debugging.
 geogram_desktop --verbose
 geogram_desktop --verbose --port=3457
 ```
+
+### --email-dns
+
+Run email DNS diagnostics for a domain and exit. This checks all DNS records required for email delivery:
+
+- **MX Record**: Mail server routing
+- **SPF Record**: Sender authorization (prevents spoofing)
+- **DKIM Record**: Email signing verification
+- **DMARC Record**: Policy enforcement for authentication failures
+- **PTR Record**: Reverse DNS (checked against your server IP)
+- **SMTP Connectivity**: Tests if SMTP server is reachable on port 25
+
+```bash
+# Auto-detect domain from station configuration (recommended)
+geogram-cli --email-dns
+
+# Specify a domain explicitly
+geogram-cli --email-dns=example.com
+
+# Use a custom data directory
+geogram-cli --email-dns --data-dir=/var/geogram
+```
+
+**Auto-detection**: When run without a domain, the tool reads the `sslDomain` from your station configuration file (`station_config.json`). This means once you've configured your domain with `ssl domain example.com`, you can simply run `--email-dns` without any arguments.
+
+**Output includes:**
+- Status of each DNS record (OK, MISSING, or WARN)
+- Specific recommendations for missing records
+- Ready-to-use DNS zone file entries
+- PTR record guidance (requires hosting provider configuration)
+
+**Example output:**
+```
+══════════════════════════════════════════════════════════════
+  EMAIL DNS DIAGNOSTICS
+══════════════════════════════════════════════════════════════
+
+  Domain:    example.com
+  Server IP: 93.184.216.34
+
+──────────────────────────────────────────────────────────────
+  RECORD CHECKS
+──────────────────────────────────────────────────────────────
+
+  MX     [OK]
+         Value: 10 example.com.
+
+  SPF    [OK]
+         Value: v=spf1 ip4:93.184.216.34 mx -all
+
+  DKIM   [MISSING]
+         No DKIM record found for selector "geogram"
+
+  DMARC  [OK]
+         Value: v=DMARC1; p=none; rua=mailto:dmarc@example.com
+
+  PTR    [OK]
+         Value: example.com
+
+  SMTP   [OK]
+         Value: 220 example.com ESMTP Geogram
+```
+
+**Use cases:**
+- Setting up a new Geogram station with email
+- Diagnosing email delivery issues
+- Verifying DNS configuration after making changes
+- Generating DNS zone file entries for your domain
 
 ### --help, -h
 

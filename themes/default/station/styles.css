@@ -1,0 +1,273 @@
+/* Station styles - extends global */
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.header {
+  padding: 40px 0 30px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 30px;
+}
+
+.header-content {
+  text-align: center;
+}
+
+.logo-section {
+  margin-bottom: 10px;
+}
+
+.logo {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.subtitle {
+  color: var(--accent-alpha-70);
+  margin: 0;
+  font-size: 1rem;
+}
+
+.main {
+  padding: 20px 0;
+}
+
+/* Station Info Grid */
+.station-info {
+  margin-bottom: 40px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+}
+
+.info-item {
+  background: var(--accent-alpha-20);
+  padding: 15px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.info-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--accent-alpha-70);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.info-value {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+
+.status-online {
+  color: #4ade80;
+}
+
+/* Devices Section */
+.devices-section {
+  margin-bottom: 40px;
+}
+
+.devices-section h2 {
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.devices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.device-card {
+  display: block;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  text-decoration: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.device-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.device-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.device-callsign {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.connection-badge {
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--accent-alpha-20);
+  color: var(--accent);
+}
+
+.connection-badge.wifi {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.connection-badge.internet {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
+
+.connection-badge.bluetooth {
+  background: rgba(167, 139, 250, 0.2);
+  color: #a78bfa;
+}
+
+.connection-badge.lora,
+.connection-badge.radio {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+}
+
+.device-nickname {
+  font-size: 1rem;
+  margin-bottom: 8px;
+  color: var(--color);
+}
+
+.device-meta {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+}
+
+.no-devices {
+  text-align: center;
+  padding: 40px 20px;
+  background: var(--accent-alpha-20);
+  border-radius: 8px;
+}
+
+.no-devices p {
+  margin: 0 0 10px 0;
+}
+
+.no-devices .hint {
+  font-size: 0.9rem;
+  color: var(--accent-alpha-70);
+  margin: 0;
+}
+
+/* API Section */
+.api-section {
+  margin-bottom: 40px;
+}
+
+.api-section h2 {
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.api-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.api-link {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px 15px;
+  background: var(--accent-alpha-20);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+
+.api-link:hover {
+  background: var(--accent-alpha-70);
+}
+
+.api-method {
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  background: var(--accent);
+  color: var(--background);
+  border-radius: 4px;
+}
+
+.api-path {
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.api-desc {
+  color: var(--accent-alpha-70);
+  margin-left: auto;
+  font-size: 0.9rem;
+}
+
+/* Footer */
+.footer {
+  padding: 30px 0;
+  border-top: 1px solid var(--border-color);
+  margin-top: 40px;
+}
+
+.footer-inner {
+  text-align: center;
+  color: var(--accent-alpha-70);
+  font-size: 0.9rem;
+}
+
+.footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .info-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .devices-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .api-link {
+    flex-wrap: wrap;
+  }
+
+  .api-desc {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 5px;
+  }
+}
