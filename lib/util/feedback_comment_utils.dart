@@ -219,4 +219,37 @@ class FeedbackCommentUtils {
     final commentFiles = await listCommentFiles(contentPath);
     return commentFiles.length;
   }
+
+  /// Get a single comment by ID.
+  static Future<FeedbackComment?> getComment(String contentPath, String commentId) async {
+    final filename = '$commentId.txt';
+    final filePath = '${FeedbackFolderUtils.buildCommentsPath(contentPath)}/$filename';
+    final file = File(filePath);
+
+    if (!await file.exists()) return null;
+
+    try {
+      final content = await file.readAsString();
+      return parseCommentFile(content, commentId);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Delete a comment by ID.
+  /// Returns true if deleted, false if not found.
+  static Future<bool> deleteComment(String contentPath, String commentId) async {
+    final filename = '$commentId.txt';
+    final filePath = '${FeedbackFolderUtils.buildCommentsPath(contentPath)}/$filename';
+    final file = File(filePath);
+
+    if (!await file.exists()) return false;
+
+    try {
+      await file.delete();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 }

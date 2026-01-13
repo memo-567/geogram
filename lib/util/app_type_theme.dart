@@ -57,6 +57,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.track_changes;
     case 'station':
       return Icons.cell_tower;
+    case 'videos':
+      return Icons.video_library;
     default:
       return Icons.folder;
   }
@@ -224,6 +226,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFFBF360C), const Color(0xFF8D6E63)]
             : [const Color(0xFFFF8A65), const Color(0xFFFFAB91)],
+      );
+    case 'videos':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF6A1B9A), const Color(0xFF8E24AA)]
+            : [const Color(0xFFCE93D8), const Color(0xFFAB47BC)],
       );
     default:
       return LinearGradient(

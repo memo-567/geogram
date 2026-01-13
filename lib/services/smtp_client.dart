@@ -66,12 +66,32 @@ class DkimConfig {
   });
 }
 
+/// SMTP Relay configuration for authenticated sending
+class SMTPRelayConfig {
+  final String host;
+  final int port;
+  final String? username;
+  final String? password;
+  final bool useStartTls;
+
+  const SMTPRelayConfig({
+    required this.host,
+    this.port = 587,
+    this.username,
+    this.password,
+    this.useStartTls = true,
+  });
+
+  bool get hasAuth => username != null && password != null;
+}
+
 /// SMTP Client for sending emails to external servers
 class SMTPClient {
   final String localDomain;
   final Duration timeout;
   final int defaultPort;
   final DkimConfig? dkimConfig;
+  final SMTPRelayConfig? relayConfig;
   DkimSigner? _dkimSigner;
 
   /// Cache of MX records (domain -> host)
@@ -83,6 +103,7 @@ class SMTPClient {
     this.timeout = const Duration(seconds: 30),
     this.defaultPort = 25,
     this.dkimConfig,
+    this.relayConfig,
   }) {
     // Initialize DKIM signer if config provided
     if (dkimConfig != null && dkimConfig!.privateKeyPem.isNotEmpty) {
@@ -180,25 +201,52 @@ class SMTPClient {
     List<SMTPAttachment>? attachments,
     Map<String, String>? extraHeaders,
   }) async {
-    // Lookup MX record
-    final mxHost = await _getMxHost(domain);
-    if (mxHost == null) {
-      return SMTPSendResult.failure(
-        error: 'No MX record found for domain: $domain',
-      );
+    String targetHost;
+    int targetPort;
+
+    // Use relay server if configured, otherwise lookup MX
+    if (relayConfig != null) {
+      targetHost = relayConfig!.host;
+      targetPort = relayConfig!.port;
+      LogService().log('SMTP: Using relay $targetHost:$targetPort for $domain');
+    } else {
+      // Lookup MX record
+      final mxHost = await _getMxHost(domain);
+      if (mxHost == null) {
+        return SMTPSendResult.failure(
+          error: 'No MX record found for domain: $domain',
+        );
+      }
+      targetHost = mxHost;
+      targetPort = defaultPort;
+      LogService().log('SMTP: Connecting to $targetHost for domain $domain');
     }
 
-    LogService().log('SMTP: Connecting to $mxHost for domain $domain');
-
     Socket? socket;
+    SecureSocket? secureSocket;
     _SMTPSession? session;
+    Socket activeSocket;
     try {
-      // Connect to mail server
-      socket = await Socket.connect(
-        mxHost,
-        defaultPort,
-        timeout: timeout,
-      ).timeout(timeout);
+      // Connect to mail server with short timeout for fast failure
+      final connectTimeout = Duration(seconds: 10);
+      try {
+        socket = await Socket.connect(
+          targetHost,
+          targetPort,
+          timeout: connectTimeout,
+        ).timeout(connectTimeout);
+      } on SocketException catch (e) {
+        LogService().log('SMTP: Connection failed to $targetHost:$targetPort - $e');
+        return SMTPSendResult.failure(
+          error: 'Cannot connect to mail server ($targetHost:$targetPort). Port may be blocked by hosting provider.',
+        );
+      } on TimeoutException {
+        LogService().log('SMTP: Connection timeout to $targetHost:$targetPort');
+        return SMTPSendResult.failure(
+          error: 'Connection timeout to mail server. Outbound SMTP port $targetPort may be blocked.',
+        );
+      }
+      activeSocket = socket;
 
       // Create session for reading responses
       session = _SMTPSession(socket, timeout);
@@ -213,7 +261,7 @@ class SMTPClient {
       }
 
       // Send EHLO
-      final ehloResponse = await session.sendAndRead('EHLO $localDomain');
+      var ehloResponse = await session.sendAndRead('EHLO $localDomain');
       if (ehloResponse == null || !ehloResponse.isSuccess) {
         // Try HELO as fallback
         final heloResponse = await session.sendAndRead('HELO $localDomain');
@@ -223,6 +271,67 @@ class SMTPClient {
             error: 'Server rejected greeting',
           );
         }
+      }
+
+      // Check for STARTTLS support and upgrade if using relay
+      final supportsStartTls = ehloResponse?.lines.any((l) => l.toUpperCase().contains('STARTTLS')) ?? false;
+      if (relayConfig != null && relayConfig!.useStartTls && supportsStartTls) {
+        LogService().log('SMTP: Upgrading to TLS via STARTTLS');
+        final startTlsResponse = await session.sendAndRead('STARTTLS');
+        if (startTlsResponse != null && startTlsResponse.isSuccess) {
+          // Upgrade to secure socket
+          session.dispose();
+          secureSocket = await SecureSocket.secure(
+            socket,
+            host: targetHost,
+            onBadCertificate: (_) => true, // Allow self-signed certs for testing
+          );
+          activeSocket = secureSocket;
+          session = _SMTPSession(secureSocket, timeout);
+
+          // Re-send EHLO after TLS upgrade
+          ehloResponse = await session.sendAndRead('EHLO $localDomain');
+          if (ehloResponse == null || !ehloResponse.isSuccess) {
+            return SMTPSendResult.failure(
+              code: ehloResponse?.code,
+              error: 'Server rejected greeting after STARTTLS',
+            );
+          }
+          LogService().log('SMTP: TLS upgrade successful');
+        }
+      }
+
+      // Authenticate if using relay with credentials
+      if (relayConfig != null && relayConfig!.hasAuth) {
+        LogService().log('SMTP: Authenticating with relay');
+        final authResponse = await session.sendAndRead('AUTH LOGIN');
+        if (authResponse == null || !authResponse.isIntermediate) {
+          return SMTPSendResult.failure(
+            code: authResponse?.code,
+            error: 'Server does not support AUTH LOGIN',
+          );
+        }
+
+        // Send username (base64)
+        final userB64 = base64Encode(utf8.encode(relayConfig!.username!));
+        final userResponse = await session.sendAndRead(userB64);
+        if (userResponse == null || !userResponse.isIntermediate) {
+          return SMTPSendResult.failure(
+            code: userResponse?.code,
+            error: 'Authentication failed (username)',
+          );
+        }
+
+        // Send password (base64)
+        final passB64 = base64Encode(utf8.encode(relayConfig!.password!));
+        final passResponse = await session.sendAndRead(passB64);
+        if (passResponse == null || !passResponse.isSuccess) {
+          return SMTPSendResult.failure(
+            code: passResponse?.code,
+            error: 'Authentication failed (password)',
+          );
+        }
+        LogService().log('SMTP: Authentication successful');
       }
 
       // MAIL FROM
@@ -267,12 +376,12 @@ class SMTPClient {
 
       // Escape content and add terminator
       final escapedContent = SMTPProtocol.escapeData(messageContent);
-      socket.write(escapedContent);
+      activeSocket.write(escapedContent);
       if (!escapedContent.endsWith('\r\n')) {
-        socket.write('\r\n');
+        activeSocket.write('\r\n');
       }
-      socket.write('.\r\n');
-      await socket.flush();
+      activeSocket.write('.\r\n');
+      await activeSocket.flush();
 
       // Wait for final response
       final finalResponse = await session.readResponse();
@@ -286,16 +395,17 @@ class SMTPClient {
       // QUIT
       await session.sendAndRead('QUIT');
 
-      LogService().log('SMTP: Successfully delivered to ${to.join(", ")} via $mxHost');
+      LogService().log('SMTP: Successfully delivered to ${to.join(", ")} via $targetHost');
 
       return SMTPSendResult.success(
-        message: 'Delivered via $mxHost',
+        message: 'Delivered via $targetHost',
       );
     } catch (e) {
       LogService().log('SMTP: Error sending to $domain: $e');
       return SMTPSendResult.failure(error: e.toString());
     } finally {
       session?.dispose();
+      await secureSocket?.close();
       await socket?.close();
     }
   }

@@ -86,6 +86,9 @@
   "collection_type_transfer": "Transfer",
   "collection_type_wallet": "Wallet",
   "collection_type_www": "Website",
+  "collection_type_videos": "Videos",
+  "collection_type_desc_videos": "Share and stream videos from your device. Videos stay on your device and are streamed via WebRTC on demand, with metadata syncing to your station.",
+  "collection_type_features_videos": "Local video playback|WebRTC streaming|Thumbnail generation|Folder organization|Category filtering|Likes and comments",
   "collection_updates": "Collection Updates",
   "collection_updates_desc": "Notify when collections are updated or synced",
 

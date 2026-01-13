@@ -11,9 +11,9 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../models/email_account.dart';
+import 'storage_config.dart';
 import '../models/email_message.dart';
 import '../models/email_thread.dart';
 import '../platform/file_system_service.dart';
@@ -79,13 +79,14 @@ class EmailService {
   }
 
   /// Get base path for email storage
+  /// Uses StorageConfig to respect --data-dir setting
   Future<String> _getEmailBasePath() async {
     if (kIsWeb) {
       return '/email';
     }
 
-    final appDir = await getApplicationDocumentsDirectory();
-    return p.join(appDir.path, 'geogram', 'email');
+    // Use centralized StorageConfig which respects --data-dir
+    return StorageConfig().emailDir;
   }
 
   /// Ensure base directory structure exists (unified folders)
@@ -890,6 +891,10 @@ class EmailService {
         case 'pending_approval':
           // Email is waiting for station operator approval
           notificationMessage = 'Email to $recipient awaiting station approval';
+          break;
+        case 'sending':
+          // Email is being sent to external recipient
+          notificationMessage = 'Sending email to $recipient...';
           break;
         case 'delayed':
           // Keep in outbox, maybe add retry info to metadata

@@ -123,6 +123,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         backgroundColor = Colors.orange;
         icon = Icons.hourglass_empty;
         break;
+      case 'sending':
+        backgroundColor = Colors.blue;
+        icon = Icons.send;
+        break;
       case 'pending':
         backgroundColor = Colors.blue;
         icon = Icons.schedule;

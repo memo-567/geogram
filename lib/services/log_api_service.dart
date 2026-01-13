@@ -41,6 +41,7 @@ import 'alert_sharing_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
 import 'station_blog_api.dart';
+import 'station_video_api.dart';
 import 'station_service.dart';
 import 'station_server_service.dart';
 import 'websocket_service.dart';
@@ -431,6 +432,11 @@ class LogApiService {
     // Direct access (local device) or via p2p.radio proxy
     if ((urlPath.startsWith('blog/') || urlPath.contains('/blog/')) && urlPath.endsWith('.html')) {
       return await _handleBlogHtmlRequest(request, urlPath, headers);
+    }
+
+    // Video API endpoints (public read access to video metadata and thumbnails)
+    if (urlPath == 'api/videos' || urlPath == 'api/videos/' || urlPath.startsWith('api/videos/')) {
+      return await _handleVideoRequest(request, urlPath, headers);
     }
 
     // Devices API endpoint (for debug - list discovered devices)
@@ -10844,6 +10850,471 @@ class LogApiService {
           body: jsonEncode(result),
           headers: headers,
         );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Video API Endpoints
+  // ============================================================
+
+  /// Main handler for all /api/videos/* endpoints
+  Future<shelf.Response> _handleVideoRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      String? dataDir;
+      try {
+        dataDir = StorageConfig().baseDir;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Storage not initialized'}),
+          headers: headers,
+        );
+      }
+
+      String? callsign;
+      try {
+        final profile = ProfileService().getProfile();
+        callsign = profile.callsign;
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Profile not initialized'}),
+          headers: headers,
+        );
+      }
+
+      // Check for X-Device-Callsign header (used by proxy)
+      final deviceCallsign = request.headers['x-device-callsign'];
+      if (deviceCallsign != null && deviceCallsign.isNotEmpty) {
+        callsign = deviceCallsign;
+        LogService().log('Video API: Serving videos for device $deviceCallsign (from proxy header)');
+      }
+
+      final videoApi = StationVideoApi(
+        dataDir: dataDir,
+        callsign: callsign,
+        log: (level, message) => LogService().log('StationVideoApi [$level]: $message'),
+      );
+
+      // Remove 'api/videos' prefix for easier parsing
+      String subPath = '';
+      if (urlPath.startsWith('api/videos/')) {
+        subPath = urlPath.substring('api/videos/'.length);
+      } else if (urlPath == 'api/videos' || urlPath == 'api/videos/') {
+        subPath = '';
+      }
+
+      // Remove trailing slash
+      if (subPath.endsWith('/')) {
+        subPath = subPath.substring(0, subPath.length - 1);
+      }
+
+      // Parse the sub-path to determine the operation
+      final pathParts = subPath.isEmpty ? <String>[] : subPath.split('/');
+
+      // Handle POST methods for feedback
+      if (request.method == 'POST') {
+        if (pathParts.length == 2 && pathParts[1] == 'comment') {
+          // POST /api/videos/{videoId}/comment
+          final videoId = pathParts[0];
+          return await _handleVideoAddComment(request, videoId, videoApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'like') {
+          // POST /api/videos/{videoId}/like
+          final videoId = pathParts[0];
+          return await _handleVideoToggleFeedback(request, videoId, 'like', videoApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'point') {
+          // POST /api/videos/{videoId}/point
+          final videoId = pathParts[0];
+          return await _handleVideoToggleFeedback(request, videoId, 'point', videoApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'dislike') {
+          // POST /api/videos/{videoId}/dislike
+          final videoId = pathParts[0];
+          return await _handleVideoToggleFeedback(request, videoId, 'dislike', videoApi, headers);
+        }
+        if (pathParts.length == 2 && pathParts[1] == 'view') {
+          // POST /api/videos/{videoId}/view
+          final videoId = pathParts[0];
+          return await _handleVideoRecordView(request, videoId, videoApi, headers);
+        }
+        if (pathParts.length == 3 && pathParts[1] == 'react') {
+          // POST /api/videos/{videoId}/react/{emoji}
+          final videoId = pathParts[0];
+          final emoji = pathParts[2];
+          return await _handleVideoToggleReaction(request, videoId, emoji, videoApi, headers);
+        }
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed for this endpoint'}),
+          headers: headers,
+        );
+      }
+
+      // Handle DELETE methods for comment deletion
+      if (request.method == 'DELETE') {
+        if (pathParts.length == 3 && pathParts[1] == 'comment') {
+          // DELETE /api/videos/{videoId}/comment/{commentId}
+          final videoId = pathParts[0];
+          final commentId = pathParts[2];
+          return await _handleVideoDeleteComment(request, videoId, commentId, videoApi, headers);
+        }
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed for this endpoint'}),
+          headers: headers,
+        );
+      }
+
+      // Handle GET methods
+      if (request.method != 'GET') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'error': 'Method not allowed'}),
+          headers: headers,
+        );
+      }
+
+      // GET /api/videos - List all videos
+      if (subPath.isEmpty) {
+        return await _handleVideoList(request, videoApi, headers);
+      }
+
+      // GET /api/videos/categories - List categories
+      if (subPath == 'categories') {
+        final result = await videoApi.getCategories();
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      }
+
+      // GET /api/videos/tags - List all tags
+      if (subPath == 'tags') {
+        final result = await videoApi.getTags();
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      }
+
+      // GET /api/videos/folders - List folder structure
+      if (subPath == 'folders' || subPath.startsWith('folders/')) {
+        final folderPath = subPath == 'folders' ? null : subPath.substring('folders/'.length);
+        final result = await videoApi.getFolders(path: folderPath);
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      }
+
+      if (pathParts.length == 1) {
+        // GET /api/videos/{videoId} - Get single video details
+        final videoId = pathParts[0];
+        final npub = request.url.queryParameters['npub'];
+        return await _handleVideoGetDetails(videoId, npub, videoApi, headers);
+      }
+
+      if (pathParts.length == 2 && pathParts[1] == 'thumbnail') {
+        // GET /api/videos/{videoId}/thumbnail - Get thumbnail image
+        final videoId = pathParts[0];
+        return await _handleVideoGetThumbnail(videoId, videoApi, headers);
+      }
+
+      if (pathParts.length == 2 && pathParts[1] == 'feedback') {
+        // GET /api/videos/{videoId}/feedback - Get feedback counts
+        final videoId = pathParts[0];
+        final npub = request.url.queryParameters['npub'];
+        final result = await videoApi.getFeedback(videoId, npub: npub);
+        if (result['error'] != null) {
+          final httpStatus = result['http_status'] as int? ?? 500;
+          return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+        }
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      }
+
+      if (pathParts.length == 2 && pathParts[1] == 'comments') {
+        // GET /api/videos/{videoId}/comments - List comments
+        final videoId = pathParts[0];
+        final limit = int.tryParse(request.url.queryParameters['limit'] ?? '');
+        final offset = int.tryParse(request.url.queryParameters['offset'] ?? '');
+        final result = await videoApi.getComments(videoId, limit: limit, offset: offset);
+        if (result['error'] != null) {
+          final httpStatus = result['http_status'] as int? ?? 500;
+          return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+        }
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      }
+
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Video endpoint not found'}),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('Video API error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Internal server error', 'message': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/videos - List all videos
+  Future<shelf.Response> _handleVideoList(
+    shelf.Request request,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    final category = request.url.queryParameters['category'];
+    final tag = request.url.queryParameters['tag'];
+    final folder = request.url.queryParameters['folder'];
+    final limit = int.tryParse(request.url.queryParameters['limit'] ?? '');
+    final offset = int.tryParse(request.url.queryParameters['offset'] ?? '');
+
+    final result = await videoApi.getVideos(
+      category: category,
+      tag: tag,
+      folder: folder,
+      limit: limit,
+      offset: offset,
+    );
+
+    return shelf.Response.ok(jsonEncode(result), headers: headers);
+  }
+
+  /// GET /api/videos/{videoId} - Get video details
+  Future<shelf.Response> _handleVideoGetDetails(
+    String videoId,
+    String? requesterNpub,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    final result = await videoApi.getVideoDetails(videoId, requesterNpub: requesterNpub);
+
+    if (result['error'] != null) {
+      final httpStatus = result['http_status'] as int? ?? 500;
+      return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+    }
+
+    return shelf.Response.ok(jsonEncode(result), headers: headers);
+  }
+
+  /// GET /api/videos/{videoId}/thumbnail - Get thumbnail image
+  Future<shelf.Response> _handleVideoGetThumbnail(
+    String videoId,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    final result = await videoApi.getThumbnail(videoId);
+
+    if (result['error'] != null) {
+      final httpStatus = result['http_status'] as int? ?? 404;
+      return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+    }
+
+    // Serve the thumbnail file
+    final filePath = result['filePath'] as String;
+    final mimeType = result['mimeType'] as String;
+    final file = io.File(filePath);
+
+    if (!await file.exists()) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Thumbnail file not found'}),
+        headers: headers,
+      );
+    }
+
+    final bytes = await file.readAsBytes();
+    return shelf.Response.ok(
+      bytes,
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Length': bytes.length.toString(),
+        'Cache-Control': 'public, max-age=86400',
+      },
+    );
+  }
+
+  /// POST /api/videos/{videoId}/comment - Add comment
+  Future<shelf.Response> _handleVideoAddComment(
+    shelf.Request request,
+    String videoId,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+
+      final author = data['author'] as String?;
+      final content = data['content'] as String?;
+      final npub = data['npub'] as String?;
+      final signature = data['signature'] as String?;
+
+      if (author == null || author.isEmpty) {
+        return shelf.Response(400, body: jsonEncode({'error': 'Author is required'}), headers: headers);
+      }
+      if (content == null || content.isEmpty) {
+        return shelf.Response(400, body: jsonEncode({'error': 'Content is required'}), headers: headers);
+      }
+
+      final result = await videoApi.addComment(videoId, author, content, npub: npub, signature: signature);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// DELETE /api/videos/{videoId}/comment/{commentId} - Delete comment
+  Future<shelf.Response> _handleVideoDeleteComment(
+    shelf.Request request,
+    String videoId,
+    String commentId,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final npub = request.url.queryParameters['npub'];
+      if (npub == null || npub.isEmpty) {
+        return shelf.Response(401, body: jsonEncode({'error': 'Authentication required (npub)'}), headers: headers);
+      }
+
+      final result = await videoApi.deleteComment(videoId, commentId, npub);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/videos/{videoId}/like, point, dislike - Toggle feedback
+  Future<shelf.Response> _handleVideoToggleFeedback(
+    shelf.Request request,
+    String videoId,
+    String feedbackType,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      Map<String, dynamic> result;
+      switch (feedbackType) {
+        case 'like':
+          result = await videoApi.toggleLike(videoId, eventJson);
+          break;
+        case 'point':
+          result = await videoApi.togglePoint(videoId, eventJson);
+          break;
+        case 'dislike':
+          result = await videoApi.toggleDislike(videoId, eventJson);
+          break;
+        default:
+          return shelf.Response(400, body: jsonEncode({'error': 'Invalid feedback type'}), headers: headers);
+      }
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/videos/{videoId}/view - Record view
+  Future<shelf.Response> _handleVideoRecordView(
+    shelf.Request request,
+    String videoId,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await videoApi.recordView(videoId, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Invalid request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/videos/{videoId}/react/{emoji} - Toggle emoji reaction
+  Future<shelf.Response> _handleVideoToggleReaction(
+    shelf.Request request,
+    String videoId,
+    String emoji,
+    StationVideoApi videoApi,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final eventJson = jsonDecode(body) as Map<String, dynamic>;
+
+      if (!eventJson.containsKey('id') || !eventJson.containsKey('sig')) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'error': 'Missing required NOSTR event fields (id, sig)'}),
+          headers: headers,
+        );
+      }
+
+      final result = await videoApi.toggleReaction(videoId, emoji, eventJson);
+
+      if (result['success'] == true) {
+        return shelf.Response.ok(jsonEncode(result), headers: headers);
+      } else {
+        final httpStatus = result['http_status'] as int? ?? 500;
+        return shelf.Response(httpStatus, body: jsonEncode(result), headers: headers);
       }
     } catch (e) {
       return shelf.Response.internalServerError(

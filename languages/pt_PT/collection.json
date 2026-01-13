@@ -86,6 +86,9 @@
   "collection_type_transfer": "Transferências",
   "collection_type_wallet": "Carteira",
   "collection_type_www": "Website",
+  "collection_type_videos": "Vídeos",
+  "collection_type_desc_videos": "Partilhe e transmita vídeos do seu dispositivo. Os vídeos permanecem no seu dispositivo e são transmitidos via WebRTC a pedido, com metadados sincronizados na sua estação.",
+  "collection_type_features_videos": "Reprodução local de vídeos|Transmissão WebRTC|Geração de miniaturas|Organização por pastas|Filtros por categoria|Gostos e comentários",
   "collection_updates": "Atualizações de Coleções",
   "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas",
 

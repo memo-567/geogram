@@ -70,6 +70,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('groups', Icons.groups),
     _CollectionTypeInfo('console', Icons.terminal),
     _CollectionTypeInfo('tracker', Icons.track_changes),
+    _CollectionTypeInfo('videos', Icons.video_library),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart

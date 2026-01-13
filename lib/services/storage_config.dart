@@ -64,6 +64,9 @@ class StorageConfig {
   /// Get the logs directory path
   String get logsDir => path.join(baseDir, 'logs');
 
+  /// Get the email directory path
+  String get emailDir => path.join(baseDir, 'email');
+
   /// Get the main config file path
   String get configPath => path.join(baseDir, 'config.json');
 

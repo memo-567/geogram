@@ -27,6 +27,7 @@ const List<String> knownAppTypesConst = [
   'backup',
   'console',
   'tracker',
+  'videos',
 ];
 
 /// App types that can only have a single instance per profile
@@ -53,4 +54,5 @@ const Set<String> singleInstanceTypesConst = {
   'console',
   'tracker',
   'contacts',
+  'videos',
 };

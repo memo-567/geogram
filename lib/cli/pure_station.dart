@@ -91,6 +91,13 @@ class PureRelaySettings {
   bool smtpServerEnabled;
   int smtpPort;
 
+  // SMTP relay configuration (for sending via external relay)
+  String? smtpRelayHost;
+  int smtpRelayPort;
+  String? smtpRelayUsername;
+  String? smtpRelayPassword;
+  bool smtpRelayStartTls;
+
   // DKIM configuration (RSA private key in PEM format, base64 encoded)
   String? dkimPrivateKey;
 
@@ -130,6 +137,11 @@ class PureRelaySettings {
     this.smtpEnabled = false,
     this.smtpServerEnabled = false,
     this.smtpPort = 2525,
+    this.smtpRelayHost,
+    this.smtpRelayPort = 587,
+    this.smtpRelayUsername,
+    this.smtpRelayPassword,
+    this.smtpRelayStartTls = true,
     this.dkimPrivateKey,
   }) : npub = npub ?? _defaultKeys.npub,
        nsec = nsec ?? _defaultKeys.nsec;
@@ -179,6 +191,11 @@ class PureRelaySettings {
       smtpEnabled: json['smtpEnabled'] as bool? ?? false,
       smtpServerEnabled: json['smtpServerEnabled'] as bool? ?? false,
       smtpPort: json['smtpPort'] as int? ?? 2525,
+      smtpRelayHost: json['smtpRelayHost'] as String?,
+      smtpRelayPort: json['smtpRelayPort'] as int? ?? 587,
+      smtpRelayUsername: json['smtpRelayUsername'] as String?,
+      smtpRelayPassword: json['smtpRelayPassword'] as String?,
+      smtpRelayStartTls: json['smtpRelayStartTls'] as bool? ?? true,
       dkimPrivateKey: json['dkimPrivateKey'] as String?,
     );
   }
@@ -221,6 +238,11 @@ class PureRelaySettings {
         'smtpEnabled': smtpEnabled,
         'smtpServerEnabled': smtpServerEnabled,
         'smtpPort': smtpPort,
+        'smtpRelayHost': smtpRelayHost,
+        'smtpRelayPort': smtpRelayPort,
+        'smtpRelayUsername': smtpRelayUsername,
+        'smtpRelayPassword': smtpRelayPassword,
+        'smtpRelayStartTls': smtpRelayStartTls,
         'dkimPrivateKey': dkimPrivateKey,
       };
 
@@ -260,6 +282,11 @@ class PureRelaySettings {
     bool? smtpEnabled,
     bool? smtpServerEnabled,
     int? smtpPort,
+    String? smtpRelayHost,
+    int? smtpRelayPort,
+    String? smtpRelayUsername,
+    String? smtpRelayPassword,
+    bool? smtpRelayStartTls,
     String? dkimPrivateKey,
   }) {
     return PureRelaySettings(
@@ -298,6 +325,11 @@ class PureRelaySettings {
       smtpEnabled: smtpEnabled ?? this.smtpEnabled,
       smtpServerEnabled: smtpServerEnabled ?? this.smtpServerEnabled,
       smtpPort: smtpPort ?? this.smtpPort,
+      smtpRelayHost: smtpRelayHost ?? this.smtpRelayHost,
+      smtpRelayPort: smtpRelayPort ?? this.smtpRelayPort,
+      smtpRelayUsername: smtpRelayUsername ?? this.smtpRelayUsername,
+      smtpRelayPassword: smtpRelayPassword ?? this.smtpRelayPassword,
+      smtpRelayStartTls: smtpRelayStartTls ?? this.smtpRelayStartTls,
       dkimPrivateKey: dkimPrivateKey ?? this.dkimPrivateKey,
     );
   }
@@ -1429,8 +1461,14 @@ class PureStationServer {
       emailRelay.settings.smtpEnabled = _settings.smtpEnabled;
       emailRelay.settings.dkimPrivateKey = _settings.dkimPrivateKey;
       emailRelay.settings.dkimSelector = 'geogram';
+      // SMTP relay settings
+      emailRelay.settings.smtpRelayHost = _settings.smtpRelayHost;
+      emailRelay.settings.smtpRelayPort = _settings.smtpRelayPort;
+      emailRelay.settings.smtpRelayUsername = _settings.smtpRelayUsername;
+      emailRelay.settings.smtpRelayPassword = _settings.smtpRelayPassword;
+      emailRelay.settings.smtpRelayStartTls = _settings.smtpRelayStartTls;
 
-      _log('INFO', 'SMTP config: enabled=${_settings.smtpEnabled}, serverEnabled=${_settings.smtpServerEnabled}, port=${_settings.smtpPort}, domain=${_settings.sslDomain}');
+      _log('INFO', 'SMTP config: enabled=${_settings.smtpEnabled}, serverEnabled=${_settings.smtpServerEnabled}, port=${_settings.smtpPort}, domain=${_settings.sslDomain}, relay=${_settings.smtpRelayHost ?? "none"}');
 
       // Start SMTP server if enabled
       if (_settings.smtpServerEnabled && _settings.sslDomain != null) {
@@ -2095,6 +2133,14 @@ class PureStationServer {
         await _handlePlacesApi(request);
       } else if (path == '/api/events' || path == '/api/events/list' || path.startsWith('/api/events/')) {
         await _handleEventsRequest(request);
+      } else if (path == '/api/email/queue') {
+        await _handleEmailQueue(request);
+      } else if (path.startsWith('/api/email/approve/')) {
+        await _handleEmailApprove(request);
+      } else if (path.startsWith('/api/email/reject/')) {
+        await _handleEmailReject(request);
+      } else if (path == '/api/email/allowlist') {
+        await _handleEmailAllowlist(request);
       } else if (path.startsWith('/api/feedback/')) {
         await _handleFeedbackApi(request);
       } else if (path.startsWith('/api/alerts/') && method == 'POST') {
@@ -4678,6 +4724,217 @@ class PureStationServer {
         'error': 'Internal server error',
         'message': e.toString(),
       }));
+    }
+  }
+
+  /// Handle /api/email/queue - List pending external emails
+  Future<void> _handleEmailQueue(HttpRequest request) async {
+    try {
+      if (request.method != 'GET') {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+
+      final emailRelay = EmailRelayService();
+      final pending = emailRelay.getPendingExternalEmails();
+
+      request.response.statusCode = 200;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': true,
+        'pending_count': pending.length,
+        'emails': pending.map((e) => {
+          'id': e.id,
+          'sender_callsign': e.senderCallsign,
+          'recipients': e.externalRecipients,
+          'subject': _extractSubject(e.message),
+          'timestamp': e.timestamp.toIso8601String(),
+          'status': e.status.toString().split('.').last,
+        }).toList(),
+        'allowlist': emailRelay.getAllowlist(),
+        'blocklist': emailRelay.getBlocklist(),
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error in email queue API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  /// Extract subject from email message
+  String _extractSubject(Map<String, dynamic> message) {
+    return message['subject'] as String? ?? '(No Subject)';
+  }
+
+  /// Handle /api/email/approve/{id} - Approve an external email
+  Future<void> _handleEmailApprove(HttpRequest request) async {
+    try {
+      if (request.method != 'POST') {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+
+      final segments = request.uri.pathSegments;
+      if (segments.length < 4) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Missing email ID'}));
+        return;
+      }
+
+      final emailId = segments[3];
+      final emailRelay = EmailRelayService();
+      final success = emailRelay.approveExternalEmail(
+        emailId: emailId,
+        reviewerCallsign: 'admin',
+      );
+
+      request.response.statusCode = success ? 200 : 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': success,
+        'message': success ? 'Email approved and queued for delivery' : 'Email not found',
+        'email_id': emailId,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error approving email: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  /// Handle /api/email/reject/{id} - Reject an external email
+  Future<void> _handleEmailReject(HttpRequest request) async {
+    try {
+      if (request.method != 'POST') {
+        request.response.statusCode = 405;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Method not allowed'}));
+        return;
+      }
+
+      final segments = request.uri.pathSegments;
+      if (segments.length < 4) {
+        request.response.statusCode = 400;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Missing email ID'}));
+        return;
+      }
+
+      final emailId = segments[3];
+      final body = await utf8.decoder.bind(request).join();
+      String? reason;
+      if (body.isNotEmpty) {
+        try {
+          final json = jsonDecode(body) as Map<String, dynamic>;
+          reason = json['reason'] as String?;
+        } catch (_) {}
+      }
+
+      final emailRelay = EmailRelayService();
+      final success = emailRelay.rejectExternalEmail(
+        emailId: emailId,
+        reviewerCallsign: 'admin',
+        reason: reason ?? 'Rejected by station operator',
+      );
+
+      request.response.statusCode = success ? 200 : 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': success,
+        'message': success ? 'Email rejected' : 'Email not found',
+        'email_id': emailId,
+      }));
+    } catch (e) {
+      _log('ERROR', 'Error rejecting email: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  /// Handle /api/email/allowlist - Manage sender allowlist
+  Future<void> _handleEmailAllowlist(HttpRequest request) async {
+    try {
+      final emailRelay = EmailRelayService();
+
+      if (request.method == 'GET') {
+        request.response.statusCode = 200;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': true,
+          'allowlist': emailRelay.getAllowlist(),
+          'blocklist': emailRelay.getBlocklist(),
+        }));
+        return;
+      }
+
+      if (request.method == 'POST') {
+        final body = await utf8.decoder.bind(request).join();
+        if (body.isEmpty) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing request body'}));
+          return;
+        }
+
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        final action = json['action'] as String?;
+        final callsign = json['callsign'] as String?;
+
+        if (action == null || callsign == null) {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Missing action or callsign'}));
+          return;
+        }
+
+        switch (action) {
+          case 'add_allowlist':
+            emailRelay.addToAllowlist(callsign);
+            break;
+          case 'remove_allowlist':
+            emailRelay.removeFromAllowlist(callsign);
+            break;
+          case 'add_blocklist':
+            emailRelay.addToBlocklist(callsign);
+            break;
+          case 'remove_blocklist':
+            emailRelay.removeFromBlocklist(callsign);
+            break;
+          default:
+            request.response.statusCode = 400;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'error': 'Unknown action: $action'}));
+            return;
+        }
+
+        request.response.statusCode = 200;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'success': true,
+          'action': action,
+          'callsign': callsign,
+          'allowlist': emailRelay.getAllowlist(),
+          'blocklist': emailRelay.getBlocklist(),
+        }));
+        return;
+      }
+
+      request.response.statusCode = 405;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Method not allowed'}));
+    } catch (e) {
+      _log('ERROR', 'Error in allowlist API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': e.toString()}));
     }
   }
 

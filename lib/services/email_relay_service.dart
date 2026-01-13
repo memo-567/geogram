@@ -54,10 +54,11 @@
 
 import 'dart:convert';
 
+import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'nip05_registry_service.dart';
-import 'smtp_client.dart';
+import 'smtp_client.dart' show SMTPClient, DkimConfig, SMTPRelayConfig;
 
 /// Callback type for sending messages to clients
 typedef SendToClientCallback = bool Function(String clientId, String message);
@@ -244,9 +245,37 @@ class EmailRelayService {
   /// This is called automatically when an external email is approved.
   /// Runs asynchronously and updates the entry status based on result.
   Future<void> _sendExternalEmailViaSMTP(ExternalEmailEntry entry) async {
+    // Check if station domain is configured
     if (settings.stationDomain == 'localhost') {
       LogService().log('SMTP: Station domain not configured, skipping delivery');
       entry.status = ExternalEmailStatus.failed;
+
+      if (entry.sendToClientCallback != null) {
+        final dsn = _createDsn(
+          action: 'failed',
+          threadId: entry.threadId,
+          recipient: entry.externalRecipients.join(', '),
+          reason: 'External email not available: station domain not configured',
+        );
+        entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
+      }
+      return;
+    }
+
+    // Check if SMTP relay is configured (required for most cloud providers that block port 25)
+    if (!settings.hasRelay && !settings.smtpEnabled) {
+      LogService().log('SMTP: No SMTP relay configured and SMTP not enabled');
+      entry.status = ExternalEmailStatus.failed;
+
+      if (entry.sendToClientCallback != null) {
+        final dsn = _createDsn(
+          action: 'failed',
+          threadId: entry.threadId,
+          recipient: entry.externalRecipients.join(', '),
+          reason: 'External email not available: SMTP relay not configured on station',
+        );
+        entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
+      }
       return;
     }
 
@@ -259,10 +288,24 @@ class EmailRelayService {
       );
     }
 
+    // Create relay config if configured
+    SMTPRelayConfig? relayConfig;
+    if (settings.hasRelay) {
+      relayConfig = SMTPRelayConfig(
+        host: settings.smtpRelayHost!,
+        port: settings.smtpRelayPort,
+        username: settings.smtpRelayUsername,
+        password: settings.smtpRelayPassword,
+        useStartTls: settings.smtpRelayStartTls,
+      );
+      LogService().log('SMTP: Using relay ${settings.smtpRelayHost}:${settings.smtpRelayPort}');
+    }
+
     final client = SMTPClient(
       localDomain: settings.stationDomain,
       defaultPort: settings.smtpPort,
       dkimConfig: dkimConfig,
+      relayConfig: relayConfig,
     );
 
     // Build sender email from callsign
@@ -411,6 +454,12 @@ class EmailRelayService {
     _externalEmailBlocklist.remove(callsign.toUpperCase());
   }
 
+  /// Get allowlist of senders who can send external emails without approval
+  List<String> getAllowlist() => _externalEmailAllowlist.toList();
+
+  /// Get blocklist of senders who are blocked from sending external emails
+  List<String> getBlocklist() => _externalEmailBlocklist.toList();
+
   /// Get count of pending external emails
   int get pendingExternalEmailCount =>
       _externalApprovalQueue.values.where((e) => e.status == ExternalEmailStatus.pending).length;
@@ -496,7 +545,11 @@ class EmailRelayService {
       }
 
       // Validate sender owns the email identity (NIP-05)
-      final senderNpub = event['pubkey'] as String?;
+      // Convert hex pubkey to npub format for registry comparison
+      final senderPubkeyHex = event['pubkey'] as String?;
+      final senderNpub = senderPubkeyHex != null && senderPubkeyHex.isNotEmpty
+          ? NostrCrypto.encodeNpub(senderPubkeyHex)
+          : null;
       if (senderNpub != null && senderNpub.isNotEmpty) {
         final registry = Nip05RegistryService();
         final collision = registry.checkCollision(senderCallsign, senderNpub);
@@ -619,12 +672,12 @@ class EmailRelayService {
         // Trigger SMTP delivery
         _sendExternalEmailViaSMTP(entry);
       }
-      // Queue for manual approval
+      // Auto-approve and send immediately (no manual approval required for now)
       else {
         final entryId = '${threadId}_external_${DateTime.now().millisecondsSinceEpoch}';
         final senderNpub = event?['pubkey'] as String? ?? '';
 
-        _externalApprovalQueue[entryId] = ExternalEmailEntry(
+        final entry = ExternalEmailEntry(
           id: entryId,
           message: message,
           senderCallsign: senderCallsign,
@@ -632,28 +685,37 @@ class EmailRelayService {
           senderNpub: senderNpub,
           externalRecipients: externalRecipients,
           timestamp: DateTime.now(),
-          status: ExternalEmailStatus.pending,
+          status: ExternalEmailStatus.approved, // Auto-approved
+          reviewedBy: 'auto',
+          reviewedAt: DateTime.now(),
           sendToClientCallback: sendToClient, // Store callback for DSN
         );
+        _externalApprovalQueue[entryId] = entry;
 
         for (final recipientStr in externalRecipients) {
-          deliveryResults[recipientStr] = 'pending_approval';
+          deliveryResults[recipientStr] = 'sending';
         }
-        LogService().log('External email queued for approval: $senderCallsign -> ${externalRecipients.join(", ")} (id: $entryId)');
+        LogService().log('External email auto-approved: $senderCallsign -> ${externalRecipients.join(", ")} (id: $entryId)');
 
-        // Notify sender that email is pending approval
+        // Notify sender that email is being sent
         final dsn = _createDsn(
-          action: 'pending_approval',
+          action: 'sending',
           threadId: threadId,
           recipient: externalRecipients.join(', '),
-          reason: 'External emails require station operator approval before delivery',
+          reason: 'Email is being delivered to external recipient(s)',
         );
         sendToClient(senderId, jsonEncode(dsn));
+
+        // Trigger SMTP delivery (will send success/failure DSN when done)
+        _sendExternalEmailViaSMTP(entry);
       }
     }
 
-    // Send DSN for each recipient
+    // Send DSN for each recipient (skip 'sending' - already notified above)
     for (final entry in deliveryResults.entries) {
+      // Skip 'sending' status - DSN already sent above for external emails
+      if (entry.value == 'sending') continue;
+
       final dsn = _createDsn(
         action: entry.value,
         threadId: threadId,
@@ -823,6 +885,21 @@ class EmailRelaySettings {
   /// DKIM selector (default: geogram)
   String dkimSelector;
 
+  /// SMTP relay host (e.g., smtp.mailgun.org)
+  String? smtpRelayHost;
+
+  /// SMTP relay port (default: 587 for submission)
+  int smtpRelayPort;
+
+  /// SMTP relay username
+  String? smtpRelayUsername;
+
+  /// SMTP relay password
+  String? smtpRelayPassword;
+
+  /// Whether to use STARTTLS for relay
+  bool smtpRelayStartTls;
+
   EmailRelaySettings({
     this.retryHours = 24,
     this.retryIntervalSeconds = 300,
@@ -831,7 +908,15 @@ class EmailRelaySettings {
     this.stationDomain = 'localhost',
     this.dkimPrivateKey,
     this.dkimSelector = 'geogram',
+    this.smtpRelayHost,
+    this.smtpRelayPort = 587,
+    this.smtpRelayUsername,
+    this.smtpRelayPassword,
+    this.smtpRelayStartTls = true,
   });
+
+  /// Check if relay is configured
+  bool get hasRelay => smtpRelayHost != null && smtpRelayHost!.isNotEmpty;
 
   /// Get appropriate SMTP port based on environment
   /// On non-root devices (Android), returns configured high port

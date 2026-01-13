@@ -83,6 +83,7 @@ import 'pages/station_dashboard_page.dart';
 import 'pages/devices_browser_page.dart';
 import 'pages/bot_page.dart';
 import 'pages/backup_browser_page.dart';
+import 'pages/video_browser_page.dart';
 import 'pages/transfer_page.dart';
 import 'pages/dm_chat_page.dart';
 import 'pages/profile_management_page.dart';
@@ -2090,6 +2091,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                               )
                                             : collection.type == 'log'
                                             ? const LogBrowserPage()
+                                            : collection.type == 'videos'
+                                            ? VideoBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2281,6 +2290,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                               )
                                             : collection.type == 'log'
                                             ? const LogBrowserPage()
+                                            : collection.type == 'videos'
+                                            ? VideoBrowserPage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
