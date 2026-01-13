@@ -28,6 +28,8 @@ import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
+import '../util/chat_scripts.dart';
+import '../util/web_navigation.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import '../util/chat_format.dart';
@@ -614,12 +616,41 @@ class PureTileCache {
     _currentSize = 0;
   }
 
+  /// Validate tile image data by checking header and basic structure
+  /// This prevents caching corrupt tiles from bad network connections
   static bool isValidImageData(Uint8List data) {
     if (data.length < 8) return false;
-    return data[0] == 0x89 &&
+
+    // Check for PNG signature
+    final isPng = data[0] == 0x89 &&
         data[1] == 0x50 &&
         data[2] == 0x4E &&
         data[3] == 0x47;
+    // Check for JPEG signature (used by satellite tiles)
+    final isJpeg = data[0] == 0xFF &&
+        data[1] == 0xD8 &&
+        data[2] == 0xFF;
+
+    if (!isPng && !isJpeg) return false;
+
+    // For PNG, verify IEND chunk exists (basic integrity check)
+    if (isPng) {
+      // Look for IEND marker in last 12 bytes
+      if (data.length < 12) return false;
+      final end = data.sublist(data.length - 12);
+      // IEND chunk: length(4) + 'IEND'(4) + CRC(4)
+      final hasIend = end[4] == 0x49 && end[5] == 0x45 &&
+                      end[6] == 0x4E && end[7] == 0x44;
+      return hasIend;
+    }
+
+    // For JPEG, verify EOI marker exists
+    if (isJpeg) {
+      // JPEG should end with FFD9
+      return data[data.length - 2] == 0xFF && data[data.length - 1] == 0xD9;
+    }
+
+    return true;
   }
 }
 
@@ -654,7 +685,7 @@ class PureStationServer {
   // Heartbeat and connection stability
   Timer? _heartbeatTimer;
   static const int _heartbeatIntervalSeconds = 30;  // Send PING every 30s
-  static const int _staleClientTimeoutSeconds = 90; // Remove client if no activity for 90s
+  static const int _staleClientTimeoutSeconds = 120; // Remove client if no activity for 120s
 
   // Shared alert API handlers
   StationAlertApi? _alertApi;
@@ -1700,6 +1731,7 @@ class PureStationServer {
   void _removeClient(String clientId, {String reason = 'disconnected'}) {
     final client = _clients.remove(clientId);
     if (client == null) return;
+    _log('INFO', 'Client removed: ${client.callsign ?? clientId} - reason: $reason (remaining clients: ${_clients.length})');
 
     // Try to close the socket gracefully
     try {
@@ -1994,6 +2026,8 @@ class PureStationServer {
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
+      } else if (path == '/api/logs') {
+        await _handleLogs(request);
       } else if (path == '/api/updates/latest') {
         await _handleUpdatesLatest(request);
       } else if (path.startsWith('/updates/')) {
@@ -2070,6 +2104,8 @@ class PureStationServer {
         await _handleWellKnownNostr(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (path == '/chat' || path == '/chat/') {
+        await _handleChatPage(request);
       } else if (_isAlertFileUploadPath(path) && method == 'POST') {
         // /{callsign}/api/alerts/{alertId}/files/{filename} - upload alert photo
         await _handleAlertFileUpload(request);
@@ -2121,7 +2157,7 @@ class PureStationServer {
       _clients[clientId] = client;
       _stats.totalConnections++;
       _stats.lastConnection = DateTime.now();
-      _log('INFO', 'WebSocket client connected: $clientId from ${client.address}');
+      _log('INFO', 'WebSocket client connected: $clientId from ${client.address} (total clients: ${_clients.length})');
 
       socket.listen(
         (data) => _handleWebSocketMessage(client, data),
@@ -5044,6 +5080,29 @@ class PureStationServer {
     request.response.write(jsonEncode(_stats.toJson()));
   }
 
+  Future<void> _handleLogs(HttpRequest request) async {
+    final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '50') ?? 50;
+    final filter = request.uri.queryParameters['filter']?.toLowerCase();
+
+    var logs = _logs.toList();
+    if (filter != null && filter.isNotEmpty) {
+      logs = logs.where((l) => l.message.toLowerCase().contains(filter)).toList();
+    }
+
+    final recentLogs = logs.length > limit ? logs.sublist(logs.length - limit) : logs;
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'total': _logs.length,
+      'showing': recentLogs.length,
+      'logs': recentLogs.map((l) => {
+        'timestamp': l.timestamp.toIso8601String(),
+        'level': l.level,
+        'message': l.message,
+      }).toList(),
+    }));
+  }
+
   Future<void> _handleDevices(HttpRequest request) async {
     final path = request.uri.path;
     final clients = _clients.values.map((c) {
@@ -6432,6 +6491,22 @@ class PureStationServer {
         .replaceAll("'", '&#39;');
   }
 
+  String _formatTimeAgo(DateTime? dateTime) {
+    if (dateTime == null) return 'unknown';
+    final now = DateTime.now();
+    final difference = now.difference(dateTime);
+
+    if (difference.inSeconds < 60) {
+      return '${difference.inSeconds}s ago';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else {
+      return '${difference.inDays}d ago';
+    }
+  }
+
   /// GET /{identifier} or /{identifier}/* - Serve WWW collection from device
   /// Supports both callsign (e.g., X1QVM3) and nickname (e.g., brito) lookups
   Future<void> _handleCallsignOrNicknameWww(HttpRequest request) async {
@@ -6704,47 +6779,814 @@ class PureStationServer {
   }
 
   Future<void> _handleRoot(HttpRequest request) async {
+    final stationName = _settings.name ?? 'geogram Station';
+
+    // Calculate uptime
     final uptime = _startTime != null
         ? DateTime.now().difference(_startTime!).inSeconds
         : 0;
+    final uptimeStr = _formatUptimeLong(uptime);
+
+    // Generate menu items for station navigation
+    final homeMenuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'home',
+      hasChat: true,
+    );
+
+    // Build devices list HTML and collect coordinates for map
+    final devicesHtml = StringBuffer();
+    final devicesWithLocation = <Map<String, dynamic>>[];
+
+    for (final client in _clients.values) {
+      final callsign = client.callsign ?? client.id;
+      final nickname = client.nickname ?? callsign;
+      final connectedAgo = _formatTimeAgo(client.connectedAt);
+      final location = (client.latitude != null && client.longitude != null)
+          ? '${client.latitude!.toStringAsFixed(2)}, ${client.longitude!.toStringAsFixed(2)}'
+          : '';
+
+      // Determine device icon based on platform/deviceType
+      final platform = (client.platform ?? '').toLowerCase();
+      final deviceType = (client.deviceType ?? '').toLowerCase();
+      String deviceIcon;
+      if (platform.contains('android') || platform.contains('ios') || deviceType.contains('phone') || deviceType.contains('mobile')) {
+        deviceIcon = 'phone';
+      } else {
+        deviceIcon = 'laptop';
+      }
+
+      // Collect devices with location for map
+      if (client.latitude != null && client.longitude != null) {
+        devicesWithLocation.add({
+          'callsign': callsign,
+          'nickname': nickname,
+          'lat': client.latitude,
+          'lng': client.longitude,
+          'icon': deviceIcon,
+        });
+      }
+
+      // Only show nickname if different from callsign
+      final nicknameHtml = (nickname != callsign)
+          ? '<div class="device-nickname">${_escapeHtml(nickname)}</div>'
+          : '';
+
+      devicesHtml.writeln('''
+        <a href="/$callsign/" class="device-card">
+          <div class="device-header">
+            <span class="device-callsign">$callsign</span>
+            <span class="connection-badge internet">Internet</span>
+          </div>
+          $nicknameHtml
+          <div class="device-meta">
+            Connected $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
+          </div>
+        </a>
+      ''');
+    }
+
+    final noDevicesDisplay = _clients.isEmpty ? 'block' : 'none';
+    final devicesDisplay = _clients.isEmpty ? 'none' : 'grid';
+    final hasDevicesWithLocation = devicesWithLocation.isNotEmpty;
+    final mapDisplay = hasDevicesWithLocation ? 'block' : 'none';
+
+    // Build devices JSON for map (with icon type)
+    final devicesJson = devicesWithLocation.map((d) =>
+      '{"callsign":"${d['callsign']}","nickname":"${_escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
+    ).join(',');
 
     request.response.headers.contentType = ContentType.html;
     request.response.write('''
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>${_settings.name ?? 'Geogram Station'}</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>$stationName - geogram Station</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
   <style>
-    body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background: #1a1a2e; color: #eee; }
-    h1 { color: #00d9ff; }
-    .info { background: #16213e; padding: 15px; border-radius: 5px; margin: 10px 0; }
-    .info p { margin: 5px 0; }
-    a { color: #00d9ff; }
-    .stat { display: inline-block; margin-right: 20px; }
-    .stat-value { font-size: 24px; font-weight: bold; color: #00d9ff; }
-    .stat-label { font-size: 12px; color: #888; }
+/* Terminimal theme */
+:root {
+  --accent: rgb(255,168,106);
+  --accent-alpha-70: rgba(255,168,106,.7);
+  --accent-alpha-20: rgba(255,168,106,.2);
+  --background: #101010;
+  --color: #f0f0f0;
+  --border-color: rgba(255,240,224,.125);
+  --shadow: 0 4px 6px rgba(0,0,0,.3);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --accent: rgb(240,128,48);
+    --accent-alpha-70: rgba(240,128,48,.7);
+    --accent-alpha-20: rgba(240,128,48,.2);
+    --background: white;
+    --color: #201030;
+    --border-color: rgba(0,0,16,.125);
+    --shadow: 0 4px 6px rgba(0,0,0,.1);
+  }
+  .logo { color: #fff; }
+}
+@media (prefers-color-scheme: dark) {
+  .logo { color: #000; }
+}
+html { box-sizing: border-box; }
+*, *:before, *:after { box-sizing: inherit; }
+body {
+  margin: 0; padding: 0;
+  font-family: Hack, DejaVu Sans Mono, Monaco, Consolas, Ubuntu Mono, monospace;
+  font-size: 1rem; line-height: 1.54;
+  background-color: var(--background); color: var(--color);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+h1, h2 { font-weight: bold; line-height: 1.3; display: flex; align-items: center; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.2rem; margin: 0; }
+
+.container {
+  display: flex;
+  flex-direction: column;
+  padding: 40px;
+  max-width: 864px;
+  min-height: 100vh;
+  margin: 0 auto;
+}
+@media (max-width: 683px) {
+  .container { padding: 20px; }
+}
+
+/* Header - matching blog theme */
+.header {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin-bottom: 30px;
+}
+.header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header__logo {
+  display: flex;
+  flex: 1;
+}
+.header__logo:after {
+  content: "";
+  background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 2px, transparent 0, transparent 16px);
+  display: block;
+  width: 100%;
+  right: 10px;
+}
+.header__logo a {
+  flex: 0 0 auto;
+  max-width: 100%;
+  text-decoration: none;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  background: var(--accent);
+  color: #000;
+  padding: 5px 10px;
+}
+/* Menu */
+.menu { margin: 20px 0; }
+.menu__inner {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.menu__inner li {
+  margin-right: 8px;
+  margin-bottom: 10px;
+  flex: 0 0 auto;
+}
+.menu__inner li.active a {
+  color: var(--accent);
+  font-weight: bold;
+}
+.menu__inner li.separator {
+  color: var(--accent-alpha-70);
+  margin-right: 8px;
+}
+.menu__inner a {
+  color: inherit;
+  text-decoration: none;
+}
+.menu__inner a:hover {
+  color: var(--accent);
+}
+.subtitle {
+  color: var(--accent-alpha-70);
+  margin: 15px 0 0 0;
+  font-size: 0.95rem;
+}
+.nav-links {
+  margin-top: 15px;
+}
+.nav-link {
+  margin-right: 20px;
+  color: var(--accent-alpha-70);
+  text-decoration: none;
+}
+.nav-link:hover {
+  color: var(--accent);
+}
+.nav-link.active {
+  color: var(--accent);
+  font-weight: bold;
+}
+${WebNavigation.getHeaderNavCss()}
+/* Search Section */
+.search-section {
+  margin-bottom: 50px;
+}
+.search-box {
+  display: flex;
+  align-items: stretch;
+}
+.search-input {
+  flex: 1;
+  padding: 16px 20px;
+  font-size: 1.1rem;
+  border: 2px solid var(--accent);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--background);
+  color: var(--color);
+  outline: none;
+  transition: box-shadow 0.2s ease;
+}
+.search-input:hover,
+.search-input:focus {
+  box-shadow: 0 0 0 3px var(--accent-alpha-20);
+}
+.search-input::placeholder {
+  color: var(--accent-alpha-70);
+}
+.search-btn {
+  padding: 16px 20px;
+  background: var(--accent);
+  border: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+.search-btn:hover {
+  background: var(--accent-alpha-70);
+}
+.search-btn svg {
+  width: 24px;
+  height: 24px;
+  fill: #000;
+}
+.main { flex: 1; }
+
+/* Station Info */
+.station-info { margin-bottom: 40px; }
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 15px;
+}
+.info-item {
+  background: var(--accent-alpha-20);
+  padding: 15px;
+  border-radius: 8px;
+  text-align: center;
+}
+.info-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--accent-alpha-70);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.info-value {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+.status-online { color: #4ade80; }
+
+/* Map Section */
+.map-section {
+  display: $mapDisplay;
+  margin-bottom: 30px;
+}
+.map-container {
+  position: relative;
+  width: 100%;
+  height: 160px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+#devices-map {
+  width: 100%;
+  height: 100%;
+}
+.fullscreen-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1000;
+  background: rgba(0,0,0,0.6);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+.fullscreen-btn:hover {
+  background: rgba(0,0,0,0.8);
+}
+.fullscreen-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* Fullscreen map modal */
+.map-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  z-index: 10000;
+}
+.map-modal.active {
+  display: block;
+}
+.map-modal .close-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10001;
+  background: rgba(0,0,0,0.7);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s ease;
+}
+.map-modal .close-btn:hover {
+  background: rgba(0,0,0,0.9);
+}
+.map-modal .close-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+#fullscreen-map {
+  width: 100%;
+  height: 100%;
+}
+
+/* Devices Section */
+.devices-section { margin-bottom: 40px; }
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 20px;
+}
+.devices-grid {
+  display: $devicesDisplay;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+.device-card {
+  display: block;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  text-decoration: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.device-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.device-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.device-callsign {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+.connection-badge {
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--accent-alpha-20);
+  color: var(--accent);
+}
+.connection-badge.localWifi { background: rgba(74, 222, 128, 0.2); color: #4ade80; }
+.connection-badge.internet { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
+.connection-badge.bluetooth { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
+.connection-badge.lora, .connection-badge.radio { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+.device-nickname { font-size: 1rem; margin-bottom: 8px; }
+.device-meta { font-size: 0.85rem; color: var(--accent-alpha-70); }
+
+.no-devices {
+  display: $noDevicesDisplay;
+  text-align: center;
+  padding: 40px 20px;
+  background: var(--accent-alpha-20);
+  border-radius: 8px;
+}
+.no-devices p { margin: 0 0 10px 0; }
+.no-devices .hint { font-size: 0.9rem; color: var(--accent-alpha-70); margin: 0; }
+
+/* API Section */
+.api-section { margin-bottom: 40px; }
+.api-list { display: flex; flex-direction: column; gap: 10px; }
+.api-link {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px 15px;
+  background: var(--accent-alpha-20);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+.api-link:hover { background: var(--accent-alpha-70); }
+.api-method {
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  background: var(--accent);
+  color: var(--background);
+  border-radius: 4px;
+}
+.api-path { font-family: monospace; font-weight: bold; }
+.api-desc { color: var(--accent-alpha-70); margin-left: auto; font-size: 0.9rem; }
+
+/* Footer */
+.footer {
+  padding: 40px 0;
+  flex-grow: 0;
+  opacity: .5;
+}
+.footer__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  max-width: 100%;
+}
+.footer a { color: inherit; }
+.copyright {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  font-size: 1rem;
+}
+
+/* Leaflet customization */
+.leaflet-popup-content-wrapper {
+  background: var(--background);
+  color: var(--color);
+  border-radius: 8px;
+  font-family: inherit;
+}
+.leaflet-popup-tip {
+  background: var(--background);
+}
+.leaflet-container {
+  font-family: inherit;
+  background: #1a1a2e;
+}
+/* Fix tile gaps (vertical lines) */
+.leaflet-tile-container img {
+  outline: 1px solid transparent;
+}
+.leaflet-tile {
+  filter: none;
+  outline: none;
+}
+
+/* Device marker icons */
+.device-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+.device-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: #000;
+}
+
+/* Marker cluster styling */
+.marker-cluster {
+  background: rgba(255,168,106,0.4);
+}
+.marker-cluster div {
+  background: var(--accent);
+  color: #000;
+  font-weight: bold;
+  font-family: inherit;
+}
+.marker-cluster-small {
+  background: rgba(255,168,106,0.4);
+}
+.marker-cluster-small div {
+  background: var(--accent);
+}
+.marker-cluster-medium {
+  background: rgba(255,168,106,0.5);
+}
+.marker-cluster-medium div {
+  background: var(--accent);
+}
+.marker-cluster-large {
+  background: rgba(255,168,106,0.6);
+}
+.marker-cluster-large div {
+  background: var(--accent);
+}
+
+@media (max-width: 600px) {
+  .info-grid { grid-template-columns: repeat(2, 1fr); }
+  .devices-grid { grid-template-columns: 1fr; }
+  .api-link { flex-wrap: wrap; }
+  .api-desc { width: 100%; margin-left: 0; margin-top: 5px; }
+}
   </style>
 </head>
 <body>
-  <h1>${_settings.name ?? 'Geogram Station'}</h1>
-  <div class="info">
-    <p><strong>Callsign:</strong> ${_settings.callsign}</p>
-    <p><strong>Version:</strong> $cliAppVersion</p>
-    <p><strong>Description:</strong> ${_settings.description ?? 'Geogram Desktop Station Server'}</p>
+  <div class="container">
+    <header class="header">
+      <div class="header__inner">
+        <div class="header__logo">
+          <a href="/" style="text-decoration: none;">
+            <div class="logo">$stationName</div>
+          </a>
+        </div>
+      </div>
+      <nav class="menu">
+        <ul class="menu__inner">
+          $homeMenuItems
+        </ul>
+      </nav>
+    </header>
+
+    <main class="main">
+      <section class="search-section">
+        <div class="search-box">
+          <input type="text" id="search-input" class="search-input" placeholder="Search..." oninput="filterDevices(this.value)">
+          <button class="search-btn" onclick="document.getElementById('search-input').focus()" title="Search">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <section class="devices-section">
+        <div class="section-header">
+          <h2>Connected Devices</h2>
+        </div>
+
+        <section class="map-section">
+          <div class="map-container">
+            <div id="devices-map"></div>
+            <button class="fullscreen-btn" onclick="openFullscreenMap()" title="Fullscreen">
+              <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="station-info">
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="info-label">Version</span>
+              <span class="info-value">$cliAppVersion</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Callsign</span>
+              <span class="info-value">${_settings.callsign}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Connected</span>
+              <span class="info-value">${_clients.length} ${_clients.length == 1 ? 'device' : 'devices'}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Uptime</span>
+              <span class="info-value">$uptimeStr</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Status</span>
+              <span class="info-value status-online">Running</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="devices-grid">
+          ${devicesHtml.toString()}
+        </div>
+        <div class="no-devices">
+          <p>No devices currently connected.</p>
+          <p class="hint">Devices will appear here when they connect to this station.</p>
+        </div>
+      </section>
+
+      <section class="api-section">
+        <div class="section-header">
+          <h2>API Endpoints</h2>
+        </div>
+        <div class="api-list">
+          <a href="/api/status" class="api-link">
+            <span class="api-method">GET</span>
+            <span class="api-path">/api/status</span>
+            <span class="api-desc">Station status and info</span>
+          </a>
+          <a href="/api/clients" class="api-link">
+            <span class="api-method">GET</span>
+            <span class="api-path">/api/clients</span>
+            <span class="api-desc">Connected devices list</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer__inner">
+        <div class="copyright">
+          <span>published via geogram</span>
+        </div>
+      </div>
+    </footer>
   </div>
-  <div class="info">
-    <div class="stat"><div class="stat-value">${_clients.length}</div><div class="stat-label">Connected Devices</div></div>
-    <div class="stat"><div class="stat-value">${_chatRooms.length}</div><div class="stat-label">Chat Rooms</div></div>
-    <div class="stat"><div class="stat-value">${_formatUptimeShort(uptime)}</div><div class="stat-label">Uptime</div></div>
-    <div class="stat"><div class="stat-value">${_tileCache.size}</div><div class="stat-label">Cached Tiles</div></div>
+
+  <!-- Fullscreen map modal -->
+  <div class="map-modal" id="map-modal">
+    <button class="close-btn" onclick="closeFullscreenMap()">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      <span>Close</span>
+    </button>
+    <div id="fullscreen-map"></div>
   </div>
-  <div class="info">
-    <p><strong>API Endpoints:</strong></p>
-    <p><a href="/api/status">/api/status</a> - Server status</p>
-    <p><a href="/api/stats">/api/stats</a> - Server statistics</p>
-    <p><a href="/api/devices">/api/devices</a> - Connected devices</p>
-    <p><a href="/${_settings.callsign}/api/chat/rooms">/${_settings.callsign}/api/chat/rooms</a> - Chat rooms</p>
-  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+  <script>
+    const devices = [$devicesJson];
+    let mainMap = null;
+    let fullscreenMap = null;
+
+    // SVG icons for device types
+    const phoneIcon = '<svg viewBox="0 0 24 24"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>';
+    const laptopIcon = '<svg viewBox="0 0 24 24"><path d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>';
+
+    function createMarker(device) {
+      const iconSvg = device.icon === 'phone' ? phoneIcon : laptopIcon;
+      const icon = L.divIcon({
+        className: '',
+        html: '<div class="device-icon">' + iconSvg + '</div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+        popupAnchor: [0, -14]
+      });
+      const marker = L.marker([device.lat, device.lng], { icon: icon });
+      // Show callsign with link, only add nickname if different
+      let popupContent = '<a href="/' + device.callsign + '/" style="font-weight:bold;color:var(--accent)">' + device.callsign + '</a>';
+      if (device.nickname && device.nickname !== device.callsign) {
+        popupContent += '<br>' + device.nickname;
+      }
+      marker.bindPopup(popupContent);
+      return marker;
+    }
+
+    function filterDevices(query) {
+      const cards = document.querySelectorAll('.device-card');
+      const q = query.toLowerCase().trim();
+      cards.forEach(function(card) {
+        const callsign = card.querySelector('.device-callsign')?.textContent?.toLowerCase() || '';
+        const nickname = card.querySelector('.device-nickname')?.textContent?.toLowerCase() || '';
+        if (q === '' || callsign.includes(q) || nickname.includes(q)) {
+          card.style.display = '';
+        } else {
+          card.style.display = 'none';
+        }
+      });
+    }
+
+    function initMap(mapId, isFullscreen) {
+      const map = L.map(mapId, {
+        zoomControl: isFullscreen,
+        attributionControl: false,
+        worldCopyJump: false,
+        maxBounds: [[-90, -180], [90, 180]],
+        maxBoundsViscosity: 1.0
+      });
+
+      // Satellite base layer from station's tile cache
+      L.tileLayer('/tiles/sat/{z}/{x}/{y}.png?layer=satellite', {
+        maxZoom: 18,
+        minZoom: 2,
+        bounds: [[-90, -180], [90, 180]]
+      }).addTo(map);
+
+      // Labels overlay (borders and place names) from station's tile cache
+      L.tileLayer('/tiles/labels/{z}/{x}/{y}.png?layer=labels', {
+        maxZoom: 18,
+        minZoom: 2,
+        bounds: [[-90, -180], [90, 180]]
+      }).addTo(map);
+
+      // Create marker cluster group
+      const markers = L.markerClusterGroup({
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true
+      });
+
+      // Add markers to cluster group
+      devices.forEach(function(device) {
+        const marker = createMarker(device);
+        markers.addLayer(marker);
+      });
+
+      map.addLayer(markers);
+
+      // Set default view to show Europe and US (Atlantic centered)
+      map.setView([40, -20], 2);
+
+      return map;
+    }
+
+    function openFullscreenMap() {
+      document.getElementById('map-modal').classList.add('active');
+      document.body.style.overflow = 'hidden';
+      if (!fullscreenMap) {
+        fullscreenMap = initMap('fullscreen-map', true);
+      } else {
+        fullscreenMap.invalidateSize();
+      }
+    }
+
+    function closeFullscreenMap() {
+      document.getElementById('map-modal').classList.remove('active');
+      document.body.style.overflow = '';
+    }
+
+    // Handle escape key to close fullscreen
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeFullscreenMap();
+      }
+    });
+
+    // Initialize main map if there are devices with location
+    document.addEventListener('DOMContentLoaded', function() {
+      if (devices.length > 0) {
+        mainMap = initMap('devices-map', false);
+      }
+    });
+  </script>
 </body>
 </html>
 ''');
@@ -6755,6 +7597,222 @@ class PureStationServer {
     if (seconds < 3600) return '${seconds ~/ 60}m';
     if (seconds < 86400) return '${seconds ~/ 3600}h';
     return '${seconds ~/ 86400}d';
+  }
+
+  String _formatUptimeLong(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+
+    final days = seconds ~/ 86400;
+    final hours = (seconds % 86400) ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+
+    final parts = <String>[];
+    if (days > 0) parts.add('${days}d');
+    if (hours > 0) parts.add('${hours}h');
+    if (minutes > 0 && days == 0) parts.add('${minutes}m');
+
+    return parts.isEmpty ? '0m' : parts.join(' ');
+  }
+
+  /// Handle /chat page - shows station's chat rooms
+  /// Reuses the same template pattern as remote device chat pages
+  Future<void> _handleChatPage(HttpRequest request) async {
+    final stationName = (_settings.name?.isNotEmpty == true) ? _settings.name! : _settings.callsign;
+
+    // Read theme files directly from disk (CLI mode, no Flutter)
+    final themesDir = '${PureStorageConfig().baseDir}/themes/default';
+    String globalStyles = '';
+    String appStyles = '';
+    String? template;
+
+    try {
+      final globalStylesFile = File('$themesDir/styles.css');
+      if (await globalStylesFile.exists()) {
+        globalStyles = await globalStylesFile.readAsString();
+      }
+      final appStylesFile = File('$themesDir/chat/styles.css');
+      if (await appStylesFile.exists()) {
+        appStyles = await appStylesFile.readAsString();
+      }
+      final templateFile = File('$themesDir/chat/index.html');
+      if (await templateFile.exists()) {
+        template = await templateFile.readAsString();
+      }
+    } catch (e) {
+      _log('WARN', 'Error reading theme files: $e');
+    }
+
+    // Build channel list HTML for sidebar (same pattern as collection_service)
+    final channelsHtml = StringBuffer();
+    final rooms = _chatRooms.values.toList();
+    final defaultRoom = rooms.isNotEmpty ? rooms.first.id : 'general';
+
+    if (rooms.isEmpty) {
+      channelsHtml.writeln('<div class="empty-state">No rooms yet</div>');
+    } else {
+      for (final room in rooms) {
+        final isActive = room.id == defaultRoom;
+        final roomName = room.name.isNotEmpty ? room.name : room.id;
+        channelsHtml.writeln('''
+<div class="channel-item${isActive ? ' active' : ''}" data-room-id="${_escapeHtml(room.id)}">
+  <span class="channel-name">#${_escapeHtml(roomName)}</span>
+</div>''');
+      }
+    }
+
+    // Build messages HTML for default room
+    final messagesHtml = StringBuffer();
+    if (rooms.isNotEmpty) {
+      final messages = getChatHistory(defaultRoom, limit: 50);
+      if (messages.isEmpty) {
+        messagesHtml.writeln('<div class="empty-state">No messages yet</div>');
+      } else {
+        String? currentDate;
+        for (final msg in messages) {
+          // Format timestamp - DateTime to string
+          final ts = msg.timestamp;
+          final msgDate = '${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')}';
+          final msgTime = '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
+          final timestampStr = '$msgDate $msgTime';
+
+          // Add date separator if date changed
+          if (currentDate != msgDate) {
+            currentDate = msgDate;
+            messagesHtml.writeln('<div class="date-separator">$msgDate</div>');
+          }
+
+          final author = _escapeHtml(msg.senderCallsign);
+          final content = _escapeHtml(msg.content);
+
+          messagesHtml.writeln('''
+<div class="message" data-timestamp="${_escapeHtml(timestampStr)}">
+  <div class="message-header">
+    <span class="message-author">$author</span>
+    <span class="message-time">$msgTime</span>
+  </div>
+  <div class="message-content">$content</div>
+</div>''');
+        }
+      }
+    } else {
+      messagesHtml.writeln('<div class="empty-state">No messages yet</div>');
+    }
+
+    // Build data JSON for JavaScript
+    final channelsList = rooms.map((r) => <String, dynamic>{
+      'id': r.id,
+      'name': r.name.isNotEmpty ? r.name : r.id,
+    }).toList();
+    final dataJson = jsonEncode({
+      'channels': channelsList,
+      'currentRoom': defaultRoom,
+      'apiBasePath': '/api/chat/rooms',
+    });
+
+    // Process template with variables
+    String html;
+    final chatScripts = getChatPageScripts();
+
+    // Generate menu items for station navigation
+    final menuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'chat',
+      hasChat: true,
+      // Station doesn't have blog, events, etc. by default
+      hasBlog: false,
+      hasEvents: false,
+      hasPlaces: false,
+      hasFiles: false,
+      hasAlerts: false,
+    );
+
+    if (template != null) {
+      // Process template with variable substitution
+      final variables = {
+        'TITLE': 'Chat - ${_escapeHtml(stationName)}',
+        'GLOBAL_STYLES': globalStyles,
+        'APP_STYLES': appStyles,
+        'COLLECTION_NAME': stationName,
+        'COLLECTION_DESCRIPTION': '${rooms.length} room${rooms.length != 1 ? 's' : ''}',
+        'CONTENT': messagesHtml.toString(),
+        'CHANNELS_LIST': channelsHtml.toString(),
+        'DATA_JSON': dataJson,
+        'SCRIPTS': chatScripts,
+        'MENU_ITEMS': menuItems,
+        'HOME_URL': '/',
+        'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
+      };
+      html = template;
+      for (final entry in variables.entries) {
+        html = html.replaceAll('{{${entry.key}}}', entry.value);
+      }
+    } else {
+      // Fallback if template not found
+      html = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>Chat - ${_escapeHtml(stationName)}</title>
+  <style>$globalStyles</style>
+  <style>$appStyles</style>
+</head>
+<body>
+<div class="container">
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__logo">
+        <a href="/" style="text-decoration: none;">
+          <div class="logo">$stationName</div>
+        </a>
+      </div>
+    </div>
+    <nav class="menu">
+      <ul class="menu__inner">
+        $menuItems
+      </ul>
+    </nav>
+  </header>
+
+  <div class="content">
+    <div class="chat-layout">
+      <aside class="channels-sidebar" id="channels">
+        <div class="channels-header">Channels</div>
+        ${channelsHtml.toString()}
+      </aside>
+
+      <div class="messages-area">
+        <div class="messages-header">
+          <span class="room-name">#<span id="current-room">$defaultRoom</span></span>
+          <span class="read-only-badge">read-only</span>
+        </div>
+        <div class="messages-list" id="messages">
+          ${messagesHtml.toString()}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="copyright">
+        <span>powered by geogram</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  window.GEOGRAM_DATA = $dataJson;
+  $chatScripts
+</script>
+</body>
+</html>
+''';
+    }
+
+    request.response.headers.contentType = ContentType.html;
+    request.response.write(html);
   }
 
   Future<void> _handleChatRooms(HttpRequest request, String targetCallsign) async {
@@ -7535,8 +8593,7 @@ class PureStationServer {
     final x = int.parse(match.group(3)!);
     final y = int.parse(match.group(4)!);
 
-    final layer = request.uri.queryParameters['layer'] ?? 'standard';
-    final isSatellite = layer.toLowerCase() == 'satellite';
+    final layer = (request.uri.queryParameters['layer'] ?? 'standard').toLowerCase();
 
     if (z < 0 || z > 18) {
       request.response.statusCode = 400;
@@ -7549,7 +8606,7 @@ class PureStationServer {
 
     if (tileData != null) {
       _stats.tilesServedFromCache++;
-      request.response.headers.contentType = ContentType('image', 'png');
+      request.response.headers.contentType = _getImageContentType(tileData);
       request.response.add(tileData);
       return;
     }
@@ -7560,23 +8617,26 @@ class PureStationServer {
       tileData = await diskFile.readAsBytes();
       _tileCache.put(cacheKey, tileData);
       _stats.tilesServedFromCache++;
-      request.response.headers.contentType = ContentType('image', 'png');
+      request.response.headers.contentType = _getImageContentType(tileData);
       request.response.add(tileData);
       return;
     }
 
+    // Tile not in cache - fetch from source if enabled
     if (_settings.osmFallbackEnabled) {
-      tileData = await _fetchTileFromInternet(z, x, y, isSatellite);
+      tileData = await _fetchTileFromSource(z, x, y, layer);
 
       if (tileData != null) {
         _stats.tilesDownloaded++;
+        // Cache in memory
         if (z <= _settings.maxZoomLevel) {
           _tileCache.put(cacheKey, tileData);
           _stats.tilesCached++;
         }
+        // Cache to disk
         await _saveTileToDisk(diskPath, tileData);
 
-        request.response.headers.contentType = ContentType('image', 'png');
+        request.response.headers.contentType = _getImageContentType(tileData);
         request.response.add(tileData);
         return;
       }
@@ -7584,6 +8644,54 @@ class PureStationServer {
 
     request.response.statusCode = 404;
     request.response.write('Tile not found');
+  }
+
+  /// Fetch tile from upstream source
+  /// Uses same URL patterns as MapTileService (lib/services/map_tile_service.dart)
+  Future<Uint8List?> _fetchTileFromSource(int z, int x, int y, String layer) async {
+    try {
+      // URL templates match MapTileService constants
+      // Note: Esri uses z/y/x order (y before x)
+      String url;
+      switch (layer) {
+        case 'satellite':
+          url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/$z/$y/$x';
+          break;
+        case 'labels':
+          url = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/$z/$y/$x';
+          break;
+        case 'borders':
+          url = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/$z/$y/$x';
+          break;
+        case 'transport':
+          url = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/$z/$y/$x';
+          break;
+        default:
+          url = 'https://tile.openstreetmap.org/$z/$x/$y.png';
+      }
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Geogram-Station/$cliAppVersion'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        final data = Uint8List.fromList(response.bodyBytes);
+        if (PureTileCache.isValidImageData(data)) {
+          return data;
+        }
+      }
+    } catch (e) {
+      _log('ERROR', 'Failed to fetch tile $layer/$z/$x/$y: $e');
+    }
+    return null;
+  }
+
+  ContentType _getImageContentType(Uint8List data) {
+    if (data.length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+      return ContentType('image', 'jpeg');
+    }
+    return ContentType('image', 'png');
   }
 
   // ============================================================
@@ -7978,28 +9086,6 @@ class PureStationServer {
     }
   }
 
-  Future<Uint8List?> _fetchTileFromInternet(int z, int x, int y, bool satellite) async {
-    try {
-      final url = satellite
-          ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/$z/$y/$x'
-          : 'https://tile.openstreetmap.org/$z/$x/$y.png';
-
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'User-Agent': 'Geogram-Desktop-Station/$cliAppVersion'},
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = Uint8List.fromList(response.bodyBytes);
-        if (PureTileCache.isValidImageData(data)) {
-          return data;
-        }
-      }
-    } catch (e) {
-      _log('ERROR', 'Failed to fetch tile: $e');
-    }
-    return null;
-  }
 
   Future<void> _saveTileToDisk(String path, Uint8List data) async {
     try {

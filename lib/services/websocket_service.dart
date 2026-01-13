@@ -402,6 +402,37 @@ class WebSocketService {
   /// Get currently connected station URL (or null if not connected)
   String? get connectedUrl => _channel != null ? _stationUrl : null;
 
+  /// Called when app resumes from background.
+  /// Verifies the WebSocket connection is still alive and reconnects if needed.
+  /// This is critical on Android where background throttling may have broken the connection.
+  Future<void> onAppResumed() async {
+    if (!_shouldReconnect || _stationUrl == null) {
+      return; // Not configured to maintain a connection
+    }
+
+    LogService().log('App resumed - verifying WebSocket connection...');
+
+    // First, check if channel is null (definitely disconnected)
+    if (_channel == null) {
+      LogService().log('WebSocket channel is null - attempting reconnection...');
+      await _attemptReconnect();
+      return;
+    }
+
+    // Channel exists but might be broken - try to send a PING
+    try {
+      final pingMessage = jsonEncode({'type': 'PING'});
+      _channel!.sink.add(pingMessage);
+      LogService().log('App resume: WebSocket connection verified (PING sent)');
+    } catch (e) {
+      LogService().log('App resume: WebSocket connection broken - reconnecting...');
+      _channel = null;
+      _subscription?.cancel();
+      _subscription = null;
+      await _attemptReconnect();
+    }
+  }
+
   /// Ensure WebSocket is connected and ready to send messages.
   /// Returns true if connected, false if connection failed.
   /// If disconnected, attempts to reconnect before returning.

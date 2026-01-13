@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';
+import '../util/chat_scripts.dart';
 
 /// Service for managing web themes (HTML templates and CSS)
 /// Handles extraction of bundled themes and theme selection
@@ -295,4 +296,8 @@ class WebThemeService {
     if (kIsWeb || _themesDir == null) return;
     await _extractBundledThemes();
   }
+
+  /// Get JavaScript for chat page interactivity
+  /// Delegates to shared function in lib/util/chat_scripts.dart
+  String getChatScripts() => getChatPageScripts();
 }

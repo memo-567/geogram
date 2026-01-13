@@ -320,16 +320,59 @@ public class BLEForegroundService extends Service {
         }
     }
 
+    // Track consecutive MethodChannel failures
+    private int consecutiveChannelFailures = 0;
+    private static final int MAX_CHANNEL_FAILURES = 3;
+
     /**
      * Send keep-alive ping by invoking the Dart callback via MethodChannel.
      * This runs on the main thread which is required for MethodChannel calls.
+     *
+     * If the Flutter engine has been destroyed (Activity killed by Android),
+     * the MethodChannel call will fail. We track consecutive failures and log
+     * warnings to help diagnose connection issues.
      */
     private void sendKeepAlivePing() {
-        if (methodChannel != null) {
-            Log.d(TAG, "Sending WebSocket keep-alive ping via MethodChannel");
-            methodChannel.invokeMethod("onKeepAlivePing", null);
-        } else {
+        if (methodChannel == null) {
             Log.w(TAG, "MethodChannel not set, cannot send keep-alive ping");
+            consecutiveChannelFailures++;
+            return;
+        }
+
+        try {
+            Log.d(TAG, "Sending WebSocket keep-alive ping via MethodChannel");
+            methodChannel.invokeMethod("onKeepAlivePing", null, new io.flutter.plugin.common.MethodChannel.Result() {
+                @Override
+                public void success(Object result) {
+                    consecutiveChannelFailures = 0;
+                    Log.d(TAG, "Keep-alive ping delivered to Flutter successfully");
+                }
+
+                @Override
+                public void error(String errorCode, String errorMessage, Object errorDetails) {
+                    consecutiveChannelFailures++;
+                    Log.w(TAG, "Keep-alive ping failed: " + errorCode + " - " + errorMessage +
+                           " (failures: " + consecutiveChannelFailures + ")");
+                    if (consecutiveChannelFailures >= MAX_CHANNEL_FAILURES) {
+                        Log.e(TAG, "Flutter engine may be destroyed. WebSocket connection at risk. " +
+                              "Consecutive failures: " + consecutiveChannelFailures);
+                    }
+                }
+
+                @Override
+                public void notImplemented() {
+                    consecutiveChannelFailures++;
+                    Log.w(TAG, "Keep-alive ping not implemented by Flutter side");
+                }
+            });
+        } catch (Exception e) {
+            consecutiveChannelFailures++;
+            Log.e(TAG, "Exception sending keep-alive ping: " + e.getMessage() +
+                   " (failures: " + consecutiveChannelFailures + ")");
+            if (consecutiveChannelFailures >= MAX_CHANNEL_FAILURES) {
+                Log.e(TAG, "Flutter engine likely destroyed. WebSocket will disconnect. " +
+                      "App needs to be brought to foreground to reconnect.");
+            }
         }
     }
 

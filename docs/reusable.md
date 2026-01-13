@@ -52,6 +52,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
 - [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
 
+### Web Theme Components
+- [WebNavigation](#webnavigation) - Reusable navigation menu generator (shared library)
+- [getChatPageScripts](#getchatpagescripts) - Reusable chat page JavaScript (shared library)
+
 ### QR Widgets
 - [QrShareReceiveWidget](#qrsharereceivewidget) - Share/receive data via QR
 
@@ -2017,6 +2021,293 @@ blog/
 
 ---
 
+## Web Theme Components
+
+### WebNavigation
+
+**File:** `lib/util/web_navigation.dart`
+
+Generates combined breadcrumb-style navigation headers for web pages. This is a shared pure Dart library (no Flutter dependencies) that creates consistent navigation across:
+- Station server pages (`pure_station.dart`) - CLI mode
+- Remote device pages (`collection_service.dart`) - Flutter apps
+
+**Format:** `stationName > home | chat | blog`
+
+**Purpose:**
+Navigation should only show links to apps that actually exist. For example, a station may have "home" and "chat" but no "blog", while a device might have "home", "blog", "chat", and "events".
+
+**Classes:**
+
+```dart
+class NavItem {
+  final String id;
+  final String label;
+  final String path;
+}
+
+class WebNavigation {
+  static String generateCombinedHeader({...});
+  static String generateStationHeader({...});
+  static String generateDeviceHeader({...});
+}
+```
+
+**Methods:**
+
+**generateStationHeader** - For station server pages (absolute paths like `/chat/`)
+```dart
+static String generateStationHeader({
+  required String name,
+  required String activeApp,
+  bool hasBlog = false,
+  bool hasChat = true,
+  bool hasEvents = false,
+  bool hasPlaces = false,
+  bool hasFiles = false,
+  bool hasAlerts = false,
+})
+```
+
+**generateDeviceHeader** - For device/collection pages (relative paths like `../chat/`)
+```dart
+static String generateDeviceHeader({
+  required String name,
+  required String activeApp,
+  bool hasBlog = false,
+  bool hasChat = true,
+  bool hasEvents = false,
+  bool hasPlaces = false,
+  bool hasFiles = false,
+  bool hasAlerts = false,
+})
+```
+
+**Usage in Station Server (CLI mode):**
+```dart
+import '../util/web_navigation.dart';
+
+final headerNav = WebNavigation.generateStationHeader(
+  name: stationName,
+  activeApp: 'chat',
+  hasChat: true,
+  hasBlog: false,  // Station doesn't have blog
+);
+
+// Pass to template
+final variables = {
+  'HEADER_NAV': headerNav,
+  // ... other variables
+};
+```
+
+**Usage in Collection Service (Flutter apps):**
+```dart
+import '../util/web_navigation.dart';
+
+// Check which apps exist
+final hasBlog = await Directory('$collectionPath/blog').exists();
+final hasEvents = await Directory('$collectionPath/events').exists();
+
+final headerNav = WebNavigation.generateDeviceHeader(
+  name: callsign,
+  activeApp: 'chat',
+  hasChat: true,
+  hasBlog: hasBlog,
+  hasEvents: hasEvents,
+);
+
+// Pass to template
+final html = themeService.processTemplate(template, {
+  'HEADER_NAV': headerNav,
+  // ... other variables
+});
+```
+
+**Template Integration:**
+Templates should use `{{HEADER_NAV}}` placeholder:
+```html
+<header class="header">
+  <div class="header__inner">
+    <nav class="header-nav">
+      {{HEADER_NAV}}
+    </nav>
+  </div>
+</header>
+```
+
+**Output Example:**
+```html
+<a href="/" class="nav-name">p2p.radio</a>
+<span class="nav-separator"> > </span>
+<a href="/" class="nav-item">home</a>
+<span class="nav-pipe"> | </span>
+<span class="nav-item active">chat</span>
+```
+
+**Supported Apps:**
+| ID | Label | Station Path | Device Path |
+|----|-------|--------------|-------------|
+| home | home | / | ../ |
+| blog | blog | /blog/ | ../blog/ |
+| chat | chat | /chat/ | ../chat/ |
+| events | events | /events/ | ../events/ |
+| places | places | /places/ | ../places/ |
+| files | files | /files/ | ../files/ |
+| alerts | alerts | /alerts/ | ../alerts/ |
+
+**CSS Classes (in themes/default/styles.css):**
+```css
+.header-nav { }           /* Container for navigation */
+.header-nav .nav-name { } /* Station/device name link */
+.header-nav .nav-separator { } /* The ">" separator */
+.header-nav .nav-pipe { } /* The "|" between items */
+.header-nav .nav-item { } /* Navigation links */
+.header-nav .nav-item.active { } /* Current page (not a link) */
+```
+
+**Consumers:**
+| Location | Method | Purpose |
+|----------|--------|---------|
+| `lib/cli/pure_station.dart` | `generateStationHeader()` | Station chat page |
+| `lib/services/collection_service.dart` | `generateDeviceHeader()` | Device chat page |
+
+---
+
+### getChatPageScripts
+
+**File:** `lib/util/chat_scripts.dart`
+
+Provides reusable JavaScript for chat page interactivity. This is a shared pure Dart library (no Flutter dependencies) used by:
+- Station server (`pure_station.dart`) - CLI mode, imports directly
+- Remote device chat pages via `WebThemeService.getChatScripts()` - Flutter apps
+
+**Function:**
+```dart
+String getChatPageScripts()
+```
+
+**Returns:** JavaScript code as a string for chat page interactivity
+
+**Usage in Template Processing:**
+```dart
+final themeService = WebThemeService();
+await themeService.init();
+
+final html = themeService.processTemplate(template, {
+  'GLOBAL_STYLES': await themeService.getGlobalStyles() ?? '',
+  'APP_STYLES': await themeService.getAppStyles('chat') ?? '',
+  'COLLECTION_NAME': stationName,
+  'CHANNELS_LIST': channelsHtml.toString(),
+  'CONTENT': messagesHtml.toString(),
+  'DATA_JSON': dataJson,
+  'SCRIPTS': themeService.getChatScripts(),  // <- Reusable scripts
+});
+```
+
+**Required HTML Elements:**
+The scripts expect these DOM elements to exist:
+- `.channel-item` - Channel/room buttons with `data-room-id` attribute
+- `#current-room` - Element to display current room name
+- `#messages` - Container for messages
+
+**Required GEOGRAM_DATA:**
+The scripts read from `window.GEOGRAM_DATA`:
+```javascript
+window.GEOGRAM_DATA = {
+  channels: [{ id: 'room1', name: 'Room 1' }],
+  currentRoom: 'room1',
+  apiBasePath: '/api/chat/rooms'  // or '../api/chat/rooms' for relative
+};
+```
+
+**Features:**
+- Channel switching with active state updates
+- Message loading with date separators
+- 5-second polling for new messages
+- Auto-scroll to bottom on new messages
+- HTML escaping for XSS prevention
+- Error states for failed loads
+
+**API Endpoints Used:**
+- `GET {apiBasePath}/{roomId}/messages` - Load messages for a room
+- `GET {apiBasePath}/{roomId}/messages?after={timestamp}` - Poll for new messages
+
+**Message Format Expected:**
+```json
+{
+  "messages": [
+    {
+      "timestamp": "2025-01-12 10:30_00",
+      "author": "USER1",
+      "content": "Hello world"
+    }
+  ]
+}
+```
+
+**Consumers:**
+| Location | Purpose |
+|----------|---------|
+| `lib/cli/pure_station.dart` `_handleChatPage()` | Station server chat page at `/chat` |
+| `lib/services/collection_service.dart` `generateChatIndex()` | Remote device chat pages |
+
+**Template File:**
+`themes/default/chat/index.html` - HTML template with placeholders
+
+**CSS File:**
+`themes/default/chat/styles.css` - Chat-specific styles including:
+- `.chat-layout` - Grid layout with sidebar
+- `.channels-sidebar` - Channel list sidebar
+- `.channel-item` - Individual channel buttons
+- `.messages-area` - Message container
+- `.message` - Individual message styling
+- `.date-separator` - Date dividers between messages
+
+**Example: Full Chat Page Generation:**
+```dart
+Future<void> _handleChatPage(HttpRequest request) async {
+  final themeService = WebThemeService();
+  await themeService.init();
+
+  // Get styles
+  final globalStyles = await themeService.getGlobalStyles() ?? '';
+  final appStyles = await themeService.getAppStyles('chat') ?? '';
+
+  // Build channel list HTML
+  final channelsHtml = StringBuffer();
+  for (final room in chatRooms) {
+    channelsHtml.writeln('''
+<div class="channel-item" data-room-id="${room.id}">
+  <span class="channel-name">#${room.name}</span>
+</div>''');
+  }
+
+  // Build data JSON
+  final dataJson = jsonEncode({
+    'channels': chatRooms.map((r) => {'id': r.id, 'name': r.name}).toList(),
+    'currentRoom': chatRooms.first.id,
+    'apiBasePath': '/api/chat/rooms',
+  });
+
+  // Get template and process
+  final template = await themeService.getTemplate('chat');
+  final html = themeService.processTemplate(template!, {
+    'GLOBAL_STYLES': globalStyles,
+    'APP_STYLES': appStyles,
+    'COLLECTION_NAME': 'My Station',
+    'CHANNELS_LIST': channelsHtml.toString(),
+    'CONTENT': '', // Initial messages loaded by JS
+    'DATA_JSON': dataJson,
+    'SCRIPTS': themeService.getChatScripts(),
+  });
+
+  request.response.headers.contentType = ContentType.html;
+  request.response.write(html);
+}
+```
+
+---
+
 ## QR Widgets
 
 ### QrShareReceiveWidget
@@ -2408,6 +2699,8 @@ All types from `knownAppTypesConst` are supported with consistent icons and grad
 | LocationProviderService | services/ | Service | Shared GPS positioning for all apps |
 | PathRecordingService | tracker/services/ | Service | GPS path recording (uses LocationProviderService) |
 | PlaceService.findPlacesWithinRadius | services/ | Service | Find places within GPS radius |
+| WebNavigation | util/ | Web Theme | Dynamic navigation menu generator (shared) |
+| getChatPageScripts | util/ | Web Theme | Reusable chat page JavaScript (shared) |
 | QrShareReceiveWidget | widgets/ | QR | Share/receive data via QR |
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |
 | App Constants | util/ | Constants | Centralized app type definitions |

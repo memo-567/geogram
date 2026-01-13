@@ -59,6 +59,8 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   String? _error;
   List<String> _labels = [];
   bool _isWideScreen = false;
+  bool _showingFolderList = true;  // Mobile: true = show folders, false = show threads
+  Map<EmailFolder, int> _folderCounts = {};
 
   StreamSubscription<EmailChangeEvent>? _emailSubscription;
   EventSubscription<EmailNotificationEvent>? _notificationSubscription;
@@ -84,7 +86,22 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     _emailSubscription = _emailService.onEmailChange.listen(_onEmailChange);
     _notificationSubscription = EventBus().on<EmailNotificationEvent>(_onEmailNotification);
     await _loadLabels();
+    await _loadFolderCounts();
     await _loadThreads();
+  }
+
+  Future<void> _loadFolderCounts() async {
+    final counts = <EmailFolder, int>{};
+    counts[EmailFolder.inbox] = (await _emailService.getInbox()).length;
+    counts[EmailFolder.sent] = (await _emailService.getSent()).length;
+    counts[EmailFolder.outbox] = (await _emailService.getOutbox()).length;
+    counts[EmailFolder.drafts] = (await _emailService.getDrafts()).length;
+    counts[EmailFolder.archive] = (await _emailService.getArchive()).length;
+    counts[EmailFolder.spam] = (await _emailService.getSpam()).length;
+    counts[EmailFolder.garbage] = (await _emailService.getGarbage()).length;
+    if (mounted) {
+      setState(() => _folderCounts = counts);
+    }
   }
 
   void _onEmailNotification(EmailNotificationEvent event) {
@@ -212,7 +229,8 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   void _onEmailChange(EmailChangeEvent event) {
-    // Reload threads when changes occur
+    // Reload threads and folder counts when changes occur
+    _loadFolderCounts();
     _loadThreads();
   }
 
@@ -276,6 +294,7 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Future<void> _refresh() async {
+    await _loadFolderCounts();
     await _loadThreads();
     await _emailService.processOutbox();
     if (mounted) {
@@ -391,10 +410,17 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                     icon: const Icon(Icons.arrow_back),
                     onPressed: () => setState(() => _selectedThread = null),
                   )
-                : null,
-            title: Text(_selectedThread == null
-                ? _getFolderTitle()
-                : _selectedThread!.subject),
+                : (!_isWideScreen && !_showingFolderList)
+                    ? IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => setState(() => _showingFolderList = true),
+                      )
+                    : null,
+            title: Text(_selectedThread != null
+                ? _selectedThread!.subject
+                : (!_isWideScreen && !_showingFolderList)
+                    ? _getFolderTitle()
+                    : 'Email'),
             actions: [
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert),
@@ -530,32 +556,40 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Widget _buildMobileView(ThemeData theme) {
-    return Container(
-      color: theme.colorScheme.surface,
-      child: Column(
-        children: [
-          // Folder navigation (collapsible on mobile)
-          ExpansionTile(
-            title: Text(_getFolderTitle()),
-            leading: Icon(_getFolderIcon(_currentFolder)),
-            initiallyExpanded: false,
-            children: [
-              _buildFolderTile(EmailFolder.inbox, null, 'Inbox'),
-              _buildFolderTile(EmailFolder.sent, null, 'Sent'),
-              _buildFolderTile(EmailFolder.outbox, null, 'Outbox'),
-              _buildFolderTile(EmailFolder.drafts, null, 'Drafts'),
-              _buildFolderTile(EmailFolder.archive, null, 'Archive'),
-              _buildFolderTile(EmailFolder.spam, null, 'Spam'),
-              _buildFolderTile(EmailFolder.garbage, null, 'Trash'),
-            ],
-          ),
-          const Divider(height: 1),
-          // Thread list
-          Expanded(
-            child: _buildThreadList(),
-          ),
-        ],
-      ),
+    if (_showingFolderList) {
+      return _buildFolderList(theme);
+    }
+    return _buildThreadList();
+  }
+
+  Widget _buildFolderList(ThemeData theme) {
+    return ListView(
+      children: [
+        _buildFolderListTile(EmailFolder.inbox, 'Inbox', Icons.inbox),
+        _buildFolderListTile(EmailFolder.sent, 'Sent', Icons.send),
+        _buildFolderListTile(EmailFolder.outbox, 'Outbox', Icons.outbox),
+        _buildFolderListTile(EmailFolder.drafts, 'Drafts', Icons.drafts),
+        _buildFolderListTile(EmailFolder.archive, 'Archive', Icons.archive),
+        _buildFolderListTile(EmailFolder.spam, 'Spam', Icons.report),
+        _buildFolderListTile(EmailFolder.garbage, 'Trash', Icons.delete),
+      ],
+    );
+  }
+
+  Widget _buildFolderListTile(EmailFolder folder, String title, IconData icon) {
+    final count = _folderCounts[folder] ?? 0;
+    return ListTile(
+      leading: Icon(icon, color: Colors.amber),
+      title: Text(title),
+      subtitle: Text('$count ${count == 1 ? 'email' : 'emails'}'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        setState(() {
+          _currentFolder = folder;
+          _showingFolderList = false;
+        });
+        _loadThreads();
+      },
     );
   }
 

@@ -13,6 +13,7 @@ import '../platform/file_system_service.dart';
 import '../util/app_constants.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/tlsh.dart';
+import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
 import 'profile_service.dart';
@@ -644,6 +645,22 @@ class CollectionService {
         'apiBasePath': '../api/chat/rooms',
       });
 
+      // Determine which apps are available for this collection
+      // chatCollectionPath is like /path/to/collection/chat, so parent is the collection
+      final collectionDir = Directory(chatCollectionPath).parent;
+      final hasBlog = await Directory('${collectionDir.path}/blog').exists();
+      final hasEvents = await Directory('${collectionDir.path}/events').exists();
+      final hasPlaces = await Directory('${collectionDir.path}/places').exists();
+
+      // Generate menu items for device pages
+      final menuItems = WebNavigation.generateDeviceMenuItems(
+        activeApp: 'chat',
+        hasChat: true,
+        hasBlog: hasBlog,
+        hasEvents: hasEvents,
+        hasPlaces: hasPlaces,
+      );
+
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': _currentCallsign ?? 'Chat',
@@ -654,7 +671,8 @@ class CollectionService {
         'CONTENT': messagesHtml.toString(),
         'CHANNELS_LIST': channelsHtml.toString(),
         'DATA_JSON': dataJson,
-        'SCRIPTS': _getChatScripts(),
+        'SCRIPTS': themeService.getChatScripts(),
+        'MENU_ITEMS': menuItems,
         'GENERATED_DATE': DateTime.now().toIso8601String().split('T').first,
       });
 
@@ -664,173 +682,6 @@ class CollectionService {
     } catch (e) {
       stderr.writeln('Error generating chat index: $e');
     }
-  }
-
-  /// Get JavaScript for chat page interactivity
-  String _getChatScripts() {
-    return '''
-    (function() {
-      const data = window.GEOGRAM_DATA || {};
-      let currentRoom = data.currentRoom || 'main';
-      let lastTimestamp = null;
-      let pollInterval = null;
-
-      // Initialize channel click handlers
-      function initChannels() {
-        document.querySelectorAll('.channel-item').forEach(item => {
-          item.addEventListener('click', function() {
-            const roomId = this.dataset.roomId;
-            switchRoom(roomId);
-          });
-        });
-      }
-
-      // Switch to a different room
-      function switchRoom(roomId) {
-        // Skip if already on this room
-        if (roomId === currentRoom && lastTimestamp !== null) {
-          return;
-        }
-
-        currentRoom = roomId;
-        lastTimestamp = null;
-
-        // Update active state
-        document.querySelectorAll('.channel-item').forEach(item => {
-          item.classList.toggle('active', item.dataset.roomId === roomId);
-        });
-
-        // Update room name in header
-        document.getElementById('current-room').textContent = roomId;
-
-        // Clear messages and load new room
-        document.getElementById('messages').innerHTML = '<div class="status-message">Loading messages...</div>';
-        loadMessages();
-      }
-
-      // Load messages for current room
-      async function loadMessages() {
-        try {
-          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages';
-          const response = await fetch(url);
-          if (!response.ok) {
-            document.getElementById('messages').innerHTML = '<div class="empty-state">Failed to load messages</div>';
-            return;
-          }
-
-          const result = await response.json();
-          let messages = [];
-          if (Array.isArray(result)) {
-            messages = result;
-          } else if (result && Array.isArray(result.messages)) {
-            messages = result.messages;
-          }
-
-          const container = document.getElementById('messages');
-          container.innerHTML = '';
-
-          if (messages.length === 0) {
-            container.innerHTML = '<div class="empty-state">No messages yet</div>';
-            return;
-          }
-
-          let currentDate = null;
-          messages.forEach(msg => {
-            // Add date separator
-            const msgDate = msg.timestamp.split(' ')[0];
-            if (currentDate !== msgDate) {
-              currentDate = msgDate;
-              const sep = document.createElement('div');
-              sep.className = 'date-separator';
-              sep.textContent = msgDate;
-              container.appendChild(sep);
-            }
-
-            appendMessage(msg);
-            lastTimestamp = msg.timestamp;
-          });
-
-          // Scroll to bottom
-          container.scrollTop = container.scrollHeight;
-        } catch (e) {
-          console.error('Error loading messages:', e);
-          document.getElementById('messages').innerHTML = '<div class="empty-state">Error loading messages</div>';
-        }
-      }
-
-      // Append a single message
-      function appendMessage(msg) {
-        const container = document.getElementById('messages');
-        const div = document.createElement('div');
-        div.className = 'message';
-        div.dataset.timestamp = msg.timestamp;
-
-        const timeParts = msg.timestamp.split(' ');
-        const time = timeParts.length > 1 ? timeParts[1].replace('_', ':').substring(0, 5) : '00:00';
-        const author = msg.author || 'anonymous';
-        const content = msg.content || '';
-
-        div.innerHTML = '<div class="message-header">' +
-                       '<span class="message-author">' + escapeHtml(author) + '</span>' +
-                       '<span class="message-time">' + time + '</span>' +
-                       '</div>' +
-                       '<div class="message-content">' + escapeHtml(content) + '</div>';
-
-        container.appendChild(div);
-      }
-
-      // Poll for new messages
-      async function pollNewMessages() {
-        if (!lastTimestamp) return;
-
-        try {
-          const url = data.apiBasePath + '/' + encodeURIComponent(currentRoom) + '/messages?after=' + encodeURIComponent(lastTimestamp);
-          const response = await fetch(url);
-          if (!response.ok) return;
-
-          const result = await response.json();
-          let messages = [];
-          if (Array.isArray(result)) {
-            messages = result;
-          } else if (result && Array.isArray(result.messages)) {
-            messages = result.messages;
-          }
-
-          if (messages.length > 0) {
-            const container = document.getElementById('messages');
-            messages.forEach(msg => {
-              if (msg.timestamp > lastTimestamp) {
-                appendMessage(msg);
-                lastTimestamp = msg.timestamp;
-              }
-            });
-            container.scrollTop = container.scrollHeight;
-          }
-        } catch (e) {
-          console.error('Error polling messages:', e);
-        }
-      }
-
-      // Escape HTML
-      function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-      }
-
-      // Start polling
-      function startPolling() {
-        if (pollInterval) clearInterval(pollInterval);
-        pollInterval = setInterval(pollNewMessages, 5000);
-      }
-
-      // Initialize on load
-      document.addEventListener('DOMContentLoaded', function() {
-        initChannels();
-        startPolling();
-      });
-    })();
-    ''';
   }
 
   /// Get blog cache - reads existing if less than a day old, otherwise regenerates

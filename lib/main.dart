@@ -37,6 +37,7 @@ import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
+import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
 import 'services/group_sync_service.dart';
@@ -62,6 +63,7 @@ import 'pages/chat_browser_page.dart';
 import 'pages/email_browser_page.dart';
 import 'pages/forum_browser_page.dart';
 import 'pages/blog_browser_page.dart';
+import 'pages/log_browser_page.dart';
 import 'pages/events_browser_page.dart';
 import 'pages/news_browser_page.dart';
 import 'pages/postcards_browser_page.dart';
@@ -571,6 +573,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print('NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state');
     if (state == AppLifecycleState.resumed) {
+      // Verify WebSocket connection is still alive (Android background may have broken it)
+      WebSocketService().onAppResumed();
+
       // Delay check to allow SharedPreferences write to complete in background isolate
       Future.delayed(const Duration(milliseconds: 500), () {
         print('NOTIFICATION_DEBUG: ${DateTime.now()} delayed _checkPendingNotification');
@@ -683,7 +688,7 @@ class _HomePageState extends State<HomePage> {
     DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
     SettingsPage(),
-    LogPage(),
+    LogBrowserPage(),
   ];
 
   @override
@@ -2084,7 +2089,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     collection.title,
                                               )
                                             : collection.type == 'log'
-                                            ? const LogPage()
+                                            ? const LogBrowserPage()
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2275,7 +2280,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     collection.title,
                                               )
                                             : collection.type == 'log'
-                                            ? const LogPage()
+                                            ? const LogBrowserPage()
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2761,240 +2766,7 @@ class GeoChatPage extends StatelessWidget {
 }
 
 // DevicesPage has been moved to pages/devices_browser_page.dart
-
-// Log Page
-class LogPage extends StatefulWidget {
-  const LogPage({super.key});
-
-  @override
-  State<LogPage> createState() => _LogPageState();
-}
-
-class _LogPageState extends State<LogPage> {
-  final LogService _logService = LogService();
-  final I18nService _i18n = I18nService();
-  final TextEditingController _filterController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  bool _isPaused = false;
-  String _filterText = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _i18n.languageNotifier.addListener(_onLanguageChanged);
-    _logService.addListener(_onLogUpdate);
-
-    // Add some initial logs for demonstration
-    Future.delayed(Duration.zero, () {
-      _logService.log('Geogram Desktop started');
-      _logService.log('Log system initialized');
-    });
-  }
-
-  void _onLanguageChanged() {
-    setState(() {});
-  }
-
-  @override
-  void dispose() {
-    _i18n.languageNotifier.removeListener(_onLanguageChanged);
-    _logService.removeListener(_onLogUpdate);
-    _filterController.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _onLogUpdate(String message) {
-    if (!_isPaused && mounted) {
-      setState(() {});
-      // Auto-scroll to bottom
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 100),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    }
-  }
-
-  void _togglePause() {
-    setState(() {
-      _isPaused = !_isPaused;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _isPaused ? _i18n.t('log_paused') : _i18n.t('log_resumed'),
-        ),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  void _clearLog() {
-    _logService.clear();
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_i18n.t('log_cleared')),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  void _copyToClipboard() {
-    final logText = _getFilteredLogs();
-    if (logText.isNotEmpty) {
-      Clipboard.setData(ClipboardData(text: logText));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_i18n.t('log_copied_to_clipboard')),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_i18n.t('log_is_empty')),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    }
-  }
-
-  String _getFilteredLogs() {
-    final messages = _logService.messages;
-    if (_filterText.isEmpty) {
-      return messages.join('\n');
-    }
-    return messages
-        .where((msg) => msg.toLowerCase().contains(_filterText.toLowerCase()))
-        .join('\n');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Scaffold(
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _i18n.t('collection_type_log'),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Controls Bar
-          Container(
-            color: isDark ? Colors.black : Colors.grey[900],
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                // Pause/Resume Button
-                IconButton(
-                  icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),
-                  color: Colors.white,
-                  tooltip: _isPaused ? _i18n.t('resume') : _i18n.t('pause'),
-                  onPressed: _togglePause,
-                ),
-                const SizedBox(width: 8),
-                // Filter Input
-                Expanded(
-                  child: Container(
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[800],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: TextField(
-                      controller: _filterController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: _i18n.t('filter_logs'),
-                        hintStyle: const TextStyle(color: Colors.grey),
-                        prefixIcon: const Icon(
-                          Icons.search,
-                          color: Colors.white,
-                        ),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 10,
-                        ),
-                      ),
-                      onChanged: (value) {
-                        setState(() {
-                          _filterText = value;
-                        });
-                      },
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Clear Button
-                IconButton(
-                  icon: const Icon(Icons.clear_all),
-                  color: Colors.white,
-                  tooltip: _i18n.t('clear_logs'),
-                  onPressed: _clearLog,
-                ),
-                // Copy Button
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.white,
-                  tooltip: _i18n.t('copy_to_clipboard_button'),
-                  onPressed: _copyToClipboard,
-                ),
-              ],
-            ),
-          ),
-          // Log Display
-          Expanded(
-            child: Container(
-              color: Colors.black,
-              padding: const EdgeInsets.all(12),
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                child: Align(
-                  alignment: Alignment.topLeft,
-                  child: SelectableText(
-                    _getFilteredLogs(),
-                    textAlign: TextAlign.left,
-                    style: const TextStyle(
-                      fontFamily: 'Courier New',
-                      fontSize: 13,
-                      color: Colors.white,
-                      height: 1.5,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+// LogPage has been moved to pages/log_browser_page.dart
 
 // Settings Page
 class SettingsPage extends StatefulWidget {
