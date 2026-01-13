@@ -23,7 +23,7 @@
     <div class="container">
       <!-- Navigation Cards -->
       <section class="home-nav">
-        <a href="blog/" class="nav-card">
+        <a href="blog/" class="nav-card" id="nav-blog">
           <span class="nav-card-icon">&#128221;</span>
           <span class="nav-card-title">Blog</span>
           <span class="nav-card-desc">Articles and posts</span>
@@ -117,8 +117,10 @@
     document.addEventListener('DOMContentLoaded', function() {
       const data = window.GEOGRAM_DATA || {};
 
-      // Hide blog section if no posts
+      // Hide blog section and nav card if no posts
       if (!data.recentPosts || data.recentPosts.length === 0) {
+        const blogNav = document.getElementById('nav-blog');
+        if (blogNav) blogNav.style.display = 'none';
         const blogSection = document.getElementById('blog-section');
         if (blogSection) blogSection.style.display = 'none';
       }
