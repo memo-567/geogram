@@ -214,94 +214,136 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
 
     return Column(
       children: [
-        // Thread header
-        _buildThreadHeader(),
-        const Divider(height: 1),
-        // Messages
         Expanded(
-          child: ListView.builder(
+          child: CustomScrollView(
             controller: _scrollController,
-            padding: const EdgeInsets.all(16),
-            itemCount: _thread.messages.length,
-            itemBuilder: (context, index) {
-              final message = _thread.messages[index];
-              final isFirst = index == 0;
-              return _buildMessageCard(message, isFirst);
-            },
+            slivers: [
+              SliverToBoxAdapter(child: _buildThreadHeader()),
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final message = _thread.messages[index];
+                    final isFirst = index == 0;
+                    final isLast = index == _thread.messages.length - 1;
+                    return _buildMessageCard(message, isFirst, isLast);
+                  },
+                  childCount: _thread.messages.length,
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+            ],
           ),
         ),
-        // Quick reply bar (for embedded view)
         if (widget.embedded) _buildQuickReplyBar(),
       ],
     );
   }
 
   Widget _buildThreadHeader() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      color: Theme.of(context).cardColor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Subject
-          Text(
-            _thread.subject,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Participants
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Material(
+        color: theme.colorScheme.surface,
+        elevation: 1,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildParticipantChip('From', _thread.from, Colors.blue),
-              for (final to in _thread.to)
-                _buildParticipantChip('To', to, Colors.green),
-              for (final cc in _thread.cc)
-                _buildParticipantChip('CC', cc, Colors.orange),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _thread.subject,
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  _buildHeaderChip(
+                    icon: Icons.mail_outline,
+                    label: _statusLabel(_thread.status),
+                    background: theme.colorScheme.primaryContainer,
+                    foreground: theme.colorScheme.onPrimaryContainer,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _buildParticipantChip('From', _thread.from, Colors.blue),
+                  for (final to in _thread.to)
+                    _buildParticipantChip('To', to, Colors.green),
+                  for (final cc in _thread.cc)
+                    _buildParticipantChip('CC', cc, Colors.orange),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildHeaderChip(
+                    icon: Icons.cloud_outlined,
+                    label: _thread.station,
+                    background: theme.colorScheme.secondaryContainer,
+                    foreground: theme.colorScheme.onSecondaryContainer,
+                  ),
+                  _buildHeaderChip(
+                    icon: Icons.forum_outlined,
+                    label:
+                        '${_thread.messageCount} message${_thread.messageCount == 1 ? '' : 's'}',
+                    background: theme.colorScheme.surfaceVariant,
+                    foreground: theme.colorScheme.onSurface,
+                  ),
+                  _buildHeaderChip(
+                    icon: Icons.access_time,
+                    label: _formatDateTime(_thread.createdDateTime),
+                    background: theme.colorScheme.surfaceVariant,
+                    foreground: theme.colorScheme.onSurface,
+                  ),
+                  if (_thread.labels.isNotEmpty)
+                    ..._thread.labels.map(
+                      (label) => _buildHeaderChip(
+                        icon: Icons.label_outline,
+                        label: label,
+                        background: theme.colorScheme.tertiaryContainer,
+                        foreground: theme.colorScheme.onTertiaryContainer,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _reply,
+                    icon: const Icon(Icons.reply),
+                    label: const Text('Reply'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _replyAll,
+                    icon: const Icon(Icons.reply_all),
+                    label: const Text('Reply all'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _forward,
+                    icon: const Icon(Icons.forward),
+                    label: const Text('Forward'),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 8),
-          // Labels
-          if (_thread.labels.isNotEmpty)
-            Wrap(
-              spacing: 4,
-              children: _thread.labels.map((label) {
-                return Chip(
-                  label: Text(label, style: const TextStyle(fontSize: 12)),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                );
-              }).toList(),
-            ),
-          // Station info
-          Row(
-            children: [
-              Icon(Icons.cloud, size: 14, color: Colors.grey[600]),
-              const SizedBox(width: 4),
-              Text(
-                _thread.station,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Icon(Icons.email, size: 14, color: Colors.grey[600]),
-              const SizedBox(width: 4),
-              Text(
-                '${_thread.messageCount} message(s)',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -322,104 +364,168 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
     );
   }
 
-  Widget _buildMessageCard(EmailMessage message, bool isFirst) {
+  Widget _buildHeaderChip({
+    required IconData icon,
+    required String label,
+    required Color background,
+    required Color foreground,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: foreground),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: foreground,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageCard(EmailMessage message, bool isFirst, bool isLast) {
     final profile = _profileService.getProfile();
     final isOwn = profile?.callsign == message.author;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Column(
+    final theme = Theme.of(context);
+    final bubbleColor = isOwn
+        ? theme.colorScheme.primaryContainer.withOpacity(0.35)
+        : theme.colorScheme.surface;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Message header
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isOwn
-                  ? Theme.of(context).primaryColor.withOpacity(0.1)
-                  : Colors.grey.withOpacity(0.1),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-            ),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 16,
-                  backgroundColor: isOwn
-                      ? Theme.of(context).primaryColor
-                      : Colors.grey,
-                  child: Text(
-                    message.author.isNotEmpty
-                        ? message.author[0].toUpperCase()
-                        : '?',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+          Column(
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor:
+                    isOwn ? theme.colorScheme.primary : theme.colorScheme.secondary,
+                child: Text(
+                  message.author.isNotEmpty ? message.author[0].toUpperCase() : '?',
+                  style: TextStyle(
+                    color: theme.colorScheme.onPrimary,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        message.author,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              if (!isLast)
+                Container(
+                  width: 2,
+                  height: 26,
+                  margin: const EdgeInsets.only(top: 4),
+                  color: theme.colorScheme.outlineVariant,
+                ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: bubbleColor,
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                message.author,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _formatDateTime(message.dateTime),
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        _buildVerificationBadge(message),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert, size: 20),
+                          onSelected: (value) => _handleMessageAction(value, message),
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 'copy',
+                              child: Text('Copy'),
+                            ),
+                            PopupMenuItem(
+                              value: 'quote',
+                              child: Text('Quote'),
+                            ),
+                            PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.delete_outline, color: Colors.red),
+                                title: Text(
+                                  'Delete message',
+                                  style: TextStyle(color: Colors.red),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      message.content,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        height: 1.35,
+                        fontSize: 14,
                       ),
-                      Text(
-                        _formatDateTime(message.dateTime),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
+                    ),
+                    if (message.hasFile || message.hasImage)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: _buildAttachments(message),
+                      ),
+                    if (message.isEdited)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Edited ${message.editedAt}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                            fontStyle: FontStyle.italic,
+                          ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                // Verification badge
-                _buildVerificationBadge(message),
-                // Actions
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  onSelected: (value) => _handleMessageAction(value, message),
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'copy',
-                      child: Text('Copy'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'quote',
-                      child: Text('Quote'),
-                    ),
                   ],
-                ),
-              ],
-            ),
-          ),
-          // Message content
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SelectableText(
-              message.content,
-              style: const TextStyle(fontSize: 15, height: 1.5),
-            ),
-          ),
-          // Attachments
-          if (message.hasFile || message.hasImage)
-            _buildAttachments(message),
-          // Edited indicator
-          if (message.isEdited)
-            Padding(
-              padding: const EdgeInsets.only(left: 16, bottom: 8),
-              child: Text(
-                'Edited ${message.editedAt}',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey[500],
-                  fontStyle: FontStyle.italic,
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -664,18 +770,26 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
   }
 
   Widget _buildQuickReplyBar() {
+    final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: theme.colorScheme.surface,
         border: Border(
-          top: BorderSide(color: Colors.grey[300]!),
+          top: BorderSide(color: theme.colorScheme.outlineVariant),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 6,
+            offset: const Offset(0, -2),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Expanded(
-            child: ElevatedButton.icon(
+            child: FilledButton.icon(
               onPressed: _reply,
               icon: const Icon(Icons.reply, size: 18),
               label: const Text('Reply'),
@@ -696,6 +810,27 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
         ],
       ),
     );
+  }
+
+  String _statusLabel(EmailStatus status) {
+    switch (status) {
+      case EmailStatus.draft:
+        return 'Draft';
+      case EmailStatus.pending:
+        return 'Outbox';
+      case EmailStatus.sent:
+        return 'Sent';
+      case EmailStatus.received:
+        return 'Inbox';
+      case EmailStatus.failed:
+        return 'Failed';
+      case EmailStatus.spam:
+        return 'Spam';
+      case EmailStatus.deleted:
+        return 'Trash';
+      case EmailStatus.archived:
+        return 'Archived';
+    }
   }
 
   String _formatDateTime(DateTime dt) {
@@ -728,6 +863,45 @@ class _EmailThreadPageState extends State<EmailThreadPage> {
       case 'quote':
         // TODO: Open compose with quoted message
         break;
+      case 'delete':
+        _confirmDeleteMessage(message);
+        break;
     }
+  }
+
+  Future<void> _confirmDeleteMessage(EmailMessage message) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this message?'),
+        content: const Text('This message will be removed from the thread.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final threadRemoved = await _emailService.deleteMessage(_thread, message);
+    if (!mounted) return;
+
+    if (threadRemoved) {
+      Navigator.pop(context);
+      return;
+    }
+
+    await _reloadThread();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Message deleted')),
+    );
   }
 }

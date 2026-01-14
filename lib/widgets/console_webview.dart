@@ -126,7 +126,8 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
     }
 
     _platformSupported = true;
-    _useNativeTerminal = !kIsWeb && (Platform.isLinux || Platform.isAndroid);
+    // Force Android to use WebView/JSLinux (lighter, avoids unsupported native TinyEMU/QEMU)
+    _useNativeTerminal = !kIsWeb && Platform.isLinux;
     _isAndroidNative = !kIsWeb && Platform.isAndroid;
 
     if (_useNativeTerminal) {
@@ -145,7 +146,8 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       _terminal = Terminal(maxLines: 10000);
 
       // Check for emulator availability (TinyEMU preferred, QEMU fallback)
-      final emulator = await _findEmulator();
+      final vmManager = ConsoleVmManager();
+      final emulator = await _findEmulator(vmManager);
       if (emulator == null) {
         setState(() {
           _platformError = _isAndroidNative
@@ -160,7 +162,6 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
       }
 
       // Ensure VM files are ready
-      final vmManager = ConsoleVmManager();
       final ready = await vmManager.ensureVmReady();
       if (!ready) {
         setState(() {
@@ -190,21 +191,22 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
         // Use TinyEMU with config file
         await _startTinyEmu(emulator.path, vmPath);
       } else {
-        // Use QEMU with kernel and disk
+        // Use QEMU with kernel and 9p-mounted rootfs (avoid extra images)
         final kernelPath = '$vmPath/kernel-x86.bin';
-        final rootfsPath = '$vmPath/alpine-x86-rootfs.tar.gz';
-
-        // Create a disk image from the rootfs if needed
-        final diskPath = await _prepareDiskImage(vmPath, rootfsPath);
-        if (diskPath == null) {
+        final rootfsDir = await vmManager.ensureRootfsExtracted();
+        if (rootfsDir == null) {
           setState(() {
-            _platformError = 'Failed to prepare VM disk image.';
+            _platformError = 'Failed to prepare VM filesystem.';
             _isLoading = false;
           });
           return;
         }
 
-        await _startQemu(emulator.path, kernelPath, diskPath);
+        await _startQemu(
+          emulator.path,
+          kernelPath,
+          rootfsDir: rootfsDir,
+        );
       }
 
       if (mounted) {
@@ -226,9 +228,18 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
     }
   }
 
-  /// Find emulator executable (bundled TinyEMU preferred, system QEMU as fallback)
-  Future<({String path, bool isTinyEmu})?> _findEmulator() async {
+  /// Find emulator executable (Android QEMU -> TinyEMU, else TinyEMU -> QEMU)
+  Future<({String path, bool isTinyEmu})?> _findEmulator(
+    ConsoleVmManager vmManager,
+  ) async {
     if (_isAndroidNative) {
+      // Prefer downloaded QEMU for Android (allows Docker-capable kernel once provided)
+      final qemuPath = await vmManager.ensureAndroidQemuBinary();
+      if (qemuPath != null) {
+        LogService().log('Console: Using Android QEMU at $qemuPath');
+        return (path: qemuPath, isTinyEmu: false);
+      }
+
       final temuPath = await _installBundledTemu();
       if (temuPath != null) {
         LogService().log('Console: Using bundled TinyEMU for Android at $temuPath');
@@ -526,43 +537,82 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
     }
   }
 
-  /// Start QEMU with PTY
+  /// Start QEMU (Android: Process; desktop: PTY)
   Future<void> _startQemu(
     String qemuPath,
-    String kernelPath,
-    String diskPath,
-  ) async {
+    String kernelPath, {
+    String? diskPath,
+    String? rootfsDir,
+  }) async {
     LogService().log('Console: Starting QEMU...');
 
     // Build QEMU command line
-    final args = [
-      '-machine', 'pc',
-      '-m', '${widget.session.memory}M',
+    final args = <String>[
+      '-machine',
+      'pc',
+      '-cpu',
+      'max',
+      '-m',
+      '${widget.session.memory}M',
       '-nographic', // Use serial console
-      '-kernel', kernelPath,
-      '-append', 'console=ttyS0 root=/dev/sda rw',
-      '-drive', 'file=$diskPath,format=qcow2,if=ide',
+      '-kernel',
+      kernelPath,
     ];
+
+    // Prefer 9p mount of extracted rootfs to avoid building a disk image
+    if (rootfsDir != null) {
+      args.addAll([
+        '-append',
+        'console=ttyS0 root=root rootfstype=9p rootflags=trans=virtio rw',
+        '-fsdev',
+        'local,id=root,path=$rootfsDir,security_model=none',
+        '-device',
+        'virtio-9p-pci,fsdev=root,mount_tag=root',
+      ]);
+      LogService().log('Console: QEMU using 9p rootfs at $rootfsDir');
+    } else if (diskPath != null) {
+      args.addAll([
+        '-append',
+        'console=ttyS0 root=/dev/sda rw',
+        '-drive',
+        'file=$diskPath,format=qcow2,if=ide',
+      ]);
+      LogService().log('Console: QEMU using disk image $diskPath');
+    } else {
+      LogService().log('Console: No rootfs provided for QEMU');
+    }
 
     // Add network if enabled
     if (widget.session.networkEnabled) {
+      // Default port forwards for SSH/HTTP/HTTPS into the guest
+      final hostForwards = [
+        'hostfwd=tcp::2222-:22',
+        'hostfwd=tcp::8080-:80',
+        'hostfwd=tcp::8443-:443',
+      ].join(',');
+
       args.addAll([
         '-netdev',
-        'user,id=net0',
+        'user,id=net0,$hostForwards',
         '-device',
         'virtio-net-pci,netdev=net0',
       ]);
     }
 
     // Enable KVM if available
-    if (await File('/dev/kvm').exists()) {
+    if (!_isAndroidNative && await File('/dev/kvm').exists()) {
       args.addAll(['-enable-kvm', '-cpu', 'host']);
       LogService().log('Console: KVM acceleration enabled');
     }
 
     LogService().log('Console: QEMU args: ${args.join(' ')}');
 
-    // Create PTY and spawn QEMU
+    if (_isAndroidNative) {
+      await _startQemuProcess(qemuPath, args, kernelPath);
+      return;
+    }
+
+    // Create PTY and spawn QEMU (desktop/Linux)
     _pty = Pty.start(
       qemuPath,
       arguments: args,
@@ -585,6 +635,51 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
         widget.onStateChanged?.call(ConsoleSessionState.stopped);
       }
     });
+  }
+
+  /// Start QEMU on Android using a normal process (no PTY available)
+  Future<void> _startQemuProcess(
+    String qemuPath,
+    List<String> args,
+    String kernelPath,
+  ) async {
+    final workDir = File(kernelPath).parent.path;
+
+    try {
+      final process = await Process.start(
+        qemuPath,
+        args,
+        workingDirectory: workDir,
+        environment: Platform.environment,
+      );
+      _qemuProcess = process;
+
+      process.stdout.transform(utf8.decoder).listen((data) {
+        _terminal?.write(data);
+      });
+      process.stderr.transform(utf8.decoder).listen((data) {
+        _terminal?.write(data);
+      });
+
+      _terminal?.onOutput = (data) {
+        process.stdin.add(const Utf8Encoder().convert(data));
+      };
+
+      process.exitCode.then((code) {
+        LogService().log('Console: QEMU exited with code $code');
+        if (mounted) {
+          widget.onStateChanged?.call(ConsoleSessionState.stopped);
+        }
+      });
+    } catch (e) {
+      LogService().log('Console: Failed to start QEMU: $e');
+      if (mounted) {
+        setState(() {
+          _platformError = 'Failed to start QEMU: $e';
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   /// Initialize WebView for mobile/macOS
@@ -632,7 +727,7 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
         await _controller!.loadHtmlString(
           _buildStatusHtml('Downloading VM files... (attempt $attempt/3)'),
         );
-        ready = await vmManager.ensureVmReady();
+        ready = await vmManager.ensureVmReady(includeRootfsTar: false);
         if (ready) break;
         LogService().log(
           'Console: Download attempt $attempt failed, retrying...',
@@ -666,7 +761,9 @@ class ConsoleWebViewState extends State<ConsoleWebView> {
         return;
       }
       final vmBaseUrl = await _ensureLocalVmServer(vmPath);
+      LogService().log('Console: WebView using VM base URL $vmBaseUrl');
       final html = await _generateEmulatorHtml(vmBaseUrl, vmPath);
+      LogService().log('Console: WebView generated HTML with config ${p.join(vmPath, 'local-alpine-x86.cfg')}');
       await _controller!.loadHtmlString(html.html, baseUrl: html.baseUrl);
     } catch (e) {
       LogService().log('Console: Error loading emulator: $e');
@@ -924,6 +1021,28 @@ $jslinuxJs
       log: function(msg) { this.sendMessage('log', msg); }
     };
 
+    // Verbose XHR logging to surface missing assets inside WebView
+    (function() {
+      var origOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this._geogramUrl = url;
+        try {
+          this.addEventListener('load', function() {
+            window.geogramBridge.log('XHR load ' + url + ' status=' + this.status + ' bytes=' + (this.response ? (this.response.byteLength || this.response.length || '?') : '?'));
+          });
+          this.addEventListener('error', function() {
+            window.geogramBridge.onError('XHR error ' + url);
+          });
+          this.addEventListener('abort', function() {
+            window.geogramBridge.onError('XHR abort ' + url);
+          });
+        } catch (e) {
+          window.geogramBridge.log('XHR hook error: ' + e);
+        }
+        return origOpen.apply(this, arguments);
+      };
+    })();
+
     // Force the page location to the VM host so jslinux resolves relative assets correctly
     (function() {
       try {
@@ -943,14 +1062,36 @@ $jslinuxJs
   <script>
     // Notify Flutter when the emulator runtime comes up
     window.Module = window.Module || {};
-    window.Module.onRuntimeInitialized = function() {
-      var status = document.getElementById('status');
-      var termWrap = document.getElementById('term_wrap');
-      if (status) status.style.display = 'none';
-      if (termWrap) termWrap.style.display = 'block';
-      window.geogramBridge.log('JSLinux runtime initialized');
-      window.geogramBridge.onReady();
+    window.Module.print = function(text) {
+      try { window.geogramBridge.log('VM: ' + text); } catch (e) {}
     };
+    window.Module.printErr = function(text) {
+      try { window.geogramBridge.log('VMERR: ' + text); } catch (e) {}
+    };
+      window.Module.onRuntimeInitialized = function() {
+        var status = document.getElementById('status');
+        var termWrap = document.getElementById('term_wrap');
+        if (status) status.style.display = 'none';
+        if (termWrap) termWrap.style.display = 'block';
+        window.geogramBridge.log('JSLinux runtime initialized');
+        try {
+          // Give the VM a kick: focus the terminal and send an Enter
+          var container = document.getElementById('term_container');
+          if (container && container.focus) container.focus();
+          if (window.term && window.term.sendString) {
+            window.term.sendString('\\r');
+            window.geogramBridge.log('Sent Enter to VM console');
+          }
+        } catch (e) {
+          window.geogramBridge.log('Focus/send error: ' + e);
+        }
+        setTimeout(function() {
+          try {
+            window.geogramBridge.log('Term status: ' + (!!window.term) + ', rows=' + (window.term && window.term.rows));
+          } catch (_) {}
+        }, 500);
+        window.geogramBridge.onReady();
+      };
 
     // Extra guard: surface a timeout if the emulator doesn't load
     setTimeout(function() {
@@ -977,7 +1118,7 @@ $jslinuxJs
     memory_size: ${widget.session.memory},
     kernel: "kernel-x86.bin",
     initrd: "alpine-x86-rootfs.cpio.gz",
-    cmdline: "loglevel=3 console=hvc0 root=/dev/ram0 rw rdinit=/bin/sh",
+    cmdline: "loglevel=3 console=ttyS0 root=/dev/ram0 rw rdinit=/bin/sh",
     eth0: { driver: "user" },
 }
 ''';
@@ -1005,6 +1146,7 @@ $jslinuxJs
           break;
         case 'ready':
           _isReady = true;
+          LogService().log('Console: WebView signaled ready');
           widget.onReady?.call();
           break;
         case 'log':
@@ -1113,6 +1255,32 @@ $jslinuxJs
                     'Loading Alpine Linux...',
                     style: TextStyle(
                       color: Colors.green,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (_isReady && !_isLoading)
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green, size: 16),
+                  SizedBox(width: 8),
+                  Text(
+                    'Console ready (press Enter)',
+                    style: TextStyle(
+                      color: Colors.white,
                       fontFamily: 'monospace',
                     ),
                   ),

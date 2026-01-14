@@ -50,11 +50,36 @@ FILES["x86emu-wasm.wasm"]="$JSLINUX_BASE/x86emu-wasm.wasm"
 FILES["kernel-x86.bin"]="$JSLINUX_BASE/kernel-x86.bin"
 FILES["alpine-x86.cfg"]="$JSLINUX_BASE/alpine-x86.cfg"
 FILES["alpine-x86-rootfs.tar.gz"]="https://dl-cdn.alpinelinux.org/alpine/v3.12/releases/x86/alpine-minirootfs-3.12.0-x86.tar.gz"
+FILES["alpine-x86-rootfs.cpio.gz"]="$JSLINUX_BASE/alpine-x86-rootfs.cpio.gz"
+
+# Optional: Android QEMU archive (placeholder if not present locally)
+LOCAL_QEMU_ARCHIVE="$SCRIPT_DIR/console_vm_assets/qemu-android-aarch64.tar.gz"
+if [ -f "$LOCAL_QEMU_ARCHIVE" ]; then
+    FILES["qemu-android-aarch64.tar.gz"]="file://$LOCAL_QEMU_ARCHIVE"
+fi
+
+# Optional: local initrd override (preferred)
+LOCAL_INITRD="$SCRIPT_DIR/console_vm_assets/alpine-x86-rootfs.cpio.gz"
+if [ -f "$LOCAL_INITRD" ]; then
+    FILES["alpine-x86-rootfs.cpio.gz"]="file://$LOCAL_INITRD"
+fi
 
 # Download each file
 for file in "${!FILES[@]}"; do
     url="${FILES[$file]}"
     echo "  Downloading $file from $url..."
+    # Handle file:// URLs for locally provided assets
+    if [[ "$url" == file://* ]]; then
+        src="${url#file://}"
+        if cp "$src" "$file"; then
+            size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "?")
+            echo -e "    ${GREEN}OK (local)${NC} ($size bytes)"
+        else
+            echo -e "    ${RED}FAILED to copy local asset${NC}"
+        fi
+        continue
+    fi
+
     if curl -sL -o "$file" "$url"; then
         size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "?")
         if [ "$size" -gt 100 ]; then
@@ -86,7 +111,7 @@ cat > manifest.json << EOF
 EOF
 
 first=true
-for file in jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
+for file in jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz alpine-x86-rootfs.cpio.gz qemu-android-aarch64.tar.gz; do
     if [ -f "$file" ]; then
         size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0")
         sha=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1 || echo "")
@@ -114,7 +139,7 @@ echo ""
 
 # Upload files to server
 echo -e "${YELLOW}[4/4] Uploading files to server...${NC}"
-for file in manifest.json jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz; do
+for file in manifest.json jslinux.js term.js x86emu-wasm.js x86emu-wasm.wasm kernel-x86.bin alpine-x86.cfg alpine-x86-rootfs.tar.gz alpine-x86-rootfs.cpio.gz qemu-android-aarch64.tar.gz; do
     if [ -f "$file" ]; then
         size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "?")
         echo "  Uploading $file ($size bytes)..."

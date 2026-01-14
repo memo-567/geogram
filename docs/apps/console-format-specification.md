@@ -1185,6 +1185,17 @@ The VM runs in a sandboxed WebView/WASM environment:
 - Permissions were verified: the copied binary is mode `0755` and executable under the app UID. The failure is not a chmod issue; the shipped TinyEMU build simply lacks x86 support.
 - Next action required: either (1) switch the Android console VM to a RISC-V image that TinyEMU supports, or (2) bundle a different emulator that implements x86 on Android (e.g., a cross-compiled `qemu-system-x86_64` or an x86-capable TinyEMU fork). Until then, Android native console cannot boot the current Alpine x86 VM.
 
+## Operational Notes: Android QEMU (2026-01-14, WIP)
+
+- Android now runs the Console via WebView/JSLinux (same as web/desktop) instead of native TinyEMU/QEMU to prioritize fast startup and a lightweight footprint. Native emulators remain unused by default.
+- The previously added QEMU bundle endpoint (`/console/emu/qemu-android-aarch64.tar.gz`) stays available for future native experiments but is not consumed by the Android client.
+- Networking in JSLinux is virtio user-mode: outbound internet works; inbound host port forwarding is not available from WebView. Use station services or HTTP/WebSocket from inside the VM as needed.
+- Docker is out of scope in this lightweight mode (kernel lacks cgroups/overlayfs, and performance would be insufficient even if enabled).
+- The existing Alpine x86 rootfs is reused: it is extracted once and mounted via virtio-9p (`rootfstype=9p root=root rootflags=trans=virtio`) so no extra disk image is required. Kernel is still `kernel-x86.bin` from the current VM bundle.
+- Networking is user-mode virtio with default host forwards: 2222→22 (SSH), 8080→80 (HTTP), 8443→443 (HTTPS). Adjust QEMU args if the guest services need different ports.
+- Docker is still blocked on this image because the current kernel lacks cgroups/overlayfs; enabling Docker will require shipping a kernel with those options (or a new guest image) while keeping the single image story aligned with desktop/web.
+- Fallback remains TinyEMU (which still fails for x86 on Android until a different build or a RISC-V image is shipped).
+
 ## Related Documentation
 
 - [Downloads Specification](../downloads.md)

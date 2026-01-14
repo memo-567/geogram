@@ -1,7 +1,10 @@
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'storage_config.dart';
 
 /// Log levels for filtering
 enum LogLevel { debug, info, warn, error }
@@ -15,8 +18,10 @@ class LogService {
   final int maxLogMessages = 1000;
   final Queue<String> _logMessages = Queue<String>();
   final List<Function(String)> _listeners = [];
-  File? _logFile;
+  Directory? _logsDir;
   IOSink? _logSink;
+  IOSink? _crashSink;
+  DateTime? _currentLogDay;
   bool _initialized = false;
 
   // Loop detection: track recent messages to detect tight loops
@@ -38,22 +43,26 @@ class LogService {
     }
 
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final logDir = Directory('${appDir.path}/geogram');
-
-      if (!await logDir.exists()) {
-        await logDir.create(recursive: true);
+      // Prefer StorageConfig location when available
+      String basePath;
+      if (StorageConfig().isInitialized) {
+        basePath = StorageConfig().logsDir;
+      } else {
+        final appDir = await getApplicationDocumentsDirectory();
+        basePath = p.join(appDir.path, 'geogram', 'logs');
       }
 
-      _logFile = File('${logDir.path}/log.txt');
+      _logsDir = Directory(basePath);
+      if (!await _logsDir!.exists()) {
+        await _logsDir!.create(recursive: true);
+      }
 
-      // Open the file sink once and keep it open
-      _logSink = _logFile!.openWrite(mode: FileMode.append);
+      _openSinks(DateTime.now());
       _initialized = true;
 
       // Write startup marker
-      _logSink!.writeln('\n=== Application Started: ${DateTime.now()} ===');
-      await _logSink!.flush();
+      _logSink?.writeln('\n=== Application Started: ${DateTime.now()} ===');
+      await _logSink?.flush();
     } catch (e) {
       // Can't use log() here as we're in init(), use print on web or stderr on native
       print('Error initializing log file: $e');
@@ -61,15 +70,69 @@ class LogService {
     }
   }
 
-  void _writeToFile(String message) {
-    if (kIsWeb || _logSink == null) return;
+  void _rotateIfNeeded(DateTime now) {
+    if (kIsWeb || _logsDir == null) return;
+
+    final today = DateTime(now.year, now.month, now.day);
+    if (_currentLogDay != null &&
+        _currentLogDay!.year == today.year &&
+        _currentLogDay!.month == today.month &&
+        _currentLogDay!.day == today.day &&
+        _logSink != null &&
+        _crashSink != null) {
+      return;
+    }
+
+    _openSinks(now);
+  }
+
+  void _writeToFile(String message, {bool isCrash = false}) {
+    if (kIsWeb) return;
 
     try {
-      // Write log entry to the open sink
-      _logSink!.writeln(message);
+      _logSink?.writeln(message);
+      if (isCrash) {
+        _crashSink?.writeln(message);
+      }
     } catch (e) {
       print('Error writing to log file: $e');
     }
+  }
+
+  void _openSinks(DateTime now) {
+    if (_logsDir == null) return;
+    if (!_logsDir!.existsSync()) {
+      _logsDir!.createSync(recursive: true);
+    }
+
+    final crashFile = File(p.join(_logsDir!.path, 'crash.txt'));
+    _crashSink ??= crashFile.openWrite(mode: FileMode.append);
+
+    final today = DateTime(now.year, now.month, now.day);
+    if (_currentLogDay != null &&
+        _currentLogDay!.year == today.year &&
+        _currentLogDay!.month == today.month &&
+        _currentLogDay!.day == today.day &&
+        _logSink != null) {
+      return;
+    }
+
+    try {
+      _logSink?.flush();
+      _logSink?.close();
+    } catch (_) {}
+
+    final yearDir = Directory(p.join(_logsDir!.path, now.year.toString()));
+    if (!yearDir.existsSync()) {
+      yearDir.createSync(recursive: true);
+    }
+
+    final dateStr =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final logFile = File(p.join(yearDir.path, 'log-$dateStr.txt'));
+    _logSink = logFile.openWrite(mode: FileMode.append);
+    _currentLogDay = today;
+    _logSink!.writeln('=== Log start ${now.toIso8601String()} ===');
   }
 
   Future<void> dispose() async {
@@ -78,6 +141,8 @@ class LogService {
     try {
       await _logSink?.flush();
       await _logSink?.close();
+      await _crashSink?.flush();
+      await _crashSink?.close();
     } catch (e) {
       print('Error closing log file: $e');
     }
@@ -95,6 +160,7 @@ class LogService {
 
   void log(String message, {LogLevel level = LogLevel.info}) {
     final now = DateTime.now();
+    _rotateIfNeeded(now);
 
     // Loop detection: extract message pattern (remove numbers/timestamps for grouping)
     final pattern = _extractPattern(message);
@@ -148,7 +214,12 @@ class LogService {
     }
 
     // Write to file asynchronously
-    _writeToFile(logEntry);
+    final isCrash = level == LogLevel.error ||
+        message.toLowerCase().contains('exception') ||
+        message.toLowerCase().contains('crash') ||
+        message.toLowerCase().contains('fatal');
+
+    _writeToFile(logEntry, isCrash: isCrash);
 
     // Notify all listeners
     for (var listener in _listeners) {
@@ -179,6 +250,108 @@ class LogService {
     _suppressedCount = 0;
     for (var listener in _listeners) {
       listener('');
+    }
+  }
+
+  Future<void> adoptStorageConfigLogsDir() async {
+    if (kIsWeb || !StorageConfig().isInitialized) return;
+    final desiredPath = StorageConfig().logsDir;
+
+    if (_logsDir != null && p.equals(_logsDir!.path, desiredPath)) {
+      return;
+    }
+
+    try {
+      await _logSink?.flush();
+      await _logSink?.close();
+      await _crashSink?.flush();
+      await _crashSink?.close();
+    } catch (_) {}
+
+    _logSink = null;
+    _crashSink = null;
+    _currentLogDay = null;
+
+    _logsDir = Directory(desiredPath);
+    if (!await _logsDir!.exists()) {
+      await _logsDir!.create(recursive: true);
+    }
+
+    _openSinks(DateTime.now());
+  }
+
+  Future<String?> readTodayLog() async {
+    if (kIsWeb) return null;
+    if (!_initialized) {
+      await init();
+    }
+    if (_logsDir == null) return null;
+
+    final now = DateTime.now();
+    final dateStr =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final file = File(p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt'));
+    if (!await file.exists()) return null;
+    try {
+      return await file.readAsString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> readCrashLog() async {
+    if (kIsWeb) return null;
+    if (!_initialized) {
+      await init();
+    }
+    if (_logsDir == null) return null;
+
+    final crashFile = File(p.join(_logsDir!.path, 'crash.txt'));
+    if (!await crashFile.exists()) return null;
+    try {
+      return await crashFile.readAsString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearCrashLog() async {
+    if (kIsWeb) return;
+    if (!_initialized) {
+      await init();
+    }
+    if (_logsDir == null) return;
+
+    final crashFile = File(p.join(_logsDir!.path, 'crash.txt'));
+    try {
+      await _crashSink?.flush();
+      await _crashSink?.close();
+    } catch (_) {}
+    _crashSink = null;
+
+    if (await crashFile.exists()) {
+      try {
+        await crashFile.delete();
+      } catch (_) {}
+    }
+
+    _rotateIfNeeded(DateTime.now());
+  }
+
+  Future<Map<String, dynamic>?> readHeartbeat() async {
+    if (kIsWeb) return null;
+    if (!_initialized) {
+      await init();
+    }
+    if (_logsDir == null) return null;
+
+    final file = File(p.join(_logsDir!.path, 'heartbeat.json'));
+    if (!await file.exists()) return null;
+    try {
+      final contents = await file.readAsString();
+      return jsonDecode(contents) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
     }
   }
 }

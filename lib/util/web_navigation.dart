@@ -79,6 +79,7 @@ class WebNavigation {
     bool hasPlaces = false,
     bool hasFiles = false,
     bool hasAlerts = false,
+    bool hasDownload = false,
   }) {
     final apps = <String>['home'];
     if (hasBlog) apps.add('blog');
@@ -87,6 +88,7 @@ class WebNavigation {
     if (hasPlaces) apps.add('places');
     if (hasFiles) apps.add('files');
     if (hasAlerts) apps.add('alerts');
+    if (hasDownload) apps.add('download');
 
     return generateMenuItems(
       availableApps: apps,
@@ -105,6 +107,7 @@ class WebNavigation {
     bool hasPlaces = false,
     bool hasFiles = false,
     bool hasAlerts = false,
+    bool hasDownload = false,
   }) {
     final apps = <String>['home'];
     if (hasBlog) apps.add('blog');
@@ -113,6 +116,7 @@ class WebNavigation {
     if (hasPlaces) apps.add('places');
     if (hasFiles) apps.add('files');
     if (hasAlerts) apps.add('alerts');
+    if (hasDownload) apps.add('download');
 
     return generateMenuItems(
       availableApps: apps,
@@ -130,6 +134,7 @@ class WebNavigation {
     'places': NavItem(id: 'places', label: 'places', path: '/places/'),
     'files': NavItem(id: 'files', label: 'files', path: '/files/'),
     'alerts': NavItem(id: 'alerts', label: 'alerts', path: '/alerts/'),
+    'download': NavItem(id: 'download', label: 'download', path: '/download/'),
   };
 
   /// Get the CSS for header navigation

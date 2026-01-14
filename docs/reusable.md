@@ -2065,6 +2065,7 @@ static String generateStationHeader({
   bool hasPlaces = false,
   bool hasFiles = false,
   bool hasAlerts = false,
+  bool hasDownload = false,
 })
 ```
 
@@ -2079,6 +2080,7 @@ static String generateDeviceHeader({
   bool hasPlaces = false,
   bool hasFiles = false,
   bool hasAlerts = false,
+  bool hasDownload = false,
 })
 ```
 
@@ -2154,6 +2156,7 @@ Templates should use `{{HEADER_NAV}}` placeholder:
 | places | places | /places/ | ../places/ |
 | files | files | /files/ | ../files/ |
 | alerts | alerts | /alerts/ | ../alerts/ |
+| download | download | /download/ | ../download/ |
 
 **CSS Classes (in themes/default/styles.css):**
 ```css

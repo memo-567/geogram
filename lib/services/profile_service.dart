@@ -50,10 +50,15 @@ class ProfileService {
       }
 
       await _loadProfiles();
+      await _repairProfilesIfNeeded();
       _initialized = true;
       LogService().log('ProfileService initialized with ${_profiles.length} profile(s)');
     } catch (e) {
       LogService().log('Error initializing ProfileService: $e');
+      // Try to salvage any loaded profiles before falling back
+      try {
+        await _repairProfilesIfNeeded();
+      } catch (_) {}
       // Still mark as initialized with a default profile to avoid blocking the app
       if (_profiles.isEmpty) {
         final newProfile = Profile();
@@ -151,6 +156,111 @@ class ProfileService {
     activeProfileNotifier.value = _activeProfileId;
   }
 
+  /// Attempt to repair corrupted profiles (missing npub/callsign but have nsec)
+  Future<void> _repairProfilesIfNeeded() async {
+    bool changed = false;
+    for (var i = 0; i < _profiles.length; i++) {
+      final repaired = await _repairProfile(_profiles[i]);
+      if (repaired) {
+        _profiles[i] = _profiles[i];
+        changed = true;
+      }
+    }
+
+    // Ensure we have an active profile after repairs
+    if (_activeProfileId == null && _profiles.isNotEmpty) {
+      _activeProfileId = _profiles.first.id;
+      changed = true;
+    }
+
+    // Drop profiles that still can't sign (no usable nsec)
+    final before = _profiles.length;
+    _profiles = _profiles.where(_hasUsableNsec).toList();
+    if (_profiles.length != before) {
+      changed = true;
+      LogService().log(
+        'ProfileService: filtered out ${before - _profiles.length} profile(s) without usable nsec',
+      );
+    }
+
+    // Ensure the active profile points to a usable entry
+    if (_activeProfileId != null &&
+        !_profiles.any((p) => p.id == _activeProfileId)) {
+      _activeProfileId = _profiles.isNotEmpty ? _profiles.first.id : null;
+      changed = true;
+    }
+
+    if (changed) {
+      _saveAllProfiles();
+      LogService().log('ProfileService: repaired profiles and refreshed config');
+    }
+  }
+
+  /// Repair a single profile in-place. Returns true if the profile was modified.
+  Future<bool> _repairProfile(Profile profile) async {
+    bool updated = false;
+    String? privateHex;
+
+    // Normalize nsec: accept hex and encode to nsec
+    if (profile.nsec.isNotEmpty) {
+      privateHex = NostrKeyGenerator.getPrivateKeyHex(profile.nsec);
+      // If nsec is hex (64 chars), encode it to nsec bech32
+      if (privateHex == null &&
+          profile.nsec.length == 64 &&
+          RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(profile.nsec)) {
+        try {
+          profile.nsec = NostrCrypto.encodeNsec(profile.nsec);
+          privateHex = profile.nsec.isNotEmpty
+              ? NostrKeyGenerator.getPrivateKeyHex(profile.nsec)
+              : null;
+          updated = true;
+          LogService().log('ProfileService: recovered nsec from raw hex for ${profile.id}');
+        } catch (_) {}
+      }
+    }
+
+    // Rebuild npub from valid nsec
+    if ((profile.npub.isEmpty || !NostrKeyGenerator.isValidNpub(profile.npub)) &&
+        privateHex != null) {
+      try {
+        final pubHex = NostrCrypto.derivePublicKey(privateHex);
+        profile.npub = NostrCrypto.encodeNpub(pubHex);
+        updated = true;
+        LogService().log('ProfileService: regenerated npub for ${profile.id}');
+      } catch (e) {
+        LogService().log('ProfileService: failed to regenerate npub for ${profile.id}: $e');
+      }
+    }
+
+    // Rebuild callsign from npub when missing
+    if (profile.callsign.isEmpty && profile.npub.isNotEmpty) {
+      try {
+        profile.callsign = profile.type == ProfileType.station
+            ? NostrKeyGenerator.deriveStationCallsign(profile.npub)
+            : NostrKeyGenerator.deriveCallsign(profile.npub);
+        updated = true;
+        LogService().log('ProfileService: derived callsign for ${profile.id}');
+      } catch (e) {
+        LogService().log('ProfileService: failed to derive callsign for ${profile.id}: $e');
+      }
+    }
+
+    // Ensure we have a display-friendly callsign even if keys are still bad
+    if (profile.callsign.isEmpty) {
+      profile.callsign = 'Recovered-${profile.id.substring(0, 6)}';
+      updated = true;
+    }
+
+    // Set a preferred color if missing
+    if (profile.preferredColor.isEmpty) {
+      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      profile.preferredColor = colors[Random().nextInt(colors.length)];
+      updated = true;
+    }
+
+    return updated;
+  }
+
   /// Generate new NOSTR identity for a specific profile
   Future<void> _generateIdentityForProfile(Profile profile, {ProfileType? type}) async {
     final keys = NostrKeyGenerator.generateKeyPair();
@@ -241,10 +351,11 @@ class ProfileService {
     if (!_initialized || _profiles.isEmpty) {
       return Profile();
     }
-    return _profiles.firstWhere(
-      (p) => p.id == _activeProfileId,
-      orElse: () => _profiles.first,
+    final byId = _profiles.firstWhere(
+      (p) => p.id == _activeProfileId && _hasUsableNsec(p),
+      orElse: () => _profiles.firstWhere(_hasUsableNsec, orElse: () => _profiles.first),
     );
+    return byId;
   }
 
   /// Get all profiles
@@ -253,13 +364,14 @@ class ProfileService {
     if (!_initialized) {
       return [];
     }
-    return List.unmodifiable(_profiles);
+    return List.unmodifiable(_profiles.where(_hasUsableNsec));
   }
 
   /// Get profile by ID
   Profile? getProfileById(String id) {
     try {
-      return _profiles.firstWhere((p) => p.id == id);
+      final profile = _profiles.firstWhere((p) => p.id == id);
+      return _hasUsableNsec(profile) ? profile : null;
     } catch (_) {
       return null;
     }
@@ -278,7 +390,7 @@ class ProfileService {
 
   /// Switch to a different profile by ID
   Future<void> switchToProfile(String profileId) async {
-    if (!_profiles.any((p) => p.id == profileId)) {
+    if (!_profiles.any((p) => p.id == profileId && _hasUsableNsec(p))) {
       throw Exception('Profile not found: $profileId');
     }
     _activeProfileId = profileId;
@@ -336,6 +448,17 @@ class ProfileService {
   /// Get all active profiles
   List<Profile> getActiveProfiles() {
     return _profiles.where((p) => p.isActive).toList();
+  }
+
+  /// Check if profile has a usable signing key (nsec or raw hex)
+  bool _hasUsableNsec(Profile profile) {
+    if (profile.nsec.isEmpty) return false;
+    if (NostrKeyGenerator.getPrivateKeyHex(profile.nsec) != null) return true;
+    if (profile.nsec.length == 64 &&
+        RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(profile.nsec)) {
+      return true;
+    }
+    return false;
   }
 
   /// Create a new profile with generated identity

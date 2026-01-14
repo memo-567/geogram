@@ -209,6 +209,10 @@ public class BLEForegroundService extends Service {
         } else if ("SCHEDULE_RESTART".equals(action)) {
             scheduleAppRestart();
             return START_STICKY;
+        } else if ("RESTART_LINK".equals(action)) {
+            Log.d(TAG, "Manual restart link requested from notification action");
+            startKeepAlive();
+            sendKeepAlivePing();
         }
 
         // Keep the service running
@@ -333,11 +337,11 @@ public class BLEForegroundService extends Service {
      * warnings to help diagnose connection issues.
      */
     private void sendKeepAlivePing() {
-        if (methodChannel == null) {
-            Log.w(TAG, "MethodChannel not set, cannot send keep-alive ping");
-            consecutiveChannelFailures++;
-            return;
-        }
+            if (methodChannel == null) {
+                Log.w(TAG, "MethodChannel not set, cannot send keep-alive ping");
+                consecutiveChannelFailures++;
+                return;
+            }
 
         try {
             Log.d(TAG, "Sending WebSocket keep-alive ping via MethodChannel");
@@ -356,6 +360,7 @@ public class BLEForegroundService extends Service {
                     if (consecutiveChannelFailures >= MAX_CHANNEL_FAILURES) {
                         Log.e(TAG, "Flutter engine may be destroyed. WebSocket connection at risk. " +
                               "Consecutive failures: " + consecutiveChannelFailures);
+                        scheduleAppRestart();
                     }
                 }
 
@@ -363,6 +368,9 @@ public class BLEForegroundService extends Service {
                 public void notImplemented() {
                     consecutiveChannelFailures++;
                     Log.w(TAG, "Keep-alive ping not implemented by Flutter side");
+                    if (consecutiveChannelFailures >= MAX_CHANNEL_FAILURES) {
+                        scheduleAppRestart();
+                    }
                 }
             });
         } catch (Exception e) {
@@ -372,6 +380,7 @@ public class BLEForegroundService extends Service {
             if (consecutiveChannelFailures >= MAX_CHANNEL_FAILURES) {
                 Log.e(TAG, "Flutter engine likely destroyed. WebSocket will disconnect. " +
                       "App needs to be brought to foreground to reconnect.");
+                scheduleAppRestart();
             }
         }
     }
@@ -430,7 +439,21 @@ public class BLEForegroundService extends Service {
                 .setOngoing(true)
                 .setContentIntent(pendingIntent)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(new NotificationCompat.Action(
+                        R.drawable.ic_notification,
+                        "Restart link",
+                        createRestartPendingIntent()))
                 .build();
+    }
+
+    private PendingIntent createRestartPendingIntent() {
+        Intent restartIntent = new Intent(this, BLEForegroundService.class);
+        restartIntent.setAction("RESTART_LINK");
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        return PendingIntent.getService(this, 1, restartIntent, flags);
     }
 
     private void acquireWakeLock() {

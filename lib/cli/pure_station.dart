@@ -724,6 +724,11 @@ class PureStationServer {
   StationPlaceApi? _placeApi;
   StationFeedbackApi? _feedbackApi;
 
+  // File-based logging
+  IOSink? _logSink;
+  IOSink? _crashSink;
+  DateTime? _currentLogDay;
+
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
   StationAlertApi get alertApi {
@@ -811,6 +816,9 @@ class PureStationServer {
 
     // PureStorageConfig already creates directories, but ensure tiles exists
     await Directory(_tilesDirectory!).create(recursive: true);
+
+    // Prepare logging sinks based on the data directory
+    await _prepareLogSinks(DateTime.now());
 
     // Initialize updates directory
     _updatesDirectory = '$_dataDir/updates';
@@ -9249,6 +9257,17 @@ ${WebNavigation.getHeaderNavCss()}
         'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.12/releases/x86/alpine-minirootfs-3.12.0-x86.tar.gz',
         'size': 2800000,
       },
+      {
+        'name': 'alpine-x86-rootfs.cpio.gz',
+        'url': 'https://bellard.org/jslinux/alpine-x86-rootfs.cpio.gz',
+        'size': 3000000,
+      },
+      {
+        // Android QEMU archive (arm64 host, x86 guest) for native console
+        'name': 'qemu-android-aarch64.tar.gz',
+        'url': 'https://p2p.radio/console/emu/qemu-android-aarch64.tar.gz',
+        'size': 128, // placeholder minimum; actual size validated after download
+      },
     ];
 
     _log('INFO', 'Checking console VM files for download...');
@@ -9306,7 +9325,15 @@ ${WebNavigation.getHeaderNavCss()}
   /// Generate manifest.json for console VM files
   Future<void> _generateConsoleVmManifest(String vmDir) async {
     final files = <Map<String, dynamic>>[];
-    final vmFiles = ['jslinux.js', 'term.js', 'kernel-x86.bin', 'alpine-x86.cfg', 'alpine-x86-rootfs.tar.gz'];
+    final vmFiles = [
+      'jslinux.js',
+      'term.js',
+      'kernel-x86.bin',
+      'alpine-x86.cfg',
+      'alpine-x86-rootfs.tar.gz',
+      'alpine-x86-rootfs.cpio.gz',
+      'qemu-android-aarch64.tar.gz',
+    ];
 
     for (final filename in vmFiles) {
       final file = File(path.join(vmDir, filename));
@@ -9383,8 +9410,16 @@ ${WebNavigation.getHeaderNavCss()}
     return _logs.sublist(_logs.length - limit);
   }
 
+  /// Prepare logging sinks (async wrapper used during initialization)
+  Future<void> _prepareLogSinks(DateTime now) async {
+    _ensureLogSinks(now);
+  }
+
   void _log(String level, String message) {
-    final entry = LogEntry(DateTime.now(), level, message);
+    final now = DateTime.now();
+    _ensureLogSinks(now);
+
+    final entry = LogEntry(now, level, message);
     _logs.add(entry);
     if (_logs.length > maxLogEntries) {
       _logs.removeAt(0);
@@ -9392,6 +9427,65 @@ ${WebNavigation.getHeaderNavCss()}
     if (!_quietMode) {
       stderr.writeln(entry.toString());
     }
+
+    // Write to daily log file
+    try {
+      _logSink?.writeln(entry.toString());
+      _logSink?.flush();
+    } catch (_) {}
+
+    // Write critical entries to crash log for easier forensics
+    final lowerMessage = message.toLowerCase();
+    final isCrashy = level == 'ERROR' ||
+        lowerMessage.contains('exception') ||
+        lowerMessage.contains('fatal') ||
+        lowerMessage.contains('crash');
+    if (isCrashy) {
+      try {
+        _crashSink?.writeln(entry.toString());
+        _crashSink?.flush();
+      } catch (_) {}
+    }
+  }
+
+  /// Ensure daily log file and crash log sinks exist and rotate per day
+  void _ensureLogSinks(DateTime now) {
+    if (_dataDir == null) return;
+    final logsRoot = Directory('$_dataDir/logs');
+    if (!logsRoot.existsSync()) {
+      logsRoot.createSync(recursive: true);
+    }
+
+    // Crash log (single file)
+    _crashSink ??= File('${logsRoot.path}/crash.txt').openWrite(
+      mode: FileMode.append,
+    );
+
+    // Daily log rotation per year/day
+    final today = DateTime(now.year, now.month, now.day);
+    if (_currentLogDay != null &&
+        _currentLogDay!.year == today.year &&
+        _currentLogDay!.month == today.month &&
+        _currentLogDay!.day == today.day) {
+      return; // already set for today
+    }
+
+    // Close previous sink
+    try {
+      _logSink?.flush();
+      _logSink?.close();
+    } catch (_) {}
+
+    final yearDir = Directory('${logsRoot.path}/${now.year}');
+    if (!yearDir.existsSync()) {
+      yearDir.createSync(recursive: true);
+    }
+    final dateStr =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final logFile = File('${yearDir.path}/log-$dateStr.txt');
+    _logSink = logFile.openWrite(mode: FileMode.append);
+    _currentLogDay = today;
+    _logSink!.writeln('=== Log start ${now.toIso8601String()} ===');
   }
 
   // ============================================

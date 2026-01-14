@@ -847,12 +847,9 @@ class DebugController {
         await vmManager.initialize();
         final vmPath = await vmManager.vmPath;
         final Map<String, bool> files = {};
-        for (final f in ConsoleVmManager.requiredFiles) {
+        for (final f in vmManager.requiredFilesForPlatform()) {
           files[f] = await File(vmManager.getVmFilePath(f)).exists();
         }
-        files['alpine-x86-rootfs.cpio.gz'] = await File(
-          vmManager.getVmFilePath('alpine-x86-rootfs.cpio.gz'),
-        ).exists();
 
         final rootfsExtracted = await File(
           p.join(vmPath, '.rootfs_extracted'),

@@ -96,8 +96,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   bool _isPaused = false;
   String _filterText = '';
   String? _crashLogs;
+  String? _todayLog;
+  Map<String, dynamic>? _heartbeat;
   ParsedLogEntry? _selectedEntry;
-  bool _isLoadingCrashLogs = true;
+  bool _isLoadingLogFiles = true;
 
   @override
   void initState() {
@@ -105,7 +107,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     _tabController = TabController(length: 4, vsync: this);
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _logService.addListener(_onLogUpdate);
-    _loadCrashLogs();
+    _loadLogFiles();
   }
 
   @override
@@ -139,22 +141,28 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     }
   }
 
-  Future<void> _loadCrashLogs() async {
-    setState(() => _isLoadingCrashLogs = true);
+  Future<void> _loadLogFiles() async {
+    setState(() => _isLoadingLogFiles = true);
 
     try {
-      final logs = await _crashService.readAllCrashLogs();
+      final todayLog = await _logService.readTodayLog();
+      final logs = await _crashService.readAllCrashLogs() ?? await _logService.readCrashLog();
+      final heartbeat = await _logService.readHeartbeat();
       if (mounted) {
         setState(() {
+          _todayLog = todayLog;
           _crashLogs = logs;
-          _isLoadingCrashLogs = false;
+          _heartbeat = heartbeat;
+          _isLoadingLogFiles = false;
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
+          _todayLog = null;
           _crashLogs = null;
-          _isLoadingCrashLogs = false;
+          _heartbeat = null;
+          _isLoadingLogFiles = false;
         });
       }
     }
@@ -233,7 +241,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     if (confirm != true) return;
 
     await _crashService.clearAllCrashLogs();
-    await _loadCrashLogs();
+    await _loadLogFiles();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -262,6 +270,12 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   void _copyExceptions() {
     final buffer = StringBuffer();
 
+    if (_todayLog != null && _todayLog!.trim().isNotEmpty) {
+      buffer.writeln('=== TODAY\'S LOG ===');
+      buffer.writeln(_todayLog!.trim());
+      buffer.writeln();
+    }
+
     // Add runtime exceptions
     final exceptionLogs = _getExceptionLogs();
     if (exceptionLogs.isNotEmpty) {
@@ -279,12 +293,12 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
 
     if (buffer.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No exceptions to copy')),
+        const SnackBar(content: Text('No logs to copy')),
       );
       return;
     }
 
-    _copyToClipboard(buffer.toString(), 'Exceptions copied to clipboard');
+    _copyToClipboard(buffer.toString(), 'Logs copied to clipboard');
   }
 
   @override
@@ -300,8 +314,8 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh crash logs',
-            onPressed: _loadCrashLogs,
+            tooltip: 'Refresh log files',
+            onPressed: _loadLogFiles,
           ),
           IconButton(
             icon: const Icon(Icons.clear_all),
@@ -550,9 +564,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   Widget _buildCrashPanel() {
     final exceptionLogs = _getExceptionLogs();
     final hasCrashLogs = _crashLogs != null && _crashLogs!.isNotEmpty;
-    final hasExceptions = exceptionLogs.isNotEmpty || hasCrashLogs;
+    final hasTodayLog = _todayLog != null && _todayLog!.trim().isNotEmpty;
+    final hasExceptions = exceptionLogs.isNotEmpty || hasCrashLogs || hasTodayLog;
 
-    if (_isLoadingCrashLogs) {
+    if (_isLoadingLogFiles) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -608,6 +623,22 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           ),
           const SizedBox(height: 16),
 
+          if (_heartbeat != null) ...[
+            _buildHeartbeatCard(),
+            const SizedBox(height: 16),
+          ],
+
+          if (hasTodayLog) ...[
+            _buildExceptionSection(
+              title: 'Today\'s Log',
+              icon: Icons.article_outlined,
+              content: _todayLog!.trim(),
+              count: _todayLog!.split('\n').where((l) => l.trim().isNotEmpty).length,
+              accentColor: Colors.blue,
+            ),
+            const SizedBox(height: 16),
+          ],
+
           // Runtime errors from log
           if (exceptionLogs.isNotEmpty) ...[
             _buildExceptionSection(
@@ -615,6 +646,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
               icon: Icons.error,
               content: exceptionLogs.map((l) => l.raw).join('\n'),
               count: exceptionLogs.length,
+              accentColor: Colors.orange,
             ),
             const SizedBox(height: 16),
           ],
@@ -626,6 +658,11 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
               icon: Icons.report_problem,
               content: _crashLogs!,
               count: _crashLogs!.split('=== CRASH REPORT ===').length - 1,
+              trailingAction: IconButton(
+                icon: const Icon(Icons.delete_forever, color: Colors.red),
+                tooltip: 'Delete crash log',
+                onPressed: _clearCrashLogs,
+              ),
             ),
         ],
       ),
@@ -637,6 +674,8 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     required IconData icon,
     required String content,
     required int count,
+    Color accentColor = Colors.red,
+    Widget? trailingAction,
   }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -649,7 +688,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.red.withValues(alpha: 0.1),
+              color: accentColor.withValues(alpha: 0.1),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(12),
                 topRight: Radius.circular(12),
@@ -657,7 +696,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
             ),
             child: Row(
               children: [
-                Icon(icon, color: Colors.red),
+                Icon(icon, color: accentColor),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -668,7 +707,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.red,
+                    color: accentColor,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
@@ -686,6 +725,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
                   tooltip: 'Copy $title',
                   onPressed: () => _copyToClipboard(content, '$title copied'),
                 ),
+                if (trailingAction != null) trailingAction,
               ],
             ),
           ),
@@ -712,5 +752,83 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
         ],
       ),
     );
+  }
+
+  Widget _buildHeartbeatCard() {
+    final hb = _heartbeat ?? {};
+    final connected = hb['connected'] == true;
+    final keepAlive = hb['keepAliveEnabled'] == true;
+    final station = (hb['stationUrl'] as String?) ?? '—';
+
+    Widget buildRow(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                value,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  connected ? Icons.link : Icons.link_off,
+                  color: connected ? Colors.green : Colors.red,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'Background Service',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                if (keepAlive)
+                  const Chip(
+                    label: Text('Keep-alive'),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            buildRow('Station', station),
+            buildRow('Last ping', _formatTimestamp(hb['lastPing'] as String?)),
+            buildRow('Last pong', _formatTimestamp(hb['lastPong'] as String?)),
+            buildRow('Last reconnect', _formatTimestamp(hb['lastReconnectSuccess'] as String?)),
+            buildRow('Last disconnect', _formatTimestamp(hb['lastDisconnect'] as String?)),
+            buildRow('Updated', _formatTimestamp(hb['updatedAt'] as String?)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTimestamp(String? iso) {
+    if (iso == null || iso.isEmpty) return '—';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return '${dt.year.toString().padLeft(4, '0')}-'
+          '${dt.month.toString().padLeft(2, '0')}-'
+          '${dt.day.toString().padLeft(2, '0')} '
+          '${dt.hour.toString().padLeft(2, '0')}:'
+          '${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '—';
+    }
   }
 }

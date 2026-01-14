@@ -17,6 +17,7 @@ class ConfigService {
   File? _configFile;
   Map<String, dynamic> _config = {};
   static const String _webStorageKey = 'geogram_config';
+  static const String _webStorageBackupKey = 'geogram_config_backup';
 
   /// Debounce timer for save operations
   Timer? _saveDebounceTimer;
@@ -61,15 +62,29 @@ class ConfigService {
     if (stored != null) {
       try {
         _config = json.decode(stored) as Map<String, dynamic>;
+        // Keep a backup copy in localStorage
+        WebStorage.set(_webStorageBackupKey, stored);
+        return;
       } catch (e) {
         LogService().log('Error loading web config: $e');
-        _createDefaultConfig();
-        await _saveImmediate();
       }
-    } else {
-      _createDefaultConfig();
-      await _saveImmediate();
     }
+
+    // Attempt to restore from backup when primary entry is missing or corrupted
+    final backup = WebStorage.get(_webStorageBackupKey);
+    if (backup != null) {
+      try {
+        _config = json.decode(backup) as Map<String, dynamic>;
+        WebStorage.set(_webStorageKey, backup);
+        return;
+      } catch (e) {
+        LogService().log('Error loading web config backup: $e');
+      }
+    }
+
+    // Fall back to defaults only if both primary and backup are unusable
+    _createDefaultConfig();
+    await _saveImmediate();
   }
 
   /// Create default configuration
@@ -89,13 +104,26 @@ class ConfigService {
 
   /// Load configuration from disk (native only)
   Future<void> _load() async {
+    String? raw;
     try {
-      final contents = await _configFile!.readAsString();
-      _config = json.decode(contents) as Map<String, dynamic>;
+      raw = await _configFile!.readAsString();
+      final data = json.decode(raw) as Map<String, dynamic>;
+      _config = Map<String, dynamic>.from(data);
+      await _writeBackup(raw);
+      return;
     } catch (e) {
       stderr.writeln('Error loading config: $e');
-      _config = {};
     }
+
+    // Attempt to recover from backup before falling back to defaults
+    final recovered = await _restoreFromBackup();
+    if (recovered) {
+      return;
+    }
+
+    // Quarantine the corrupt file to avoid overwriting it and to aid debugging
+    await _quarantineCorruptFile();
+    _config = {};
   }
 
   /// Save configuration to storage (debounced to prevent too many file operations)
@@ -121,6 +149,8 @@ class ConfigService {
       try {
         final contents = JsonEncoder.withIndent('  ').convert(_config);
         WebStorage.set(_webStorageKey, contents);
+        // Maintain a backup copy in case localStorage entry is corrupted
+        WebStorage.set(_webStorageBackupKey, contents);
       } catch (e) {
         LogService().log('Error saving web config: $e');
       }
@@ -131,7 +161,20 @@ class ConfigService {
       }
       try {
         final contents = JsonEncoder.withIndent('  ').convert(_config);
-        await _configFile!.writeAsString(contents);
+
+        // Ensure the config directory exists
+        await _configFile!.parent.create(recursive: true);
+
+        // Persist a backup of the last known good config before overwriting
+        if (await _configFile!.exists()) {
+          final existing = await _configFile!.readAsString();
+          await _writeBackup(existing);
+        }
+
+        // Atomic-ish write: write to a temp file then rename
+        final tmpFile = File('${_configFile!.path}.tmp');
+        await tmpFile.writeAsString(contents, flush: true);
+        await tmpFile.rename(_configFile!.path);
       } catch (e) {
         stderr.writeln('Error saving config: $e');
       }
@@ -212,6 +255,60 @@ class ConfigService {
   /// Get the full configuration map
   Map<String, dynamic> getAll() {
     return Map<String, dynamic>.from(_config);
+  }
+
+  /// Write a backup copy of the config alongside the main file
+  Future<void> _writeBackup(String contents) async {
+    if (_configFile == null) return;
+    try {
+      final backupFile = File('${_configFile!.path}.bak');
+      await backupFile.parent.create(recursive: true);
+      await backupFile.writeAsString(contents, flush: true);
+    } catch (e) {
+      stderr.writeln('Error writing config backup: $e');
+    }
+  }
+
+  /// Restore config from backup if possible
+  Future<bool> _restoreFromBackup() async {
+    if (_configFile == null) return false;
+    final backupFile = File('${_configFile!.path}.bak');
+    if (!await backupFile.exists()) return false;
+
+    try {
+      final contents = await backupFile.readAsString();
+      final data = json.decode(contents) as Map<String, dynamic>;
+      _config = Map<String, dynamic>.from(data);
+
+      // Rewrite the main file from the recovered backup to ensure future loads succeed
+      final tmpFile = File('${_configFile!.path}.tmp');
+      await tmpFile.writeAsString(contents, flush: true);
+      await tmpFile.rename(_configFile!.path);
+      stderr.writeln('ConfigService: Restored config from backup');
+      return true;
+    } catch (e) {
+      stderr.writeln('Error restoring config from backup: $e');
+      return false;
+    }
+  }
+
+  /// Quarantine a corrupt config file to avoid losing it
+  Future<void> _quarantineCorruptFile() async {
+    if (_configFile == null) return;
+    final file = _configFile!;
+    if (!await file.exists()) return;
+
+    final timestamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final quarantinePath = '${file.path}.corrupt-$timestamp';
+    try {
+      await file.rename(quarantinePath);
+      stderr.writeln('ConfigService: Moved corrupt config to $quarantinePath');
+    } catch (e) {
+      stderr.writeln('ConfigService: Failed to quarantine corrupt config: $e');
+    }
   }
 
   /// Store collection npub/nsec key pair

@@ -611,7 +611,7 @@ class _EmailComposePageState extends State<EmailComposePage> {
             // Send button
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-              child: ElevatedButton.icon(
+              child: FilledButton.icon(
                 onPressed: _isSending ? null : _send,
                 icon: _isSending
                     ? const SizedBox(
@@ -627,90 +627,23 @@ class _EmailComposePageState extends State<EmailComposePage> {
         ),
         body: Form(
           key: _formKey,
-          child: Column(
-            children: [
-              // Account selector - always show to display sender email
-              _buildAccountSelector(),
-              // Email fields
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    // To field
-                    _buildRecipientField(
-                      controller: _toController,
-                      label: 'To',
-                      required: true,
-                    ),
-                    // CC field (toggleable)
-                    if (_showCc)
-                      _buildRecipientField(
-                        controller: _ccController,
-                        label: 'Cc',
-                        onRemove: () => setState(() {
-                          _ccController.clear();
-                          _showCc = false;
-                        }),
-                      ),
-                    // BCC field (toggleable)
-                    if (_showBcc)
-                      _buildRecipientField(
-                        controller: _bccController,
-                        label: 'Bcc',
-                        onRemove: () => setState(() {
-                          _bccController.clear();
-                          _showBcc = false;
-                        }),
-                      ),
-                    // CC/BCC toggle buttons
-                    if (!_showCc || !_showBcc)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            if (!_showCc)
-                              TextButton(
-                                onPressed: () => setState(() => _showCc = true),
-                                child: const Text('Add Cc'),
-                              ),
-                            if (!_showBcc)
-                              TextButton(
-                                onPressed: () =>
-                                    setState(() => _showBcc = true),
-                                child: const Text('Add Bcc'),
-                              ),
-                          ],
-                        ),
-                      ),
-                    const Divider(),
-                    // Subject field
-                    TextFormField(
-                      controller: _subjectController,
-                      decoration: const InputDecoration(
-                        labelText: 'Subject',
-                        border: InputBorder.none,
-                      ),
-                      textInputAction: TextInputAction.next,
-                    ),
-                    const Divider(),
-                    // Body field
-                    TextFormField(
-                      controller: _bodyController,
-                      decoration: const InputDecoration(
-                        hintText: 'Compose email...',
-                        border: InputBorder.none,
-                      ),
-                      maxLines: null,
-                      minLines: 10,
-                      keyboardType: TextInputType.multiline,
-                      textCapitalization: TextCapitalization.sentences,
-                    ),
-                    // Attachments list
-                    _buildAttachmentsList(),
-                  ],
-                ),
-              ),
-            ],
+          child: SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              children: [
+                _buildAccountSelector(),
+                const SizedBox(height: 12),
+                _buildRecipientsCard(),
+                const SizedBox(height: 12),
+                _buildSubjectCard(),
+                const SizedBox(height: 12),
+                _buildBodyCard(),
+                if (_attachments.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _buildAttachmentsList(),
+                ],
+              ],
+            ),
           ),
         ),
       ),
@@ -730,39 +663,40 @@ class _EmailComposePageState extends State<EmailComposePage> {
   Widget _buildAccountSelector() {
     final accounts = _emailService.accounts;
     final hasMultipleAccounts = accounts.length > 1;
+    final theme = Theme.of(context);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(
-            'From: ',
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[700],
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'From',
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: accounts.isEmpty
+            const SizedBox(height: 8),
+            accounts.isEmpty
                 ? Text(
                     'No account configured',
                     style: TextStyle(
-                      color: Colors.red[400],
+                      color: theme.colorScheme.error,
                       fontStyle: FontStyle.italic,
                     ),
                   )
                 : hasMultipleAccounts
-                    ? DropdownButton<EmailAccount>(
+                    ? DropdownButtonFormField<EmailAccount>(
                         value: _selectedAccount,
                         isExpanded: true,
-                        underline: const SizedBox.shrink(),
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
                         items: accounts.map((account) {
                           return DropdownMenuItem(
                             value: account,
@@ -802,13 +736,178 @@ class _EmailComposePageState extends State<EmailComposePage> {
                           Expanded(
                             child: Text(
                               _selectedAccount?.email ?? 'No account',
-                              style: const TextStyle(fontWeight: FontWeight.w500),
+                              style: const TextStyle(fontWeight: FontWeight.w600),
                             ),
                           ),
                         ],
                       ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildMetaChip(
+                  icon: _selectedAccount?.isConnected == true
+                      ? Icons.cloud_done
+                      : Icons.cloud_off,
+                  label: _selectedAccount?.isConnected == true ? 'Connected' : 'Offline',
+                  color: _selectedAccount?.isConnected == true
+                      ? theme.colorScheme.secondary
+                      : theme.colorScheme.error,
+                ),
+                _buildMetaChip(
+                  icon: Icons.flag,
+                  label: 'Priority: ${_priority.name}',
+                  color: theme.colorScheme.primary,
+                  onTap: _showPriorityDialog,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetaChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecipientsCard() {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Recipients',
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _buildRecipientField(
+              controller: _toController,
+              label: 'To',
+              required: true,
+            ),
+            if (_showCc)
+              _buildRecipientField(
+                controller: _ccController,
+                label: 'Cc',
+                onRemove: () => setState(() {
+                  _ccController.clear();
+                  _showCc = false;
+                }),
+              ),
+            if (_showBcc)
+              _buildRecipientField(
+                controller: _bccController,
+                label: 'Bcc',
+                onRemove: () => setState(() {
+                  _bccController.clear();
+                  _showBcc = false;
+                }),
+              ),
+            if (!_showCc || !_showBcc)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    if (!_showCc)
+                      TextButton.icon(
+                        onPressed: () => setState(() => _showCc = true),
+                        icon: const Icon(Icons.person_add_alt, size: 18),
+                        label: const Text('Add Cc'),
+                      ),
+                    if (!_showBcc)
+                      TextButton.icon(
+                        onPressed: () => setState(() => _showBcc = true),
+                        icon: const Icon(Icons.visibility_off, size: 18),
+                        label: const Text('Add Bcc'),
+                      ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubjectCard() {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: TextFormField(
+          controller: _subjectController,
+          decoration: const InputDecoration(
+            labelText: 'Subject',
+            border: OutlineInputBorder(),
           ),
-        ],
+          textInputAction: TextInputAction.next,
+          style: theme.textTheme.titleMedium,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBodyCard() {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: TextFormField(
+          controller: _bodyController,
+          decoration: const InputDecoration(
+            hintText: 'Compose email...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: null,
+          minLines: 12,
+          keyboardType: TextInputType.multiline,
+          textCapitalization: TextCapitalization.sentences,
+        ),
       ),
     );
   }
@@ -820,20 +919,25 @@ class _EmailComposePageState extends State<EmailComposePage> {
     VoidCallback? onRemove,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 40,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(8),
+            ),
             child: Text(
-              '$label:',
+              label,
               style: TextStyle(
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w500,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
+          const SizedBox(width: 8),
           Expanded(
             child: _buildAutocompleteField(
               controller: controller,
@@ -1173,52 +1277,53 @@ class _EmailComposePageState extends State<EmailComposePage> {
     final totalSize = _attachments.fold(0, (sum, a) => sum + a.size);
     final totalSizeMB = (totalSize / (1024 * 1024)).toStringAsFixed(1);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey.withOpacity(0.1),
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!),
-        ),
-      ),
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.attach_file, size: 16),
-              const SizedBox(width: 4),
-              Text(
-                '${_attachments.length} attachment${_attachments.length > 1 ? 's' : ''} ($totalSizeMB MB)',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: Row(
+              children: [
+                const Icon(Icons.attach_file, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  '${_attachments.length} attachment${_attachments.length > 1 ? 's' : ''} ($totalSizeMB MB)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: _attachments.asMap().entries.map((entry) {
-              final index = entry.key;
-              final attachment = entry.value;
-              return Chip(
-                avatar: Icon(
-                  attachment.isImage ? Icons.image : Icons.insert_drive_file,
-                  size: 16,
-                ),
-                label: Text(
-                  attachment.name.length > 20
-                      ? '${attachment.name.substring(0, 17)}...'
-                      : attachment.name,
-                  style: const TextStyle(fontSize: 12),
-                ),
-                deleteIcon: const Icon(Icons.close, size: 16),
-                onDeleted: () => _removeAttachment(index),
-              );
-            }).toList(),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: _attachments.asMap().entries.map((entry) {
+                final index = entry.key;
+                final attachment = entry.value;
+                return Chip(
+                  avatar: Icon(
+                    attachment.isImage ? Icons.image : Icons.insert_drive_file,
+                    size: 16,
+                  ),
+                  label: Text(
+                    attachment.name.length > 20
+                        ? '${attachment.name.substring(0, 17)}...'
+                        : attachment.name,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  onDeleted: () => _removeAttachment(index),
+                );
+              }).toList(),
+            ),
           ),
         ],
       ),

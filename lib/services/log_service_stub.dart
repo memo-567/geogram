@@ -108,6 +108,12 @@ class LogService {
   void warn(String message) => log(message, level: LogLevel.warn);
   void error(String message) => log(message, level: LogLevel.error);
 
+  Future<String?> readTodayLog() async => null;
+  Future<String?> readCrashLog() async => null;
+  Future<void> clearCrashLog() async {}
+  Future<void> adoptStorageConfigLogsDir() async {}
+  Future<Map<String, dynamic>?> readHeartbeat() async => null;
+
   void clear() {
     _logMessages.clear();
     _recentMessages.clear();

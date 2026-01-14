@@ -8,8 +8,10 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'storage_config.dart';
 import '../version.dart';
+import 'log_service.dart';
 
 /// Service to manage crash handling and recovery on Android.
 ///
@@ -26,6 +28,7 @@ class CrashService {
 
   File? _crashLogFile;
   bool _initialized = false;
+  static const _crashFileName = 'crash.txt';
 
   /// Whether the crash service has been initialized
   bool get isInitialized => _initialized;
@@ -46,21 +49,14 @@ class CrashService {
 
     try {
       // Use StorageConfig's logsDir if available, otherwise use a fallback
-      String logsDir;
-      if (StorageConfig().isInitialized) {
-        logsDir = StorageConfig().logsDir;
-      } else {
-        // Fallback: StorageConfig not yet initialized
-        // This can happen during early crash handling
-        logsDir = '/tmp';
-      }
+      final logsDir = await _earlyLogsDir();
 
       final crashDir = Directory(logsDir);
       if (!await crashDir.exists()) {
         await crashDir.create(recursive: true);
       }
 
-      _crashLogFile = File(path.join(logsDir, 'crashes.log'));
+      _crashLogFile = File(path.join(logsDir, _crashFileName));
       _initialized = true;
     } catch (e) {
       // Can't do much here, just mark as initialized for in-memory operation
@@ -73,14 +69,14 @@ class CrashService {
   Future<void> reinitialize() async {
     if (kIsWeb) return;
 
-    if (StorageConfig().isInitialized) {
-      final logsDir = StorageConfig().logsDir;
-      final crashDir = Directory(logsDir);
-      if (!await crashDir.exists()) {
-        await crashDir.create(recursive: true);
-      }
-      _crashLogFile = File(path.join(logsDir, 'crashes.log'));
+    final logsDir = await _resolveLogsDir();
+    if (logsDir == null) return;
+
+    final crashDir = Directory(logsDir);
+    if (!await crashDir.exists()) {
+      await crashDir.create(recursive: true);
     }
+    _crashLogFile = File(path.join(logsDir, _crashFileName));
   }
 
   /// Log crash synchronously (blocking) to ensure it's written before process dies
@@ -167,12 +163,10 @@ class CrashService {
   Future<String?> readCrashLogs() async {
     if (kIsWeb) return null;
 
-    if (_crashLogFile == null || !await _crashLogFile!.exists()) {
-      return null;
-    }
-
     try {
-      return await _crashLogFile!.readAsString();
+      final file = await _getCrashLogFile();
+      if (file == null || !await file.exists()) return null;
+      return await file.readAsString();
     } catch (e) {
       return null;
     }
@@ -211,8 +205,13 @@ class CrashService {
   Future<void> clearCrashLogs() async {
     if (kIsWeb) return;
 
-    if (_crashLogFile != null && await _crashLogFile!.exists()) {
-      await _crashLogFile!.delete();
+    try {
+      await LogService().clearCrashLog();
+    } catch (_) {}
+
+    final file = await _getCrashLogFile();
+    if (file != null && await file.exists()) {
+      await file.delete();
     }
   }
 
@@ -265,5 +264,40 @@ class CrashService {
     } catch (e) {
       // Ignore
     }
+  }
+
+  Future<String> _earlyLogsDir() async {
+    if (StorageConfig().isInitialized) {
+      return StorageConfig().logsDir;
+    }
+    return path.join(Directory.systemTemp.path, 'geogram', 'logs');
+  }
+
+  Future<String?> _resolveLogsDir() async {
+    try {
+      if (StorageConfig().isInitialized) {
+        return StorageConfig().logsDir;
+      }
+      final appDir = await getApplicationDocumentsDirectory();
+      return path.join(appDir.path, 'geogram', 'logs');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<File?> _getCrashLogFile() async {
+    if (kIsWeb) return null;
+    if (_crashLogFile != null) return _crashLogFile;
+
+    final logsDir = await _resolveLogsDir();
+    if (logsDir == null) return null;
+
+    final crashDir = Directory(logsDir);
+    if (!await crashDir.exists()) {
+      await crashDir.create(recursive: true);
+    }
+
+    _crashLogFile = File(path.join(logsDir, _crashFileName));
+    return _crashLogFile;
   }
 }

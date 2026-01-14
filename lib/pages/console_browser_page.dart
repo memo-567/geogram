@@ -106,7 +106,9 @@ class _ConsoleBrowserPageState extends State<ConsoleBrowserPage> {
 
   /// Check if VM files exist without triggering download
   Future<bool> _checkVmFilesExist() async {
-    for (final filename in ConsoleVmManager.requiredFiles) {
+    final required =
+        _vmManager.requiredFilesForPlatform();
+    for (final filename in required) {
       if (!await _vmManager.isFileDownloaded(filename)) {
         return false;
       }
@@ -142,7 +144,9 @@ class _ConsoleBrowserPageState extends State<ConsoleBrowserPage> {
     });
 
     try {
-      final success = await _vmManager.downloadVmFiles();
+      final success = await _vmManager.downloadVmFiles(
+        includeRootfsTar: _vmManager.shouldIncludeRootfsTar(),
+      );
       LogService().log('Console: Download result: $success');
 
       if (mounted) {

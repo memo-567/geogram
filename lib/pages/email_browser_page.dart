@@ -48,6 +48,7 @@ class EmailBrowserPage extends StatefulWidget {
 }
 
 class _EmailBrowserPageState extends State<EmailBrowserPage> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final EmailService _emailService = EmailService();
 
   List<EmailThread> _threads = [];
@@ -59,11 +60,126 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   String? _error;
   List<String> _labels = [];
   bool _isWideScreen = false;
-  bool _showingFolderList = true;  // Mobile: true = show folders, false = show threads
   Map<EmailFolder, int> _folderCounts = {};
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  static const List<EmailFolder> _folderOrder = [
+    EmailFolder.inbox,
+    EmailFolder.sent,
+    EmailFolder.outbox,
+    EmailFolder.drafts,
+    EmailFolder.archive,
+    EmailFolder.spam,
+    EmailFolder.garbage,
+  ];
 
   StreamSubscription<EmailChangeEvent>? _emailSubscription;
   EventSubscription<EmailNotificationEvent>? _notificationSubscription;
+
+  Future<int> _countForStation(Future<List<EmailThread>> future) async {
+    final threads = await future;
+    if (_currentStation != null) {
+      return threads.where((t) => t.station == _currentStation).length;
+    }
+    return threads.length;
+  }
+
+  PreferredSizeWidget _buildAppBar(ThemeData theme) {
+    final subtitle =
+        _currentLabel != null ? 'Label: $_currentLabel' : _getFolderTitle();
+
+    return AppBar(
+      automaticallyImplyLeading: false,
+      leading: Navigator.canPop(context)
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+              tooltip: 'Back',
+            )
+          : null,
+      titleSpacing: 16,
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Mail',
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            subtitle,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.7),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.menu),
+          onSelected: (value) {
+            switch (value) {
+              case 'refresh':
+                _refresh();
+                break;
+              case 'labels':
+                _showLabelsSheet();
+                break;
+              case 'accounts':
+              case 'settings':
+                _handleMenuAction(value);
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'refresh',
+              child: ListTile(
+                leading: Icon(Icons.refresh),
+                title: Text('Refresh'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            if (_labels.isNotEmpty)
+              const PopupMenuItem(
+                value: 'labels',
+                child: ListTile(
+                  leading: Icon(Icons.label_outline),
+                  title: Text('Labels'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            const PopupMenuDivider(),
+            const PopupMenuItem(
+              value: 'accounts',
+              child: ListTile(
+                leading: Icon(Icons.account_circle),
+                title: Text('Accounts'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'settings',
+              child: ListTile(
+                leading: Icon(Icons.settings),
+                title: Text('Settings'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
+        ),
+      ],
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(64),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: _buildSearchBar(theme, showFolderMenu: !_isWideScreen),
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -71,11 +187,16 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     _currentFolder = widget.initialFolder;
     _currentStation = widget.initialStation;
     _currentLabel = widget.initialLabel;
+    _searchController.addListener(() {
+      if (!mounted) return;
+      setState(() => _searchQuery = _searchController.text);
+    });
     _initialize();
   }
 
   @override
   void dispose() {
+    _searchController.dispose();
     _emailSubscription?.cancel();
     _notificationSubscription?.cancel();
     super.dispose();
@@ -92,13 +213,13 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
 
   Future<void> _loadFolderCounts() async {
     final counts = <EmailFolder, int>{};
-    counts[EmailFolder.inbox] = (await _emailService.getInbox()).length;
-    counts[EmailFolder.sent] = (await _emailService.getSent()).length;
-    counts[EmailFolder.outbox] = (await _emailService.getOutbox()).length;
-    counts[EmailFolder.drafts] = (await _emailService.getDrafts()).length;
-    counts[EmailFolder.archive] = (await _emailService.getArchive()).length;
-    counts[EmailFolder.spam] = (await _emailService.getSpam()).length;
-    counts[EmailFolder.garbage] = (await _emailService.getGarbage()).length;
+    counts[EmailFolder.inbox] = await _countForStation(_emailService.getInbox());
+    counts[EmailFolder.sent] = await _countForStation(_emailService.getSent());
+    counts[EmailFolder.outbox] = await _countForStation(_emailService.getOutbox());
+    counts[EmailFolder.drafts] = await _countForStation(_emailService.getDrafts());
+    counts[EmailFolder.archive] = await _countForStation(_emailService.getArchive());
+    counts[EmailFolder.spam] = await _countForStation(_emailService.getSpam());
+    counts[EmailFolder.garbage] = await _countForStation(_emailService.getGarbage());
     if (mounted) {
       setState(() => _folderCounts = counts);
     }
@@ -285,6 +406,10 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         setState(() {
           _threads = threads;
           _isLoading = false;
+          if (_selectedThread != null &&
+              !_threads.any((t) => t.threadId == _selectedThread!.threadId)) {
+            _selectedThread = null;
+          }
         });
       }
     } catch (e) {
@@ -301,14 +426,23 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     await _loadFolderCounts();
     await _loadThreads();
     await _emailService.processOutbox();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Email refreshed'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+  }
+
+  List<EmailThread> get _visibleThreads {
+    if (_searchQuery.trim().isEmpty) return _threads;
+    final query = _searchQuery.toLowerCase();
+    return _threads.where((thread) {
+      final haystack = [
+        thread.subject,
+        thread.from,
+        ...thread.to,
+        ...thread.cc,
+        ...thread.labels,
+        thread.preview,
+        thread.station,
+      ].join(' ').toLowerCase();
+      return haystack.contains(query);
+    }).toList();
   }
 
   String _getFolderTitle() {
@@ -404,99 +538,61 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        _isWideScreen = constraints.maxWidth >= 600;
+        _isWideScreen = constraints.maxWidth >= 960;
         final theme = Theme.of(context);
 
         return Scaffold(
-          appBar: AppBar(
-            leading: _selectedThread != null
-                ? IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => setState(() => _selectedThread = null),
-                  )
-                : (!_isWideScreen && !_showingFolderList)
-                    ? IconButton(
-                        icon: const Icon(Icons.arrow_back),
-                        onPressed: () => setState(() => _showingFolderList = true),
-                      )
-                    : null,
-            title: Text(_selectedThread != null
-                ? _selectedThread!.subject
-                : (!_isWideScreen && !_showingFolderList)
-                    ? _getFolderTitle()
-                    : 'Email'),
-            actions: [
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert),
-                onSelected: _handleMenuAction,
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: 'labels',
-                    child: ListTile(
-                      leading: Icon(Icons.label),
-                      title: Text('Labels'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'settings',
-                    child: ListTile(
-                      leading: Icon(Icons.settings),
-                      title: Text('Settings'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'accounts',
-                    child: ListTile(
-                      leading: Icon(Icons.account_circle),
-                      title: Text('Accounts'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
-              ),
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _refresh,
-                tooltip: 'Refresh',
-              ),
-            ],
-          ),
-          floatingActionButton: FloatingActionButton(
+          key: _scaffoldKey,
+          backgroundColor: theme.colorScheme.surfaceVariant.withOpacity(0.25),
+          appBar: _buildAppBar(theme),
+          floatingActionButton: FloatingActionButton.extended(
             onPressed: _composeEmail,
             tooltip: 'Compose',
-            child: const Icon(Icons.edit),
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Compose'),
           ),
+          drawer: _isWideScreen ? null : _buildFolderDrawer(theme),
           body: _isWideScreen
-              ? Row(
-                  children: [
-                    // Left panel: Folders only (narrow)
-                    SizedBox(
-                      width: 180,
-                      child: _buildFolderPanel(theme),
-                    ),
-                    const VerticalDivider(width: 1),
-                    // Right panel: Thread list OR thread detail
-                    Expanded(
-                      child: _selectedThread != null
-                          ? EmailThreadPage(
-                              thread: _selectedThread!,
-                              embedded: true,
-                            )
-                          : _buildThreadList(),
-                    ),
-                  ],
-                )
-              : _selectedThread != null
-                  ? EmailThreadPage(
-                      thread: _selectedThread!,
-                      embedded: true,
-                    )
-                  : _buildMobileView(theme),
+              ? _buildDesktopLayout(theme)
+              : _buildMobileLayout(theme),
         );
       },
     );
+  }
+
+  Widget _buildDesktopLayout(ThemeData theme) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 240,
+          child: _buildNavigationRail(theme),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          flex: 5,
+          child: Column(
+            children: [
+              _buildFolderHeader(theme),
+              Expanded(child: _buildThreadList()),
+            ],
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          flex: 6,
+          child: _selectedThread != null
+              ? EmailThreadPage(
+                  thread: _selectedThread!,
+                  embedded: true,
+                )
+              : _buildEmptyState(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileLayout(ThemeData theme) {
+    return _buildThreadList();
   }
 
   void _handleMenuAction(String action) {
@@ -559,85 +655,313 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     );
   }
 
-  Widget _buildMobileView(ThemeData theme) {
-    if (_showingFolderList) {
-      return _buildFolderList(theme);
-    }
-    return _buildThreadList();
+  Widget _buildSearchBar(ThemeData theme, {required bool showFolderMenu}) {
+    return Material(
+      elevation: 1,
+      color: theme.colorScheme.surface,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            if (showFolderMenu)
+              IconButton(
+                icon: const Icon(Icons.folder_open),
+                splashRadius: 20,
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                tooltip: 'Folders',
+              ),
+            Icon(Icons.search, color: theme.colorScheme.onSurface.withOpacity(0.7)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  hintText: 'Search subject, sender, or recipient',
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+                textInputAction: TextInputAction.search,
+              ),
+            ),
+            if (_searchQuery.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.close),
+                splashRadius: 18,
+                tooltip: 'Clear search',
+                onPressed: () {
+                  _searchController.clear();
+                  FocusScope.of(context).unfocus();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildFolderList(ThemeData theme) {
-    return ListView(
+  Widget _buildFolderDrawer(ThemeData theme) {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            ListTile(
+              title: const Text('Folders', style: TextStyle(fontWeight: FontWeight.bold)),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                children: _folderOrder.map((folder) {
+                  final count = _folderCounts[folder] ?? 0;
+                  return ListTile(
+                    leading: Icon(_getFolderIcon(folder)),
+                    title: Text(_folderLabel(folder)),
+                    trailing: count > 0 ? Text('$count') : null,
+                    selected: folder == _currentFolder,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _selectFolder(folder);
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavigationRail(ThemeData theme) {
+    final selectedIndex = _folderOrder.contains(_currentFolder)
+        ? _folderOrder.indexOf(_currentFolder)
+        : 0;
+    final extended = MediaQuery.of(context).size.width > 1200;
+    final folderLabelStyle = theme.textTheme.bodyLarge?.copyWith(
+      fontWeight: FontWeight.w600,
+    );
+
+    return NavigationRail(
+      backgroundColor: theme.colorScheme.surface,
+      extended: extended,
+      selectedIndex: selectedIndex,
+      destinations: _folderOrder.map((folder) {
+        final count = _folderCounts[folder] ?? 0;
+        return NavigationRailDestination(
+          icon: _buildNavIcon(theme, folder, false, count),
+          selectedIcon: _buildNavIcon(theme, folder, true, count),
+          label: Text(
+            _folderLabel(folder),
+            style: folderLabelStyle,
+          ),
+        );
+      }).toList(),
+      onDestinationSelected: (index) => _selectFolder(_folderOrder[index]),
+      trailing: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: IconButton(
+          icon: const Icon(Icons.label_outline),
+          tooltip: 'Labels',
+          onPressed: _showLabelsSheet,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavIcon(
+    ThemeData theme,
+    EmailFolder folder,
+    bool isSelected,
+    int count,
+  ) {
+    final color =
+        isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        _buildFolderListTile(EmailFolder.inbox, 'Inbox', Icons.inbox),
-        _buildFolderListTile(EmailFolder.sent, 'Sent', Icons.send),
-        _buildFolderListTile(EmailFolder.outbox, 'Outbox', Icons.outbox),
-        _buildFolderListTile(EmailFolder.drafts, 'Drafts', Icons.drafts),
-        _buildFolderListTile(EmailFolder.archive, 'Archive', Icons.archive),
-        _buildFolderListTile(EmailFolder.spam, 'Spam', Icons.report),
-        _buildFolderListTile(EmailFolder.garbage, 'Trash', Icons.delete),
+        Icon(_getFolderIcon(folder), color: color),
+        if (count > 0)
+          Positioned(
+            right: -8,
+            top: -6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                count.toString(),
+                style: TextStyle(
+                  color: isSelected
+                      ? theme.colorScheme.onPrimary
+                      : theme.colorScheme.onSecondaryContainer,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _buildFolderListTile(EmailFolder folder, String title, IconData icon) {
-    final count = _folderCounts[folder] ?? 0;
-    return ListTile(
-      leading: Icon(icon, color: Colors.amber),
-      title: Text(title),
-      subtitle: Text('$count ${count == 1 ? 'email' : 'emails'}'),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () {
-        setState(() {
-          _currentFolder = folder;
-          _showingFolderList = false;
-        });
-        _loadThreads();
-      },
-    );
-  }
-
-  Widget _buildFolderPanel(ThemeData theme) {
+  Widget _buildFolderHeader(ThemeData theme) {
+    final count = _visibleThreads.length;
     return Container(
-      color: theme.colorScheme.surface,
-      child: ListView(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
         children: [
-          _buildFolderTile(EmailFolder.inbox, null, 'Inbox'),
-          _buildFolderTile(EmailFolder.sent, null, 'Sent'),
-          _buildFolderTile(EmailFolder.outbox, null, 'Outbox'),
-          _buildFolderTile(EmailFolder.drafts, null, 'Drafts'),
-          _buildFolderTile(EmailFolder.archive, null, 'Archive'),
-          _buildFolderTile(EmailFolder.spam, null, 'Spam'),
-          _buildFolderTile(EmailFolder.garbage, null, 'Trash'),
+          _buildFilterPill(
+            label: _folderLabel(_currentFolder),
+            icon: _getFolderIcon(_currentFolder),
+            background: theme.colorScheme.primaryContainer,
+            foreground: theme.colorScheme.onPrimaryContainer,
+          ),
+          const SizedBox(width: 8),
+          if (_currentStation != null)
+            _buildFilterPill(
+              label: _currentStation!,
+              icon: Icons.cloud_outlined,
+              background: theme.colorScheme.secondaryContainer,
+              foreground: theme.colorScheme.onSecondaryContainer,
+            ),
+          if (_currentLabel != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: _buildFilterPill(
+                label: _currentLabel!,
+                icon: Icons.label_outline,
+                background: theme.colorScheme.tertiaryContainer,
+                foreground: theme.colorScheme.onTertiaryContainer,
+              ),
+            ),
+          const Spacer(),
+          Text(
+            '$count thread${count == 1 ? '' : 's'}',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildFolderTile(EmailFolder folder, String? station, String title) {
-    final isSelected = _currentFolder == folder && _currentStation == station;
-
-    return ListTile(
-      dense: true,
-      leading: Icon(
-        _getFolderIcon(folder),
-        size: 20,
-        color: isSelected ? Theme.of(context).primaryColor : null,
+  Widget _buildFilterPill({
+    required String label,
+    required IconData icon,
+    required Color background,
+    required Color foreground,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
       ),
-      title: Text(
-        title,
-        style: TextStyle(
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          color: isSelected ? Theme.of(context).primaryColor : null,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: foreground),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: foreground,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
-      selected: isSelected,
-      selectedTileColor: Theme.of(context).primaryColor.withOpacity(0.1),
-      onTap: () => _selectFolder(folder, station: station),
     );
   }
 
+  Widget _buildFolderChips(ThemeData theme) {
+    final chipLabelStyle = theme.textTheme.bodyLarge?.copyWith(
+      fontWeight: FontWeight.w600,
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      color: theme.colorScheme.surface,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            ..._folderOrder.map(
+              (folder) => Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text(
+                    _folderLabel(folder),
+                    style: chipLabelStyle,
+                  ),
+                  avatar: Icon(_getFolderIcon(folder), size: 18),
+                  selected: _currentFolder == folder,
+                  onSelected: (_) => _selectFolder(folder),
+                  selectedColor: theme.colorScheme.primaryContainer,
+                  labelStyle: TextStyle(
+                    color: _currentFolder == folder
+                        ? theme.colorScheme.onPrimaryContainer
+                        : theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ),
+            ActionChip(
+              avatar: const Icon(Icons.label_outline, size: 18),
+              label: const Text('Labels'),
+              onPressed: _showLabelsSheet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _folderLabel(EmailFolder folder) {
+    switch (folder) {
+      case EmailFolder.inbox:
+        return 'Inbox';
+      case EmailFolder.sent:
+        return 'Sent';
+      case EmailFolder.outbox:
+        return 'Outbox';
+      case EmailFolder.drafts:
+        return 'Drafts';
+      case EmailFolder.archive:
+        return 'Archive';
+      case EmailFolder.spam:
+        return 'Spam';
+      case EmailFolder.garbage:
+        return 'Trash';
+      case EmailFolder.label:
+        return 'Label';
+    }
+  }
+
   Widget _buildThreadList() {
+    final threads = _visibleThreads;
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -648,28 +972,38 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
-            const SizedBox(height: 16),
-            Text(_error!, style: TextStyle(color: Colors.red[300])),
-            const SizedBox(height: 16),
-            ElevatedButton(
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                _error!,
+                style: TextStyle(color: Colors.red[300]),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
               onPressed: _loadThreads,
-              child: const Text('Retry'),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
             ),
           ],
         ),
       );
     }
 
-    if (_threads.isEmpty) {
+    if (threads.isEmpty) {
       return _buildEmptyFolder();
     }
 
     return RefreshIndicator(
       onRefresh: _refresh,
-      child: ListView.builder(
-        itemCount: _threads.length,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        itemCount: threads.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          final thread = _threads[index];
+          final thread = threads[index];
           return _buildSwipeableThreadTile(thread);
         },
       ),
@@ -677,31 +1011,49 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Widget _buildSwipeableThreadTile(EmailThread thread) {
+    final theme = Theme.of(context);
     return Dismissible(
       key: Key(thread.threadId),
       background: Container(
-        color: Colors.red,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.error,
+          borderRadius: BorderRadius.circular(12),
+        ),
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.only(left: 20),
-        child: const Icon(Icons.delete, color: Colors.white),
+        child: Row(
+          children: const [
+            Icon(Icons.delete, color: Colors.white),
+            SizedBox(width: 8),
+            Text('Delete', style: TextStyle(color: Colors.white)),
+          ],
+        ),
       ),
       secondaryBackground: Container(
-        color: Colors.blue,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.secondary,
+          borderRadius: BorderRadius.circular(12),
+        ),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.archive, color: Colors.white),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: const [
+            Text('Archive', style: TextStyle(color: Colors.white)),
+            SizedBox(width: 8),
+            Icon(Icons.archive, color: Colors.white),
+          ],
+        ),
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
-          // Swipe right to delete
           await _emailService.deleteThread(thread);
           if (_selectedThread?.threadId == thread.threadId) {
             setState(() => _selectedThread = null);
           }
           _loadThreads();
-          return false; // Don't remove from list, we reload
+          return false;
         } else {
-          // Swipe left to archive
           await _emailService.archiveThread(thread);
           if (_selectedThread?.threadId == thread.threadId) {
             setState(() => _selectedThread = null);
@@ -715,8 +1067,9 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
   }
 
   Widget _buildThreadTile(EmailThread thread) {
+    final theme = Theme.of(context);
     final isSelected = _selectedThread?.threadId == thread.threadId;
-    final isUnread = thread.status == EmailStatus.received;
+    final isUnread = thread.isUnread;
     final hasAttachment = thread.hasAttachments;
 
     // Determine display name based on folder
@@ -729,109 +1082,233 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
       displayName = thread.from;
     }
 
-    return ListTile(
-      selected: isSelected,
-      selectedTileColor: Theme.of(context).primaryColor.withOpacity(0.1),
-      leading: CircleAvatar(
-        backgroundColor: isUnread
-            ? Theme.of(context).primaryColor
-            : Colors.grey[300],
-        child: Text(
-          displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-          style: TextStyle(
-            color: isUnread ? Colors.white : Colors.grey[600],
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              displayName,
-              style: TextStyle(
-                fontWeight: isUnread ? FontWeight.bold : FontWeight.normal,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Text(
-            _formatDate(thread.lastMessageTime),
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-            ),
-          ),
-        ],
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Card(
+      elevation: isSelected ? 3 : 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color:
+          isSelected ? theme.colorScheme.primaryContainer : theme.colorScheme.surface,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _selectThread(thread),
+        onLongPress: () => _showThreadActions(thread),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (hasAttachment)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Icon(Icons.attach_file, size: 14, color: Colors.grey[600]),
-                ),
-              Expanded(
-                child: Text(
-                  thread.subject,
-                  style: TextStyle(
-                    fontWeight: isUnread ? FontWeight.w500 : FontWeight.normal,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    backgroundColor: isUnread
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.surfaceVariant,
+                    child: Text(
+                      displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                      style: TextStyle(
+                        color: isUnread
+                            ? theme.colorScheme.onPrimary
+                            : theme.colorScheme.onSurface,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    displayName,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: isUnread
+                                          ? FontWeight.w700
+                                          : FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    thread.subject.isNotEmpty
+                                        ? thread.subject
+                                        : '(No subject)',
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontWeight: isUnread
+                                          ? FontWeight.w700
+                                          : FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  _formatDate(thread.lastMessageTime),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                _buildStatusChip(thread, compact: true),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                thread.preview.isNotEmpty
+                    ? thread.preview
+                    : 'No message preview',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.2,
+                  fontSize: 13,
                 ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  if (hasAttachment)
+                    _buildFilterPill(
+                      label: 'Attachment',
+                      icon: Icons.attach_file,
+                      background: theme.colorScheme.surfaceVariant,
+                      foreground: theme.colorScheme.onSurface,
+                    ),
+                  if (thread.priority == EmailPriority.high)
+                    _buildFilterPill(
+                      label: 'High priority',
+                      icon: Icons.flag,
+                      background: theme.colorScheme.errorContainer,
+                      foreground: theme.colorScheme.onErrorContainer,
+                    ),
+                  ...thread.labels.take(2).map(_buildLabelChip),
+                ],
               ),
             ],
           ),
-          Text(
-            thread.preview,
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 12,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          if (_currentStation == null && thread.station != 'local')
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                thread.station,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey[500],
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
-      isThreeLine: true,
-      onTap: () => _selectThread(thread),
-      onLongPress: () => _showThreadActions(thread),
     );
   }
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final diff = now.difference(date);
+  Widget _buildStatusChip(EmailThread thread, {bool compact = false}) {
+    final theme = Theme.of(context);
+    final color = _statusColor(thread.status, theme);
+    final padding = compact
+        ? const EdgeInsets.symmetric(horizontal: 8, vertical: 4)
+        : const EdgeInsets.symmetric(horizontal: 10, vertical: 6);
+    final radius = compact ? 8.0 : 10.0;
+    final iconSize = compact ? 8.0 : 10.0;
 
-    if (diff.inDays == 0) {
-      // Today - show time
-      return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } else if (diff.inDays == 1) {
-      return 'Yesterday';
-    } else if (diff.inDays < 7) {
-      // This week - show day name
-      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      return days[date.weekday - 1];
-    } else {
-      // Older - show date
-      return '${date.day}/${date.month}';
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.brightness_1, size: iconSize, color: color),
+          const SizedBox(width: 4),
+          Text(
+            _statusLabel(thread.status),
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w600,
+              fontSize: compact ? 10 : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLabelChip(String label) {
+    final theme = Theme.of(context);
+    return InputChip(
+      label: Text(label),
+      avatar: const Icon(Icons.label, size: 16),
+      backgroundColor: theme.colorScheme.surfaceVariant,
+      labelStyle: TextStyle(
+        color: theme.colorScheme.onSurface,
+      ),
+      onPressed: () => _selectFolder(EmailFolder.label, label: label),
+    );
+  }
+
+  Color _statusColor(EmailStatus status, ThemeData theme) {
+    switch (status) {
+      case EmailStatus.draft:
+        return theme.colorScheme.secondary;
+      case EmailStatus.pending:
+        return Colors.orange;
+      case EmailStatus.sent:
+        return theme.colorScheme.primary;
+      case EmailStatus.received:
+        return Colors.teal;
+      case EmailStatus.failed:
+        return theme.colorScheme.error;
+      case EmailStatus.spam:
+        return Colors.deepOrange;
+      case EmailStatus.deleted:
+        return Colors.grey;
+      case EmailStatus.archived:
+        return Colors.blueGrey;
     }
+  }
+
+  String _statusLabel(EmailStatus status) {
+    switch (status) {
+      case EmailStatus.draft:
+        return 'Draft';
+      case EmailStatus.pending:
+        return 'Outbox';
+      case EmailStatus.sent:
+        return 'Sent';
+      case EmailStatus.received:
+        return 'Inbox';
+      case EmailStatus.failed:
+        return 'Failed';
+      case EmailStatus.spam:
+        return 'Spam';
+      case EmailStatus.deleted:
+        return 'Trash';
+      case EmailStatus.archived:
+        return 'Archived';
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$year-$month-$day $hour:$minute';
   }
 
   void _showThreadActions(EmailThread thread) {
@@ -841,7 +1318,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Edit option for drafts
             if (thread.isDraft)
               ListTile(
                 leading: const Icon(Icons.edit),
@@ -855,7 +1331,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   ).then((_) => _loadThreads());
                 },
               ),
-            // Reply/Forward options (not for drafts)
             if (!thread.isDraft) ...[
               ListTile(
                 leading: const Icon(Icons.reply),
@@ -896,7 +1371,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 },
               ),
             ],
-            // Archive (not for archived threads)
             if (thread.status != EmailStatus.archived)
               ListTile(
                 leading: const Icon(Icons.archive),
@@ -915,7 +1389,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   }
                 },
               ),
-            // Restore option for archived/deleted/spam threads
             if (thread.status == EmailStatus.archived ||
                 thread.status == EmailStatus.deleted ||
                 thread.status == EmailStatus.spam)
@@ -936,7 +1409,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   }
                 },
               ),
-            // Spam option
             if (thread.status != EmailStatus.spam)
               ListTile(
                 leading: const Icon(Icons.report),
@@ -950,7 +1422,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                   _loadThreads();
                 },
               ),
-            // Delete
             ListTile(
               leading: const Icon(Icons.delete),
               title: const Text('Delete'),
@@ -963,7 +1434,6 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
                 _loadThreads();
               },
             ),
-            // Permanent delete for trash
             if (thread.status == EmailStatus.deleted)
               ListTile(
                 leading: const Icon(Icons.delete_forever, color: Colors.red),
@@ -1024,36 +1494,47 @@ class _EmailBrowserPageState extends State<EmailBrowserPage> {
     }
 
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          Text(
-            message,
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey[600],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildEmptyState() {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.email_outlined, size: 64, color: Colors.grey),
-          SizedBox(height: 16),
+          Icon(Icons.mail_outline,
+              size: 72, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(height: 12),
           Text(
-            'Select an email to read',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey,
-            ),
+            'Select a conversation to read',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Stay on top of multi-station mail with the preview pane.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
           ),
         ],
       ),

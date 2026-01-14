@@ -699,6 +699,8 @@ class StationServerService {
         await _handleDeviceContentRequest(request);
       } else if (path == '/.well-known/nostr.json') {
         await _handleWellKnownNostr(request);
+      } else if (path == '/download' || path == '/download/') {
+        await _handleDownload(request);
       } else if (path == '/') {
         await _handleRoot(request);
       } else {
@@ -1476,6 +1478,21 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 30px;
 }
+.header-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+}
+.header-nav a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.header-nav a:hover { text-decoration: underline; }
+.header-nav .separator { color: var(--accent-alpha-70); }
+.header-nav .active { color: var(--accent-alpha-70); }
 .logo {
   display: inline-block;
   font-size: 1.6rem;
@@ -1634,6 +1651,11 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 <body>
   <div class="container">
     <header class="header">
+      <nav class="header-nav">
+        <span class="active">home</span>
+        <span class="separator">|</span>
+        <a href="/download/">download</a>
+      </nav>
       <div class="logo">${_escapeHtml(stationName)}</div>
       <p class="subtitle">Geogram Relay Server</p>
     </header>
@@ -1687,6 +1709,352 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
             <span class="api-method">GET</span>
             <span class="api-path">/api/clients</span>
             <span class="api-desc">Connected devices list</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Powered by <a href="https://geogram.radio">Geogram</a></span>
+    </footer>
+  </div>
+</body>
+</html>
+''');
+  }
+
+  /// Handle /download endpoint
+  Future<void> _handleDownload(HttpRequest request) async {
+    final profile = ProfileService().getProfile();
+    final stationName = profile.nickname.isNotEmpty ? profile.nickname : 'Geogram Station';
+
+    request.response.headers.contentType = ContentType.html;
+    request.response.write('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Downloads - $stationName</title>
+  <style>
+/* Terminimal theme */
+:root {
+  --accent: rgb(255,168,106);
+  --accent-alpha-70: rgba(255,168,106,.7);
+  --accent-alpha-20: rgba(255,168,106,.2);
+  --background: #101010;
+  --color: #f0f0f0;
+  --border-color: rgba(255,240,224,.125);
+  --shadow: 0 4px 6px rgba(0,0,0,.3);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --accent: rgb(240,128,48);
+    --accent-alpha-70: rgba(240,128,48,.7);
+    --accent-alpha-20: rgba(240,128,48,.2);
+    --background: white;
+    --color: #201030;
+    --border-color: rgba(0,0,16,.125);
+    --shadow: 0 4px 6px rgba(0,0,0,.1);
+  }
+}
+html { box-sizing: border-box; }
+*, *:before, *:after { box-sizing: inherit; }
+body {
+  margin: 0; padding: 0;
+  font-family: Hack, DejaVu Sans Mono, Monaco, Consolas, Ubuntu Mono, monospace;
+  font-size: 1rem; line-height: 1.54;
+  background-color: var(--background); color: var(--color);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+h1, h2, h3 { font-weight: bold; line-height: 1.3; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
+h3 { font-size: 1rem; margin: 0 0 10px 0; color: var(--accent); }
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.header {
+  text-align: center;
+  padding-bottom: 30px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 30px;
+}
+.header-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+}
+.header-nav a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.header-nav a:hover { text-decoration: underline; }
+.header-nav .separator { color: var(--accent-alpha-70); }
+.header-nav .active { color: var(--accent-alpha-70); }
+.logo {
+  display: inline-block;
+  font-size: 1.6rem;
+  font-weight: bold;
+  background: var(--accent);
+  color: #000;
+  padding: 8px 16px;
+  margin-bottom: 10px;
+}
+.subtitle {
+  color: var(--accent-alpha-70);
+  margin: 0;
+  font-size: 0.95rem;
+}
+.main { flex: 1; }
+
+/* Download Sections */
+.download-section { margin-bottom: 40px; }
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 20px;
+}
+.section-header h2 { margin: 0; }
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 15px;
+}
+.download-card {
+  display: block;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 15px;
+  text-decoration: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.download-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.download-icon {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+.download-name {
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+.download-size {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+  margin-bottom: 5px;
+}
+.download-desc {
+  font-size: 0.85rem;
+  color: var(--accent-alpha-70);
+}
+
+/* Model list */
+.model-list { display: flex; flex-direction: column; gap: 10px; }
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px 15px;
+  background: var(--accent-alpha-20);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+.model-item:hover { background: var(--accent-alpha-70); }
+.model-tier {
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  background: var(--accent);
+  color: var(--background);
+  border-radius: 4px;
+  min-width: 60px;
+  text-align: center;
+}
+.model-name { font-weight: bold; flex: 1; }
+.model-size { color: var(--accent-alpha-70); font-size: 0.9rem; min-width: 80px; text-align: right; }
+.model-desc { color: var(--accent-alpha-70); font-size: 0.85rem; flex: 2; }
+
+/* Footer */
+.footer {
+  padding: 30px 0;
+  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+  text-align: center;
+  color: var(--accent-alpha-70);
+  font-size: 0.9rem;
+}
+.footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+@media (max-width: 600px) {
+  .download-grid { grid-template-columns: 1fr 1fr; }
+  .model-item { flex-wrap: wrap; }
+  .model-desc { width: 100%; margin-top: 5px; }
+  .model-size { min-width: auto; }
+}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <nav class="header-nav">
+        <a href="/">home</a>
+        <span class="separator">|</span>
+        <span class="active">download</span>
+      </nav>
+      <div class="logo">${_escapeHtml(stationName)}</div>
+      <p class="subtitle">Downloads</p>
+    </header>
+
+    <main class="main">
+      <!-- Application Downloads -->
+      <section class="download-section">
+        <div class="section-header">
+          <h2>Geogram Application</h2>
+        </div>
+        <div class="download-grid">
+          <a href="/api/updates/latest" class="download-card" target="_blank">
+            <div class="download-icon">&#128230;</div>
+            <div class="download-name">Latest Release</div>
+            <div class="download-desc">View latest version info (JSON)</div>
+          </a>
+          <a href="https://github.com/geograms/geogram/releases" class="download-card" target="_blank">
+            <div class="download-icon">&#128187;</div>
+            <div class="download-name">All Releases</div>
+            <div class="download-desc">GitHub releases page</div>
+          </a>
+        </div>
+        <p style="margin-top: 15px; font-size: 0.9rem; color: var(--accent-alpha-70);">
+          Available platforms: Linux (tar.gz), Windows (exe), Android (apk), macOS (dmg)
+        </p>
+      </section>
+
+      <!-- Speech Recognition Models -->
+      <section class="download-section">
+        <div class="section-header">
+          <h2>Speech Recognition Models (Whisper)</h2>
+        </div>
+        <div class="model-list">
+          <a href="/bot/models/whisper/ggml-tiny.bin" class="model-item">
+            <span class="model-tier">TINY</span>
+            <span class="model-name">Whisper Tiny</span>
+            <span class="model-size">~39 MB</span>
+            <span class="model-desc">Fastest, lower accuracy</span>
+          </a>
+          <a href="/bot/models/whisper/ggml-base.bin" class="model-item">
+            <span class="model-tier">BASE</span>
+            <span class="model-name">Whisper Base</span>
+            <span class="model-size">~145 MB</span>
+            <span class="model-desc">Good balance of speed and accuracy</span>
+          </a>
+          <a href="/bot/models/whisper/ggml-small.bin" class="model-item">
+            <span class="model-tier">SMALL</span>
+            <span class="model-name">Whisper Small</span>
+            <span class="model-size">~465 MB</span>
+            <span class="model-desc">Better accuracy, slower</span>
+          </a>
+          <a href="/bot/models/whisper/ggml-medium.bin" class="model-item">
+            <span class="model-tier">MEDIUM</span>
+            <span class="model-name">Whisper Medium</span>
+            <span class="model-size">~1.5 GB</span>
+            <span class="model-desc">High accuracy</span>
+          </a>
+          <a href="/bot/models/whisper/ggml-large-v2.bin" class="model-item">
+            <span class="model-tier">LARGE</span>
+            <span class="model-name">Whisper Large v2</span>
+            <span class="model-size">~3 GB</span>
+            <span class="model-desc">Best accuracy</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Vision AI Models -->
+      <section class="download-section">
+        <div class="section-header">
+          <h2>Vision AI Models</h2>
+        </div>
+        <div class="model-list">
+          <a href="/bot/models/vision/mobilenet-v3-small.tflite" class="model-item">
+            <span class="model-tier">LITE</span>
+            <span class="model-name">MobileNet V3 Small</span>
+            <span class="model-size">~10 MB</span>
+            <span class="model-desc">Fast image classification</span>
+          </a>
+          <a href="/bot/models/vision/mobilenet-v4-medium.tflite" class="model-item">
+            <span class="model-tier">LITE</span>
+            <span class="model-name">MobileNet V4 Medium</span>
+            <span class="model-size">~19 MB</span>
+            <span class="model-desc">Better accuracy classification</span>
+          </a>
+          <a href="/bot/models/vision/efficientdet-lite0.tflite" class="model-item">
+            <span class="model-tier">LITE</span>
+            <span class="model-name">EfficientDet Lite</span>
+            <span class="model-size">~20 MB</span>
+            <span class="model-desc">Object detection</span>
+          </a>
+          <a href="/bot/models/vision/llava-7b-q4.gguf" class="model-item">
+            <span class="model-tier">STANDARD</span>
+            <span class="model-name">LLaVA 7B (Q4)</span>
+            <span class="model-size">~4.1 GB</span>
+            <span class="model-desc">Full visual Q&A</span>
+          </a>
+          <a href="/bot/models/vision/llava-7b-q5.gguf" class="model-item">
+            <span class="model-tier">QUALITY</span>
+            <span class="model-name">LLaVA 7B (Q5)</span>
+            <span class="model-size">~4.8 GB</span>
+            <span class="model-desc">Better quality visual Q&A</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Console VM Files -->
+      <section class="download-section">
+        <div class="section-header">
+          <h2>Console VM Files</h2>
+        </div>
+        <div class="model-list">
+          <a href="/console/vm/manifest.json" class="model-item">
+            <span class="model-tier">META</span>
+            <span class="model-name">VM Manifest</span>
+            <span class="model-size">~1 KB</span>
+            <span class="model-desc">File list and checksums</span>
+          </a>
+          <a href="/console/vm/jslinux.js" class="model-item">
+            <span class="model-tier">CORE</span>
+            <span class="model-name">JSLinux Runtime</span>
+            <span class="model-size">~200 KB</span>
+            <span class="model-desc">TinyEMU JavaScript runtime</span>
+          </a>
+          <a href="/console/vm/x86emu-wasm.wasm" class="model-item">
+            <span class="model-tier">WASM</span>
+            <span class="model-name">x86 Emulator</span>
+            <span class="model-size">~500 KB</span>
+            <span class="model-desc">x86 WebAssembly emulator</span>
+          </a>
+          <a href="/console/vm/alpine-x86-root.bin" class="model-item">
+            <span class="model-tier">ROOT</span>
+            <span class="model-name">Alpine Root FS</span>
+            <span class="model-size">~50-100 MB</span>
+            <span class="model-desc">Alpine Linux filesystem</span>
           </a>
         </div>
       </section>

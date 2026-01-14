@@ -185,6 +185,8 @@ void main() async {
     // Initialize storage configuration first (all other services depend on it)
     // Use custom data directory from CLI args if specified
     await StorageConfig().init(customBaseDir: AppArgs().dataDir);
+    await LogService().adoptStorageConfigLogsDir();
+    await CrashService().reinitialize();
     LogService().log('StorageConfig initialized: ${StorageConfig().baseDir}');
 
     // Also initialize PureStorageConfig with same base directory

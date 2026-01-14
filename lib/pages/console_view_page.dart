@@ -154,7 +154,13 @@ class _ConsoleViewPageState extends State<ConsoleViewPage> {
                 children: [
                   _buildStatusIndicator(),
                   const SizedBox(width: 8),
-                  Text(_session.name),
+                  Expanded(
+                    child: Text(
+                      _session.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ],
               ),
               actions: [

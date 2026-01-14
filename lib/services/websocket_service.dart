@@ -8,6 +8,8 @@ import 'package:crypto/crypto.dart';
 import 'package:mime/mime.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
 import '../services/profile_service.dart';
@@ -19,11 +21,13 @@ import '../services/backup_service.dart';
 import '../services/email_service.dart';
 import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
+import '../services/storage_config.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
+import '../util/nostr_key_generator.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
 import '../models/collection.dart';
@@ -47,6 +51,17 @@ class WebSocketService {
   bool _lastConnectionState = false; // Track last state to avoid duplicate events
   String? _connectedStationCallsign;
   final EventBus _eventBus = EventBus();
+  String? _heartbeatPath;
+  DateTime? _lastPingAt;
+  DateTime? _lastPongAt;
+  DateTime? _lastHelloAt;
+  DateTime? _lastDisconnectAt;
+  DateTime? _lastReconnectAttemptAt;
+  DateTime? _lastReconnectSuccessAt;
+  DateTime? _lastKeepAlivePingAt;
+  int _consecutivePingMisses = 0;
+  int _reconnectFailures = 0;
+  bool _foregroundKeepAliveEnabled = false;
 
   /// Grace period before marking station as disconnected (allows brief reconnection)
   static const _disconnectGracePeriod = Duration(seconds: 5);
@@ -56,6 +71,7 @@ class WebSocketService {
 
   /// Connect to station and send hello
   Future<bool> connectAndHello(String url) async {
+    final profile = ProfileService().getProfile();
     try {
       // Normalize URL to WebSocket protocol
       var wsUrl = url;
@@ -70,6 +86,18 @@ class WebSocketService {
       // Store URL for reconnection
       _stationUrl = wsUrl;
       _shouldReconnect = true;
+      _recordHeartbeat('connect_start', message: wsUrl);
+
+      // Validate that we have a usable nsec before connecting (avoid accidental new identity)
+      final profile = ProfileService().getProfile();
+      final hasNsec = profile.nsec.isNotEmpty &&
+          NostrKeyGenerator.getPrivateKeyHex(profile.nsec) != null;
+      if (!hasNsec) {
+        LogService().log('Connection aborted: profile missing usable nsec. Refusing to create new identity.');
+        _shouldReconnect = false;
+        _recordHeartbeat('missing_nsec', message: 'Profile lacks nsec, cannot connect');
+        return false;
+      }
 
       LogService().log('══════════════════════════════════════');
       LogService().log('CONNECTING TO STATION');
@@ -88,9 +116,12 @@ class WebSocketService {
       try {
         await _channel!.ready;
         LogService().log('✓ WebSocket ready (connection established)');
+        _recordHeartbeat('socket_connected', connected: true);
+        _consecutivePingMisses = 0;
       } catch (e) {
         LogService().log('WebSocket ready failed: $e');
         _channel = null;
+        _recordHeartbeat('socket_connect_failed', message: e.toString(), connected: false);
         return false;
       }
 
@@ -102,8 +133,6 @@ class WebSocketService {
       // Start heartbeat (ping) timer
       _startPingTimer();
 
-      // Get user profile
-      final profile = ProfileService().getProfile();
       LogService().log('User callsign: ${profile.callsign}');
       LogService().log('User npub: ${profile.npub.substring(0, 20)}...');
 
@@ -187,6 +216,8 @@ class WebSocketService {
 
       // Send hello
       try {
+        _lastHelloAt = DateTime.now();
+        _recordHeartbeat('hello_sent');
         _channel!.sink.add(helloJson);
       } catch (e) {
         LogService().log('Error sending hello: $e');
@@ -238,6 +269,9 @@ class WebSocketService {
             if (data['type'] == 'PONG') {
               // Heartbeat response - connection is alive
               LogService().log('✓ PONG received from station');
+              _lastPongAt = DateTime.now();
+              _consecutivePingMisses = 0;
+              _recordHeartbeat('pong');
             } else if (data['type'] == 'hello_ack') {
               final success = data['success'] as bool? ?? false;
               final stationId = data['station_id'] as String?;
@@ -247,6 +281,9 @@ class WebSocketService {
                 LogService().log('Message: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
                 _isReconnecting = false; // Reset reconnecting flag on successful connection
+                _reconnectFailures = 0;
+                _lastReconnectSuccessAt = DateTime.now();
+                _recordHeartbeat('hello_ack', connected: true);
                 // Cancel disconnect grace timer since we're now connected
                 _disconnectGraceTimer?.cancel();
                 _disconnectGraceTimer = null;
@@ -352,6 +389,7 @@ class WebSocketService {
       LogService().log('══════════════════════════════════════');
       LogService().log('Error: $e');
       LogService().log('══════════════════════════════════════');
+      _recordHeartbeat('connect_error', message: e.toString(), connected: false);
       return false;
     }
   }
@@ -374,6 +412,8 @@ class WebSocketService {
     }
     _channel = null;
     _subscription = null;
+    _lastDisconnectAt = DateTime.now();
+    _recordHeartbeat('manual_disconnect', connected: false);
 
     // Disable foreground service keep-alive on Android
     _disableForegroundKeepAlive();
@@ -1372,7 +1412,9 @@ class WebSocketService {
         };
         final json = jsonEncode(pingMessage);
         _channel!.sink.add(json);
+        _lastPingAt = DateTime.now();
         LogService().log('Sent PING to station');
+        _recordHeartbeat('ping');
       } catch (e) {
         LogService().log('Error sending PING: $e');
       }
@@ -1385,11 +1427,33 @@ class WebSocketService {
       return;
     }
 
-    // Check if channel is still active
-    if (_channel == null) {
-      LogService().log('Connection lost - attempting reconnection...');
-      _attemptReconnect();
+    final now = DateTime.now();
+
+    if (_channel != null) {
+      final pongAge = _lastPongAt != null ? now.difference(_lastPongAt!) : null;
+      final pingAge = _lastPingAt != null ? now.difference(_lastPingAt!) : null;
+
+      if ((pongAge == null || pongAge > const Duration(seconds: 120)) &&
+          pingAge != null &&
+          pingAge > const Duration(seconds: 60)) {
+        _consecutivePingMisses++;
+        LogService().log('WebSocket: Missing PONG (${_consecutivePingMisses}x) - checking connection health');
+        _recordHeartbeat('ping_miss', message: 'Missing PONG (${_consecutivePingMisses})', connected: true);
+
+        if (_consecutivePingMisses >= 3) {
+          LogService().log('WebSocket: Forcing reconnect after repeated missed PONGs');
+          _handleConnectionLoss();
+          _attemptReconnect();
+          return;
+        }
+      }
+
+      return; // Channel exists and no action needed
     }
+
+    // Check if channel is still active
+    LogService().log('Connection lost - attempting reconnection...');
+    _attemptReconnect();
   }
 
   /// Handle connection loss
@@ -1398,6 +1462,8 @@ class WebSocketService {
     _channel = null;
     _subscription?.cancel();
     _subscription = null;
+    _lastDisconnectAt = DateTime.now();
+    _recordHeartbeat('disconnected', connected: false);
 
     // Disable foreground service keep-alive on Android when connection lost
     _disableForegroundKeepAlive();
@@ -1453,6 +1519,8 @@ class WebSocketService {
     }
 
     _isReconnecting = true;
+    _lastReconnectAttemptAt = DateTime.now();
+    _recordHeartbeat('reconnect_attempt', message: 'Attempting reconnect');
     LogService().log('Attempting to reconnect to station...');
 
     try {
@@ -1470,10 +1538,14 @@ class WebSocketService {
       } else {
         LogService().log('✗ Reconnection failed');
         _isReconnecting = false;
+        _reconnectFailures++;
+        _recordHeartbeat('reconnect_failed', message: 'Reconnection failed (${"$_reconnectFailures"} failures)');
       }
     } catch (e) {
       LogService().log('✗ Reconnection failed: $e');
       _isReconnecting = false;
+      _reconnectFailures++;
+      _recordHeartbeat('reconnect_error', message: e.toString());
     }
   }
 
@@ -1489,6 +1561,8 @@ class WebSocketService {
     // Set up callback to send PING when foreground service triggers keep-alive
     foregroundService.onKeepAlivePing = () {
       LogService().log('Foreground service triggered keep-alive ping');
+      _lastKeepAlivePingAt = DateTime.now();
+      _recordHeartbeat('keepalive_ping');
       _sendPing();
     };
 
@@ -1516,7 +1590,9 @@ class WebSocketService {
       stationName: stationName,
       stationUrl: stationHost,
     );
+    _foregroundKeepAliveEnabled = true;
     LogService().log('WebSocket: Enabled foreground service keep-alive for ${stationName ?? stationHost ?? "station"}');
+    _recordHeartbeat('keepalive_enabled', message: 'Foreground service keep-alive enabled');
   }
 
   /// Disable Android foreground service keep-alive for WebSocket
@@ -1529,7 +1605,66 @@ class WebSocketService {
     final foregroundService = BLEForegroundService();
     foregroundService.onKeepAlivePing = null;
     foregroundService.disableKeepAlive();
+    _foregroundKeepAliveEnabled = false;
     LogService().log('WebSocket: Disabled foreground service keep-alive');
+    _recordHeartbeat('keepalive_disabled', message: 'Foreground service keep-alive disabled');
+  }
+
+  Future<String?> _ensureHeartbeatPath() async {
+    if (_heartbeatPath != null) return _heartbeatPath;
+    try {
+      String base;
+      if (StorageConfig().isInitialized) {
+        base = StorageConfig().logsDir;
+      } else {
+        final appDir = await getApplicationDocumentsDirectory();
+        base = p.join(appDir.path, 'geogram', 'logs');
+      }
+      final dir = Directory(base);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      _heartbeatPath = p.join(base, 'heartbeat.json');
+      return _heartbeatPath;
+    } catch (e) {
+      LogService().log('WebSocket: Unable to resolve heartbeat path: $e');
+      return null;
+    }
+  }
+
+  Future<void> _recordHeartbeat(
+    String event, {
+    String? message,
+    bool? connected,
+  }) async {
+    try {
+      final path = await _ensureHeartbeatPath();
+      if (path == null) return;
+
+      final data = <String, dynamic>{
+        'event': event,
+        'message': message,
+        'stationUrl': _stationUrl,
+        'connected': connected ?? (_channel != null),
+        'shouldReconnect': _shouldReconnect,
+        'keepAliveEnabled': _foregroundKeepAliveEnabled,
+        'lastHello': _lastHelloAt?.toIso8601String(),
+        'lastPing': _lastPingAt?.toIso8601String(),
+        'lastPong': _lastPongAt?.toIso8601String(),
+        'lastKeepAlivePing': _lastKeepAlivePingAt?.toIso8601String(),
+        'lastReconnectAttempt': _lastReconnectAttemptAt?.toIso8601String(),
+        'lastReconnectSuccess': _lastReconnectSuccessAt?.toIso8601String(),
+        'lastDisconnect': _lastDisconnectAt?.toIso8601String(),
+        'reconnectFailures': _reconnectFailures,
+        'consecutivePingMisses': _consecutivePingMisses,
+        'updatedAt': DateTime.now().toIso8601String(),
+      };
+
+      final file = File(path);
+      await file.writeAsString(jsonEncode(data));
+    } catch (e) {
+      LogService().log('WebSocket: Failed to write heartbeat: $e');
+    }
   }
 
   /// Cleanup

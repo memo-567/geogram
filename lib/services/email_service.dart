@@ -489,6 +489,26 @@ class EmailService {
     ));
   }
 
+  /// Delete a single message from a thread. Returns true if the entire
+  /// thread was removed because no messages remained.
+  Future<bool> deleteMessage(EmailThread thread, EmailMessage message) async {
+    final beforeLength = thread.messages.length;
+    thread.messages.removeWhere(
+      (m) => m.timestamp == message.timestamp && m.author == message.author,
+    );
+    final removed = beforeLength - thread.messages.length;
+
+    if (removed == 0) return false;
+
+    if (thread.messages.isEmpty) {
+      await deleteThread(thread);
+      return true;
+    }
+
+    await saveThread(thread);
+    return false;
+  }
+
   /// Move thread to archive
   Future<void> archiveThread(EmailThread thread) async {
     if (thread.status == EmailStatus.archived) return;
