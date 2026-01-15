@@ -50,7 +50,21 @@ echo ""
 
 # Step 2: Kill existing instances on remote
 echo -e "${YELLOW}[2/6] Stopping existing instances...${NC}"
-ssh "$REMOTE_HOST" "screen -S $SCREEN_NAME -X quit >/dev/null 2>&1; pkill -f geogram-cli >/dev/null 2>&1; sleep 1" || true
+
+# Check if systemd service exists and stop it gracefully
+SYSTEMD_SERVICE_EXISTS=$(ssh "$REMOTE_HOST" "systemctl list-unit-files geogram-station.service 2>/dev/null | grep -q geogram-station && echo 'yes' || echo 'no'")
+
+if [ "$SYSTEMD_SERVICE_EXISTS" = "yes" ]; then
+    echo "Stopping systemd service..."
+    ssh "$REMOTE_HOST" "systemctl stop geogram-station 2>/dev/null" || true
+    sleep 2
+else
+    # Fallback: kill screen and any running processes
+    ssh "$REMOTE_HOST" "screen -S $SCREEN_NAME -X quit >/dev/null 2>&1" || true
+fi
+
+# Make sure process is really dead
+ssh "$REMOTE_HOST" "pkill -f geogram-cli >/dev/null 2>&1; sleep 1" || true
 echo -e "${GREEN}Existing instances stopped.${NC}"
 echo ""
 
@@ -272,17 +286,239 @@ else
 fi
 echo ""
 
-# Step 5: Start with screen
+# Step 5: Start the server
 echo -e "${YELLOW}[5/6] Starting geogram-cli on port $PORT...${NC}"
 
-# Start in screen
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && screen -dmS $SCREEN_NAME ./geogram-cli --data-dir=$REMOTE_DIR"
+# Check if systemd is available on remote
+SYSTEMD_AVAILABLE=$(ssh "$REMOTE_HOST" "command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1 && echo 'yes' || echo 'no'")
 
-# Wait for startup and send station start command
-sleep 2
-ssh "$REMOTE_HOST" "screen -S $SCREEN_NAME -p 0 -X stuff 'station start\n'" || true
+if [ "$SYSTEMD_AVAILABLE" = "yes" ]; then
+    echo "Systemd detected, installing service..."
 
-echo -e "${GREEN}Started in screen session '$SCREEN_NAME'.${NC}"
+    # Create systemd service file
+    ssh "$REMOTE_HOST" "cat > /etc/systemd/system/geogram-station.service" << 'SERVICE_EOF'
+[Unit]
+Description=Geogram Station Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/geogram
+ExecStart=/root/geogram/geogram-cli --data-dir=/root/geogram station
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/root/geogram
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+    # Reload systemd, enable and start/restart the service
+    ssh "$REMOTE_HOST" "systemctl daemon-reload && systemctl enable geogram-station"
+
+    # Use restart to handle both fresh start and updates
+    if [ "$SYSTEMD_SERVICE_EXISTS" = "yes" ]; then
+        ssh "$REMOTE_HOST" "systemctl restart geogram-station"
+    else
+        ssh "$REMOTE_HOST" "systemctl start geogram-station"
+    fi
+
+    echo -e "${GREEN}Started as systemd service 'geogram-station'.${NC}"
+    echo ""
+    echo "Management commands:"
+    echo "  Status:  ssh $REMOTE_HOST 'systemctl status geogram-station'"
+    echo "  Logs:    ssh $REMOTE_HOST 'journalctl -u geogram-station -f'"
+    echo "  Stop:    ssh $REMOTE_HOST 'systemctl stop geogram-station'"
+    echo "  Restart: ssh $REMOTE_HOST 'systemctl restart geogram-station'"
+else
+    echo "Systemd not available, using screen in daemon mode..."
+
+    # Start in screen with station command (daemon mode - no interactive prompt)
+    ssh "$REMOTE_HOST" "cd $REMOTE_DIR && screen -dmS $SCREEN_NAME ./geogram-cli --data-dir=$REMOTE_DIR station"
+
+    echo -e "${GREEN}Started in screen session '$SCREEN_NAME'.${NC}"
+    echo ""
+    echo "Management commands:"
+    echo "  Monitor: ssh $REMOTE_HOST 'screen -r $SCREEN_NAME'"
+    echo "  Stop:    ssh $REMOTE_HOST 'screen -S $SCREEN_NAME -X quit'"
+fi
+
+# Create/update launch script on remote server
+echo "Creating launch script on remote server..."
+ssh "$REMOTE_HOST" "cat > $REMOTE_DIR/start-geogram.sh" << 'LAUNCH_EOF'
+#!/bin/bash
+#
+# Geogram Station Launch Script
+# This script manages the Geogram station server.
+#
+# Usage:
+#   ./start-geogram.sh              - Start using systemd (if available) or screen
+#   ./start-geogram.sh start        - Same as above
+#   ./start-geogram.sh stop         - Stop the server
+#   ./start-geogram.sh restart      - Restart the server
+#   ./start-geogram.sh status       - Show server status
+#   ./start-geogram.sh logs         - Show server logs (follow mode)
+#   ./start-geogram.sh screen       - Force screen mode
+#   ./start-geogram.sh systemd      - Force systemd mode
+#
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+MODE="${1:-start}"
+
+# Check if systemd is available
+has_systemd() {
+    command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1
+}
+
+# Check if systemd service is installed
+has_service() {
+    systemctl list-unit-files geogram-station.service 2>/dev/null | grep -q geogram-station
+}
+
+# Check if running
+is_running() {
+    pgrep -f geogram-cli >/dev/null 2>&1
+}
+
+start_systemd() {
+    echo "Starting with systemd..."
+    if ! has_service; then
+        echo "Error: systemd service not installed. Run server-deploy.sh first."
+        exit 1
+    fi
+    systemctl start geogram-station
+    echo "Service started. Check status with: systemctl status geogram-station"
+    echo "View logs with: journalctl -u geogram-station -f"
+}
+
+start_screen() {
+    echo "Starting with screen..."
+    # Kill any existing screen session
+    screen -S geogram -X quit 2>/dev/null || true
+    pkill -f geogram-cli 2>/dev/null || true
+    sleep 1
+
+    # Start in screen with daemon mode (station command)
+    screen -dmS geogram ./geogram-cli --data-dir="$SCRIPT_DIR" station
+
+    echo "Started in screen session 'geogram'."
+    echo "Attach with: screen -r geogram"
+    echo "Detach with: Ctrl+A, D"
+}
+
+do_start() {
+    if is_running; then
+        echo "Geogram is already running."
+        exit 0
+    fi
+    if has_systemd && has_service; then
+        start_systemd
+    else
+        start_screen
+    fi
+}
+
+do_stop() {
+    echo "Stopping Geogram..."
+    if has_systemd && has_service; then
+        systemctl stop geogram-station 2>/dev/null || true
+    fi
+    screen -S geogram -X quit 2>/dev/null || true
+    pkill -f geogram-cli 2>/dev/null || true
+    sleep 1
+    if is_running; then
+        echo "Warning: Process still running, force killing..."
+        pkill -9 -f geogram-cli 2>/dev/null || true
+    fi
+    echo "Stopped."
+}
+
+do_restart() {
+    do_stop
+    sleep 1
+    do_start
+}
+
+do_status() {
+    if has_systemd && has_service; then
+        systemctl status geogram-station --no-pager
+    else
+        if is_running; then
+            echo "Geogram is running (screen mode)"
+            screen -ls | grep geogram || true
+            echo ""
+            echo "PID: $(pgrep -f geogram-cli)"
+        else
+            echo "Geogram is not running"
+        fi
+    fi
+}
+
+do_logs() {
+    if has_systemd && has_service; then
+        journalctl -u geogram-station -f
+    else
+        echo "Logs are in: $SCRIPT_DIR/logs/"
+        echo ""
+        if [ -f "$SCRIPT_DIR/logs/crash.txt" ]; then
+            echo "=== Recent crash log ==="
+            tail -20 "$SCRIPT_DIR/logs/crash.txt"
+        fi
+        # Find today's log
+        TODAY=$(date +%Y-%m-%d)
+        YEAR=$(date +%Y)
+        LOG_FILE="$SCRIPT_DIR/logs/$YEAR/log-$TODAY.txt"
+        if [ -f "$LOG_FILE" ]; then
+            echo ""
+            echo "=== Today's log (last 50 lines) ==="
+            tail -50 "$LOG_FILE"
+        fi
+    fi
+}
+
+case "$MODE" in
+    start|"")
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart)
+        do_restart
+        ;;
+    status)
+        do_status
+        ;;
+    logs|log)
+        do_logs
+        ;;
+    systemd)
+        start_systemd
+        ;;
+    screen)
+        start_screen
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|logs|screen|systemd}"
+        exit 1
+        ;;
+esac
+LAUNCH_EOF
+ssh "$REMOTE_HOST" "chmod +x $REMOTE_DIR/start-geogram.sh"
+echo -e "${GREEN}Launch script created: $REMOTE_DIR/start-geogram.sh${NC}"
 echo ""
 
 # Step 6: Test that it's online
@@ -331,19 +567,22 @@ if [ "$HTTP_STATUS" = "200" ]; then
     fi
     echo "  WebSocket: ws://p2p.radio/"
     echo ""
-    echo "Management:"
-    echo "  Monitor: ssh $REMOTE_HOST 'screen -r $SCREEN_NAME'"
-    echo "  Stop:    ssh $REMOTE_HOST 'screen -S $SCREEN_NAME -X quit'"
+    echo "Management (via start-geogram.sh on server):"
+    echo "  Status:  ssh $REMOTE_HOST 'cd $REMOTE_DIR && ./start-geogram.sh status'"
+    echo "  Logs:    ssh $REMOTE_HOST 'cd $REMOTE_DIR && ./start-geogram.sh logs'"
+    echo "  Stop:    ssh $REMOTE_HOST 'cd $REMOTE_DIR && ./start-geogram.sh stop'"
+    echo "  Restart: ssh $REMOTE_HOST 'cd $REMOTE_DIR && ./start-geogram.sh restart'"
 else
     echo -e "${YELLOW}WARNING: Server may still be starting (HTTP $HTTP_STATUS)${NC}"
     echo ""
-    echo "Checking screen session..."
-    ssh "$REMOTE_HOST" "screen -ls" || true
+    echo "Checking server status..."
+    ssh "$REMOTE_HOST" "cd $REMOTE_DIR && ./start-geogram.sh status" || true
     echo ""
     echo "Try again in a few seconds:"
     echo "  curl http://p2p.radio/api/status"
     echo ""
-    echo "To debug: ssh $REMOTE_HOST 'screen -r $SCREEN_NAME'"
+    echo "To debug:"
+    echo "  ssh $REMOTE_HOST 'cd $REMOTE_DIR && ./start-geogram.sh logs'"
 fi
 
 echo ""
