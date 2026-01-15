@@ -13,6 +13,7 @@ Options:
   --port=PORT, -p PORT       API server port (default: 3456)
   --data-dir=PATH, -d PATH   Data directory path
   --cli                      Run in CLI mode (no GUI)
+  --auto-station             Auto-start station mode (for systemd services)
   --http-api                 Enable HTTP API on startup
   --debug-api                Enable Debug API on startup
   --new-identity             Create a new identity on startup
@@ -90,6 +91,38 @@ Run in CLI (Command Line Interface) mode without the GUI.
 ```bash
 geogram_desktop --cli
 ```
+
+### --auto-station
+
+Automatically start the station server on launch without requiring an interactive prompt. This is designed for unattended server operation, such as running as a systemd service.
+
+```bash
+# Run as a background service (two equivalent ways)
+geogram-cli --data-dir=/root/geogram --auto-station
+geogram-cli --data-dir=/root/geogram station
+
+# Typical systemd service usage
+ExecStart=/root/geogram/geogram-cli --data-dir=/root/geogram station
+```
+
+**Behavior:**
+- Automatically enters station mode on startup
+- No interactive prompts or user input required
+- Ideal for headless server deployments
+
+**Equivalent forms:**
+- `--auto-station` flag
+- `station` positional command (CLI only)
+
+Both forms trigger the same daemon mode behavior.
+
+**Use cases:**
+- Running Geogram as a systemd service with auto-restart
+- Headless server operation (VPS, cloud instances)
+- Docker containers or automated deployments
+- CI/CD pipelines that need a running station
+
+**Note:** When used with the desktop GUI, the station server is managed through the application interface.
 
 ### --http-api
 

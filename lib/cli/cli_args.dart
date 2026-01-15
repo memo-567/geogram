@@ -52,8 +52,11 @@ class CliArgs {
   /// Force setup wizard
   final bool forceSetup;
 
-  /// Run in daemon mode (station command as first arg)
+  /// Run in daemon mode (station command or --auto-station flag)
   final bool daemonMode;
+
+  /// Auto-station mode (alias for daemon mode, for consistency with desktop app)
+  final bool autoStation;
 
   /// Email DNS diagnostics - true if flag present, domain is optional
   final bool emailDnsCheck;
@@ -81,6 +84,7 @@ class CliArgs {
     this.showVersion = false,
     this.forceSetup = false,
     this.daemonMode = false,
+    this.autoStation = false,
     this.emailDnsCheck = false,
     this.emailDnsDomain,
     this.positionalArgs = const [],
@@ -104,6 +108,7 @@ class CliArgs {
     bool showVersion = false;
     bool forceSetup = false;
     bool daemonMode = false;
+    bool autoStation = false;
     bool emailDnsCheck = false;
     String? emailDnsDomain;
     final positionalArgs = <String>[];
@@ -185,6 +190,11 @@ class CliArgs {
       else if (arg == '--setup' || arg == '-s') {
         forceSetup = true;
       }
+      // --auto-station (alias for daemon mode, for consistency with desktop app)
+      else if (arg == '--auto-station') {
+        autoStation = true;
+        daemonMode = true;
+      }
       // --email-dns or --email-dns=DOMAIN
       else if (arg == '--email-dns') {
         emailDnsCheck = true;
@@ -222,6 +232,7 @@ class CliArgs {
       showVersion: showVersion,
       forceSetup: forceSetup,
       daemonMode: daemonMode,
+      autoStation: autoStation,
       emailDnsCheck: emailDnsCheck,
       emailDnsDomain: emailDnsDomain,
       positionalArgs: positionalArgs,
@@ -249,12 +260,13 @@ Options:
   --no-update                Disable automatic update checks
   --verbose                  Enable verbose logging
   --setup, -s                Force setup wizard
+  --auto-station             Auto-start station server (daemon mode)
   --email-dns[=DOMAIN]       Run email DNS diagnostics and exit (auto-detects domain)
   --help, -h                 Show this help message
   --version, -v              Show version information
 
 Commands:
-  station                    Run in daemon mode (start station server)
+  station                    Run in daemon mode (same as --auto-station)
 
 Examples:
   # Start CLI with default settings
@@ -263,8 +275,9 @@ Examples:
   # Create a new station identity and start the server
   geogram-cli --new-identity --identity-type=station --nickname="MyStation" --port=8080
 
-  # Run station in daemon mode
+  # Run station in daemon mode (two equivalent ways)
   geogram-cli station --port=80 --data-dir=/var/geogram
+  geogram-cli --auto-station --port=80 --data-dir=/var/geogram
 
   # Start with fresh identity for testing
   geogram-cli --new-identity --skip-intro --data-dir=/tmp/test
