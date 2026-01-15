@@ -30,6 +30,7 @@ import '../util/nostr_crypto.dart';
 import '../util/chat_api.dart';
 import '../util/chat_scripts.dart';
 import '../util/web_navigation.dart';
+import '../util/station_html_templates.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import '../util/chat_format.dart';
@@ -693,6 +694,12 @@ class PureStationServer {
   SMTPServer? _smtpServer;
   PureRelaySettings _settings = PureRelaySettings();
   final Map<String, PureConnectedClient> _clients = {};
+
+  // Connection tolerance: preserve uptime for reconnects within 5 minutes
+  // Maps callsign -> (disconnectTime, originalConnectTime)
+  final Map<String, ({DateTime disconnectTime, DateTime originalConnectTime})> _disconnectInfo = {};
+  static const Duration _reconnectTolerance = Duration(minutes: 5);
+
   final PureTileCache _tileCache = PureTileCache();
   final Map<String, ChatRoom> _chatRooms = {};
   final List<LogEntry> _logs = [];
@@ -713,6 +720,9 @@ class PureStationServer {
   Map<String, String> _downloadedAssets = {};
   Map<String, String> _assetFilenames = {};
   String? _currentDownloadVersion;
+
+  // Whisper model mirror state
+  Set<String> _availableWhisperModels = {};
 
   // Heartbeat and connection stability
   Timer? _heartbeatTimer;
@@ -828,6 +838,9 @@ class PureStationServer {
 
     // Load cached release info if exists
     await _loadCachedRelease();
+
+    // Scan for existing whisper models
+    await _scanWhisperModels();
 
     // Only initialize chat data if settings already existed (not fresh install).
     // For fresh installs, chat will be initialized after identity is established
@@ -1779,6 +1792,15 @@ class PureStationServer {
     if (client == null) return;
     _log('INFO', 'Client removed: ${client.callsign ?? clientId} - reason: $reason (remaining clients: ${_clients.length})');
 
+    // Store disconnect info for reconnection tolerance
+    if (client.callsign != null) {
+      final callsignKey = client.callsign!.toUpperCase();
+      _disconnectInfo[callsignKey] = (
+        disconnectTime: DateTime.now(),
+        originalConnectTime: client.connectedAt,
+      );
+    }
+
     // Try to close the socket gracefully
     try {
       client.socket.close();
@@ -2158,6 +2180,8 @@ class PureStationServer {
         await _handleWellKnownNostr(request);
       } else if (path == '/') {
         await _handleRoot(request);
+      } else if (path == '/download' || path == '/download/') {
+        await _handleDownload(request);
       } else if (path == '/chat' || path == '/chat/') {
         await _handleChatPage(request);
       } else if (_isAlertFileUploadPath(path) && method == 'POST') {
@@ -2370,6 +2394,25 @@ class PureStationServer {
             client.latitude = latitude;
             client.longitude = longitude;
 
+            // Check for reconnection within tolerance period - restore original connect time
+            if (callsign != null) {
+              final callsignKey = callsign.toUpperCase();
+              final info = _disconnectInfo[callsignKey];
+              if (info != null) {
+                final timeSinceDisconnect = DateTime.now().difference(info.disconnectTime);
+                if (timeSinceDisconnect <= _reconnectTolerance) {
+                  // Reconnected within tolerance - restore original connect time
+                  client.connectedAt = info.originalConnectTime;
+                  _log('INFO', 'Restored original connect time for $callsign (reconnected within ${timeSinceDisconnect.inSeconds}s)');
+                }
+                // Clean up the entry
+                _disconnectInfo.remove(callsignKey);
+              }
+              // Clean up old entries (older than tolerance period)
+              final now = DateTime.now();
+              _disconnectInfo.removeWhere((_, v) => now.difference(v.disconnectTime) > _reconnectTolerance);
+            }
+
             // Register for NIP-05 identity verification
             if (callsign != null && npub != null) {
               final registry = Nip05RegistryService();
@@ -2419,9 +2462,26 @@ class PureStationServer {
 
           case 'REGISTER':
             // Device registration with capabilities
-            client.callsign = message['callsign'] as String?;
+            final registerCallsign = message['callsign'] as String?;
+            client.callsign = registerCallsign;
             client.deviceType = message['device_type'] as String?;
             client.version = message['version'] as String?;
+
+            // Check for reconnection within tolerance period
+            if (registerCallsign != null) {
+              final callsignKey = registerCallsign.toUpperCase();
+              final info = _disconnectInfo[callsignKey];
+              if (info != null) {
+                final timeSinceDisconnect = DateTime.now().difference(info.disconnectTime);
+                if (timeSinceDisconnect <= _reconnectTolerance) {
+                  client.connectedAt = info.originalConnectTime;
+                  _log('INFO', 'Restored original connect time for $registerCallsign (reconnected within ${timeSinceDisconnect.inSeconds}s)');
+                }
+                _disconnectInfo.remove(callsignKey);
+              }
+              final now = DateTime.now();
+              _disconnectInfo.removeWhere((_, v) => now.difference(v.disconnectTime) > _reconnectTolerance);
+            }
 
             // Capabilities and collections are provided but not stored yet
             // Future: store these for device capability discovery
@@ -6759,16 +6819,22 @@ class PureStationServer {
   String _formatTimeAgo(DateTime? dateTime) {
     if (dateTime == null) return 'unknown';
     final now = DateTime.now();
-    final difference = now.difference(dateTime);
+    final diff = now.difference(dateTime);
 
-    if (difference.inSeconds < 60) {
-      return '${difference.inSeconds}s ago';
-    } else if (difference.inMinutes < 60) {
-      return '${difference.inMinutes}m ago';
-    } else if (difference.inHours < 24) {
-      return '${difference.inHours}h ago';
+    if (diff.inDays >= 30) {
+      final months = diff.inDays ~/ 30;
+      return '$months ${months == 1 ? 'month' : 'months'} ago';
+    } else if (diff.inDays >= 7) {
+      final weeks = diff.inDays ~/ 7;
+      return '$weeks ${weeks == 1 ? 'week' : 'weeks'} ago';
+    } else if (diff.inDays > 0) {
+      return '${diff.inDays} ${diff.inDays == 1 ? 'day' : 'days'} ago';
+    } else if (diff.inHours > 0) {
+      return '${diff.inHours} ${diff.inHours == 1 ? 'hour' : 'hours'} ago';
+    } else if (diff.inMinutes > 0) {
+      return '${diff.inMinutes} ${diff.inMinutes == 1 ? 'minute' : 'minutes'} ago';
     } else {
-      return '${difference.inDays}d ago';
+      return 'just now';
     }
   }
 
@@ -7043,6 +7109,28 @@ class PureStationServer {
     }
   }
 
+  /// Handle /download endpoint - serve downloads page using shared template
+  Future<void> _handleDownload(HttpRequest request) async {
+    final stationName = _settings.name ?? 'geogram Station';
+
+    // Generate menu items for station navigation
+    final menuItems = WebNavigation.generateStationMenuItems(
+      activeApp: 'download',
+      hasChat: true,
+      hasDownload: true,
+    );
+
+    request.response.headers.contentType = ContentType.html;
+    request.response.write(StationHtmlTemplates.buildDownloadPage(
+      stationName: stationName,
+      menuItems: menuItems,
+      availableAssets: _downloadedAssets,
+      availableWhisperModels: getAvailableWhisperModels(),
+      releaseVersion: _cachedRelease?['version'] as String?,
+      releaseNotes: _cachedRelease?['body'] as String?,
+    ));
+  }
+
   Future<void> _handleRoot(HttpRequest request) async {
     final stationName = _settings.name ?? 'geogram Station';
 
@@ -7056,6 +7144,7 @@ class PureStationServer {
     final homeMenuItems = WebNavigation.generateStationMenuItems(
       activeApp: 'home',
       hasChat: true,
+      hasDownload: true,
     );
 
     // Build devices list HTML and collect coordinates for map
@@ -7104,7 +7193,7 @@ class PureStationServer {
           </div>
           $nicknameHtml
           <div class="device-meta">
-            Connected $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
+            Connected since $connectedAgo${location.isNotEmpty ? ' · $location' : ''}
           </div>
         </a>
       ''');
@@ -7315,6 +7404,25 @@ ${WebNavigation.getHeaderNavCss()}
   width: 24px;
   height: 24px;
   fill: #000;
+}
+/* Toast notification */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: var(--accent);
+  color: #000;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: bold;
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  z-index: 9999;
+}
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
 }
 .main { flex: 1; }
 
@@ -7642,8 +7750,8 @@ ${WebNavigation.getHeaderNavCss()}
     <main class="main">
       <section class="search-section">
         <div class="search-box">
-          <input type="text" id="search-input" class="search-input" placeholder="Search..." oninput="filterDevices(this.value)">
-          <button class="search-btn" onclick="document.getElementById('search-input').focus()" title="Search">
+          <input type="text" id="search-input" class="search-input" placeholder="Search..." onclick="showSearchToast()" readonly>
+          <button class="search-btn" onclick="showSearchToast()">
             <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           </button>
         </div>
@@ -7734,9 +7842,21 @@ ${WebNavigation.getHeaderNavCss()}
     <div id="fullscreen-map"></div>
   </div>
 
+  <div id="toast" class="toast">Coming soon</div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
   <script>
+    // Toast notification for search (shows once per session)
+    let searchToastShown = false;
+    function showSearchToast() {
+      if (searchToastShown) return;
+      searchToastShown = true;
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
     const devices = [$devicesJson];
     let mainMap = null;
     let fullscreenMap = null;
@@ -7851,6 +7971,151 @@ ${WebNavigation.getHeaderNavCss()}
         mainMap = initMap('devices-map', false);
       }
     });
+
+    // Keep track of markers for updates
+    let mainMarkers = null;
+    let fullscreenMarkers = null;
+
+    // Format time ago like the server does
+    function formatTimeAgo(isoString) {
+      const then = new Date(isoString);
+      const now = new Date();
+      const diff = Math.floor((now - then) / 1000);
+
+      if (diff >= 2592000) { // 30 days
+        const months = Math.floor(diff / 2592000);
+        return months + (months === 1 ? ' month' : ' months') + ' ago';
+      } else if (diff >= 604800) { // 7 days
+        const weeks = Math.floor(diff / 604800);
+        return weeks + (weeks === 1 ? ' week' : ' weeks') + ' ago';
+      } else if (diff >= 86400) {
+        const days = Math.floor(diff / 86400);
+        return days + (days === 1 ? ' day' : ' days') + ' ago';
+      } else if (diff >= 3600) {
+        const hours = Math.floor(diff / 3600);
+        return hours + (hours === 1 ? ' hour' : ' hours') + ' ago';
+      } else if (diff >= 60) {
+        const minutes = Math.floor(diff / 60);
+        return minutes + (minutes === 1 ? ' minute' : ' minutes') + ' ago';
+      } else {
+        return 'just now';
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    function getDeviceIcon(platform, deviceType) {
+      const p = (platform || '').toLowerCase();
+      const d = (deviceType || '').toLowerCase();
+      if (p.includes('android') || p.includes('ios') || d.includes('phone') || d.includes('mobile')) {
+        return 'phone';
+      } else if (p.includes('linux') || p.includes('windows') || p.includes('mac') || d.includes('desktop') || d.includes('computer')) {
+        return 'desktop';
+      } else if (d.includes('station')) {
+        return 'station';
+      }
+      return 'phone';
+    }
+
+    function updateDeviceCards(clients) {
+      const grid = document.querySelector('.devices-grid');
+      const emptyState = document.querySelector('.no-devices');
+      if (!grid || !emptyState) return;
+
+      if (clients.length === 0) {
+        grid.style.display = 'none';
+        emptyState.style.display = 'block';
+        return;
+      }
+
+      grid.style.display = 'grid';
+      emptyState.style.display = 'none';
+
+      grid.innerHTML = clients.map(c => {
+        const callsign = c.callsign || 'Unknown';
+        const nickname = c.nickname || callsign;
+        const nicknameHtml = nickname !== callsign
+          ? '<div class="device-nickname">' + escapeHtml(nickname) + '</div>'
+          : '';
+        const location = (c.latitude && c.longitude)
+          ? ' · ' + c.latitude.toFixed(2) + ', ' + c.longitude.toFixed(2)
+          : '';
+        return '<a href="/' + callsign + '/" class="device-card">' +
+          '<div class="device-header">' +
+            '<span class="device-callsign">' + escapeHtml(callsign) + '</span>' +
+            '<span class="connection-badge internet">Internet</span>' +
+          '</div>' +
+          nicknameHtml +
+          '<div class="device-meta">' +
+            'Connected since ' + formatTimeAgo(c.connected_at) + location +
+          '</div>' +
+        '</a>';
+      }).join('');
+    }
+
+    function updateMapMarkers(clients, map, existingMarkers) {
+      if (!map) return null;
+
+      // Remove old markers
+      if (existingMarkers) {
+        map.removeLayer(existingMarkers);
+      }
+
+      // Filter clients with location
+      const withLocation = clients.filter(c => c.latitude && c.longitude);
+      if (withLocation.length === 0) return null;
+
+      // Create new marker cluster group
+      const markers = L.markerClusterGroup({
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true
+      });
+
+      withLocation.forEach(function(c) {
+        const device = {
+          callsign: c.callsign || 'Unknown',
+          nickname: c.nickname || c.callsign || 'Unknown',
+          lat: c.latitude,
+          lng: c.longitude,
+          icon: getDeviceIcon(c.platform, c.device_type)
+        };
+        const marker = createMarker(device);
+        markers.addLayer(marker);
+      });
+
+      map.addLayer(markers);
+      return markers;
+    }
+
+    // Dynamic updates every 10 seconds
+    setInterval(async function() {
+      try {
+        const response = await fetch('/api/clients');
+        const data = await response.json();
+        const clients = data.clients || [];
+
+        // Update device cards
+        updateDeviceCards(clients);
+
+        // Update map markers
+        mainMarkers = updateMapMarkers(clients, mainMap, mainMarkers);
+        fullscreenMarkers = updateMapMarkers(clients, fullscreenMap, fullscreenMarkers);
+
+        // Initialize main map if it doesn't exist but we now have devices
+        if (!mainMap && clients.some(c => c.latitude && c.longitude)) {
+          mainMap = initMap('devices-map', false);
+          mainMarkers = updateMapMarkers(clients, mainMap, null);
+        }
+      } catch (e) {
+        console.error('Failed to refresh devices:', e);
+      }
+    }, 10000);
   </script>
 </body>
 </html>
@@ -7982,6 +8247,7 @@ ${WebNavigation.getHeaderNavCss()}
     final menuItems = WebNavigation.generateStationMenuItems(
       activeApp: 'chat',
       hasChat: true,
+      hasDownload: true,
       // Station doesn't have blog, events, etc. by default
       hasBlog: false,
       hasEvents: false,
@@ -8983,8 +9249,8 @@ ${WebNavigation.getHeaderNavCss()}
       return;
     }
 
-    final modelType = segments[2];
-    if (modelType != 'vision' && modelType != 'music') {
+    final modelType = segments[2]; // 'vision', 'music', or 'whisper'
+    if (modelType != 'vision' && modelType != 'music' && modelType != 'whisper') {
       request.response.statusCode = 400;
       request.response.write('Invalid model type');
       return;
@@ -9500,7 +9766,20 @@ ${WebNavigation.getHeaderNavCss()}
       if (await releaseFile.exists()) {
         final content = await releaseFile.readAsString();
         _cachedRelease = jsonDecode(content) as Map<String, dynamic>;
-        _log('INFO', 'Loaded cached release: ${_cachedRelease?['version']}');
+
+        // Restore _downloadedAssets from cached release
+        final assets = _cachedRelease?['assets'];
+        if (assets is Map<String, dynamic>) {
+          _downloadedAssets = Map<String, String>.from(assets);
+        }
+
+        // Restore _assetFilenames from cached release
+        final filenames = _cachedRelease?['assetFilenames'];
+        if (filenames is Map<String, dynamic>) {
+          _assetFilenames = Map<String, String>.from(filenames);
+        }
+
+        _log('INFO', 'Loaded cached release: ${_cachedRelease?['version']} with ${_downloadedAssets.length} assets');
       }
     } catch (e) {
       _log('ERROR', 'Error loading cached release: $e');
@@ -9597,6 +9876,9 @@ ${WebNavigation.getHeaderNavCss()}
       } else if (isNewVersion) {
         _log('INFO', 'Update mirror complete: version $version (no binaries available yet)');
       }
+
+      // Also sync whisper models
+      await _downloadWhisperModels();
     } catch (e) {
       _log('ERROR', 'Error polling for updates: $e');
     } finally {
@@ -9703,6 +9985,156 @@ ${WebNavigation.getHeaderNavCss()}
 
   /// Build asset filenames map
   Map<String, String> _buildAssetFilenames() => _assetFilenames;
+
+  // ============================================
+  // Whisper Model Mirror Methods
+  // ============================================
+
+  /// Whisper model definitions for mirroring
+  static const List<Map<String, dynamic>> _whisperModels = [
+    {
+      'id': 'ggml-tiny.bin',
+      'name': 'Whisper Tiny',
+      'size': 39 * 1024 * 1024,
+      'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+      'description': 'Fastest, lower accuracy',
+    },
+    {
+      'id': 'ggml-base.bin',
+      'name': 'Whisper Base',
+      'size': 145 * 1024 * 1024,
+      'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+      'description': 'Good balance of speed and accuracy',
+    },
+    {
+      'id': 'ggml-small.bin',
+      'name': 'Whisper Small',
+      'size': 465 * 1024 * 1024,
+      'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+      'description': 'Better accuracy, slower',
+    },
+    {
+      'id': 'ggml-medium.bin',
+      'name': 'Whisper Medium',
+      'size': 1500 * 1024 * 1024,
+      'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin',
+      'description': 'High accuracy',
+    },
+    {
+      'id': 'ggml-large-v2.bin',
+      'name': 'Whisper Large v2',
+      'size': 3000 * 1024 * 1024,
+      'url': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin',
+      'description': 'Best accuracy',
+    },
+  ];
+
+  /// Download all whisper models from HuggingFace
+  Future<void> _downloadWhisperModels() async {
+    if (_dataDir == null) return;
+
+    final whisperDir = Directory(path.join(_dataDir!, 'bot', 'models', 'whisper'));
+    if (!await whisperDir.exists()) {
+      await whisperDir.create(recursive: true);
+    }
+
+    _log('INFO', 'Checking whisper models for mirroring...');
+    _availableWhisperModels.clear();
+
+    int downloaded = 0;
+    int existed = 0;
+
+    for (final model in _whisperModels) {
+      final filename = model['id'] as String;
+      final url = model['url'] as String;
+      final expectedSize = model['size'] as int;
+
+      final filePath = path.join(whisperDir.path, filename);
+      final file = File(filePath);
+
+      // Check if file exists with reasonable size
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          // File exists and is at least 90% of expected size
+          _availableWhisperModels.add(filename);
+          existed++;
+          continue;
+        }
+      }
+
+      // Download the model using streaming to avoid memory issues
+      try {
+        _log('INFO', 'Downloading whisper model: $filename...');
+        final client = http.Client();
+        final request = http.Request('GET', Uri.parse(url));
+        request.headers['User-Agent'] = 'Geogram-Station-Updater';
+
+        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
+
+        if (streamedResponse.statusCode == 200) {
+          final sink = file.openWrite();
+          int bytesReceived = 0;
+
+          await for (final chunk in streamedResponse.stream) {
+            sink.add(chunk);
+            bytesReceived += chunk.length;
+          }
+
+          await sink.flush();
+          await sink.close();
+          client.close();
+
+          final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
+          _log('INFO', 'Downloaded whisper model $filename: ${sizeMb}MB');
+          _availableWhisperModels.add(filename);
+          downloaded++;
+        } else {
+          client.close();
+          _log('ERROR', 'Failed to download whisper model $filename: ${streamedResponse.statusCode}');
+        }
+      } catch (e) {
+        _log('ERROR', 'Error downloading whisper model $filename: $e');
+      }
+    }
+
+    _log('INFO', 'Whisper model sync: $downloaded new, $existed existing, ${_availableWhisperModels.length} total');
+  }
+
+  /// Scan for existing whisper models on disk
+  Future<void> _scanWhisperModels() async {
+    if (_dataDir == null) return;
+
+    final whisperDir = Directory(path.join(_dataDir!, 'bot', 'models', 'whisper'));
+    if (!await whisperDir.exists()) return;
+
+    _availableWhisperModels.clear();
+
+    for (final model in _whisperModels) {
+      final filename = model['id'] as String;
+      final expectedSize = model['size'] as int;
+      final filePath = path.join(whisperDir.path, filename);
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          _availableWhisperModels.add(filename);
+        }
+      }
+    }
+
+    if (_availableWhisperModels.isNotEmpty) {
+      _log('INFO', 'Found ${_availableWhisperModels.length} whisper models on disk');
+    }
+  }
+
+  /// Get list of available whisper models for download page
+  List<Map<String, dynamic>> getAvailableWhisperModels() {
+    return _whisperModels
+        .where((m) => _availableWhisperModels.contains(m['id']))
+        .toList();
+  }
 
   /// Handle GET /api/updates/latest - Return latest release info
   Future<void> _handleUpdatesLatest(HttpRequest request) async {

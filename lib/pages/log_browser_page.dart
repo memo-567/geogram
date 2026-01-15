@@ -76,6 +76,49 @@ class ParsedLogEntry {
   }
 }
 
+/// Grouped log entry with occurrence count
+class GroupedLogEntry {
+  final String message;
+  final LogLevel level;
+  final String lastTimestamp;
+  final int count;
+
+  GroupedLogEntry({
+    required this.message,
+    required this.level,
+    required this.lastTimestamp,
+    required this.count,
+  });
+
+  /// Group log entries by message content, counting occurrences
+  static List<GroupedLogEntry> groupByMessage(List<ParsedLogEntry> entries) {
+    final Map<String, List<ParsedLogEntry>> grouped = {};
+
+    for (final entry in entries) {
+      final key = entry.message;
+      grouped.putIfAbsent(key, () => []).add(entry);
+    }
+
+    // Convert to list of GroupedLogEntry, sorted by last occurrence (most recent first)
+    final result = grouped.entries.map((e) {
+      final entriesForMessage = e.value;
+      // Sort by timestamp descending to get the most recent
+      entriesForMessage.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return GroupedLogEntry(
+        message: e.key,
+        level: entriesForMessage.first.level,
+        lastTimestamp: entriesForMessage.first.timestamp,
+        count: entriesForMessage.length,
+      );
+    }).toList();
+
+    // Sort by last timestamp descending (most recent first)
+    result.sort((a, b) => b.lastTimestamp.compareTo(a.lastTimestamp));
+
+    return result;
+  }
+}
+
 /// Log browser page with consistent UI and exceptions panel
 class LogBrowserPage extends StatefulWidget {
   const LogBrowserPage({super.key});
@@ -104,7 +147,8 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onTabChanged);
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _logService.addListener(_onLogUpdate);
     _loadLogFiles();
@@ -112,6 +156,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
 
   @override
   void dispose() {
+    _tabController.removeListener(_onTabChanged);
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _logService.removeListener(_onLogUpdate);
     _filterController.dispose();
@@ -121,24 +166,96 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     super.dispose();
   }
 
+  void _onTabChanged() {
+    if (_tabController.indexIsChanging) return;
+
+    // Reload data when switching tabs
+    if (_tabController.index == 0) {
+      // "All" tab - reload and scroll to bottom
+      _reloadAndScrollToBottom();
+    } else if (_tabController.index == 1) {
+      // "Crashes" tab - reload crash logs
+      _loadLogFiles();
+    }
+  }
+
+  Future<void> _reloadAndScrollToBottom() async {
+    await _loadLogFiles();
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScrollController.hasClients) {
+        _logScrollController.animateTo(
+          _logScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 100),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   void _onLanguageChanged() {
     setState(() {});
   }
 
-  void _onLogUpdate(String message) {
+  void _onLogUpdate(String message) async {
     if (!_isPaused && mounted) {
-      setState(() {});
-      // Auto-scroll to bottom
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_logScrollController.hasClients) {
-          _logScrollController.animateTo(
-            _logScrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 100),
-            curve: Curves.easeOut,
-          );
+      // Reload logs to update counters
+      final todayLog = await _logService.readTodayLog();
+      final crashLogs = await _crashService.readAllCrashLogs() ?? await _logService.readCrashLog();
+      if (mounted) {
+        setState(() {
+          _todayLog = todayLog;
+          _crashLogs = crashLogs;
+        });
+        // Auto-scroll to bottom if on "All" tab
+        if (_tabController.index == 0) {
+          _scrollToBottom();
         }
-      });
+      }
     }
+  }
+
+  /// Count formal crash reports only (=== CRASH REPORT ===)
+  int _countFormalCrashReports(String? crashLogs) {
+    if (crashLogs == null || crashLogs.trim().isEmpty) return 0;
+    final separator = '=== CRASH REPORT ===';
+    return separator.allMatches(crashLogs).length;
+  }
+
+  /// Extract only formal crash reports from crash logs
+  /// Returns text containing only the === CRASH REPORT === blocks
+  String? _extractFormalCrashReports(String? crashLogs) {
+    if (crashLogs == null || crashLogs.trim().isEmpty) return null;
+
+    final buffer = StringBuffer();
+    final startMarker = '=== CRASH REPORT ===';
+    final endMarker = '=== END CRASH REPORT ===';
+
+    int searchStart = 0;
+    while (true) {
+      final startIndex = crashLogs.indexOf(startMarker, searchStart);
+      if (startIndex == -1) break;
+
+      final endIndex = crashLogs.indexOf(endMarker, startIndex);
+      if (endIndex == -1) {
+        // No end marker found, take rest of content
+        buffer.writeln(crashLogs.substring(startIndex).trim());
+        break;
+      }
+
+      // Extract the full crash report including end marker
+      final crashReport = crashLogs.substring(startIndex, endIndex + endMarker.length);
+      buffer.writeln(crashReport.trim());
+      buffer.writeln();
+
+      searchStart = endIndex + endMarker.length;
+    }
+
+    final result = buffer.toString().trim();
+    return result.isEmpty ? null : result;
   }
 
   Future<void> _loadLogFiles() async {
@@ -155,6 +272,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           _heartbeat = heartbeat;
           _isLoadingLogFiles = false;
         });
+        // Scroll to bottom if on "All" tab
+        if (_tabController.index == 0) {
+          _scrollToBottom();
+        }
       }
     } catch (_) {
       if (mounted) {
@@ -206,8 +327,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   }
 
   void _clearLog() {
+    // Clear in-memory logs and displayed content (not files on disk)
     _logService.clear();
     setState(() {
+      _todayLog = null;
       _selectedEntry = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
@@ -312,20 +435,16 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
             tooltip: _isPaused ? _i18n.t('resume') : _i18n.t('pause'),
             onPressed: _togglePause,
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh log files',
-            onPressed: _loadLogFiles,
-          ),
-          IconButton(
-            icon: const Icon(Icons.clear_all),
-            tooltip: _i18n.t('clear_logs'),
-            onPressed: _clearLog,
-          ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
+            icon: const Icon(Icons.menu),
             onSelected: (value) {
               switch (value) {
+                case 'refresh':
+                  _loadLogFiles();
+                  break;
+                case 'clear_log':
+                  _clearLog();
+                  break;
                 case 'copy_all':
                   _copyAllLogs();
                   break;
@@ -338,6 +457,23 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'refresh',
+                child: ListTile(
+                  leading: Icon(Icons.refresh),
+                  title: Text('Refresh'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'clear_log',
+                child: ListTile(
+                  leading: Icon(Icons.clear_all),
+                  title: Text('Clear Log'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'copy_all',
                 child: ListTile(
@@ -370,8 +506,6 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           controller: _tabController,
           tabs: const [
             Tab(text: 'All', icon: Icon(Icons.list)),
-            Tab(text: 'Errors', icon: Icon(Icons.error)),
-            Tab(text: 'Warnings', icon: Icon(Icons.warning)),
             Tab(text: 'Crashes', icon: Icon(Icons.bug_report)),
           ],
         ),
@@ -408,9 +542,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
             child: TabBarView(
               controller: _tabController,
               children: [
-                _buildLogList(null), // All logs
-                _buildLogList(LogLevel.error), // Errors
-                _buildLogList(LogLevel.warn), // Warnings
+                _buildTodayLogPanel(), // Today's log
                 _buildCrashPanel(), // Crashes
               ],
             ),
@@ -420,42 +552,117 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     );
   }
 
-  Widget _buildLogList(LogLevel? levelFilter) {
-    final logs = _getFilteredLogs(levelFilter);
+  Widget _buildTodayLogPanel() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-    if (logs.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              levelFilter == LogLevel.error
-                  ? Icons.check_circle
-                  : Icons.article_outlined,
-              size: 48,
-              color: Colors.grey,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              levelFilter == LogLevel.error
-                  ? 'No errors'
-                  : levelFilter == LogLevel.warn
-                      ? 'No warnings'
-                      : 'No logs yet',
-              style: TextStyle(color: Colors.grey),
-            ),
-          ],
-        ),
-      );
+    // Filter log lines if search text is provided
+    String filteredLog = '';
+    if (_todayLog != null && _todayLog!.trim().isNotEmpty) {
+      if (_filterText.isEmpty) {
+        filteredLog = _todayLog!.trim();
+      } else {
+        final lines = _todayLog!.split('\n');
+        final filtered = lines.where((line) =>
+            line.toLowerCase().contains(_filterText.toLowerCase())).toList();
+        filteredLog = filtered.join('\n');
+      }
     }
 
-    return ListView.builder(
-      controller: _logScrollController,
-      itemCount: logs.length,
-      itemBuilder: (context, index) {
-        final entry = logs[index];
-        return _buildLogTile(entry);
-      },
+    final hasLogs = filteredLog.isNotEmpty;
+    final lineCount = hasLogs
+        ? filteredLog.split('\n').where((l) => l.trim().isNotEmpty).length
+        : 0;
+
+    if (_isLoadingLogFiles) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Column(
+      children: [
+        // Fixed header
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.withValues(alpha: 0.1),
+            border: Border(
+              bottom: BorderSide(color: Colors.blue.withValues(alpha: 0.3)),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.article_outlined, color: Colors.blue),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _filterText.isEmpty ? 'Today\'s Log' : 'Today\'s Log (filtered)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$lineCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.copy),
+                tooltip: 'Copy Today\'s Log',
+                onPressed: hasLogs
+                    ? () => _copyToClipboard(filteredLog, 'Today\'s log copied')
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        // Scrollable content
+        Expanded(
+          child: hasLogs
+              ? Container(
+                  width: double.infinity,
+                  color: isDark ? Colors.black : Colors.grey[100],
+                  child: SingleChildScrollView(
+                    controller: _logScrollController,
+                    padding: const EdgeInsets.all(12),
+                    child: SelectableText(
+                      filteredLog,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                )
+              : Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.article_outlined,
+                        size: 48,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _filterText.isEmpty ? 'No logs yet' : 'No matching logs',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
@@ -563,33 +770,11 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
 
   Widget _buildCrashPanel() {
     final exceptionLogs = _getExceptionLogs();
-    final hasCrashLogs = _crashLogs != null && _crashLogs!.isNotEmpty;
-    final hasTodayLog = _todayLog != null && _todayLog!.trim().isNotEmpty;
-    final hasExceptions = exceptionLogs.isNotEmpty || hasCrashLogs || hasTodayLog;
+    final formalCrashReports = _extractFormalCrashReports(_crashLogs);
+    final hasCrashLogs = formalCrashReports != null && formalCrashReports.isNotEmpty;
 
     if (_isLoadingLogFiles) {
       return const Center(child: CircularProgressIndicator());
-    }
-
-    if (!hasExceptions) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.check_circle, size: 64, color: Colors.green),
-            const SizedBox(height: 16),
-            const Text(
-              'No crashes or exceptions',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Your app is running smoothly',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-          ],
-        ),
-      );
     }
 
     return SingleChildScrollView(
@@ -623,47 +808,31 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           ),
           const SizedBox(height: 16),
 
-          if (_heartbeat != null) ...[
-            _buildHeartbeatCard(),
-            const SizedBox(height: 16),
-          ],
-
-          if (hasTodayLog) ...[
-            _buildExceptionSection(
-              title: 'Today\'s Log',
-              icon: Icons.article_outlined,
-              content: _todayLog!.trim(),
-              count: _todayLog!.split('\n').where((l) => l.trim().isNotEmpty).length,
-              accentColor: Colors.blue,
-            ),
-            const SizedBox(height: 16),
-          ],
-
-          // Runtime errors from log
+          // Runtime errors from log (grouped by message)
           if (exceptionLogs.isNotEmpty) ...[
-            _buildExceptionSection(
+            _buildGroupedExceptionSection(
               title: 'Runtime Errors',
               icon: Icons.error,
-              content: exceptionLogs.map((l) => l.raw).join('\n'),
-              count: exceptionLogs.length,
+              entries: GroupedLogEntry.groupByMessage(exceptionLogs),
               accentColor: Colors.orange,
             ),
             const SizedBox(height: 16),
           ],
 
-          // Crash logs
-          if (hasCrashLogs)
-            _buildExceptionSection(
-              title: 'Crash Reports',
-              icon: Icons.report_problem,
-              content: _crashLogs!,
-              count: _crashLogs!.split('=== CRASH REPORT ===').length - 1,
-              trailingAction: IconButton(
-                icon: const Icon(Icons.delete_forever, color: Colors.red),
-                tooltip: 'Delete crash log',
-                onPressed: _clearCrashLogs,
-              ),
-            ),
+          // Crash logs (formal crash reports only)
+          _buildExceptionSection(
+            title: 'Crash Reports',
+            icon: Icons.report_problem,
+            content: hasCrashLogs ? formalCrashReports! : 'No crash reports',
+            count: _countFormalCrashReports(_crashLogs),
+            trailingAction: hasCrashLogs
+                ? IconButton(
+                    icon: const Icon(Icons.delete_forever, color: Colors.red),
+                    tooltip: 'Delete crash log',
+                    onPressed: _clearCrashLogs,
+                  )
+                : null,
+          ),
         ],
       ),
     );
@@ -749,6 +918,168 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupedExceptionSection({
+    required String title,
+    required IconData icon,
+    required List<GroupedLogEntry> entries,
+    Color accentColor = Colors.red,
+  }) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final uniqueCount = entries.length;
+    final totalCount = entries.fold<int>(0, (sum, e) => sum + e.count);
+
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: accentColor.withValues(alpha: 0.1),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                topRight: Radius.circular(12),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: accentColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: accentColor,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$uniqueCount unique ($totalCount total)',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy $title',
+                  onPressed: () {
+                    final content = entries.map((e) =>
+                        '${e.count > 1 ? "[x${e.count}] " : ""}${e.message}').join('\n');
+                    _copyToClipboard(content, '$title copied');
+                  },
+                ),
+              ],
+            ),
+          ),
+          // Content - list of grouped entries
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.black : Colors.grey[100],
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(12),
+                bottomRight: Radius.circular(12),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: entries.map((entry) => _buildGroupedEntryTile(entry, accentColor, isDark)).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupedEntryTile(GroupedLogEntry entry, Color accentColor, bool isDark) {
+    Color levelColor;
+    IconData levelIcon;
+
+    switch (entry.level) {
+      case LogLevel.error:
+        levelColor = Colors.red;
+        levelIcon = Icons.error;
+        break;
+      case LogLevel.warn:
+        levelColor = Colors.orange;
+        levelIcon = Icons.warning;
+        break;
+      case LogLevel.debug:
+        levelColor = Colors.grey;
+        levelIcon = Icons.bug_report;
+        break;
+      default:
+        levelColor = Colors.blue;
+        levelIcon = Icons.info;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: isDark ? Colors.grey[800]! : Colors.grey[300]!),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(levelIcon, color: levelColor, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.message,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Last: ${entry.lastTimestamp}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (entry.count > 1)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'x${entry.count}',
+                style: TextStyle(
+                  color: accentColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
         ],
       ),
     );
