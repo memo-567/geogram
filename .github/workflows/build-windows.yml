@@ -97,6 +97,33 @@ jobs:
         Write-Host "Bundled VC++ Runtime DLLs to $targetPath"
         Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name
 
+    - name: Bundle ONNX Runtime DLL
+      shell: powershell
+      run: |
+        $targetPath = "build\windows\x64\runner\Release"
+
+        # Check if onnxruntime.dll already exists (bundled by plugin)
+        if (Test-Path "$targetPath\onnxruntime.dll") {
+          Write-Host "onnxruntime.dll already bundled by plugin"
+        } else {
+          Write-Host "onnxruntime.dll not found, bundling explicitly..."
+
+          # Find the downloaded ONNX Runtime DLL from the plugin build
+          $onnxDll = Get-ChildItem -Path "build\windows\x64" -Recurse -Filter "onnxruntime.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($onnxDll) {
+            Write-Host "Found ONNX Runtime at: $($onnxDll.FullName)"
+            Copy-Item $onnxDll.FullName $targetPath -Force
+            Write-Host "Bundled onnxruntime.dll"
+          } else {
+            Write-Error "Could not find onnxruntime.dll in build directory"
+            exit 1
+          }
+        }
+
+        Write-Host "`nAll DLLs in release:"
+        Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name, Length
+
     - name: Create portable archive
       run: |
         cd build/windows/x64/runner/Release
