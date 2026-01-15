@@ -25,29 +25,58 @@ This document describes how to publish and update Geogram on F-Droid.
    git checkout add-geogram
    ```
 
-## Publishing a New Version
+## Publishing a New Version (Auto-Update with Tag Filter)
+
+F-Droid is configured to automatically pick up versions tagged with `fdroid-v*` pattern.
+This lets you release frequently on GitHub while controlling exactly which versions reach F-Droid.
+
+### How It Works
+
+| Tag | F-Droid Action |
+|-----|----------------|
+| `v1.7.10` | Ignored |
+| `v1.7.11` | Ignored |
+| `fdroid-v1.7.12` | Auto-picked up for F-Droid |
+
+### Releasing to F-Droid
+
+```bash
+cd /home/brito/code/geograms/geogram
+
+# 1. Ensure pubspec.yaml has the correct version (e.g., version: 1.7.12+BUILD)
+
+# 2. Update .flutter-version if Flutter version changed
+echo "3.38.5" > .flutter-version
+
+# 3. Commit if needed
+git add -A
+git commit -m "Release v1.7.12"
+git push origin main
+
+# 4. Create the F-Droid tag (this triggers F-Droid auto-update)
+git tag fdroid-v1.7.12
+git push origin fdroid-v1.7.12
+```
+
+That's it. F-Droid will automatically detect the new `fdroid-v*` tag and build it.
+
+### Version Naming
+
+- The tag must match pattern `fdroid-vX.Y.Z`
+- The version number must match `pubspec.yaml` version field
+- Example: if pubspec.yaml has `version: 1.7.12+50`, tag as `fdroid-v1.7.12`
+
+## Manual Version Update (Alternative)
+
+If auto-update is not working or you need to manually add a version:
 
 ### Step 1: Create a Release Tag in Geogram
 
 ```bash
 cd /home/brito/code/geograms/geogram
 
-# Update version in pubspec.yaml
-# version: X.Y.Z+BUILD
-
-# Update .flutter-version if Flutter version changed
-echo "3.38.5" > .flutter-version
-
-# Commit changes
-git add -A
-git commit -m "Release vX.Y.Z"
-
-# Create and push tag
-git tag vX.Y.Z
-git push origin main --tags
-
 # Get the commit hash for F-Droid (use hash, not tag name)
-git rev-parse vX.Y.Z
+git rev-parse fdroid-v1.7.12
 ```
 
 ### Step 2: Update F-Droid Metadata
@@ -226,15 +255,23 @@ If the build fails with Play Core class errors, the issue is usually in ProGuard
 
 ## Auto Update Configuration
 
-The metadata supports automatic version updates:
+The metadata uses tag-filtered automatic updates:
 ```yaml
-AutoUpdateMode: Version %v
-UpdateCheckMode: Tags .*
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^fdroid-v.*$
 ```
 
 This tells F-Droid to:
-- Check for new tags matching `.*` pattern
-- Auto-generate build entries for new versions using `%v` as version placeholder
+- Only check for tags matching `^fdroid-v.*$` pattern (e.g., `fdroid-v1.7.12`)
+- Ignore regular version tags (e.g., `v1.7.12`)
+- Auto-generate build entries for matching tags
+
+### Why Tag Filtering?
+
+During active development, Geogram may have 3-5 releases per day. Tag filtering allows:
+- Frequent releases on GitHub for testers using the auto-updater
+- Controlled releases to F-Droid users (only `fdroid-v*` tags)
+- No manual metadata editing required for F-Droid updates
 
 ## Files to Maintain
 
