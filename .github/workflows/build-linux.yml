@@ -53,6 +53,25 @@ jobs:
     - name: Build Linux Release
       run: flutter build linux --release
 
+    - name: Bundle ONNX Runtime library
+      run: |
+        ONNX_VERSION="1.21.0"
+        BUNDLE_LIB="build/linux/x64/release/bundle/lib"
+
+        # Download ONNX Runtime
+        wget -q "https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz"
+        tar -xzf "onnxruntime-linux-x64-${ONNX_VERSION}.tgz"
+
+        # Copy the shared library to bundle
+        cp "onnxruntime-linux-x64-${ONNX_VERSION}/lib/libonnxruntime.so.${ONNX_VERSION}" "${BUNDLE_LIB}/"
+
+        # Create symlink for .so.1
+        cd "${BUNDLE_LIB}"
+        ln -sf "libonnxruntime.so.${ONNX_VERSION}" "libonnxruntime.so.1"
+
+        echo "Bundled ONNX Runtime:"
+        ls -la libonnxruntime*
+
     - name: Fix library rpaths for portability
       run: |
         sudo apt-get install -y patchelf
