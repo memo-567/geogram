@@ -55,7 +55,7 @@ jobs:
 
     - name: Bundle ONNX Runtime library
       run: |
-        ONNX_VERSION="1.21.0"
+        ONNX_VERSION="1.22.0"
         BUNDLE_LIB="build/linux/x64/release/bundle/lib"
 
         # Download ONNX Runtime
@@ -65,9 +65,10 @@ jobs:
         # Copy the shared library to bundle
         cp "onnxruntime-linux-x64-${ONNX_VERSION}/lib/libonnxruntime.so.${ONNX_VERSION}" "${BUNDLE_LIB}/"
 
-        # Create symlink for .so.1
+        # Create symlinks for compatibility
         cd "${BUNDLE_LIB}"
         ln -sf "libonnxruntime.so.${ONNX_VERSION}" "libonnxruntime.so.1"
+        ln -sf "libonnxruntime.so.${ONNX_VERSION}" "libonnxruntime.so"
 
         echo "Bundled ONNX Runtime:"
         ls -la libonnxruntime*
