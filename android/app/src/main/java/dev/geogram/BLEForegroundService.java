@@ -197,6 +197,10 @@ public class BLEForegroundService extends Service {
             sendKeepAlivePing();
         } else if ("RESTART_WITHOUT_DATASYNC".equals(action)) {
             Log.d(TAG, "Restarted without dataSync type after timeout");
+
+            // Notify Flutter to check connection (may need reconnection)
+            notifyServiceRestarted();
+
             // Re-enable keep-alive if it was previously enabled
             if (stationUrl != null || stationName != null) {
                 startKeepAlive();
@@ -486,6 +490,30 @@ public class BLEForegroundService extends Service {
                       "App needs to be brought to foreground to reconnect.");
                 scheduleAppRestart();
             }
+        }
+    }
+
+    /**
+     * Notify Flutter that the service has restarted after dataSync timeout.
+     * This allows the WebSocket connection to be checked and reconnected if needed.
+     */
+    private void notifyServiceRestarted() {
+        if (methodChannel == null) {
+            Log.w(TAG, "MethodChannel not set, cannot notify service restart");
+            return;
+        }
+
+        try {
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    methodChannel.invokeMethod("onServiceRestarted", null);
+                    Log.d(TAG, "Notified Flutter of service restart");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to notify Flutter of restart: " + e.getMessage());
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Exception notifying service restart: " + e.getMessage());
         }
     }
 

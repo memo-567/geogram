@@ -13,6 +13,10 @@ import 'log_service.dart';
 /// Android foreground service, which runs even when the display is off.
 typedef KeepAlivePingCallback = void Function();
 
+/// Callback type for when the foreground service restarts after Android 15+ timeout.
+/// This allows the WebSocketService to check and reconnect if needed.
+typedef ServiceRestartedCallback = void Function();
+
 /// Service to manage the foreground service on Android.
 /// This keeps BLE and WebSocket connections active when app goes to background.
 ///
@@ -35,6 +39,9 @@ class BLEForegroundService {
   /// Callback to invoke when the foreground service triggers a keep-alive ping
   KeepAlivePingCallback? onKeepAlivePing;
 
+  /// Callback to invoke when the foreground service restarts after Android 15+ timeout
+  ServiceRestartedCallback? onServiceRestarted;
+
   /// Whether the foreground service is currently running
   bool get isRunning => _isRunning;
 
@@ -47,6 +54,10 @@ class BLEForegroundService {
       case 'onKeepAlivePing':
         LogService().log('BLEForegroundService: Keep-alive ping received from Android');
         onKeepAlivePing?.call();
+        break;
+      case 'onServiceRestarted':
+        LogService().log('BLEForegroundService: Service restarted after dataSync timeout');
+        onServiceRestarted?.call();
         break;
       default:
         LogService().log('BLEForegroundService: Unknown method ${call.method}');

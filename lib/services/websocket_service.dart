@@ -1566,6 +1566,14 @@ class WebSocketService {
       _sendPing();
     };
 
+    // Set up callback for when service restarts after Android 15+ dataSync timeout
+    // This triggers a connection check and reconnection if needed
+    foregroundService.onServiceRestarted = () {
+      LogService().log('WebSocket: Foreground service restarted after timeout, checking connection...');
+      _recordHeartbeat('service_restarted', message: 'Android foreground service restarted after dataSync timeout');
+      _checkConnection();
+    };
+
     // Extract station info for the notification
     String? stationName;
     String? stationHost;
@@ -1604,6 +1612,7 @@ class WebSocketService {
 
     final foregroundService = BLEForegroundService();
     foregroundService.onKeepAlivePing = null;
+    foregroundService.onServiceRestarted = null;
     foregroundService.disableKeepAlive();
     _foregroundKeepAliveEnabled = false;
     LogService().log('WebSocket: Disabled foreground service keep-alive');
