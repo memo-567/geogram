@@ -568,7 +568,7 @@ class StationServerService {
       // Initialize GeoIP service for offline IP geolocation
       try {
         final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
-        GeoIpService().initFromBytes(data.buffer.asUint8List());
+        await GeoIpService().initFromBytes(data.buffer.asUint8List());
       } catch (e) {
         LogService().log('Station: GeoIP service initialization failed (non-critical): $e');
       }
@@ -1355,7 +1355,7 @@ class StationServerService {
       return;
     }
 
-    final result = geoip.lookup(clientIp);
+    final result = await geoip.lookup(clientIp);
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({

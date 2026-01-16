@@ -5504,7 +5504,7 @@ class PureStationServer {
       return;
     }
 
-    final result = geoip.lookup(clientIp);
+    final result = await geoip.lookup(clientIp);
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({

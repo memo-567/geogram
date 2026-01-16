@@ -92,7 +92,7 @@ class GeoIpService {
       }
 
       final bytes = await file.readAsBytes();
-      _database = MaxMindDatabase.memory(bytes);
+      _database = await MaxMindDatabase.memory(bytes);
 
       _initialized = true;
       LogService().log('GeoIpService: Database loaded successfully (${bytes.length} bytes)');
@@ -104,17 +104,17 @@ class GeoIpService {
   }
 
   /// Initialize from raw bytes (useful for tests or pre-loaded data)
-  void initFromBytes(Uint8List bytes) {
+  Future<void> initFromBytes(Uint8List bytes) async {
     if (_initialized) return;
 
-    _database = MaxMindDatabase.memory(bytes);
+    _database = await MaxMindDatabase.memory(bytes);
     _initialized = true;
     LogService().log('GeoIpService: Database loaded from bytes (${bytes.length} bytes)');
   }
 
   /// Look up geolocation for an IP address
   /// Returns null if database not initialized or IP not found
-  GeoIpResult? lookup(String ipAddress) {
+  Future<GeoIpResult?> lookup(String ipAddress) async {
     if (!_initialized || _database == null) {
       LogService().log('GeoIpService: Database not initialized');
       return null;
@@ -127,7 +127,7 @@ class GeoIpService {
     }
 
     try {
-      final result = _database!.search(ipAddress);
+      final result = await _database!.search(ipAddress);
       if (result == null) {
         LogService().log('GeoIpService: No result for IP: $ipAddress');
         return GeoIpResult(ip: ipAddress);
