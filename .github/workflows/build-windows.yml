@@ -46,6 +46,40 @@ jobs:
     - name: Install dependencies
       run: flutter pub get
 
+    - name: Pre-download ONNX Runtime for flutter_onnxruntime
+      shell: powershell
+      run: |
+        # The flutter_onnxruntime plugin expects ONNX Runtime at a specific path
+        $onnxVersion = "1.21.1"
+        $onnxDir = "build\windows\x64\plugins\flutter_onnxruntime\onnxruntime"
+        $extractDir = "$onnxDir\onnxruntime-win-x64-$onnxVersion"
+
+        # Create the directory structure
+        New-Item -ItemType Directory -Force -Path $onnxDir | Out-Null
+
+        # Download ONNX Runtime
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnxVersion/onnxruntime-win-x64-$onnxVersion.zip"
+        $zipPath = "$onnxDir\onnxruntime.zip"
+
+        Write-Host "Downloading ONNX Runtime v$onnxVersion..."
+        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+
+        # Extract to the expected directory
+        Write-Host "Extracting to $extractDir..."
+        Expand-Archive -Path $zipPath -DestinationPath $onnxDir -Force
+
+        # Verify extraction
+        if (Test-Path "$extractDir\lib\onnxruntime.dll") {
+          Write-Host "ONNX Runtime extracted successfully"
+          Get-ChildItem $extractDir
+        } else {
+          Write-Error "ONNX Runtime extraction failed"
+          exit 1
+        }
+
+        # Clean up zip file
+        Remove-Item $zipPath -Force
+
     - name: Build Windows Release
       run: flutter build windows --release
 
