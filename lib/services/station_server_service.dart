@@ -42,6 +42,8 @@ import '../util/station_html_templates.dart';
 import '../util/web_navigation.dart';
 import '../version.dart';
 import 'email_relay_service.dart';
+import 'stun_server_service.dart';
+import 'geoip_service.dart';
 
 /// Station server settings
 class StationServerSettings {
@@ -60,6 +62,9 @@ class StationServerSettings {
   int updateCheckInterval;       // Polling interval in seconds (default: 120 = 2 min)
   String? lastMirroredVersion;   // Track what version has been downloaded
   String updateMirrorUrl;        // GitHub API URL for releases (can be changed for different repos)
+  // STUN server settings (for WebRTC NAT traversal)
+  bool stunServerEnabled;        // Enable/disable STUN server (default: true)
+  int stunServerPort;            // UDP port for STUN server (default: 3478, standard STUN port)
 
   StationServerSettings({
     this.port = 3456,  // Standard Geogram port
@@ -76,6 +81,8 @@ class StationServerSettings {
     this.updateCheckInterval = 120,
     this.lastMirroredVersion,
     this.updateMirrorUrl = 'https://api.github.com/repos/geograms/geogram/releases/latest',
+    this.stunServerEnabled = true,  // Enabled by default for privacy
+    this.stunServerPort = 3478,     // Standard STUN port
   });
 
   factory StationServerSettings.fromJson(Map<String, dynamic> json) {
@@ -94,6 +101,8 @@ class StationServerSettings {
       updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
       updateMirrorUrl: json['updateMirrorUrl'] as String? ?? 'https://api.github.com/repos/geograms/geogram/releases/latest',
+      stunServerEnabled: json['stunServerEnabled'] as bool? ?? true,
+      stunServerPort: json['stunServerPort'] as int? ?? 3478,
     );
   }
 
@@ -112,6 +121,8 @@ class StationServerSettings {
         'updateCheckInterval': updateCheckInterval,
         'lastMirroredVersion': lastMirroredVersion,
         'updateMirrorUrl': updateMirrorUrl,
+        'stunServerEnabled': stunServerEnabled,
+        'stunServerPort': stunServerPort,
       };
 
   StationServerSettings copyWith({
@@ -129,6 +140,8 @@ class StationServerSettings {
     int? updateCheckInterval,
     String? lastMirroredVersion,
     String? updateMirrorUrl,
+    bool? stunServerEnabled,
+    int? stunServerPort,
   }) {
     return StationServerSettings(
       port: port ?? this.port,
@@ -145,6 +158,8 @@ class StationServerSettings {
       updateCheckInterval: updateCheckInterval ?? this.updateCheckInterval,
       lastMirroredVersion: lastMirroredVersion ?? this.lastMirroredVersion,
       updateMirrorUrl: updateMirrorUrl ?? this.updateMirrorUrl,
+      stunServerEnabled: stunServerEnabled ?? this.stunServerEnabled,
+      stunServerPort: stunServerPort ?? this.stunServerPort,
     );
   }
 }
@@ -549,6 +564,13 @@ class StationServerService {
         nip05Registry.setStationOwner(profile.npub!);
       }
 
+      // Initialize GeoIP service for offline IP geolocation
+      try {
+        await GeoIpService().initFromAssets();
+      } catch (e) {
+        LogService().log('Station: GeoIP service initialization failed (non-critical): $e');
+      }
+
       // Handle incoming connections
       _httpServer!.listen(_handleRequest, onError: (error) {
         LogService().log('Server error: $error');
@@ -562,6 +584,16 @@ class StationServerService {
       await downloadAllVisionModels();
       await downloadAllMusicModels();
       await downloadAllConsoleVmFiles();
+
+      // Start STUN server for WebRTC NAT traversal (privacy-respecting alternative to Google STUN)
+      if (_settings.stunServerEnabled) {
+        final stunStarted = await StunServerService().start(port: _settings.stunServerPort);
+        if (stunStarted) {
+          LogService().log('STUN server started on UDP port ${_settings.stunServerPort}');
+        } else {
+          LogService().log('Failed to start STUN server (WebRTC may require external STUN)');
+        }
+      }
 
       return true;
     } catch (e) {
@@ -581,6 +613,9 @@ class StationServerService {
     // Stop update polling
     _updatePollTimer?.cancel();
     _updatePollTimer = null;
+
+    // Stop STUN server
+    await StunServerService().stop();
 
     // Close all WebSocket connections
     for (final client in _clients.values) {
@@ -631,6 +666,8 @@ class StationServerService {
       // Route requests
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path == '/api/geoip') {
+        await _handleGeoIp(request);
       } else if (path == '/api/clients') {
         await _handleClients(request);
       } else if (path == '/api/backup/providers/available' && method == 'GET') {
@@ -936,7 +973,8 @@ class StationServerService {
       }
     }
 
-    // Send hello acknowledgment
+    // Send hello acknowledgment with STUN server info
+    final stunServer = StunServerService();
     final response = {
       'type': 'hello_ack',
       'success': true,
@@ -944,6 +982,11 @@ class StationServerService {
       'server': 'geogram-station',
       'version': appVersion,
       'station_id': ProfileService().getProfile().callsign,
+      // Advertise STUN capability for privacy-respecting WebRTC NAT traversal
+      if (stunServer.isRunning) 'stun_server': {
+        'enabled': true,
+        'port': stunServer.port,
+      },
     };
     client.socket.add(jsonEncode(response));
 
@@ -1280,10 +1323,47 @@ class StationServerService {
       'osm_fallback': _settings.osmFallbackEnabled,
       'cache_size': _tileCache.size,
       'cache_size_bytes': _tileCache.sizeBytes,
+      'stun_server': StunServerService().getStatus(),
     };
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(status));
+  }
+
+  /// Handle /api/geoip endpoint - returns client's IP geolocation using local MMDB database
+  /// This enables privacy-preserving IP geolocation without external API calls
+  Future<void> _handleGeoIp(HttpRequest request) async {
+    final clientIp = request.connectionInfo?.remoteAddress.address;
+
+    if (clientIp == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Cannot determine client IP'}));
+      return;
+    }
+
+    final geoip = GeoIpService();
+    if (!geoip.isInitialized) {
+      request.response.statusCode = 503;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'GeoIP service not initialized',
+        'ip': clientIp,
+      }));
+      return;
+    }
+
+    final result = geoip.lookup(clientIp);
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'ip': clientIp,
+      'latitude': result?.latitude,
+      'longitude': result?.longitude,
+      'city': result?.city,
+      'country': result?.country,
+      'countryCode': result?.countryCode,
+    }));
   }
 
   /// Handle /api/clients endpoint - returns list of connected clients

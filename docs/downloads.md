@@ -161,16 +161,21 @@ Files: `place.txt`, `images/*.jpg`
 
 ---
 
-### 9. IP Geolocation
+### 9. IP Geolocation (Offline)
 
-**Service:** `lib/util/geolocation_utils.dart`
+**Service:** `lib/services/geoip_service.dart`
 
-JSON responses (not stored).
+Privacy-preserving IP geolocation using bundled DB-IP MMDB database.
 
-**Sources:**
-1. `http://ip-api.com/json/?fields=status,lat,lon,city,country`
-2. `https://ipinfo.io/json`
-3. `https://ipwho.is/`
+**Database:** `assets/dbip-city-lite.mmdb` (~127MB, CC BY 4.0, stored via Git LFS)
+
+**API Endpoint:** `GET /api/geoip`
+
+Returns client's public IP and its geolocation (latitude, longitude, city, country).
+
+Clients request their location from the connected station, which extracts the client IP from the HTTP connection and looks it up in the local MMDB database. **No external IP services are called.**
+
+**Attribution:** IP Geolocation by [DB-IP](https://db-ip.com)
 
 ---
 

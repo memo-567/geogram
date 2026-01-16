@@ -1768,20 +1768,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   }
 
   /// Filter connection methods to only show those currently available
-  /// Uses NetworkMonitorService for LAN/Internet, WebSocketService for station
-  /// - 'internet' requires general internet connectivity
+  /// Uses NetworkMonitorService for LAN, WebSocketService for station
+  /// - 'internet' requires station connection (implies internet works)
   /// - 'lan'/'wifi' requires local network interface
   /// - 'bluetooth' is always shown if present
   List<String> _filterAvailableConnectionMethods(List<String> methods) {
-    final hasInternet = _networkMonitor.hasInternet;
     final hasLan = _networkMonitor.hasLan;
     final hasStation = _wsService.isConnected;
 
     return methods.where((method) {
       final m = method.toLowerCase();
-      // Internet-dependent methods
+      // Internet-dependent methods - station connection implies internet works
       if (m == 'internet') {
-        return hasInternet || hasStation; // Station connection implies internet
+        return hasStation;
       }
       // LAN/WiFi methods - need local network interface
       if (m == 'lan' || m == 'wifi' || m == 'wifi_local' || m == 'wifi-local') {

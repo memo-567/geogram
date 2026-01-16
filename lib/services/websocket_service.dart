@@ -22,6 +22,7 @@ import '../services/email_service.dart';
 import '../services/ble_foreground_service.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
+import '../services/webrtc_config.dart';
 import '../util/nostr_event.dart';
 import '../util/tlsh.dart';
 import '../util/event_bus.dart';
@@ -50,6 +51,7 @@ class WebSocketService {
   bool _isReconnecting = false;
   bool _lastConnectionState = false; // Track last state to avoid duplicate events
   String? _connectedStationCallsign;
+  StationStunInfo? _connectedStationStunInfo; // STUN server info from connected station
   final EventBus _eventBus = EventBus();
   String? _heartbeatPath;
   DateTime? _lastPingAt;
@@ -279,6 +281,17 @@ class WebSocketService {
                 LogService().log('✓ Hello acknowledged!');
                 LogService().log('Station ID: $stationId');
                 LogService().log('Message: ${data['message']}');
+
+                // Parse STUN server info for privacy-preserving WebRTC
+                final stunServerData = data['stun_server'] as Map<String, dynamic>?;
+                if (stunServerData != null) {
+                  _connectedStationStunInfo = StationStunInfo.fromJson(stunServerData);
+                  LogService().log('STUN server: port ${_connectedStationStunInfo!.port} (enabled: ${_connectedStationStunInfo!.enabled})');
+                } else {
+                  _connectedStationStunInfo = null;
+                  LogService().log('STUN server: not available (WebRTC will use host candidates only)');
+                }
+
                 LogService().log('══════════════════════════════════════');
                 _isReconnecting = false; // Reset reconnecting flag on successful connection
                 _reconnectFailures = 0;
@@ -412,6 +425,7 @@ class WebSocketService {
     }
     _channel = null;
     _subscription = null;
+    _connectedStationStunInfo = null; // Clear STUN info on disconnect
     _lastDisconnectAt = DateTime.now();
     _recordHeartbeat('manual_disconnect', connected: false);
 
@@ -441,6 +455,10 @@ class WebSocketService {
 
   /// Get currently connected station URL (or null if not connected)
   String? get connectedUrl => _channel != null ? _stationUrl : null;
+
+  /// Get STUN server info from connected station (or null if not available)
+  /// Used by WebRTC to use station's self-hosted STUN instead of Google/Twilio
+  StationStunInfo? get connectedStationStunInfo => _channel != null ? _connectedStationStunInfo : null;
 
   /// Called when app resumes from background.
   /// Verifies the WebSocket connection is still alive and reconnects if needed.

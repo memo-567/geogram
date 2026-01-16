@@ -223,6 +223,22 @@ class AboutPage extends StatelessWidget {
 
             const SizedBox(height: 32),
 
+            // Data Attribution
+            Text(
+              _i18n.t('data_attribution'),
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 12),
+            _buildAttribution(
+              context,
+              Icons.location_on,
+              'IP Geolocation by DB-IP',
+              'https://db-ip.com',
+              _i18n.t('dbip_attribution_desc'),
+            ),
+
+            const SizedBox(height: 32),
+
             // Links
             Text(
               _i18n.t('links'),
@@ -405,6 +421,68 @@ class AboutPage extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAttribution(
+    BuildContext context,
+    IconData icon,
+    String title,
+    String url,
+    String description,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  icon,
+                  size: 24,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: InkWell(
+                    onTap: () => _launchURL(context, url),
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                            decoration: TextDecoration.underline,
+                          ),
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.open_in_new,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              description,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
         ),
       ),
     );

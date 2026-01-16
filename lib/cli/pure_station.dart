@@ -35,6 +35,7 @@ import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import '../util/chat_format.dart';
 import '../models/update_settings.dart' show UpdateAssetType;
+import '../services/geoip_service.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -1478,6 +1479,30 @@ class PureStationServer {
         nip05Registry.setStationOwner(_settings.npub!);
       }
 
+      // Initialize GeoIP service for offline IP geolocation
+      try {
+        // Try to load from data directory first, then current directory
+        final possiblePaths = [
+          if (_dataDir != null) '$_dataDir/assets/dbip-city-lite.mmdb',
+          'assets/dbip-city-lite.mmdb',
+          '/opt/geogram/assets/dbip-city-lite.mmdb',
+        ];
+
+        for (final dbPath in possiblePaths) {
+          if (await File(dbPath).exists()) {
+            await GeoIpService().initFromFile(dbPath);
+            _log('INFO', 'GeoIP database loaded from $dbPath');
+            break;
+          }
+        }
+
+        if (!GeoIpService().isInitialized) {
+          _log('WARN', 'GeoIP database not found, IP geolocation will not be available');
+        }
+      } catch (e) {
+        _log('WARN', 'GeoIP service initialization failed (non-critical): $e');
+      }
+
       _log('INFO', 'HTTP server started on port ${_settings.httpPort}');
 
       _httpServer!.listen(_handleRequest, onError: (error) {
@@ -2141,6 +2166,8 @@ class PureStationServer {
 
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path == '/api/geoip') {
+        await _handleGeoIp(request);
       } else if (path == '/station/status') {
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
@@ -5452,6 +5479,42 @@ class PureStationServer {
 
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode(status));
+  }
+
+  /// Handle /api/geoip endpoint - returns client's IP geolocation using local MMDB database
+  /// This enables privacy-preserving IP geolocation without external API calls
+  Future<void> _handleGeoIp(HttpRequest request) async {
+    final clientIp = request.connectionInfo?.remoteAddress.address;
+
+    if (clientIp == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Cannot determine client IP'}));
+      return;
+    }
+
+    final geoip = GeoIpService();
+    if (!geoip.isInitialized) {
+      request.response.statusCode = 503;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'GeoIP service not initialized',
+        'ip': clientIp,
+      }));
+      return;
+    }
+
+    final result = geoip.lookup(clientIp);
+
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'ip': clientIp,
+      'latitude': result?.latitude,
+      'longitude': result?.longitude,
+      'city': result?.city,
+      'country': result?.country,
+      'countryCode': result?.countryCode,
+    }));
   }
 
   Future<void> _handleStats(HttpRequest request) async {

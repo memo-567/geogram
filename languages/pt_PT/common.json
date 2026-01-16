@@ -142,6 +142,8 @@
   "license_info": "Licença",
   "copyright_text": "Copyright 2025 Contribuidores Geogram\n\nLicenciado sob a Apache License, Versão 2.0",
   "view_license": "Ver Licença",
+  "data_attribution": "Atribuição de Dados",
+  "dbip_attribution_desc": "Este produto inclui dados de geolocalização IP criados pela DB-IP. Licenciado sob CC BY 4.0.",
   "links": "Hiperligações",
   "github_repository": "Repositório GitHub",
   "report_issues": "Reportar Problemas",

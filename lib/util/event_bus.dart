@@ -298,7 +298,8 @@ class DMMessageDeliveredEvent extends AppEvent {
 
 /// Connection type for ConnectionStateChangedEvent
 enum ConnectionType {
-  internet,   // General internet connectivity (can reach external hosts)
+  @Deprecated('No longer fired - services check their own endpoints instead')
+  internet,   // Was: general internet connectivity (no longer used)
   station,    // Station relay connection (WebSocket to p2p.radio)
   lan,        // Local network connection (WiFi/Ethernet with private IP)
   bluetooth,  // Bluetooth Low Energy connection

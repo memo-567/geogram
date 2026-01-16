@@ -10,6 +10,7 @@ This document describes the HTTP API endpoints available on Geogram radio statio
 - [Endpoints](#endpoints)
   - [Status](#status)
   - [Clients](#clients)
+  - [GeoIP](#geoip)
   - [Device Proxy](#device-proxy)
   - [Alert File Upload/Download](#alert-file-uploaddownload-station)
   - [Software Updates](#software-updates)
@@ -460,6 +461,54 @@ Returns list of connected clients, grouped by callsign.
 | `connected_at` | string | ISO 8601 connection timestamp |
 | `last_activity` | string | ISO 8601 last activity timestamp |
 | `is_online` | bool | Online status |
+
+---
+
+### GeoIP
+
+Privacy-preserving IP geolocation using a bundled offline database (DB-IP Lite).
+
+#### GET /api/geoip
+
+Returns the client's public IP address and its geolocation. The station extracts the client IP from the HTTP connection and looks it up in the local MMDB database. **No external IP services are called.**
+
+**Response (200 OK):**
+```json
+{
+  "ip": "203.0.113.42",
+  "latitude": 38.7223,
+  "longitude": -9.1393,
+  "city": "Lisbon",
+  "country": "Portugal",
+  "countryCode": "PT"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ip` | string | Client's public IP address |
+| `latitude` | float | Latitude (null if not found) |
+| `longitude` | float | Longitude (null if not found) |
+| `city` | string | City name in English (null if not found) |
+| `country` | string | Country name in English (null if not found) |
+| `countryCode` | string | ISO 3166-1 alpha-2 country code (null if not found) |
+
+**Response (503 Service Unavailable):**
+
+Returned when the GeoIP database is not loaded.
+
+```json
+{
+  "error": "GeoIP service not initialized",
+  "ip": "203.0.113.42"
+}
+```
+
+**Privacy Notes:**
+- Uses bundled DB-IP Lite database (~127MB)
+- No external IP lookup services are contacted
+- Client IP is determined from the HTTP connection, not via external APIs
+- Database attribution: "IP Geolocation by DB-IP" (CC BY 4.0)
 
 ---
 

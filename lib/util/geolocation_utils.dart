@@ -20,6 +20,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/websocket_service.dart';
 
 /// Result of a geolocation attempt
 class GeolocationResult {
@@ -241,106 +242,34 @@ class GeolocationUtils {
     }
   }
 
-  /// Detect location via IP address using multiple services
-  /// Tries services in order until one succeeds
+  /// Detect location via IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   static Future<GeolocationResult?> detectViaIP() async {
-    // Try multiple services in order of reliability
-    final services = <Future<GeolocationResult?> Function()>[
-      _tryIpApiCom,
-      _tryIpInfoIo,
-      _tryIpWhoIs,
-    ];
-
-    for (final service in services) {
-      try {
-        final result = await service();
-        if (result != null) {
-          return result;
-        }
-      } catch (e) {
-        LogService().log('GeolocationUtils: IP service failed: $e');
+    try {
+      // Get the connected station URL
+      final stationUrl = WebSocketService().connectedUrl;
+      if (stationUrl == null) {
+        LogService().log('GeolocationUtils: Not connected to station, cannot detect IP location');
+        return null;
       }
-    }
 
-    LogService().log('GeolocationUtils: All IP geolocation services failed');
-    return null;
-  }
+      // Convert WebSocket URL to HTTP URL
+      final httpUrl = stationUrl
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://');
 
-  /// Try ip-api.com service
-  static Future<GeolocationResult?> _tryIpApiCom() async {
-    final response = await http
-        .get(
-          Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
-        )
-        .timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('$httpUrl/api/geoip'))
+          .timeout(const Duration(seconds: 10));
 
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      if (data['status'] == 'success') {
-        final lat = (data['lat'] as num).toDouble();
-        final lon = (data['lon'] as num).toDouble();
-
-        LogService().log(
-            'GeolocationUtils: ip-api.com location: $lat, $lon (${data['city']}, ${data['country']})');
-
-        return GeolocationResult(
-          latitude: lat,
-          longitude: lon,
-          source: 'ip',
-          city: data['city'] as String?,
-          country: data['country'] as String?,
-          serviceName: 'ip-api.com',
-        );
-      }
-    }
-    return null;
-  }
-
-  /// Try ipinfo.io service (often more accurate for European ISPs)
-  static Future<GeolocationResult?> _tryIpInfoIo() async {
-    final response = await http
-        .get(Uri.parse('https://ipinfo.io/json'))
-        .timeout(const Duration(seconds: 5));
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final loc = data['loc'] as String?;
-      if (loc != null && loc.contains(',')) {
-        final parts = loc.split(',');
-        final lat = double.tryParse(parts[0]);
-        final lon = double.tryParse(parts[1]);
-        if (lat != null && lon != null) {
-          LogService().log(
-              'GeolocationUtils: ipinfo.io location: $lat, $lon (${data['city']}, ${data['country']})');
-
-          return GeolocationResult(
-            latitude: lat,
-            longitude: lon,
-            source: 'ip',
-            city: data['city'] as String?,
-            country: data['country'] as String?,
-            serviceName: 'ipinfo.io',
-          );
-        }
-      }
-    }
-    return null;
-  }
-
-  /// Try ipwhois.app service
-  static Future<GeolocationResult?> _tryIpWhoIs() async {
-    final response = await http
-        .get(Uri.parse('https://ipwho.is/'))
-        .timeout(const Duration(seconds: 5));
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      if (data['success'] == true) {
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
         final lat = (data['latitude'] as num?)?.toDouble();
         final lon = (data['longitude'] as num?)?.toDouble();
+
         if (lat != null && lon != null) {
           LogService().log(
-              'GeolocationUtils: ipwhois.app location: $lat, $lon (${data['city']}, ${data['country']})');
+              'GeolocationUtils: Station GeoIP location: $lat, $lon (${data['city']}, ${data['country']})');
 
           return GeolocationResult(
             latitude: lat,
@@ -348,12 +277,20 @@ class GeolocationUtils {
             source: 'ip',
             city: data['city'] as String?,
             country: data['country'] as String?,
-            serviceName: 'ipwhois.app',
+            serviceName: 'station-geoip',
           );
         }
+      } else if (response.statusCode == 503) {
+        LogService().log('GeolocationUtils: Station GeoIP service not initialized');
+      } else {
+        LogService().log('GeolocationUtils: Station GeoIP failed with status ${response.statusCode}');
       }
+
+      return null;
+    } catch (e) {
+      LogService().log('GeolocationUtils: Station GeoIP failed: $e');
+      return null;
     }
-    return null;
   }
 
   /// Check if GPS/location services are available on this device

@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'webrtc_config.dart';
 import 'webrtc_signaling_service.dart';
+import 'websocket_service.dart';
 import 'log_service.dart';
 
 /// Represents a peer connection to another device
@@ -89,6 +90,9 @@ class WebRTCPeerManager {
 
     LogService().log('WebRTCPeerManager: Initializing...');
 
+    // Configure STUN server from station (privacy-preserving alternative to Google STUN)
+    _configureStationStun();
+
     // Initialize signaling service
     _signalingService.initialize();
 
@@ -97,6 +101,31 @@ class WebRTCPeerManager {
 
     _initialized = true;
     LogService().log('WebRTCPeerManager: Initialized');
+  }
+
+  /// Configure STUN server from connected station for privacy-preserving WebRTC
+  void _configureStationStun() {
+    final wsService = WebSocketService();
+    final stunInfo = wsService.connectedStationStunInfo;
+    final stationUrl = wsService.connectedUrl;
+
+    if (stunInfo != null && stunInfo.enabled && stationUrl != null) {
+      // Extract host from WebSocket URL
+      try {
+        final uri = Uri.parse(stationUrl);
+        final stationHost = uri.host;
+        _config = WebRTCConfig.withStationStun(
+          stationHost: stationHost,
+          stunPort: stunInfo.port,
+        );
+        LogService().log('WebRTCPeerManager: Using station STUN at $stationHost:${stunInfo.port}');
+      } catch (e) {
+        LogService().log('WebRTCPeerManager: Failed to parse station URL, using default config');
+      }
+    } else {
+      // No station STUN available - use empty config (host candidates only)
+      LogService().log('WebRTCPeerManager: No station STUN available (LAN connections only)');
+    }
   }
 
   /// Dispose resources

@@ -21,6 +21,7 @@ import 'package:latlong2/latlong.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'map_tile_service.dart';
+import 'websocket_service.dart';
 
 /// User's current location with metadata
 class UserLocation {
@@ -244,25 +245,38 @@ class UserLocationService extends ChangeNotifier {
     });
   }
 
-  /// Detect location via IP address (works on all platforms)
+  /// Detect location via IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   Future<void> _detectLocationViaIP() async {
     if (_isUpdating) return;
     _isUpdating = true;
     notifyListeners();
 
     try {
+      // Get the connected station URL
+      final stationUrl = WebSocketService().connectedUrl;
+      if (stationUrl == null) {
+        LogService().log('UserLocationService: Not connected to station, cannot detect IP location');
+        return;
+      }
+
+      // Convert WebSocket URL to HTTP URL
+      final httpUrl = stationUrl
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://');
+
       final response = await http.get(
-        Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
+        Uri.parse('$httpUrl/api/geoip'),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
-          final lat = (data['lat'] as num).toDouble();
-          final lon = (data['lon'] as num).toDouble();
-          final city = data['city'] as String?;
-          final country = data['country'] as String?;
+        final lat = (data['latitude'] as num?)?.toDouble();
+        final lon = (data['longitude'] as num?)?.toDouble();
+        final city = data['city'] as String?;
+        final country = data['country'] as String?;
 
+        if (lat != null && lon != null) {
           String? locationName;
           if (city != null && country != null) {
             locationName = '$city, $country';

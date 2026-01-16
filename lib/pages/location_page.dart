@@ -15,6 +15,7 @@ import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
+import '../services/websocket_service.dart';
 
 /// Location Settings page - simplified map-based location picker
 /// Saves coordinates to user profile
@@ -208,15 +209,28 @@ class _LocationPageState extends State<LocationPage> {
     }
   }
 
+  /// Detect location via IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   Future<void> _detectLocationViaIP() async {
+    // Get the connected station URL
+    final stationUrl = WebSocketService().connectedUrl;
+    if (stationUrl == null) {
+      throw Exception('Not connected to station, cannot detect IP location');
+    }
+
+    // Convert WebSocket URL to HTTP URL
+    final httpUrl = stationUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+
     final response = await http.get(
-      Uri.parse('http://ip-api.com/json/?fields=lat,lon'),
+      Uri.parse('$httpUrl/api/geoip'),
     ).timeout(const Duration(seconds: 10));
 
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      final lat = data['lat'] as double?;
-      final lon = data['lon'] as double?;
+      final lat = (data['latitude'] as num?)?.toDouble();
+      final lon = (data['longitude'] as num?)?.toDouble();
 
       if (lat != null && lon != null && mounted) {
         setState(() {
@@ -226,10 +240,10 @@ class _LocationPageState extends State<LocationPage> {
           _hasChanges = true;
         });
         _mapController.move(_selectedPosition, 10.0);
-        LogService().log('IP-based location: $lat, $lon');
+        LogService().log('Station GeoIP location: $lat, $lon');
       }
     } else {
-      throw Exception('Failed to fetch IP location: ${response.statusCode}');
+      throw Exception('Failed to fetch IP location from station: ${response.statusCode}');
     }
   }
 

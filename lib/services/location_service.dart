@@ -9,6 +9,8 @@ import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 
+import 'websocket_service.dart';
+
 /// Result of IP-based geolocation
 class GeoIpResult {
   final double latitude;
@@ -461,20 +463,35 @@ class LocationService {
     return result.jurisdiction;
   }
 
-  /// Detect location via IP address using ip-api.com (free, no API key required)
-  /// Works on desktop, web, and CLI when connected to the internet
+  /// Detect location via IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   Future<GeoIpResult?> detectLocationViaIP() async {
     try {
+      // Get the connected station URL
+      final stationUrl = WebSocketService().connectedUrl;
+      if (stationUrl == null) {
+        stderr.writeln('LocationService: Not connected to station, cannot detect IP location');
+        return null;
+      }
+
+      // Convert WebSocket URL to HTTP URL
+      final httpUrl = stationUrl
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://');
+
       final response = await http.get(
-        Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
+        Uri.parse('$httpUrl/api/geoip'),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
+        final lat = (data['latitude'] as num?)?.toDouble();
+        final lon = (data['longitude'] as num?)?.toDouble();
+
+        if (lat != null && lon != null) {
           return GeoIpResult(
-            latitude: (data['lat'] as num).toDouble(),
-            longitude: (data['lon'] as num).toDouble(),
+            latitude: lat,
+            longitude: lon,
             city: data['city'] as String?,
             country: data['country'] as String?,
           );

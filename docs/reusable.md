@@ -51,6 +51,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [PathRecordingService](#pathrecordingservice) - GPS path recording (uses LocationProviderService)
 - [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
 - [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
+- [StunServerService](#stunserverservice) - Self-hosted STUN server for WebRTC NAT traversal
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -2027,6 +2028,69 @@ blog/
 
 ---
 
+### StunServerService
+
+**File:** `lib/services/stun_server_service.dart`
+
+Self-hosted STUN server implementing RFC 5389 Binding method for WebRTC NAT traversal. Replaces external STUN servers (Google, Twilio, Mozilla) with privacy-respecting self-hosted capability on station servers.
+
+**Key Methods:**
+```dart
+Future<bool> start({int port = 3478}) async  // Start UDP server
+Future<void> stop() async                     // Stop server
+Map<String, dynamic> getStatus()              // Get server status for API
+```
+
+**Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `isRunning` | bool | Whether STUN server is running |
+| `port` | int | Current UDP port (valid when running) |
+| `requestsHandled` | int | Requests handled since start |
+
+**Protocol Flow:**
+1. Client sends UDP Binding Request to port 3478
+2. Server responds with XOR-MAPPED-ADDRESS (client's public IP:port)
+3. WebRTC uses this reflexive address for NAT traversal
+
+**Integration with Station:**
+```dart
+// In StationServerSettings (station_server_service.dart)
+bool stunServerEnabled = true;  // Default: enabled
+int stunServerPort = 3478;      // Standard STUN port
+
+// In hello_ack response to clients
+'stun_server': {
+  'enabled': true,
+  'port': 3478,
+}
+```
+
+**Client Usage:**
+```dart
+// websocket_service.dart stores STUN info from hello_ack
+StationStunInfo? get connectedStationStunInfo
+
+// webrtc_peer_manager.dart uses station STUN
+WebRTCConfig.withStationStun(
+  stationHost: 'station.example.com',
+  stunPort: 3478,
+)
+```
+
+**Test Script:**
+```bash
+dart run bin/stun_test.dart localhost 3478
+```
+
+**Privacy Benefits:**
+- No client IPs logged by STUN server
+- No external dependencies or third-party contacts
+- No Google/Twilio/Mozilla STUN servers
+- LAN connections work without any external servers
+
+---
+
 ## Web Theme Components
 
 ### WebNavigation
@@ -2580,6 +2644,78 @@ TextFormField(
 
 ---
 
+## Patterns
+
+### Service-Specific Connectivity Checking
+
+**Problem:** Generic internet checks (pinging google.com/cloudflare.com) raise privacy concerns and don't tell you if your specific service is actually reachable.
+
+**Solution:** Each service checks its own endpoint rather than relying on a generic "hasInternet" flag.
+
+**Examples:**
+
+**MapTileService** (`lib/services/map_tile_service.dart`):
+```dart
+/// Check if tile server is reachable (cached for 30s)
+bool get canUseInternet {
+  if (_canReachTileServer != null && _lastTileServerCheck != null) {
+    if (DateTime.now().difference(_lastTileServerCheck!) < Duration(seconds: 30)) {
+      return _canReachTileServer!;
+    }
+  }
+  _checkTileServerReachability(); // async, updates cache
+  return _canReachTileServer ?? false;
+}
+
+Future<bool> _checkTileServerReachability() async {
+  try {
+    final response = await httpClient.head(
+      Uri.parse('https://tile.openstreetmap.org/0/0/0.png'),
+    ).timeout(const Duration(seconds: 5));
+    _canReachTileServer = response.statusCode >= 200 && response.statusCode < 400;
+    _lastTileServerCheck = DateTime.now();
+    return _canReachTileServer!;
+  } catch (e) {
+    _canReachTileServer = false;
+    _lastTileServerCheck = DateTime.now();
+    return false;
+  }
+}
+```
+
+**PlaceSharingService** (`lib/services/place_sharing_service.dart`):
+```dart
+/// Check if relay station is reachable
+Future<bool> canReachRelay() async {
+  final relayUrls = getRelayUrls();
+  for (final relayUrl in relayUrls) {
+    try {
+      final httpUrl = _stationToHttpUrl(relayUrl);
+      final response = await http.head(Uri.parse(httpUrl))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode >= 200 && response.statusCode < 400) {
+        return true;
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+  return false;
+}
+```
+
+**Key Benefits:**
+- No privacy-concerning pings to big tech companies
+- More accurate - tells you if YOUR service works, not just "internet"
+- Cached results avoid repeated checks
+- Lazy evaluation - only checks when needed
+
+**NetworkMonitorService** (`lib/services/network_monitor_service.dart`) now only monitors:
+- LAN availability (has private IP address)
+- No longer checks generic internet connectivity
+
+---
+
 ## Constants
 
 ### App Constants
@@ -2921,3 +3057,53 @@ ListView.builder(
 | ConsoleHandler | cli/ | Service | Shared command logic for CLI/UI/Telegram |
 | ConsoleCompleter | cli/ | Service | Shared TAB completion logic |
 | LogService.readTodayLogAsync | services/ | Service | Read logs off UI thread in isolate |
+| StunServerService | services/ | Service | Self-hosted STUN server for WebRTC |
+| GeoIpService | services/ | Service | Offline IP geolocation using MMDB database |
+
+## GeoIpService
+
+Privacy-preserving offline IP geolocation using DB-IP MMDB database.
+
+**Location**: `lib/services/geoip_service.dart`
+
+### Station API Endpoint
+
+Stations expose `/api/geoip` endpoint that:
+1. Extracts client IP from HTTP request
+2. Looks up IP in local MMDB database
+3. Returns JSON: `{ip, latitude, longitude, city, country, countryCode}`
+
+### Client Usage Pattern
+
+Clients call the connected station's `/api/geoip` endpoint:
+
+```dart
+// Get connected station URL and convert to HTTP
+final stationUrl = WebSocketService().connectedUrl;
+if (stationUrl == null) return null;
+
+final httpUrl = stationUrl
+    .replaceFirst('wss://', 'https://')
+    .replaceFirst('ws://', 'http://');
+
+final response = await http.get(Uri.parse('$httpUrl/api/geoip'));
+if (response.statusCode == 200) {
+  final data = json.decode(response.body);
+  final lat = (data['latitude'] as num?)?.toDouble();
+  final lon = (data['longitude'] as num?)?.toDouble();
+  // Use lat, lon, data['city'], data['country']
+}
+```
+
+### Files Using This Pattern
+- `lib/util/geolocation_utils.dart`
+- `lib/services/user_location_service.dart`
+- `lib/services/location_service.dart`
+- `lib/pages/maps_browser_page.dart`
+- `lib/pages/location_page.dart`
+- `lib/pages/stations_page.dart`
+- `lib/cli/cli_location_service.dart`
+
+### Station-Side Initialization
+- Flutter station: `GeoIpService().initFromAssets()` (loads from Flutter assets)
+- CLI station: `GeoIpService().initFromFile(path)` (loads from filesystem)

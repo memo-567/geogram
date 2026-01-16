@@ -29,6 +29,7 @@ import '../services/event_service.dart';
 import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
 import '../services/collection_service.dart';
+import '../services/websocket_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
 import 'event_detail_page.dart';
@@ -717,23 +718,36 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
     _updateLocationAndReload(position.latitude, position.longitude, 'location_detected_gps');
   }
 
-  /// Detect location via IP address (for Desktop)
+  /// Detect location via IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   Future<void> _detectLocationViaIP() async {
+    // Get the connected station URL
+    final stationUrl = WebSocketService().connectedUrl;
+    if (stationUrl == null) {
+      throw Exception('Not connected to station, cannot detect IP location');
+    }
+
+    // Convert WebSocket URL to HTTP URL
+    final httpUrl = stationUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://');
+
     final response = await http.get(
-      Uri.parse('http://ip-api.com/json/?fields=status,lat,lon,city,country'),
+      Uri.parse('$httpUrl/api/geoip'),
     );
 
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      if (data['status'] == 'success') {
-        final lat = (data['lat'] as num).toDouble();
-        final lon = (data['lon'] as num).toDouble();
+      final lat = (data['latitude'] as num?)?.toDouble();
+      final lon = (data['longitude'] as num?)?.toDouble();
+
+      if (lat != null && lon != null) {
         _updateLocationAndReload(lat, lon, 'location_detected');
       } else {
-        throw Exception('IP geolocation failed');
+        throw Exception('Station GeoIP returned no location data');
       }
     } else {
-      throw Exception('Failed to fetch IP location');
+      throw Exception('Failed to fetch IP location from station');
     }
   }
 

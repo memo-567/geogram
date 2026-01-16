@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.8.2+1
+version: 1.9.0+1
 
 environment:
   sdk: ^3.10.0
@@ -89,6 +89,7 @@ dependencies:
   flutter_zxing: ^1.8.0          # QR code scanning using ZXing (F-Droid compatible, no Google deps)
   whisper_flutter_new: ^1.0.1    # Offline speech-to-text using Whisper (Android/iOS/macOS)
   share_plus: ^10.1.4            # Native share sheet for sharing images and files
+  maxminddb: ^1.1.0              # Offline IP geolocation using MMDB databases
 
 dev_dependencies:
   flutter_test:
@@ -136,6 +137,7 @@ flutter:
     - assets/default_profile.svg
     - assets/geogram-icon-dark.svg
     - assets/geogram_icon_transparent.png
+    - assets/dbip-city-lite.mmdb
     - games/
     # Web themes for HTML/CSS customization
     - themes/default/

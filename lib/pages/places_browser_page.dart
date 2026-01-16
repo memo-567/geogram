@@ -16,7 +16,6 @@ import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/place_sharing_service.dart';
-import '../services/network_monitor_service.dart';
 import '../services/profile_service.dart';
 import '../services/station_place_service.dart';
 import '../services/user_location_service.dart';
@@ -514,22 +513,25 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
   Future<void> _publishPlace(Place place) async {
     if (kIsWeb) return;
 
-    // Check network connectivity
-    final networkMonitor = NetworkMonitorService();
+    // Check relay connectivity
     final sharingService = PlaceSharingService();
     final relayUrls = sharingService.getRelayUrls();
     final hasLocalRelay = relayUrls.any(_isLikelyLocalStationUrl);
 
-    if (!networkMonitor.hasInternet && !hasLocalRelay) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('no_internet_connection')),
-            backgroundColor: Colors.orange,
-          ),
-        );
+    // Skip connectivity check for local relays (they don't need internet)
+    if (!hasLocalRelay) {
+      final canReach = await sharingService.canReachRelay();
+      if (!canReach) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_i18n.t('no_internet_connection')),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
       }
-      return;
     }
 
     // Show publishing indicator

@@ -37,6 +37,27 @@ class PlaceSharingService {
     return ['wss://p2p.radio'];
   }
 
+  /// Check if any configured relay is reachable
+  /// Returns true if at least one relay responds to HTTP request
+  Future<bool> canReachRelay() async {
+    final relayUrls = getRelayUrls();
+    for (final relayUrl in relayUrls) {
+      try {
+        // Convert WebSocket URL to HTTP for health check
+        final httpUrl = _stationToHttpUrl(relayUrl);
+        final response = await http.head(Uri.parse(httpUrl))
+            .timeout(const Duration(seconds: 5));
+        if (response.statusCode >= 200 && response.statusCode < 400) {
+          return true;
+        }
+      } catch (e) {
+        // Try next relay
+        continue;
+      }
+    }
+    return false;
+  }
+
   /// Upload a place (place.txt + photos) to all configured stations
   Future<int> uploadPlaceToStations(Place place, String collectionPath) async {
     if (kIsWeb) return 0;

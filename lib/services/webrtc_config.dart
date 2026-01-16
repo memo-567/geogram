@@ -2,21 +2,39 @@
 ///
 /// Contains STUN/TURN server configuration, ICE settings,
 /// timeouts, and data channel configuration for P2P connections.
+///
+/// Privacy note: This configuration uses self-hosted STUN servers on
+/// Geogram stations instead of third-party STUN servers (Google, Twilio,
+/// Mozilla). This prevents leaking client IP addresses to external services.
 library;
 
-/// Default STUN servers (free, public)
-const List<Map<String, dynamic>> defaultStunServers = [
-  // Google STUN servers (reliable, global)
-  {'urls': 'stun:stun.l.google.com:19302'},
-  {'urls': 'stun:stun1.l.google.com:19302'},
-  {'urls': 'stun:stun2.l.google.com:19302'},
+/// Default STUN servers - empty by default for maximum privacy.
+/// Station STUN servers are used when available (from hello_ack).
+/// Without station STUN, WebRTC uses host candidates only (LAN-only).
+const List<Map<String, dynamic>> defaultStunServers = [];
 
-  // Twilio STUN (free tier)
-  {'urls': 'stun:global.stun.twilio.com:3478'},
+/// STUN server info received from a station
+class StationStunInfo {
+  final bool enabled;
+  final int port;
 
-  // Mozilla STUN
-  {'urls': 'stun:stun.services.mozilla.com:3478'},
-];
+  const StationStunInfo({
+    required this.enabled,
+    required this.port,
+  });
+
+  factory StationStunInfo.fromJson(Map<String, dynamic> json) {
+    return StationStunInfo(
+      enabled: json['enabled'] as bool? ?? false,
+      port: json['port'] as int? ?? 3478,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'port': port,
+  };
+}
 
 /// WebRTC configuration class
 class WebRTCConfig {
@@ -74,6 +92,23 @@ class WebRTCConfig {
         'credential': credential,
       },
       if (additionalStunServers != null) ...additionalStunServers,
+    ];
+    return WebRTCConfig(iceServers: servers);
+  }
+
+  /// Create configuration with station-hosted STUN server (privacy-preserving)
+  ///
+  /// Uses the station's self-hosted STUN server instead of third-party servers.
+  /// This ensures client IP addresses are not leaked to Google, Twilio, etc.
+  ///
+  /// [stationHost] - The hostname or IP of the station (extracted from WebSocket URL)
+  /// [stunPort] - The UDP port of the STUN server (from hello_ack, usually 3478)
+  factory WebRTCConfig.withStationStun({
+    required String stationHost,
+    required int stunPort,
+  }) {
+    final servers = <Map<String, dynamic>>[
+      {'urls': 'stun:$stationHost:$stunPort'},
     ];
     return WebRTCConfig(iceServers: servers);
   }

@@ -7,6 +7,7 @@ import '../services/log_service.dart';
 import '../services/station_discovery_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
+import '../services/websocket_service.dart';
 
 class StationsPage extends StatefulWidget {
   const StationsPage({super.key});
@@ -62,22 +63,34 @@ class _StationsPageState extends State<StationsPage> {
     }
   }
 
-  /// Detect location from IP address
+  /// Detect location from IP address using the connected station's GeoIP service
+  /// This provides privacy-preserving IP geolocation without external API calls
   Future<Map<String, dynamic>?> _detectLocationFromIP() async {
     try {
+      // Get the connected station URL
+      final stationUrl = WebSocketService().connectedUrl;
+      if (stationUrl == null) {
+        LogService().log('StationsPage: Not connected to station, cannot detect IP location');
+        return null;
+      }
+
+      // Convert WebSocket URL to HTTP URL
+      final httpUrl = stationUrl
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://');
+
       final response = await http.get(
-        Uri.parse('http://ip-api.com/json/'),
+        Uri.parse('$httpUrl/api/geoip'),
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        final lat = (data['latitude'] as num?)?.toDouble();
+        final lon = (data['longitude'] as num?)?.toDouble();
+        final city = data['city'] as String?;
+        final country = data['country'] as String?;
 
-        if (data['status'] == 'success') {
-          final lat = data['lat'] as double;
-          final lon = data['lon'] as double;
-          final city = data['city'] as String?;
-          final country = data['country'] as String?;
-
+        if (lat != null && lon != null) {
           return {
             'lat': lat,
             'lon': lon,

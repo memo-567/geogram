@@ -120,6 +120,8 @@
   "license": "License",
   "license_text": "Copyright 2025 Geogram Contributors\n\nLicensed under the Apache License, Version 2.0",
   "view_license": "View License",
+  "data_attribution": "Data Attribution",
+  "dbip_attribution_desc": "This product includes IP geolocation data created by DB-IP. Licensed under CC BY 4.0.",
   "links": "Links",
   "github_repository": "GitHub Repository",
   "report_issues": "Report Issues",

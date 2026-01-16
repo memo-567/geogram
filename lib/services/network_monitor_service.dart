@@ -2,14 +2,18 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Network Monitor Service - Monitors LAN and Internet connectivity
+ * Network Monitor Service - Monitors LAN connectivity
  * Fires ConnectionStateChangedEvent when network states change
+ *
+ * Note: This service only monitors LAN (local network interface) availability.
+ * Internet connectivity checks were removed to avoid privacy-concerning pings
+ * to external servers. Services that need connectivity should check their
+ * specific endpoints instead (e.g., MapTileService checks tile servers).
  */
 
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
 import 'log_service.dart';
 import '../util/event_bus.dart';
 
@@ -24,22 +28,17 @@ class NetworkMonitorService {
   /// Check interval for network state
   static const Duration _checkInterval = Duration(seconds: 10);
 
-  /// Timeout for internet connectivity check
-  static const Duration _internetCheckTimeout = Duration(seconds: 5);
-
   /// Timer for periodic checks
   Timer? _checkTimer;
 
   /// Last known states (to avoid duplicate events)
   bool _lastLanAvailable = false;
-  bool _lastInternetAvailable = false;
 
   /// Whether the service has been initialized
   bool _initialized = false;
 
-  /// Current network state getters
+  /// Current network state getter
   bool get hasLan => _lastLanAvailable;
-  bool get hasInternet => _lastInternetAvailable;
 
   /// Initialize the service and start monitoring
   Future<void> initialize() async {
@@ -47,14 +46,12 @@ class NetworkMonitorService {
     _initialized = true;
 
     if (kIsWeb) {
-      // On web, assume internet is available and LAN is not detectable
-      _lastInternetAvailable = true;
+      // On web, LAN is not detectable
       _lastLanAvailable = false;
-      _fireInternetStateChanged(true);
       return;
     }
 
-    LogService().log('NetworkMonitor: Initializing network monitoring');
+    LogService().log('NetworkMonitor: Initializing LAN monitoring');
 
     // Check initial state
     await _checkNetworkState();
@@ -84,12 +81,6 @@ class NetworkMonitorService {
       final hasLan = await _checkLanAvailable();
       if (hasLan != _lastLanAvailable) {
         _fireLanStateChanged(hasLan);
-      }
-
-      // Check Internet availability (can we reach external hosts?)
-      final hasInternet = await _checkInternetAvailable();
-      if (hasInternet != _lastInternetAvailable) {
-        _fireInternetStateChanged(hasInternet);
       }
     } catch (e) {
       LogService().log('NetworkMonitor: Error checking network state: $e');
@@ -137,30 +128,6 @@ class NetworkMonitorService {
     return false;
   }
 
-  /// Check if internet is reachable
-  Future<bool> _checkInternetAvailable() async {
-    // Try multiple endpoints for reliability
-    final endpoints = [
-      'https://www.google.com',
-      'https://www.cloudflare.com',
-      'https://www.apple.com',
-    ];
-
-    for (final url in endpoints) {
-      try {
-        final response = await http.head(Uri.parse(url))
-            .timeout(_internetCheckTimeout);
-        if (response.statusCode >= 200 && response.statusCode < 400) {
-          return true;
-        }
-      } catch (e) {
-        // Try next endpoint
-        continue;
-      }
-    }
-    return false;
-  }
-
   /// Fire LAN state changed event
   void _fireLanStateChanged(bool isAvailable) {
     _lastLanAvailable = isAvailable;
@@ -168,17 +135,6 @@ class NetworkMonitorService {
 
     _eventBus.fire(ConnectionStateChangedEvent(
       connectionType: ConnectionType.lan,
-      isConnected: isAvailable,
-    ));
-  }
-
-  /// Fire Internet state changed event
-  void _fireInternetStateChanged(bool isAvailable) {
-    _lastInternetAvailable = isAvailable;
-    LogService().log('ConnectionStateChanged: internet ${isAvailable ? "available" : "unavailable"}');
-
-    _eventBus.fire(ConnectionStateChangedEvent(
-      connectionType: ConnectionType.internet,
       isConnected: isAvailable,
     ));
   }

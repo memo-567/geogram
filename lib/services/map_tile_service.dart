@@ -155,6 +155,11 @@ class MapTileService {
   final Set<String> _queuedKeys = {};  // O(1) deduplication check
   bool _queueProcessorRunning = false;
 
+  /// Tile server reachability state (replaces generic internet check)
+  bool? _canReachTileServer;
+  DateTime? _lastTileServerCheck;
+  static const Duration _tileServerCheckCacheDuration = Duration(seconds: 30);
+
   /// Increment loading count
   void _startLoading() {
     statusNotifier.value = statusNotifier.value.copyWith(
@@ -266,8 +271,43 @@ class MapTileService {
   String? get tilesPath => _tilesPath;
 
   /// Network availability helpers (used to avoid retries in offline mode)
-  bool get canUseInternet => _networkMonitor.hasInternet;
-  bool get canUseStation => _networkMonitor.hasInternet || _networkMonitor.hasLan;
+  /// canUseInternet checks if OSM tile server is reachable (cached for 30s)
+  bool get canUseInternet {
+    // If we have a fresh cached result, use it
+    if (_canReachTileServer != null && _lastTileServerCheck != null) {
+      if (DateTime.now().difference(_lastTileServerCheck!) < _tileServerCheckCacheDuration) {
+        return _canReachTileServer!;
+      }
+    }
+    // If no cached result, return false and trigger async check
+    _checkTileServerReachability();
+    return _canReachTileServer ?? false;
+  }
+
+  bool get canUseStation => _canReachTileServer == true || _networkMonitor.hasLan;
+
+  /// Check if the OSM tile server is reachable (async, updates cached state)
+  Future<bool> checkTileServerReachability() async {
+    return _checkTileServerReachability();
+  }
+
+  /// Internal tile server reachability check
+  Future<bool> _checkTileServerReachability() async {
+    try {
+      // HEAD request to tile server - minimal data transfer
+      final response = await httpClient.head(
+        Uri.parse('https://tile.openstreetmap.org/0/0/0.png'),
+      ).timeout(const Duration(seconds: 5));
+
+      _canReachTileServer = response.statusCode >= 200 && response.statusCode < 400;
+      _lastTileServerCheck = DateTime.now();
+      return _canReachTileServer!;
+    } catch (e) {
+      _canReachTileServer = false;
+      _lastTileServerCheck = DateTime.now();
+      return false;
+    }
+  }
 
   /// Initialize the tile caching system
   /// Should be called once at app startup or before first map use
@@ -305,6 +345,11 @@ class MapTileService {
       } catch (e) {
         LogService().log('MapTileService: Network monitor init failed: $e');
       }
+
+      // Check tile server reachability (async, non-blocking)
+      _checkTileServerReachability().then((reachable) {
+        LogService().log('MapTileService: Tile server ${reachable ? "reachable" : "unreachable"}');
+      });
 
       // Log station tile URL availability for debugging
       final stationUrl = getStationTileUrl();
