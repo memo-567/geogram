@@ -50,23 +50,33 @@ jobs:
       shell: powershell
       run: |
         # The flutter_onnxruntime plugin expects ONNX Runtime at a specific path
-        $onnxVersion = "1.21.1"
+        # Note: v1.21.1 doesn't have Windows binaries, use v1.21.0 but name the
+        # folder as the plugin expects (1.21.1)
+        $downloadVersion = "1.21.0"
+        $expectedVersion = "1.21.1"
         $onnxDir = "build\windows\x64\plugins\flutter_onnxruntime\onnxruntime"
-        $extractDir = "$onnxDir\onnxruntime-win-x64-$onnxVersion"
+        $extractDir = "$onnxDir\onnxruntime-win-x64-$expectedVersion"
 
         # Create the directory structure
         New-Item -ItemType Directory -Force -Path $onnxDir | Out-Null
 
-        # Download ONNX Runtime
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnxVersion/onnxruntime-win-x64-$onnxVersion.zip"
+        # Download ONNX Runtime (using 1.21.0 since 1.21.1 doesn't have Windows binaries)
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$downloadVersion/onnxruntime-win-x64-$downloadVersion.zip"
         $zipPath = "$onnxDir\onnxruntime.zip"
 
-        Write-Host "Downloading ONNX Runtime v$onnxVersion..."
+        Write-Host "Downloading ONNX Runtime v$downloadVersion (as v$expectedVersion)..."
         Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
 
-        # Extract to the expected directory
-        Write-Host "Extracting to $extractDir..."
+        # Extract to temp directory first
+        Write-Host "Extracting..."
         Expand-Archive -Path $zipPath -DestinationPath $onnxDir -Force
+
+        # Rename to the expected version directory
+        $downloadDir = "$onnxDir\onnxruntime-win-x64-$downloadVersion"
+        if (Test-Path $downloadDir) {
+          Write-Host "Renaming $downloadDir to $extractDir"
+          Rename-Item -Path $downloadDir -NewName "onnxruntime-win-x64-$expectedVersion"
+        }
 
         # Verify extraction
         if (Test-Path "$extractDir\lib\onnxruntime.dll") {
@@ -74,6 +84,7 @@ jobs:
           Get-ChildItem $extractDir
         } else {
           Write-Error "ONNX Runtime extraction failed"
+          Get-ChildItem $onnxDir -Recurse
           exit 1
         }
 
