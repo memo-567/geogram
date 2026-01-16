@@ -1,6 +1,7 @@
 package dev.geogram;
 
 import android.Manifest;
+import android.app.ForegroundServiceStartNotAllowedException;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -50,6 +51,12 @@ public class BLEForegroundService extends Service {
     private Handler keepAliveHandler;
     private Runnable keepAliveRunnable;
     private boolean keepAliveEnabled = false;
+
+    // Track if dataSync type is available (Android 15+ has 6-hour limit)
+    private boolean dataSyncExhausted = false;
+
+    // Track if service is already in foreground to avoid duplicate startForeground calls
+    private boolean isInForeground = false;
 
     // Station info for notification display
     private static String stationName = null;
@@ -164,41 +171,16 @@ public class BLEForegroundService extends Service {
         String action = intent != null ? intent.getAction() : null;
         Log.d(TAG, "Foreground service onStartCommand, action=" + action);
 
-        Notification notification = createNotification();
-
-        // Check if this is a boot start - Android 15+ restricts dataSync from BOOT_COMPLETED
-        boolean isFromBoot = "START_FROM_BOOT".equals(action);
-
-        // Use both connectedDevice (for BLE) and dataSync (for WebSocket/network) service types
-        // This ensures network operations continue even when the display is off
-        // Note: On Android 14+ (API 34+), CONNECTED_DEVICE type requires Bluetooth permissions
-        // to be granted at runtime, not just declared in the manifest
-        // Note: On Android 15+ (API 35+), dataSync cannot be started from BOOT_COMPLETED
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            int serviceType;
-            if (hasBluetoothPermissions()) {
-                // On Android 15+ from boot, only use connectedDevice (dataSync is restricted)
-                if (isFromBoot && Build.VERSION.SDK_INT >= 35) {
-                    serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
-                    Log.d(TAG, "Starting foreground service from boot with CONNECTED_DEVICE type only (Android 15+ restriction)");
-                } else {
-                    // Full service with BLE and network support
-                    serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
-                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-                    Log.d(TAG, "Starting foreground service with CONNECTED_DEVICE|DATA_SYNC types");
-                }
-            } else {
-                // No Bluetooth permissions - on Android 15+ from boot, we can't start at all
-                // since dataSync is also restricted. Log warning and try anyway.
-                if (isFromBoot && Build.VERSION.SDK_INT >= 35) {
-                    Log.w(TAG, "Boot start on Android 15+ without Bluetooth permissions - service may fail");
-                }
-                serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-                Log.w(TAG, "Bluetooth permissions not granted, using DATA_SYNC type only");
+        // Only call startForeground if not already in foreground
+        // This prevents crashes when Android 15+ dataSync limit is exhausted
+        if (!isInForeground) {
+            if (!tryStartForeground(action)) {
+                // Failed to start foreground - stop self to avoid crash
+                Log.e(TAG, "Failed to start foreground service, stopping");
+                stopSelf();
+                return START_NOT_STICKY;
             }
-            startForeground(NOTIFICATION_ID, notification, serviceType);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+            isInForeground = true;
         }
 
         // Handle actions
@@ -213,10 +195,98 @@ public class BLEForegroundService extends Service {
             Log.d(TAG, "Manual restart link requested from notification action");
             startKeepAlive();
             sendKeepAlivePing();
+        } else if ("RESTART_WITHOUT_DATASYNC".equals(action)) {
+            Log.d(TAG, "Restarted without dataSync type after timeout");
+            // Re-enable keep-alive if it was previously enabled
+            if (stationUrl != null || stationName != null) {
+                startKeepAlive();
+            }
         }
 
         // Keep the service running
         return START_STICKY;
+    }
+
+    /**
+     * Try to start the foreground service with appropriate service types.
+     * Handles Android 15+ dataSync time limit exceptions gracefully.
+     * @return true if successful, false if failed
+     */
+    private boolean tryStartForeground(String action) {
+        Notification notification = createNotification();
+
+        // Check if this is a boot start - Android 15+ restricts dataSync from BOOT_COMPLETED
+        boolean isFromBoot = "START_FROM_BOOT".equals(action);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            int serviceType = determineServiceType(isFromBoot);
+
+            try {
+                startForeground(NOTIFICATION_ID, notification, serviceType);
+                Log.d(TAG, "Started foreground service with type: " + serviceType);
+                return true;
+            } catch (Exception e) {
+                // Handle Android 15+ ForegroundServiceStartNotAllowedException
+                if (Build.VERSION.SDK_INT >= 34 && e instanceof ForegroundServiceStartNotAllowedException) {
+                    Log.w(TAG, "ForegroundServiceStartNotAllowedException: " + e.getMessage());
+                    dataSyncExhausted = true;
+
+                    // Retry with connectedDevice only if we have Bluetooth permissions
+                    if (hasBluetoothPermissions()) {
+                        try {
+                            int fallbackType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+                            startForeground(NOTIFICATION_ID, notification, fallbackType);
+                            Log.d(TAG, "Fallback: started with CONNECTED_DEVICE only");
+                            return true;
+                        } catch (Exception e2) {
+                            Log.e(TAG, "Fallback also failed: " + e2.getMessage());
+                            return false;
+                        }
+                    }
+                    return false;
+                }
+                Log.e(TAG, "Failed to start foreground: " + e.getMessage());
+                return false;
+            }
+        } else {
+            try {
+                startForeground(NOTIFICATION_ID, notification);
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to start foreground (pre-Q): " + e.getMessage());
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Determine the appropriate foreground service type based on permissions and restrictions.
+     */
+    private int determineServiceType(boolean isFromBoot) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return 0;
+        }
+
+        if (hasBluetoothPermissions()) {
+            // On Android 15+ from boot or when dataSync is exhausted, only use connectedDevice
+            if ((isFromBoot && Build.VERSION.SDK_INT >= 35) || dataSyncExhausted) {
+                Log.d(TAG, "Using CONNECTED_DEVICE type only (Android 15+ restriction or dataSync exhausted)");
+                return android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            } else {
+                // Full service with BLE and network support
+                Log.d(TAG, "Using CONNECTED_DEVICE|DATA_SYNC types");
+                return android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE |
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+            }
+        } else {
+            // No Bluetooth permissions - on Android 15+ from boot, we can't use dataSync either
+            if ((isFromBoot && Build.VERSION.SDK_INT >= 35) || dataSyncExhausted) {
+                Log.w(TAG, "No Bluetooth permissions and dataSync restricted - service may fail");
+                return 0; // Will likely fail, but let it try
+            }
+            Log.w(TAG, "Bluetooth permissions not granted, using DATA_SYNC type only");
+            return android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        }
     }
 
     /**
@@ -239,9 +309,43 @@ public class BLEForegroundService extends Service {
     @Override
     public void onDestroy() {
         Log.d(TAG, "Foreground service destroyed");
+        isInForeground = false;
         stopKeepAlive();
         releaseWakeLock();
         super.onDestroy();
+    }
+
+    /**
+     * Called on Android 15+ (API 34+) when a foreground service with a time limit
+     * (like dataSync) reaches its timeout. We must stop within a few seconds or crash.
+     */
+    @Override
+    public void onTimeout(int startId) {
+        // Called on Android 15+ when dataSync foreground service times out (6 hours)
+        Log.w(TAG, "Foreground service timeout (dataSync limit reached), stopping gracefully");
+        dataSyncExhausted = true;
+        isInForeground = false;
+
+        // Stop the service to avoid ForegroundServiceDidNotStopInTimeException
+        stopSelf();
+
+        // Schedule restart with connectedDevice only (no dataSync)
+        if (hasBluetoothPermissions() && restartHandler != null) {
+            restartHandler.postDelayed(() -> {
+                try {
+                    Log.d(TAG, "Restarting service without dataSync type");
+                    Intent intent = new Intent(getApplicationContext(), BLEForegroundService.class);
+                    intent.setAction("RESTART_WITHOUT_DATASYNC");
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        getApplicationContext().startForegroundService(intent);
+                    } else {
+                        getApplicationContext().startService(intent);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to restart service: " + e.getMessage());
+                }
+            }, 1000);
+        }
     }
 
     @Nullable
