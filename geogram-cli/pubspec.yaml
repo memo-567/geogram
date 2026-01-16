@@ -12,6 +12,7 @@ dependencies:
   dart_console: ^4.1.2
   http: ^1.2.0
   markdown: ^7.2.2
+  maxminddb: ^1.1.0            # Offline IP geolocation for /api/geoip endpoint
   path: ^1.9.0
   web_socket_channel: ^3.0.1
   shelf: ^1.4.0

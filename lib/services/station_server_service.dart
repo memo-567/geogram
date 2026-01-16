@@ -4,6 +4,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as path;
@@ -566,7 +567,8 @@ class StationServerService {
 
       // Initialize GeoIP service for offline IP geolocation
       try {
-        await GeoIpService().initFromAssets();
+        final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
+        GeoIpService().initFromBytes(data.buffer.asUint8List());
       } catch (e) {
         LogService().log('Station: GeoIP service initialization failed (non-critical): $e');
       }

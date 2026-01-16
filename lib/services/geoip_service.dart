@@ -7,14 +7,15 @@
  *
  * Database: DB-IP Lite (https://db-ip.com) - CC BY 4.0 license
  * Attribution required: "IP Geolocation by DB-IP"
+ *
+ * Note: This file must remain pure Dart (no Flutter dependencies) for CLI compatibility.
+ * Flutter apps should load assets via rootBundle and call initFromBytes().
  */
 
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:maxminddb/maxminddb.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'log_service.dart';
 
@@ -75,31 +76,6 @@ class GeoIpService {
 
   /// Whether the database has been loaded
   bool get isInitialized => _initialized;
-
-  /// Initialize the service by loading the MMDB database from Flutter assets
-  /// Used by Flutter apps (embedded station mode)
-  Future<void> initFromAssets() async {
-    if (_initialized || _initializing) return;
-    _initializing = true;
-
-    try {
-      LogService().log('GeoIpService: Loading DB-IP database from assets...');
-
-      // Load the database from Flutter assets
-      final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
-      final bytes = data.buffer.asUint8List();
-
-      // Save to temp file and load (maxminddb requires file path or memory bytes)
-      _database = MaxMindDatabase.memory(bytes);
-
-      _initialized = true;
-      LogService().log('GeoIpService: Database loaded successfully (${bytes.length} bytes)');
-    } catch (e) {
-      LogService().log('GeoIpService: Failed to load database from assets: $e');
-      _initializing = false;
-      rethrow;
-    }
-  }
 
   /// Initialize the service by loading the MMDB database from a file path
   /// Used by CLI/pure station mode
