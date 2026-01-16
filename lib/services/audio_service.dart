@@ -673,6 +673,104 @@ class AudioService {
     }
   }
 
+  /// Play audio from WAV bytes directly.
+  /// This is useful for TTS where audio is generated in memory.
+  Future<void> playBytes(Uint8List audioBytes) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final tempPath = '${tempDir.path}/tts_output_$timestamp.wav';
+
+      // Write bytes to temp file
+      final file = PlatformFile(tempPath);
+      await file.writeAsBytes(audioBytes);
+
+      // Load and play
+      await load(tempPath);
+      await play();
+
+      LogService().log('AudioService: Playing ${(audioBytes.length / 1024).toStringAsFixed(1)} KB audio');
+    } catch (e) {
+      LogService().log('AudioService: Failed to play bytes: $e');
+    }
+  }
+
+  /// Play audio from Float32 PCM samples directly.
+  /// Converts samples to 16-bit WAV format and plays.
+  Future<void> playSamples(Float32List samples, {int sampleRate = 24000}) async {
+    try {
+      // Convert float samples (-1.0 to 1.0) to 16-bit PCM
+      final int16Samples = Int16List(samples.length);
+      for (var i = 0; i < samples.length; i++) {
+        final clamped = samples[i].clamp(-1.0, 1.0);
+        int16Samples[i] = (clamped * 32767).round();
+      }
+
+      // Create WAV bytes
+      final wavBytes = _createWavFileWithSampleRate(int16Samples, sampleRate);
+      await playBytes(wavBytes);
+    } catch (e) {
+      LogService().log('AudioService: Failed to play samples: $e');
+    }
+  }
+
+  /// Create a WAV file from PCM samples with custom sample rate.
+  Uint8List _createWavFileWithSampleRate(Int16List samples, int sampleRate) {
+    final dataSize = samples.length * 2;
+    final fileSize = 36 + dataSize;
+
+    final buffer = ByteData(44 + dataSize);
+    var offset = 0;
+
+    // RIFF header
+    buffer.setUint8(offset++, 0x52); // 'R'
+    buffer.setUint8(offset++, 0x49); // 'I'
+    buffer.setUint8(offset++, 0x46); // 'F'
+    buffer.setUint8(offset++, 0x46); // 'F'
+    buffer.setUint32(offset, fileSize, Endian.little);
+    offset += 4;
+    buffer.setUint8(offset++, 0x57); // 'W'
+    buffer.setUint8(offset++, 0x41); // 'A'
+    buffer.setUint8(offset++, 0x56); // 'V'
+    buffer.setUint8(offset++, 0x45); // 'E'
+
+    // fmt chunk
+    buffer.setUint8(offset++, 0x66); // 'f'
+    buffer.setUint8(offset++, 0x6D); // 'm'
+    buffer.setUint8(offset++, 0x74); // 't'
+    buffer.setUint8(offset++, 0x20); // ' '
+    buffer.setUint32(offset, 16, Endian.little); // Chunk size
+    offset += 4;
+    buffer.setUint16(offset, 1, Endian.little); // Audio format (PCM)
+    offset += 2;
+    buffer.setUint16(offset, 1, Endian.little); // Channels (mono)
+    offset += 2;
+    buffer.setUint32(offset, sampleRate, Endian.little); // Sample rate
+    offset += 4;
+    buffer.setUint32(offset, sampleRate * 2, Endian.little); // Byte rate (mono, 16-bit)
+    offset += 4;
+    buffer.setUint16(offset, 2, Endian.little); // Block align (mono, 16-bit)
+    offset += 2;
+    buffer.setUint16(offset, 16, Endian.little); // Bits per sample
+    offset += 2;
+
+    // data chunk
+    buffer.setUint8(offset++, 0x64); // 'd'
+    buffer.setUint8(offset++, 0x61); // 'a'
+    buffer.setUint8(offset++, 0x74); // 't'
+    buffer.setUint8(offset++, 0x61); // 'a'
+    buffer.setUint32(offset, dataSize, Endian.little);
+    offset += 4;
+
+    // PCM data
+    for (var i = 0; i < samples.length; i++) {
+      buffer.setInt16(offset, samples[i], Endian.little);
+      offset += 2;
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
   /// Get the duration of an audio file without loading it for playback.
   Future<Duration?> getFileDuration(String filePath) async {
     try {

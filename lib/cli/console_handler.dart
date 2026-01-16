@@ -8,6 +8,7 @@
 
 import 'console_io.dart';
 import 'game/game_config.dart';
+import '../tts/services/tts_service.dart';
 import '../version.dart';
 
 /// Service interface for profile management
@@ -210,6 +211,9 @@ class ConsoleHandler {
       case 'quit':
       case 'exit':
         return true;
+      case 'say':
+        await _handleSay(args);
+        return false;
       default:
         _writeError('Unknown command: $command. Type "help" for available commands.');
         return false;
@@ -254,6 +258,7 @@ class ConsoleHandler {
     io.writeln('    status             Show application status');
     io.writeln('    help               Show this help message');
     io.writeln('    clear              Clear the screen');
+    io.writeln('    say <text>         Speak text using TTS');
     io.writeln('    quit               Exit the console');
     io.writeln();
     io.writeln('  Virtual Filesystem:');
@@ -797,6 +802,42 @@ class ConsoleHandler {
     final days = seconds ~/ 86400;
     final hours = (seconds % 86400) ~/ 3600;
     return '${days}d ${hours}h';
+  }
+
+  // --- Text-to-Speech ---
+
+  Future<void> _handleSay(List<String> args) async {
+    if (args.isEmpty) {
+      io.writeln('Usage: say <text>');
+      io.writeln('Example: say Hello world');
+      return;
+    }
+
+    final text = args.join(' ');
+    io.writeln('Speaking...');
+
+    try {
+      final tts = TtsService();
+
+      // Ensure model is loaded (shows download progress)
+      if (!tts.isLoaded) {
+        io.writeln('Loading TTS model...');
+        await for (final progress in tts.load()) {
+          if (progress < 1.0) {
+            // Could show progress here if desired
+          }
+        }
+
+        if (!tts.isLoaded) {
+          _writeError('Failed to load TTS model');
+          return;
+        }
+      }
+
+      await tts.speak(text);
+    } catch (e) {
+      _writeError('TTS error: $e');
+    }
   }
 
   String _truncateNpub(String npub) {

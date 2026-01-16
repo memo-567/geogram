@@ -6,10 +6,12 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_linux
   flutter_onnxruntime
   flutter_webrtc
-  fvp
+  media_kit_libs_linux
+  media_kit_video
   objectbox_flutter_libs
   record_linux
   screen_retriever_linux
+  sqlite3_flutter_libs
   url_launcher_linux
   window_manager
 )

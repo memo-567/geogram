@@ -63,9 +63,9 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     if (_tabController.indexIsChanging) return;
 
     if (_tabController.index == 0) {
-      _reloadAndScrollToBottom();
-    } else if (_tabController.index == 1) {
       _loadCrashLogs();
+    } else if (_tabController.index == 1) {
+      _reloadAndScrollToBottom();
     }
   }
 
@@ -100,7 +100,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           _totalLogLines = result.totalLines;
           _logsTruncated = result.truncated;
         });
-        if (_tabController.index == 0) {
+        if (_tabController.index == 1) {
           _scrollToBottom();
         }
       }
@@ -123,7 +123,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
           _heartbeat = heartbeat;
           _isLoadingLogFiles = false;
         });
-        if (_tabController.index == 0) {
+        if (_tabController.index == 1) {
           _scrollToBottom();
         }
       }
@@ -374,8 +374,8 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(text: 'All', icon: Icon(Icons.list)),
             Tab(text: 'Crashes', icon: Icon(Icons.bug_report)),
+            Tab(text: 'All', icon: Icon(Icons.list)),
           ],
         ),
       ),
@@ -411,8 +411,8 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
             child: TabBarView(
               controller: _tabController,
               children: [
-                _buildLogPanel(),
                 _buildCrashPanel(),
+                _buildLogPanel(),
               ],
             ),
           ),

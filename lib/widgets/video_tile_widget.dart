@@ -65,81 +65,78 @@ class VideoTileWidget extends StatelessWidget {
               ),
             ),
             // Video info section - compact layout
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Title
-                    Text(
-                      video.getTitle(langCode),
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Title
+                  Text(
+                    video.getTitle(langCode),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
                     ),
-                    const SizedBox(height: 4),
-                    // Author and metadata row
-                    Row(
-                      children: [
-                        // Author avatar placeholder
-                        CircleAvatar(
-                          radius: 10,
-                          backgroundColor: theme.colorScheme.primaryContainer,
-                          child: Text(
-                            video.author.isNotEmpty
-                                ? video.author[0].toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.onPrimaryContainer,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        // Author name and stats
-                        Expanded(
-                          child: Text(
-                            '${video.author} • ${video.displayDate}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              fontSize: 11,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    // Category chip - only show if there's space
-                    if (video.category.displayName.isNotEmpty) ...[
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _getCategoryColor(video.category)
-                              .withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  // Author, date and category row
+                  Row(
+                    children: [
+                      // Author avatar placeholder
+                      CircleAvatar(
+                        radius: 10,
+                        backgroundColor: theme.colorScheme.primaryContainer,
                         child: Text(
-                          video.category.displayName,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: _getCategoryColor(video.category),
-                            fontWeight: FontWeight.w600,
+                          video.author.isNotEmpty
+                              ? video.author[0].toUpperCase()
+                              : '?',
+                          style: TextStyle(
                             fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.onPrimaryContainer,
                           ),
                         ),
                       ),
+                      const SizedBox(width: 6),
+                      // Author name and date
+                      Expanded(
+                        child: Text(
+                          '${video.author} • ${video.displayDate}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      // Category chip inline
+                      if (video.category.displayName.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _getCategoryColor(video.category)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            video.category.displayName,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: _getCategoryColor(video.category),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
                     ],
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -220,31 +217,6 @@ class VideoTileWidget extends StatelessWidget {
       ),
       child: Icon(icon, size: 16, color: color),
     );
-  }
-
-  String _buildMetadataText() {
-    final parts = <String>[];
-
-    if (video.viewsCount > 0) {
-      parts.add('${_formatCount(video.viewsCount)} views');
-    }
-
-    parts.add(video.displayDate);
-
-    if (video.likesCount > 0) {
-      parts.add('${_formatCount(video.likesCount)} likes');
-    }
-
-    return parts.join(' • ');
-  }
-
-  String _formatCount(int count) {
-    if (count >= 1000000) {
-      return '${(count / 1000000).toStringAsFixed(1)}M';
-    } else if (count >= 1000) {
-      return '${(count / 1000).toStringAsFixed(1)}K';
-    }
-    return count.toString();
   }
 
   Color _getCategoryColor(VideoCategory category) {

@@ -7,7 +7,9 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
+import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
+
 
 import '../services/log_service.dart';
 import '../services/config_service.dart';
@@ -42,9 +44,20 @@ import '../util/event_bus.dart';
 import '../util/station_html_templates.dart';
 import '../util/web_navigation.dart';
 import '../version.dart';
+import 'contact_service.dart';
+import 'nostr_blossom_service.dart';
+import 'nostr_relay_service.dart';
+import 'nostr_relay_storage.dart';
+import 'nostr_storage_paths.dart';
 import 'email_relay_service.dart';
 import 'stun_server_service.dart';
 import 'geoip_service.dart';
+
+class _UploadPayload {
+  final Uint8List bytes;
+  final String? mime;
+  _UploadPayload({required this.bytes, this.mime});
+}
 
 /// Station server settings
 class StationServerSettings {
@@ -58,6 +71,9 @@ class StationServerSettings {
   String? location;
   double? latitude;
   double? longitude;
+  bool nostrRequireAuthForWrites;
+  int blossomMaxStorageMb;
+  int blossomMaxFileMb;
   // Update mirror settings
   bool updateMirrorEnabled;      // Enable/disable update mirroring from GitHub
   int updateCheckInterval;       // Polling interval in seconds (default: 120 = 2 min)
@@ -78,6 +94,9 @@ class StationServerSettings {
     this.location,
     this.latitude,
     this.longitude,
+    this.nostrRequireAuthForWrites = true,
+    this.blossomMaxStorageMb = 1024,
+    this.blossomMaxFileMb = 10,
     this.updateMirrorEnabled = true,
     this.updateCheckInterval = 120,
     this.lastMirroredVersion,
@@ -98,6 +117,9 @@ class StationServerSettings {
       location: json['location'] as String?,
       latitude: json['latitude'] as double?,
       longitude: json['longitude'] as double?,
+      nostrRequireAuthForWrites: json['nostrRequireAuthForWrites'] as bool? ?? true,
+      blossomMaxStorageMb: json['blossomMaxStorageMb'] as int? ?? 1024,
+      blossomMaxFileMb: json['blossomMaxFileMb'] as int? ?? 10,
       updateMirrorEnabled: json['updateMirrorEnabled'] as bool? ?? true,
       updateCheckInterval: json['updateCheckInterval'] as int? ?? 120,
       lastMirroredVersion: json['lastMirroredVersion'] as String?,
@@ -118,6 +140,9 @@ class StationServerSettings {
         'location': location,
         'latitude': latitude,
         'longitude': longitude,
+        'nostrRequireAuthForWrites': nostrRequireAuthForWrites,
+        'blossomMaxStorageMb': blossomMaxStorageMb,
+        'blossomMaxFileMb': blossomMaxFileMb,
         'updateMirrorEnabled': updateMirrorEnabled,
         'updateCheckInterval': updateCheckInterval,
         'lastMirroredVersion': lastMirroredVersion,
@@ -419,6 +444,11 @@ class StationServerService {
   StationPlaceApi? _placeApi;
   StationFeedbackApi? _feedbackApi;
 
+  // NOSTR relay + Blossom
+  NostrRelayStorage? _nostrStorage;
+  NostrRelayService? _nostrRelay;
+  NostrBlossomService? _blossom;
+
   /// Get the shared alert API handlers (lazy initialization)
   StationAlertApi get alertApi {
     if (_alertApi == null) {
@@ -559,6 +589,14 @@ class StationServerService {
 
       LogService().log('Station server started on port $serverPort');
 
+      await _initNostrServices();
+      _nostrRelay?.requireAuthForWrites = _settings.nostrRequireAuthForWrites;
+      if (_blossom != null) {
+        _blossom!
+          ..maxBytes = _settings.blossomMaxStorageMb * 1024 * 1024
+          ..maxFileBytes = _settings.blossomMaxFileMb * 1024 * 1024;
+      }
+
       // Initialize NIP-05 registry for identity verification
       final nip05Registry = Nip05RegistryService();
       await nip05Registry.init();
@@ -588,6 +626,7 @@ class StationServerService {
       // Run synchronously to ensure models are available before clients connect
       await downloadAllVisionModels();
       await downloadAllMusicModels();
+      await _downloadSupertonicModels();
       await downloadAllConsoleVmFiles();
 
       // Start STUN server for WebRTC NAT traversal (privacy-respecting alternative to Google STUN)
@@ -628,6 +667,12 @@ class StationServerService {
     }
     _clients.clear();
 
+    _nostrRelay = null;
+    _nostrStorage?.close();
+    _nostrStorage = null;
+    _blossom?.close();
+    _blossom = null;
+
     // Close HTTP server
     await _httpServer?.close(force: true);
     _httpServer = null;
@@ -644,6 +689,10 @@ class StationServerService {
     final method = request.method;
 
     try {
+      if (path.startsWith('/blossom')) {
+        await _handleBlossomRequest(request);
+        return;
+      }
       // Log requests that might be device content
       if (_isCallsignPath(path) || _isDeviceContentPath(path)) {
         LogService().log('Incoming request: $method $path (isCallsignPath=${_isCallsignPath(path)}, isDeviceContentPath=${_isDeviceContentPath(path)})');
@@ -775,6 +824,7 @@ class StationServerService {
     try {
       final socket = await WebSocketTransformer.upgrade(request);
       final clientId = DateTime.now().millisecondsSinceEpoch.toString();
+      final isOpenRelay = _isOpenRelayPath(request.uri.path);
 
       // Get remote address for connection type detection
       final remoteAddress = request.connectionInfo?.remoteAddress.address;
@@ -790,9 +840,16 @@ class StationServerService {
       _clients[clientId] = client;
       LogService().log('WebSocket client connected: $clientId from $remoteAddress ($connectionType)');
 
+      _nostrRelay?.registerConnection(
+        clientId,
+        (message) => socket.add(message),
+        openRelay: isOpenRelay,
+      );
+
       socket.listen(
         (data) => _handleWebSocketMessage(client, data),
         onDone: () {
+          _nostrRelay?.unregisterConnection(clientId);
           _clients.remove(clientId);
           if (client.callsign != null) {
             final callsignKey = client.callsign!.toUpperCase();
@@ -806,6 +863,7 @@ class StationServerService {
           LogService().log('WebSocket client disconnected: $clientId');
         },
         onError: (error) {
+          _nostrRelay?.unregisterConnection(clientId);
           LogService().log('WebSocket error: $error');
           _clients.remove(clientId);
           if (client.callsign != null) {
@@ -830,7 +888,13 @@ class StationServerService {
       client.lastActivity = DateTime.now();
 
       if (data is String) {
-        final message = jsonDecode(data) as Map<String, dynamic>;
+        final decoded = jsonDecode(data);
+        if (decoded is List) {
+          _nostrRelay?.handleFrame(client.id, decoded);
+          return;
+        }
+
+        final message = decoded as Map<String, dynamic>;
         final type = message['type'] as String?;
 
         if (type == 'hello') {
@@ -855,6 +919,192 @@ class StationServerService {
     } catch (e) {
       LogService().log('WebSocket message error: $e');
     }
+  }
+
+  bool _isOpenRelayPath(String path) {
+    final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.isEmpty) return true;
+    final first = segments.first;
+    if (_looksLikeCallsign(first)) return false;
+    return true;
+  }
+
+  bool _looksLikeCallsign(String value) {
+    return RegExp(r'^x[0-9a-z]{3,}$', caseSensitive: false).hasMatch(value);
+  }
+
+  Future<void> _initNostrServices() async {
+    final baseDir = NostrStoragePaths.baseDir();
+    final storageConfig = StorageConfig();
+    if (storageConfig.isInitialized) {
+      await Directory(baseDir).create(recursive: true);
+    }
+
+    _nostrStorage ??= NostrRelayStorage.open();
+    _blossom ??= NostrBlossomService.open(
+      maxBytes: _settings.blossomMaxStorageMb * 1024 * 1024,
+      maxFileBytes: _settings.blossomMaxFileMb * 1024 * 1024,
+    );
+
+    final allowed = await _loadAllowedPubkeys();
+    _nostrRelay ??= NostrRelayService(
+      storage: _nostrStorage!,
+      blossom: _blossom,
+      requireAuthForWrites: _settings.nostrRequireAuthForWrites,
+      allowedPubkeysHex: allowed,
+    );
+  }
+
+  Future<Set<String>> _loadAllowedPubkeys() async {
+    final allowed = <String>{};
+    final profile = ProfileService().getProfile();
+    if (profile.npub.isNotEmpty) {
+      allowed.add(NostrCrypto.decodeNpub(profile.npub));
+    }
+
+    final callsign = profile.callsign;
+    if (callsign.isEmpty) return allowed;
+
+    final contactsPath = path.join(StorageConfig().getCallsignDir(callsign), 'contacts');
+    final contactService = ContactService();
+    await contactService.initializeCollection(contactsPath);
+    final contacts = await contactService.loadAllContactsRecursively();
+    for (final contact in contacts) {
+      final npub = contact.npub;
+      if (npub != null && npub.isNotEmpty) {
+        try {
+          allowed.add(NostrCrypto.decodeNpub(npub));
+        } catch (_) {}
+      }
+    }
+
+    return allowed;
+  }
+
+  Future<void> _handleBlossomRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    if (_blossom == null) {
+      request.response.statusCode = 503;
+      request.response.write(jsonEncode({'error': 'Blossom not initialized'}));
+      await request.response.close();
+      return;
+    }
+
+    if (method == 'POST' && path == '/blossom/upload') {
+      await _handleBlossomUpload(request);
+      return;
+    }
+
+    if (path.startsWith('/blossom/')) {
+      final hash = path.substring('/blossom/'.length);
+      if (method == 'GET' || method == 'HEAD') {
+        await _handleBlossomDownload(request, hash);
+        return;
+      }
+    }
+
+    request.response.statusCode = 404;
+    request.response.write('Not Found');
+    await request.response.close();
+  }
+
+  Future<void> _handleBlossomUpload(HttpRequest request) async {
+    final isOpenRelay = _isOpenRelayPath(request.uri.path);
+    if (!isOpenRelay && _settings.nostrRequireAuthForWrites) {
+      final authEvent = _verifyNostrAuthHeader(request);
+      if (authEvent == null) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Unauthorized'}));
+        await request.response.close();
+        return;
+      }
+      final allowed = await _loadAllowedPubkeys();
+      if (!allowed.contains(authEvent.pubkey)) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Forbidden'}));
+        await request.response.close();
+        return;
+      }
+    }
+
+    try {
+      final upload = await _readUploadBytes(request, _blossom!.maxFileBytes);
+      final result = await _blossom!.ingestBytes(
+        bytes: upload.bytes,
+        mime: upload.mime,
+        ownerPubkey: null,
+      );
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result.toJson(baseUrl: _blossomBaseUrl(request))));
+    } catch (e) {
+      request.response.statusCode = 400;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+    await request.response.close();
+  }
+
+  Future<void> _handleBlossomDownload(HttpRequest request, String hash) async {
+    final file = _blossom!.getBlobFile(hash);
+    if (file == null) {
+      request.response.statusCode = 404;
+      request.response.write('Not Found');
+      await request.response.close();
+      return;
+    }
+
+    if (request.method == 'HEAD') {
+      request.response.contentLength = await file.length();
+      await request.response.close();
+      return;
+    }
+
+    request.response.headers.contentType = ContentType.binary;
+    await file.openRead().pipe(request.response);
+  }
+
+  String _blossomBaseUrl(HttpRequest request) {
+    final scheme = request.requestedUri.scheme;
+    final host = request.requestedUri.authority;
+    return '$scheme://$host/blossom';
+  }
+
+  Future<_UploadPayload> _readUploadBytes(HttpRequest request, int maxBytes) async {
+    final contentType = request.headers.contentType;
+    if (contentType != null && contentType.mimeType == 'multipart/form-data') {
+      final boundary = contentType.parameters['boundary'];
+      if (boundary == null) {
+        throw BlossomStorageError('Missing multipart boundary');
+      }
+      final transformer = MimeMultipartTransformer(boundary);
+      await for (final part in transformer.bind(request)) {
+        final disposition = part.headers['content-disposition'];
+        if (disposition == null || !disposition.contains('name="file"')) {
+          continue;
+        }
+        final mime = part.headers['content-type'];
+        final bytes = await _readStreamWithLimit(part, maxBytes);
+        return _UploadPayload(bytes: bytes, mime: mime);
+      }
+      throw BlossomStorageError('No file part found');
+    }
+
+    final bytes = await _readStreamWithLimit(request, maxBytes);
+    return _UploadPayload(bytes: bytes, mime: contentType?.mimeType);
+  }
+
+  Future<Uint8List> _readStreamWithLimit(Stream<List<int>> stream, int maxBytes) async {
+    final builder = BytesBuilder(copy: false);
+    var total = 0;
+    await for (final chunk in stream) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        throw BlossomStorageError('Upload exceeds max size (${maxBytes} bytes)');
+      }
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
   }
 
   /// Handle email send request
@@ -7148,110 +7398,84 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         .toList();
   }
 
-  // ========== Supertonic TTS Model Mirror Methods ==========
+  // ========== Supertonic TTS Model Methods ==========
 
-  /// Supertonic model definitions for mirroring
   static const List<Map<String, dynamic>> _supertonicModels = [
     {
-      'id': 'supertonic-2.onnx',
-      'name': 'Supertonic 2',
-      'size': 66 * 1024 * 1024, // ~66MB
+      'id': 'supertonic-2',
+      'filename': 'supertonic-2.onnx',
+      'size': 66 * 1024 * 1024,
       'url': 'https://huggingface.co/Supertone/supertonic-2/resolve/main/supertonic-2.onnx',
-      'description': 'Fast on-device text-to-speech (EN, PT, ES, FR, KO)',
     },
   ];
+
+  Set<String> _availableSupertonic = {};
+
+  Future<void> _downloadFile(String url, String path) async {
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        await File(path).writeAsBytes(response.bodyBytes);
+      } else {
+        LogService().log('Failed to download file from $url: ${response.statusCode}');
+      }
+    } catch (e) {
+      LogService().log('Error downloading file from $url: $e');
+    }
+  }
 
   /// Download Supertonic models from HuggingFace
   Future<void> _downloadSupertonicModels() async {
     if (_appDir == null) return;
 
-    final supertonicDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
-    if (!await supertonicDir.exists()) {
-      await supertonicDir.create(recursive: true);
+    final modelsDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
+    if (!await modelsDir.exists()) {
+      await modelsDir.create(recursive: true);
     }
 
-    LogService().log('Checking Supertonic TTS models for mirroring...');
-    _availableSupertonicModels.clear();
-
-    int downloaded = 0;
-    int existed = 0;
-
     for (final model in _supertonicModels) {
-      final filename = model['id'] as String;
-      final url = model['url'] as String;
-      final expectedSize = model['size'] as int;
-
-      final filePath = path.join(supertonicDir.path, filename);
-      final file = File(filePath);
-
-      // Check if file exists with reasonable size
+      final file = File(path.join(modelsDir.path, model['filename']));
       if (await file.exists()) {
-        final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
-          _availableSupertonicModels.add(filename);
-          existed++;
+        final size = await file.length();
+        if (size >= model['size'] * 0.9) {
+          _availableSupertonic.add(model['id']);
           continue;
         }
       }
 
-      // Download the model
-      try {
-        LogService().log('Downloading Supertonic model: $filename...');
-        final response = await http.get(
-          Uri.parse(url),
-          headers: {'User-Agent': 'Geogram-Station-Updater'},
-        ).timeout(const Duration(minutes: 30));
-
-        if (response.statusCode == 200) {
-          await file.writeAsBytes(response.bodyBytes);
-          final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
-          LogService().log('Downloaded Supertonic model $filename: ${sizeMb}MB');
-          _availableSupertonicModels.add(filename);
-          downloaded++;
-        } else {
-          LogService().log('Failed to download Supertonic model $filename: ${response.statusCode}');
-        }
-      } catch (e) {
-        LogService().log('Error downloading Supertonic model $filename: $e');
-      }
+      // Download from HuggingFace
+      LogService().log('Downloading Supertonic model: ${model['filename']}');
+      await _downloadFile(model['url'], file.path);
+      _availableSupertonic.add(model['id']);
     }
-
-    LogService().log('Supertonic model sync: $downloaded new, $existed existing, ${_availableSupertonicModels.length} total');
   }
 
   /// Scan for existing Supertonic models on disk
   Future<void> _scanSupertonicModels() async {
     if (_appDir == null) return;
+    
+    final modelsDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
+    if (!await modelsDir.exists()) return;
 
-    final supertonicDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
-    if (!await supertonicDir.exists()) return;
-
-    _availableSupertonicModels.clear();
+    _availableSupertonic.clear();
 
     for (final model in _supertonicModels) {
-      final filename = model['id'] as String;
+      final filename = model['filename'] as String;
       final expectedSize = model['size'] as int;
-      final filePath = path.join(supertonicDir.path, filename);
+      final filePath = path.join(modelsDir.path, filename);
       final file = File(filePath);
 
       if (await file.exists()) {
         final fileSize = await file.length();
         if (fileSize > expectedSize * 0.9) {
-          _availableSupertonicModels.add(filename);
+          _availableSupertonic.add(model['id']);
         }
       }
     }
 
-    if (_availableSupertonicModels.isNotEmpty) {
-      LogService().log('Found ${_availableSupertonicModels.length} Supertonic models on disk');
+    if (_availableSupertonic.isNotEmpty) {
+      LogService().log('Found ${_availableSupertonic.length} Supertonic models on disk');
     }
-  }
-
-  /// Get list of available Supertonic models for download page
-  List<Map<String, dynamic>> getAvailableSupertonicModels() {
-    return _supertonicModels
-        .where((m) => _availableSupertonicModels.contains(m['id']))
-        .toList();
   }
 
   /// Handle GET /api/updates/latest - Return latest release info

@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:markdown/markdown.dart' as md;
+import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
 import 'pure_storage_config.dart';
 import '../bot/models/music_model_info.dart';
@@ -36,6 +37,11 @@ import '../util/reaction_utils.dart';
 import '../util/chat_format.dart';
 import '../models/update_settings.dart' show UpdateAssetType;
 import '../services/geoip_service.dart';
+import '../services/contact_service.dart';
+import '../services/nostr_blossom_service.dart';
+import '../services/nostr_relay_service.dart';
+import '../services/nostr_relay_storage.dart';
+import '../services/nostr_storage_paths.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -64,6 +70,9 @@ class PureRelaySettings {
   bool enableCors;
   int httpRequestTimeout;
   int maxConnectedDevices;
+  bool nostrRequireAuthForWrites;
+  int blossomMaxStorageMb;
+  int blossomMaxFileMb;
 
   // Station role configuration
   String stationRole; // 'root' or 'node'
@@ -121,6 +130,9 @@ class PureRelaySettings {
     this.enableCors = true,
     this.httpRequestTimeout = 30000,
     this.maxConnectedDevices = 100,
+    this.nostrRequireAuthForWrites = true,
+    this.blossomMaxStorageMb = 1024,
+    this.blossomMaxFileMb = 10,
     this.stationRole = '',
     this.networkId,
     this.parentStationUrl,
@@ -174,6 +186,9 @@ class PureRelaySettings {
       enableCors: json['enableCors'] as bool? ?? true,
       httpRequestTimeout: json['httpRequestTimeout'] as int? ?? 30000,
       maxConnectedDevices: json['maxConnectedDevices'] as int? ?? 100,
+      nostrRequireAuthForWrites: json['nostrRequireAuthForWrites'] as bool? ?? true,
+      blossomMaxStorageMb: json['blossomMaxStorageMb'] as int? ?? 1024,
+      blossomMaxFileMb: json['blossomMaxFileMb'] as int? ?? 10,
       stationRole: json['stationRole'] as String? ?? '',
       networkId: json['networkId'] as String?,
       parentStationUrl: json['parentStationUrl'] as String?,
@@ -222,6 +237,9 @@ class PureRelaySettings {
         'enableCors': enableCors,
         'httpRequestTimeout': httpRequestTimeout,
         'maxConnectedDevices': maxConnectedDevices,
+        'nostrRequireAuthForWrites': nostrRequireAuthForWrites,
+        'blossomMaxStorageMb': blossomMaxStorageMb,
+        'blossomMaxFileMb': blossomMaxFileMb,
         'stationRole': stationRole,
         'networkId': networkId,
         'parentStationUrl': parentStationUrl,
@@ -266,6 +284,9 @@ class PureRelaySettings {
     bool? enableCors,
     int? httpRequestTimeout,
     int? maxConnectedDevices,
+    bool? nostrRequireAuthForWrites,
+    int? blossomMaxStorageMb,
+    int? blossomMaxFileMb,
     String? stationRole,
     String? networkId,
     String? parentStationUrl,
@@ -309,6 +330,9 @@ class PureRelaySettings {
       enableCors: enableCors ?? this.enableCors,
       httpRequestTimeout: httpRequestTimeout ?? this.httpRequestTimeout,
       maxConnectedDevices: maxConnectedDevices ?? this.maxConnectedDevices,
+      nostrRequireAuthForWrites: nostrRequireAuthForWrites ?? this.nostrRequireAuthForWrites,
+      blossomMaxStorageMb: blossomMaxStorageMb ?? this.blossomMaxStorageMb,
+      blossomMaxFileMb: blossomMaxFileMb ?? this.blossomMaxFileMb,
       stationRole: stationRole ?? this.stationRole,
       networkId: networkId ?? this.networkId,
       parentStationUrl: parentStationUrl ?? this.parentStationUrl,
@@ -725,6 +749,9 @@ class PureStationServer {
   // Whisper model mirror state
   Set<String> _availableWhisperModels = {};
 
+  // Supertonic TTS model mirror state
+  Set<String> _availableSupertonicModels = {};
+
   // Heartbeat and connection stability
   Timer? _heartbeatTimer;
   static const int _heartbeatIntervalSeconds = 30;  // Send PING every 30s
@@ -734,6 +761,11 @@ class PureStationServer {
   StationAlertApi? _alertApi;
   StationPlaceApi? _placeApi;
   StationFeedbackApi? _feedbackApi;
+
+  // NOSTR relay + Blossom
+  NostrRelayStorage? _nostrStorage;
+  NostrRelayService? _nostrRelay;
+  NostrBlossomService? _blossom;
 
   // File-based logging
   IOSink? _logSink;
@@ -849,11 +881,16 @@ class PureStationServer {
 
     final settingsExisted = await _loadSettings();
 
+    await _initNostrServices();
+
     // Load cached release info if exists
     await _loadCachedRelease();
 
     // Scan for existing whisper models
     await _scanWhisperModels();
+
+    // Scan for existing Supertonic TTS models
+    await _scanSupertonicModels();
 
     // Only initialize chat data if settings already existed (not fresh install).
     // For fresh installs, chat will be initialized after identity is established
@@ -1437,6 +1474,15 @@ class PureStationServer {
       case 'maxConnectedDevices':
         _settings = _settings.copyWith(maxConnectedDevices: value as int);
         break;
+      case 'nostrRequireAuthForWrites':
+        _settings = _settings.copyWith(nostrRequireAuthForWrites: value as bool);
+        break;
+      case 'blossomMaxStorageMb':
+        _settings = _settings.copyWith(blossomMaxStorageMb: value as int);
+        break;
+      case 'blossomMaxFileMb':
+        _settings = _settings.copyWith(blossomMaxFileMb: value as int);
+        break;
       default:
         throw ArgumentError('Unknown setting: $key');
     }
@@ -1450,6 +1496,13 @@ class PureStationServer {
 
     // Reload settings to pick up any config changes
     await _loadSettings();
+    await _initNostrServices();
+    _nostrRelay?.requireAuthForWrites = _settings.nostrRequireAuthForWrites;
+    if (_blossom != null) {
+      _blossom!
+        ..maxBytes = _settings.blossomMaxStorageMb * 1024 * 1024
+        ..maxFileBytes = _settings.blossomMaxFileMb * 1024 * 1024;
+    }
 
     // Load security lists (blacklist/whitelist)
     await _loadSecurityLists();
@@ -1712,6 +1765,12 @@ class PureStationServer {
     // Stop SMTP server
     await _smtpServer?.stop();
     _smtpServer = null;
+
+    _nostrRelay = null;
+    _nostrStorage?.close();
+    _nostrStorage = null;
+    _blossom?.close();
+    _blossom = null;
 
     _running = false;
     _startTime = null;
@@ -2166,6 +2225,8 @@ class PureStationServer {
 
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path.startsWith('/blossom')) {
+        await _handleBlossomRequest(request);
       } else if (path == '/api/geoip') {
         await _handleGeoIp(request);
       } else if (path == '/station/status') {
@@ -2307,6 +2368,7 @@ class PureStationServer {
     try {
       final socket = await WebSocketTransformer.upgrade(request);
       final clientId = DateTime.now().millisecondsSinceEpoch.toString();
+      final isOpenRelay = _isOpenRelayPath(request.uri.path);
       final client = PureConnectedClient(
         socket: socket,
         id: clientId,
@@ -2318,12 +2380,20 @@ class PureStationServer {
       _stats.lastConnection = DateTime.now();
       _log('INFO', 'WebSocket client connected: $clientId from ${client.address} (total clients: ${_clients.length})');
 
+      _nostrRelay?.registerConnection(
+        clientId,
+        (message) => socket.add(message),
+        openRelay: isOpenRelay,
+      );
+
       socket.listen(
         (data) => _handleWebSocketMessage(client, data),
         onDone: () {
+          _nostrRelay?.unregisterConnection(clientId);
           _removeClient(clientId, reason: 'connection closed');
         },
         onError: (error) {
+          _nostrRelay?.unregisterConnection(clientId);
           _log('ERROR', 'WebSocket error for ${client.callsign ?? clientId}: $error');
           _removeClient(clientId, reason: 'error: $error');
         },
@@ -2339,7 +2409,13 @@ class PureStationServer {
       client.lastActivity = DateTime.now();
 
       if (data is String) {
-        final message = jsonDecode(data) as Map<String, dynamic>;
+        final decoded = jsonDecode(data);
+        if (decoded is List) {
+          _nostrRelay?.handleFrame(client.id, decoded);
+          return;
+        }
+
+        final message = decoded as Map<String, dynamic>;
         final type = message['type'] as String?;
 
         switch (type) {
@@ -2767,6 +2843,219 @@ class PureStationServer {
       _log('ERROR', 'WebSocket message error: $e');
     }
   }
+
+  bool _isOpenRelayPath(String path) {
+    final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.isEmpty) return true;
+    final first = segments.first;
+    if (_looksLikeCallsign(first)) return false;
+    return true;
+  }
+
+  bool _looksLikeCallsign(String value) {
+    return RegExp(r'^x[0-9a-z]{3,}$', caseSensitive: false).hasMatch(value);
+  }
+
+  Future<void> _initNostrServices() async {
+    final baseDir = NostrStoragePaths.baseDir();
+    await Directory(baseDir).create(recursive: true);
+
+    _nostrStorage ??= NostrRelayStorage.open();
+    _blossom ??= NostrBlossomService.open(
+      maxBytes: _settings.blossomMaxStorageMb * 1024 * 1024,
+      maxFileBytes: _settings.blossomMaxFileMb * 1024 * 1024,
+    );
+
+    final allowed = await _loadAllowedPubkeys();
+    _nostrRelay ??= NostrRelayService(
+      storage: _nostrStorage!,
+      blossom: _blossom,
+      requireAuthForWrites: _settings.nostrRequireAuthForWrites,
+      allowedPubkeysHex: allowed,
+    );
+  }
+
+  Future<Set<String>> _loadAllowedPubkeys() async {
+    final allowed = <String>{};
+    if (_settings.npub.isNotEmpty) {
+      allowed.add(NostrCrypto.decodeNpub(_settings.npub));
+    }
+
+    final contactsPath = path.join(PureStorageConfig().getCallsignDir(_settings.callsign), 'contacts');
+    final contactService = ContactService();
+    await contactService.initializeCollection(contactsPath);
+    final contacts = await contactService.loadAllContactsRecursively();
+    for (final contact in contacts) {
+      final npub = contact.npub;
+      if (npub != null && npub.isNotEmpty) {
+        try {
+          allowed.add(NostrCrypto.decodeNpub(npub));
+        } catch (_) {}
+      }
+    }
+
+    return allowed;
+  }
+
+  Future<void> _handleBlossomRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    final method = request.method;
+
+    if (_blossom == null) {
+      request.response.statusCode = 503;
+      request.response.write(jsonEncode({'error': 'Blossom not initialized'}));
+      await request.response.close();
+      return;
+    }
+
+    if (method == 'POST' && path == '/blossom/upload') {
+      await _handleBlossomUpload(request);
+      return;
+    }
+
+    if (path.startsWith('/blossom/')) {
+      final hash = path.substring('/blossom/'.length);
+      if (method == 'GET' || method == 'HEAD') {
+        await _handleBlossomDownload(request, hash);
+        return;
+      }
+    }
+
+    request.response.statusCode = 404;
+    request.response.write('Not Found');
+    await request.response.close();
+  }
+
+  NostrEvent? _verifyNostrAuthHeader(HttpRequest request) {
+    final authHeader = request.headers.value('authorization');
+    if (authHeader == null || !authHeader.startsWith('Nostr ')) {
+      return null;
+    }
+
+    try {
+      final base64Event = authHeader.substring(6);
+      final eventJson = utf8.decode(base64Decode(base64Event));
+      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
+      final event = NostrEvent.fromJson(eventData);
+
+      if (!event.verify()) {
+        _log('WARN', 'NOSTR auth failed - invalid signature');
+        return null;
+      }
+      if (!_isFreshNostrEvent(event)) {
+        _log('WARN', 'NOSTR auth failed - event too old');
+        return null;
+      }
+
+      return event;
+    } catch (e) {
+      _log('WARN', 'NOSTR auth failed - parse error: $e');
+      return null;
+    }
+  }
+
+  bool _isFreshNostrEvent(NostrEvent event) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return (now - event.createdAt).abs() <= 300;
+  }
+
+  Future<void> _handleBlossomUpload(HttpRequest request) async {
+    final isOpenRelay = _isOpenRelayPath(request.uri.path);
+    if (!isOpenRelay && _settings.nostrRequireAuthForWrites) {
+      final authEvent = _verifyNostrAuthHeader(request);
+      if (authEvent == null) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Unauthorized'}));
+        await request.response.close();
+        return;
+      }
+      final allowed = await _loadAllowedPubkeys();
+      if (!allowed.contains(authEvent.pubkey)) {
+        request.response.statusCode = 403;
+        request.response.write(jsonEncode({'error': 'Forbidden'}));
+        await request.response.close();
+        return;
+      }
+    }
+
+    try {
+      final upload = await _readUploadBytes(request, _blossom!.maxFileBytes);
+      final result = await _blossom!.ingestBytes(
+        bytes: upload.bytes,
+        mime: upload.mime,
+        ownerPubkey: null,
+      );
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result.toJson(baseUrl: _blossomBaseUrl(request))));
+    } catch (e) {
+      request.response.statusCode = 400;
+      request.response.write(jsonEncode({'error': e.toString()}));
+    }
+    await request.response.close();
+  }
+
+  Future<void> _handleBlossomDownload(HttpRequest request, String hash) async {
+    final file = _blossom!.getBlobFile(hash);
+    if (file == null) {
+      request.response.statusCode = 404;
+      request.response.write('Not Found');
+      await request.response.close();
+      return;
+    }
+
+    if (request.method == 'HEAD') {
+      request.response.contentLength = await file.length();
+      await request.response.close();
+      return;
+    }
+
+    request.response.headers.contentType = ContentType.binary;
+    await file.openRead().pipe(request.response);
+  }
+
+  String _blossomBaseUrl(HttpRequest request) {
+    final scheme = request.requestedUri.scheme;
+    final host = request.requestedUri.authority;
+    return '$scheme://$host/blossom';
+  }
+
+  Future<_UploadPayload> _readUploadBytes(HttpRequest request, int maxBytes) async {
+    final contentType = request.headers.contentType;
+    if (contentType != null && contentType.mimeType == 'multipart/form-data') {
+      final boundary = contentType.parameters['boundary'];
+      if (boundary == null) {
+        throw BlossomStorageError('Missing multipart boundary');
+      }
+      final transformer = MimeMultipartTransformer(boundary);
+      await for (final part in transformer.bind(request)) {
+        final disposition = part.headers['content-disposition'];
+        if (disposition == null || !disposition.contains('name="file"')) {
+          continue;
+        }
+        final mime = part.headers['content-type'];
+        final bytes = await _readStreamWithLimit(part, maxBytes);
+        return _UploadPayload(bytes: bytes, mime: mime);
+      }
+      throw BlossomStorageError('No file part found');
+    }
+
+    final bytes = await _readStreamWithLimit(request, maxBytes);
+    return _UploadPayload(bytes: bytes, mime: contentType?.mimeType);
+  }
+
+  Future<Uint8List> _readStreamWithLimit(Stream<List<int>> stream, int maxBytes) async {
+    final builder = BytesBuilder(copy: false);
+    var total = 0;
+    await for (final chunk in stream) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        throw BlossomStorageError('Upload exceeds max size (${maxBytes} bytes)');
+      }
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+
 
   /// Handle WebRTC signaling messages (offer, answer, ICE candidates)
   /// Simply forwards the message to the target device identified by to_callsign
@@ -9366,8 +9655,8 @@ ${WebNavigation.getHeaderNavCss()}
       return;
     }
 
-    final modelType = segments[2]; // 'vision', 'music', or 'whisper'
-    if (modelType != 'vision' && modelType != 'music' && modelType != 'whisper') {
+    final modelType = segments[2]; // 'vision', 'music', 'whisper', or 'supertonic'
+    if (modelType != 'vision' && modelType != 'music' && modelType != 'whisper' && modelType != 'supertonic') {
       request.response.statusCode = 400;
       request.response.write('Invalid model type');
       return;
@@ -9461,6 +9750,23 @@ ${WebNavigation.getHeaderNavCss()}
         return 'https://huggingface.co/${model.repoId}/resolve/main/$resolvedPath';
       }
       return model.url;
+    }
+
+    if (modelType == 'whisper') {
+      // Look up whisper model by filename (modelId is the filename)
+      final filename = modelId;
+      final model = _whisperModels.where((m) => m['id'] == filename).firstOrNull;
+      return model?['url'] as String?;
+    }
+
+    if (modelType == 'supertonic') {
+      // Look up supertonic model by full path (modelId/relativePath format)
+      // e.g., modelId='onnx', relativePath='text_encoder.onnx' -> 'onnx/text_encoder.onnx'
+      final fullId = relativePath != null && relativePath.isNotEmpty
+          ? '$modelId/$relativePath'
+          : modelId;
+      final model = _supertonicModels.where((m) => m['id'] == fullId).firstOrNull;
+      return model?['url'] as String?;
     }
 
     return null;
@@ -10277,6 +10583,9 @@ ${WebNavigation.getHeaderNavCss()}
 
       // Also sync whisper models
       await _downloadWhisperModels();
+
+      // Also sync Supertonic TTS models
+      await _downloadSupertonicModels();
     } catch (e) {
       _log('ERROR', 'Error polling for updates: $e');
     } finally {
@@ -10531,6 +10840,248 @@ ${WebNavigation.getHeaderNavCss()}
   List<Map<String, dynamic>> getAvailableWhisperModels() {
     return _whisperModels
         .where((m) => _availableWhisperModels.contains(m['id']))
+        .toList();
+  }
+
+  // ============================================
+  // Supertonic TTS Model Mirror Methods
+  // ============================================
+
+  /// HuggingFace base URL for Supertonic models
+  static const String _supertonicHuggingFaceUrl =
+      'https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx';
+
+  /// HuggingFace base URL for Supertonic voice styles
+  static const String _supertonicVoiceStylesUrl =
+      'https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles';
+
+  /// Supertonic model files for mirroring (4 ONNX + 2 config + 10 voice styles)
+  static const List<Map<String, dynamic>> _supertonicModels = [
+    {
+      'id': 'onnx/text_encoder.onnx',
+      'name': 'Text Encoder',
+      'size': 27 * 1024 * 1024, // ~27 MB
+      'url': '$_supertonicHuggingFaceUrl/text_encoder.onnx',
+      'description': 'Converts text to embeddings',
+    },
+    {
+      'id': 'onnx/duration_predictor.onnx',
+      'name': 'Duration Predictor',
+      'size': 2 * 1024 * 1024, // ~1.5 MB
+      'url': '$_supertonicHuggingFaceUrl/duration_predictor.onnx',
+      'description': 'Predicts phoneme durations',
+    },
+    {
+      'id': 'onnx/vector_estimator.onnx',
+      'name': 'Vector Estimator',
+      'size': 132 * 1024 * 1024, // ~132 MB
+      'url': '$_supertonicHuggingFaceUrl/vector_estimator.onnx',
+      'description': 'Generates acoustic features',
+    },
+    {
+      'id': 'onnx/vocoder.onnx',
+      'name': 'Vocoder',
+      'size': 101 * 1024 * 1024, // ~101 MB
+      'url': '$_supertonicHuggingFaceUrl/vocoder.onnx',
+      'description': 'Converts features to audio waveform',
+    },
+    {
+      'id': 'onnx/tts.json',
+      'name': 'TTS Config',
+      'size': 9 * 1024, // ~9 KB
+      'url': '$_supertonicHuggingFaceUrl/tts.json',
+      'description': 'TTS pipeline configuration',
+    },
+    {
+      'id': 'onnx/unicode_indexer.json',
+      'name': 'Unicode Indexer',
+      'size': 262 * 1024, // ~262 KB
+      'url': '$_supertonicHuggingFaceUrl/unicode_indexer.json',
+      'description': 'Character to index mapping for tokenization',
+    },
+    // Voice styles (10 voices: M1-M5, F1-F5)
+    {
+      'id': 'voice_styles/M1.json',
+      'name': 'Voice Male 1',
+      'size': 420 * 1024, // ~420 KB
+      'url': '$_supertonicVoiceStylesUrl/M1.json',
+      'description': 'Male voice style 1',
+    },
+    {
+      'id': 'voice_styles/M2.json',
+      'name': 'Voice Male 2',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/M2.json',
+      'description': 'Male voice style 2',
+    },
+    {
+      'id': 'voice_styles/M3.json',
+      'name': 'Voice Male 3',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/M3.json',
+      'description': 'Male voice style 3',
+    },
+    {
+      'id': 'voice_styles/M4.json',
+      'name': 'Voice Male 4',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/M4.json',
+      'description': 'Male voice style 4',
+    },
+    {
+      'id': 'voice_styles/M5.json',
+      'name': 'Voice Male 5',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/M5.json',
+      'description': 'Male voice style 5',
+    },
+    {
+      'id': 'voice_styles/F1.json',
+      'name': 'Voice Female 1',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/F1.json',
+      'description': 'Female voice style 1',
+    },
+    {
+      'id': 'voice_styles/F2.json',
+      'name': 'Voice Female 2',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/F2.json',
+      'description': 'Female voice style 2',
+    },
+    {
+      'id': 'voice_styles/F3.json',
+      'name': 'Voice Female 3',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/F3.json',
+      'description': 'Female voice style 3',
+    },
+    {
+      'id': 'voice_styles/F4.json',
+      'name': 'Voice Female 4',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/F4.json',
+      'description': 'Female voice style 4',
+    },
+    {
+      'id': 'voice_styles/F5.json',
+      'name': 'Voice Female 5',
+      'size': 420 * 1024,
+      'url': '$_supertonicVoiceStylesUrl/F5.json',
+      'description': 'Female voice style 5',
+    },
+  ];
+
+  /// Download all Supertonic TTS models from HuggingFace
+  Future<void> _downloadSupertonicModels() async {
+    if (_dataDir == null) return;
+
+    final supertonicDir = Directory(path.join(_dataDir!, 'bot', 'models', 'supertonic'));
+    if (!await supertonicDir.exists()) {
+      await supertonicDir.create(recursive: true);
+    }
+
+    _log('INFO', 'Checking Supertonic TTS models for mirroring...');
+    _availableSupertonicModels.clear();
+
+    int downloaded = 0;
+    int existed = 0;
+
+    for (final model in _supertonicModels) {
+      final filename = model['id'] as String;
+      final url = model['url'] as String;
+      final expectedSize = model['size'] as int;
+
+      final filePath = path.join(supertonicDir.path, filename);
+      final file = File(filePath);
+
+      // Check if file exists with reasonable size
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          // File exists and is at least 90% of expected size
+          _availableSupertonicModels.add(filename);
+          existed++;
+          continue;
+        }
+      }
+
+      // Download the model using streaming to avoid memory issues
+      try {
+        // Ensure parent directory exists (for subdirs like onnx/ and voice_styles/)
+        final parentDir = file.parent;
+        if (!await parentDir.exists()) {
+          await parentDir.create(recursive: true);
+        }
+
+        _log('INFO', 'Downloading Supertonic model: $filename...');
+        final client = http.Client();
+        final request = http.Request('GET', Uri.parse(url));
+        request.headers['User-Agent'] = 'Geogram-Station-Updater';
+
+        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 60));
+
+        if (streamedResponse.statusCode == 200) {
+          final sink = file.openWrite();
+          int bytesReceived = 0;
+
+          await for (final chunk in streamedResponse.stream) {
+            sink.add(chunk);
+            bytesReceived += chunk.length;
+          }
+
+          await sink.flush();
+          await sink.close();
+          client.close();
+
+          final sizeMb = (bytesReceived / (1024 * 1024)).toStringAsFixed(1);
+          _log('INFO', 'Downloaded Supertonic model $filename: ${sizeMb}MB');
+          _availableSupertonicModels.add(filename);
+          downloaded++;
+        } else {
+          client.close();
+          _log('ERROR', 'Failed to download Supertonic model $filename: ${streamedResponse.statusCode}');
+        }
+      } catch (e) {
+        _log('ERROR', 'Error downloading Supertonic model $filename: $e');
+      }
+    }
+
+    _log('INFO', 'Supertonic model sync: $downloaded new, $existed existing, ${_availableSupertonicModels.length} total');
+  }
+
+  /// Scan for existing Supertonic models on disk
+  Future<void> _scanSupertonicModels() async {
+    if (_dataDir == null) return;
+
+    final supertonicDir = Directory(path.join(_dataDir!, 'bot', 'models', 'supertonic'));
+    if (!await supertonicDir.exists()) return;
+
+    _availableSupertonicModels.clear();
+
+    for (final model in _supertonicModels) {
+      final filename = model['id'] as String;
+      final expectedSize = model['size'] as int;
+      final filePath = path.join(supertonicDir.path, filename);
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          _availableSupertonicModels.add(filename);
+        }
+      }
+    }
+
+    if (_availableSupertonicModels.isNotEmpty) {
+      _log('INFO', 'Found ${_availableSupertonicModels.length} Supertonic models on disk');
+    }
+  }
+
+  /// Get list of available Supertonic models for download page
+  List<Map<String, dynamic>> getAvailableSupertonicModels() {
+    return _supertonicModels
+        .where((m) => _availableSupertonicModels.contains(m['id']))
         .toList();
   }
 
@@ -11428,6 +11979,13 @@ class SslCertificateManager {
       rethrow;
     }
   }
+}
+
+class _UploadPayload {
+  final Uint8List bytes;
+  final String? mime;
+
+  _UploadPayload({required this.bytes, this.mime});
 }
 
 /// Rate limiting tracking per IP address

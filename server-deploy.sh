@@ -24,6 +24,8 @@ cd "$SCRIPT_DIR"
 
 # Local binary path
 LOCAL_BINARY="$SCRIPT_DIR/build/geogram-cli"
+LOCAL_LIB_DIR="$SCRIPT_DIR/build/libs"
+LOCAL_SQLITE_LIB="$SCRIPT_DIR/third_party/sqlite/linux-x64/libsqlite3.so.0"
 
 echo "=============================================="
 echo "  Geogram CLI Deployment"
@@ -43,6 +45,12 @@ fi
 if [ ! -f "$LOCAL_BINARY" ]; then
     echo -e "${RED}Error: Binary not found at $LOCAL_BINARY${NC}"
     exit 1
+fi
+
+# Prepare bundled libs for offline deployment
+mkdir -p "$LOCAL_LIB_DIR"
+if [ -f "$LOCAL_SQLITE_LIB" ]; then
+    cp "$LOCAL_SQLITE_LIB" "$LOCAL_LIB_DIR/"
 fi
 
 echo -e "${GREEN}Build complete.${NC}"
@@ -74,6 +82,10 @@ ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR"
 if ! scp "$LOCAL_BINARY" "$REMOTE_HOST:$REMOTE_BINARY"; then
     echo -e "${RED}Error: Failed to upload binary${NC}"
     exit 1
+fi
+if [ -d "$LOCAL_LIB_DIR" ]; then
+    ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR/libs"
+    scp "$LOCAL_LIB_DIR/"* "$REMOTE_HOST:$REMOTE_DIR/libs/" >/dev/null 2>&1 || true
 fi
 ssh "$REMOTE_HOST" "chmod +x $REMOTE_BINARY"
 echo -e "${GREEN}Upload complete.${NC}"

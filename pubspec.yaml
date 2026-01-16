@@ -77,8 +77,9 @@ dependencies:
   flutter_onnxruntime: ^1.6.1    # ONNX Runtime for offline music generation
   unorm_dart: ^0.3.2             # Unicode normalization for MusicGen tokenizer
   pdfx: ^2.6.0                   # Native PDF rendering for document viewer
-  video_player: ^2.9.2           # Video playback in media viewer (mobile)
-  fvp: ^0.35.0                    # Desktop video player using native APIs
+  media_kit: ^1.2.6              # Cross-platform video/audio player (replaces video_player + fvp)
+  media_kit_video: ^2.0.1        # Video rendering widget for media_kit
+  media_kit_libs_video: ^1.0.7   # Bundled native video libraries for all platforms
   webview_flutter: ^4.10.0       # Cross-platform WebView for Console VM emulator
   webview_flutter_android: ^4.3.0  # Android WebView implementation
   webview_flutter_wkwebview: ^3.16.0  # iOS/macOS WebView implementation
@@ -90,6 +91,8 @@ dependencies:
   whisper_flutter_new: ^1.0.1    # Offline speech-to-text using Whisper (Android/iOS/macOS)
   share_plus: ^10.1.4            # Native share sheet for sharing images and files
   maxminddb: ^1.1.0              # Offline IP geolocation using MMDB databases
+  sqlite3: ^2.4.0                # SQLite database for NOSTR relay + Blossom storage
+  sqlite3_flutter_libs: ^0.5.24  # SQLite native libs for Flutter platforms
 
 dev_dependencies:
   flutter_test:

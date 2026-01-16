@@ -5,14 +5,16 @@
 
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 
 /// Video player widget for local video playback
-/// Uses video_player package with fvp backend for cross-platform support
+/// Uses media_kit for cross-platform support (Windows, Linux, macOS, Android, iOS)
 class VideoPlayerWidget extends StatefulWidget {
   final String videoPath;
   final bool autoPlay;
@@ -32,7 +34,8 @@ class VideoPlayerWidget extends StatefulWidget {
 }
 
 class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
-  VideoPlayerController? _controller;
+  Player? _player;
+  VideoController? _controller;
   bool _isInitialized = false;
   bool _isPlaying = false;
   bool _showOverlay = true;
@@ -45,6 +48,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   Timer? _hideOverlayTimer;
   static const _overlayHideDelay = Duration(seconds: 5);
 
+  final List<StreamSubscription> _subscriptions = [];
+
   @override
   void initState() {
     super.initState();
@@ -55,8 +60,10 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   @override
   void dispose() {
     _hideOverlayTimer?.cancel();
-    _controller?.removeListener(_onVideoUpdate);
-    _controller?.dispose();
+    for (final sub in _subscriptions) {
+      sub.cancel();
+    }
+    _player?.dispose();
     super.dispose();
   }
 
@@ -84,7 +91,11 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   void didUpdateWidget(VideoPlayerWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoPath != widget.videoPath) {
-      _controller?.dispose();
+      _player?.dispose();
+      for (final sub in _subscriptions) {
+        sub.cancel();
+      }
+      _subscriptions.clear();
       _initializePlayer();
     }
   }
@@ -100,18 +111,63 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     }
 
     try {
-      _controller = VideoPlayerController.file(file);
-      await _controller!.initialize();
-      _controller!.addListener(_onVideoUpdate);
+      _player = Player();
+      _controller = VideoController(_player!);
+
+      // Listen to player state changes
+      _subscriptions.add(
+        _player!.stream.playing.listen((playing) {
+          if (mounted) {
+            setState(() => _isPlaying = playing);
+          }
+        }),
+      );
+
+      _subscriptions.add(
+        _player!.stream.position.listen((position) {
+          if (mounted) {
+            setState(() => _position = position);
+          }
+        }),
+      );
+
+      _subscriptions.add(
+        _player!.stream.duration.listen((duration) {
+          if (mounted) {
+            setState(() => _duration = duration);
+          }
+        }),
+      );
+
+      _subscriptions.add(
+        _player!.stream.volume.listen((volume) {
+          if (mounted) {
+            setState(() {
+              _volume = volume / 100.0;
+              _isMuted = volume == 0;
+            });
+          }
+        }),
+      );
+
+      _subscriptions.add(
+        _player!.stream.error.listen((error) {
+          if (mounted && error.isNotEmpty) {
+            setState(() => _errorMessage = error);
+          }
+        }),
+      );
+
+      // Open the media file
+      await _player!.open(Media(widget.videoPath));
 
       setState(() {
         _isInitialized = true;
-        _duration = _controller!.value.duration;
         _errorMessage = null;
       });
 
       if (widget.autoPlay) {
-        _controller!.play();
+        _player!.play();
       }
     } catch (e) {
       setState(() {
@@ -121,50 +177,34 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     }
   }
 
-  void _onVideoUpdate() {
-    if (!mounted || _controller == null) return;
-
-    final value = _controller!.value;
-    setState(() {
-      _isPlaying = value.isPlaying;
-      _position = value.position;
-      _duration = value.duration;
-    });
-  }
-
   void _togglePlayPause() {
-    if (_controller == null) return;
-
-    if (_isPlaying) {
-      _controller!.pause();
-    } else {
-      _controller!.play();
-    }
+    if (_player == null) return;
+    _player!.playOrPause();
   }
 
   void _seekTo(Duration position) {
-    _controller?.seekTo(position);
+    _player?.seek(position);
   }
 
   void _seekForward() {
-    if (_controller == null) return;
+    if (_player == null) return;
     final newPosition = _position + const Duration(seconds: 10);
     _seekTo(newPosition > _duration ? _duration : newPosition);
   }
 
   void _seekBackward() {
-    if (_controller == null) return;
+    if (_player == null) return;
     final newPosition = _position - const Duration(seconds: 10);
     _seekTo(newPosition < Duration.zero ? Duration.zero : newPosition);
   }
 
   void _toggleMute() {
-    if (_controller == null) return;
+    if (_player == null) return;
 
     if (_isMuted) {
-      _controller!.setVolume(_volume);
+      _player!.setVolume(_volume * 100);
     } else {
-      _controller!.setVolume(0);
+      _player!.setVolume(0);
     }
 
     setState(() {
@@ -173,8 +213,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   }
 
   void _setVolume(double value) {
-    if (_controller == null) return;
-    _controller!.setVolume(value);
+    if (_player == null) return;
+    _player!.setVolume(value * 100);
     setState(() {
       _volume = value;
       _isMuted = value == 0;
@@ -184,12 +224,12 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   void _toggleFullscreen() async {
     setState(() {
       _isFullscreen = !_isFullscreen;
-      _showOverlay = !_isFullscreen; // Hide overlay in fullscreen
+      _showOverlay = !_isFullscreen;
     });
 
     // Auto-play when entering fullscreen
-    if (_isFullscreen && _controller != null && !_isPlaying) {
-      _controller!.play();
+    if (_isFullscreen && _player != null && !_isPlaying) {
+      _player!.play();
     }
 
     // Desktop: use window_manager for true fullscreen
@@ -217,6 +257,13 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     widget.onFullscreenToggle?.call();
   }
 
+  /// Take a screenshot of current video frame
+  /// Returns PNG-encoded bytes or null on failure
+  Future<Uint8List?> takeScreenshot() async {
+    if (_player == null) return null;
+    return await _player!.screenshot();
+  }
+
   String _formatDuration(Duration duration) {
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60);
@@ -236,7 +283,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       return _buildErrorState(theme);
     }
 
-    if (!_isInitialized) {
+    if (!_isInitialized || _controller == null) {
       return _buildLoadingState(theme);
     }
 
@@ -250,9 +297,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
           alignment: Alignment.center,
           children: [
             // Video
-            AspectRatio(
-              aspectRatio: _controller!.value.aspectRatio,
-              child: VideoPlayer(_controller!),
+            Video(
+              controller: _controller!,
+              controls: NoVideoControls,
             ),
             // Controls overlay
             if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
@@ -511,7 +558,6 @@ class VideoPreviewWidget extends StatelessWidget {
   }
 
   Widget _buildPlaceholder(ThemeData theme) {
-    // Dark background only - the play button overlay is shown separately
     return Container(
       color: theme.colorScheme.surfaceContainerHighest,
     );

@@ -46,6 +46,9 @@ class StationStorageConfig {
   final int retentionDays;
   final int chatRetentionDays;
   final int resolvedReportRetentionDays;
+  final bool nostrRequireAuthForWrites;
+  final int blossomMaxStorageMb;
+  final int blossomMaxFileMb;
 
   const StationStorageConfig({
     this.allocatedMb = 10000,
@@ -54,6 +57,9 @@ class StationStorageConfig {
     this.retentionDays = 365,
     this.chatRetentionDays = 90,
     this.resolvedReportRetentionDays = 180,
+    this.nostrRequireAuthForWrites = true,
+    this.blossomMaxStorageMb = 1024,
+    this.blossomMaxFileMb = 10,
   });
 
   factory StationStorageConfig.fromJson(Map<String, dynamic> json) {
@@ -67,6 +73,9 @@ class StationStorageConfig {
       retentionDays: json['retentionDays'] as int? ?? 365,
       chatRetentionDays: json['chatRetentionDays'] as int? ?? 90,
       resolvedReportRetentionDays: json['resolvedReportRetentionDays'] as int? ?? 180,
+      nostrRequireAuthForWrites: json['nostrRequireAuthForWrites'] as bool? ?? true,
+      blossomMaxStorageMb: json['blossomMaxStorageMb'] as int? ?? 1024,
+      blossomMaxFileMb: json['blossomMaxFileMb'] as int? ?? 10,
     );
   }
 
@@ -78,6 +87,9 @@ class StationStorageConfig {
       'retentionDays': retentionDays,
       'chatRetentionDays': chatRetentionDays,
       'resolvedReportRetentionDays': resolvedReportRetentionDays,
+      'nostrRequireAuthForWrites': nostrRequireAuthForWrites,
+      'blossomMaxStorageMb': blossomMaxStorageMb,
+      'blossomMaxFileMb': blossomMaxFileMb,
     };
   }
 
@@ -88,6 +100,9 @@ class StationStorageConfig {
     int? retentionDays,
     int? chatRetentionDays,
     int? resolvedReportRetentionDays,
+    bool? nostrRequireAuthForWrites,
+    int? blossomMaxStorageMb,
+    int? blossomMaxFileMb,
   }) {
     return StationStorageConfig(
       allocatedMb: allocatedMb ?? this.allocatedMb,
@@ -96,6 +111,9 @@ class StationStorageConfig {
       retentionDays: retentionDays ?? this.retentionDays,
       chatRetentionDays: chatRetentionDays ?? this.chatRetentionDays,
       resolvedReportRetentionDays: resolvedReportRetentionDays ?? this.resolvedReportRetentionDays,
+      nostrRequireAuthForWrites: nostrRequireAuthForWrites ?? this.nostrRequireAuthForWrites,
+      blossomMaxStorageMb: blossomMaxStorageMb ?? this.blossomMaxStorageMb,
+      blossomMaxFileMb: blossomMaxFileMb ?? this.blossomMaxFileMb,
     );
   }
 }

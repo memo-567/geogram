@@ -52,6 +52,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
 - [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
 - [StunServerService](#stunserverservice) - Self-hosted STUN server for WebRTC NAT traversal
+- [VideoMetadataExtractor](#videometadataextractor) - Video metadata and thumbnail generation using media_kit
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -68,6 +69,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Speech Input Widgets
 - [TranscribeButtonWidget](#transcribebuttonwidget) - Voice-to-text for text fields
+- [TtsPlayerWidget](#ttsplayerwidget) - Text-to-speech playback
 
 ### Constants
 - [App Constants](#app-constants) - Centralized app type definitions
@@ -2091,6 +2093,126 @@ dart run bin/stun_test.dart localhost 3478
 
 ---
 
+### VideoMetadataExtractor
+
+**File:** `lib/util/video_metadata_extractor.dart`
+
+Cross-platform video metadata extraction and thumbnail generation using `media_kit`. Works on all platforms (Windows, Linux, macOS, Android, iOS) without requiring FFmpeg CLI installation.
+
+**Key Methods:**
+```dart
+// Extract video metadata (duration, resolution, file size)
+static Future<VideoMetadata?> extract(String videoPath) async
+
+// Generate thumbnail at specific timestamp
+static Future<String?> generateThumbnail(
+  String videoPath,
+  String outputPath, {
+  int atSeconds = 1,
+  int width = 1280,  // ignored - media_kit returns native resolution
+}) async
+
+// Get recommended thumbnail time (10% of duration)
+static int getRecommendedThumbnailTime(int durationSeconds)
+```
+
+**VideoMetadata Class:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `duration` | int | Duration in seconds |
+| `width` | int | Video width in pixels |
+| `height` | int | Video height in pixels |
+| `fileSize` | int | File size in bytes |
+| `mimeType` | String | MIME type (e.g., "video/mp4") |
+| `frameRate` | double? | Frame rate (from CLI fallback) |
+| `bitrate` | int? | Bitrate (from CLI fallback) |
+| `videoCodec` | String? | Video codec (from CLI fallback) |
+| `audioCodec` | String? | Audio codec (from CLI fallback) |
+
+**Thumbnail Generation Pattern (using media_kit):**
+```dart
+// The core pattern for taking screenshots with media_kit:
+Player? player;
+try {
+  player = Player();
+  // VideoController is REQUIRED for screenshot() to work
+  final videoController = VideoController(player);
+
+  // Wait for duration to confirm media is loaded
+  final completer = Completer<Duration>();
+  late StreamSubscription sub;
+  sub = player.stream.duration.listen((duration) {
+    if (duration > Duration.zero && !completer.isCompleted) {
+      completer.complete(duration);
+      sub.cancel();
+    }
+  });
+
+  // Open media without playing
+  await player.open(Media(videoPath), play: false);
+
+  // Wait for load with timeout
+  final duration = await completer.future.timeout(
+    const Duration(seconds: 10),
+    onTimeout: () => Duration.zero,
+  );
+
+  if (duration == Duration.zero) return null;
+
+  // Seek to desired position
+  await player.seek(Duration(seconds: atSeconds));
+  await Future.delayed(const Duration(milliseconds: 300));
+
+  // Play briefly to decode frames, then pause
+  player.play();
+  await Future.delayed(const Duration(milliseconds: 200));
+  player.pause();
+  await Future.delayed(const Duration(milliseconds: 200));
+
+  // Take screenshot (returns PNG bytes)
+  final bytes = await player.screenshot();
+
+  await player.dispose();
+
+  if (bytes == null || bytes.isEmpty) return null;
+
+  // Save to file (media_kit outputs PNG format)
+  await File(outputPath).writeAsBytes(bytes, flush: true);
+  return outputPath;
+} catch (e) {
+  await player?.dispose();
+  return null;
+}
+```
+
+**Usage Example:**
+```dart
+import 'package:geogram/util/video_metadata_extractor.dart';
+
+// Extract metadata
+final metadata = await VideoMetadataExtractor.extract('/path/to/video.mp4');
+if (metadata != null) {
+  print('Duration: ${metadata.duration}s');
+  print('Resolution: ${metadata.resolution}');
+}
+
+// Generate thumbnail
+final thumbnailTime = VideoMetadataExtractor.getRecommendedThumbnailTime(metadata.duration);
+final thumbnailPath = await VideoMetadataExtractor.generateThumbnail(
+  '/path/to/video.mp4',
+  '/path/to/thumbnail.png',  // Use .png extension - media_kit outputs PNG
+  atSeconds: thumbnailTime,
+);
+```
+
+**Notes:**
+- media_kit `screenshot()` requires `VideoController` to be attached (for frame decoding)
+- Output format is always PNG regardless of file extension
+- Use `.png` file extension for thumbnails (see `VideoFolderUtils.buildThumbnailPath()`)
+- Falls back to CLI ffprobe for detailed metadata (codec info, bitrate) on desktop
+
+---
+
 ## Web Theme Components
 
 ### WebNavigation
@@ -2641,6 +2763,85 @@ TextFormField(
 - `microphone_permission_required` - Permission error
 - `transcription_failed` - Error message
 - `no_speech_detected` - Empty result message
+
+### TtsPlayerWidget
+
+**File:** `lib/widgets/tts_player_widget.dart`
+
+Text-to-speech player using Supertonic for on-device voice synthesis.
+Automatically uses the app's selected language (English or Portuguese).
+
+**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `text` | String | Yes | - | Text to synthesize |
+| `autoPlay` | bool | No | false | Play immediately on mount |
+| `showControls` | bool | No | true | Show play/loading indicator |
+| `voice` | TtsVoice | No | f3 | Voice style (m3-m5, f3-f5) |
+| `onAudioGenerated` | Function? | No | null | Callback with audio samples |
+| `child` | Widget? | No | null | Custom trigger widget |
+| `iconSize` | double | No | 24.0 | Icon size for default controls |
+| `iconColor` | Color? | No | null | Icon color |
+
+**Usage:**
+```dart
+// Simple - shows play button
+TtsPlayerWidget(
+  text: 'Hello, welcome to Geogram!',
+)
+
+// Auto-play notification
+TtsPlayerWidget(
+  text: notification.message,
+  autoPlay: true,
+  showControls: false,
+)
+
+// Custom trigger with male voice
+TtsPlayerWidget(
+  text: article.content,
+  voice: TtsVoice.m4,
+  child: IconButton(
+    icon: Icon(Icons.volume_up),
+    onPressed: null, // Widget handles tap
+  ),
+)
+
+// Generate audio samples
+TtsPlayerWidget(
+  text: script,
+  onAudioGenerated: (samples) {
+    // samples is Float32List at 24kHz
+    // Save or process audio...
+  },
+)
+```
+
+**Features:**
+- Auto-downloads Supertonic model from station server on first use (~66 MB)
+- Falls back to HuggingFace if no station connected
+- Offline processing (no internet required after model download)
+- Language matches app's I18n setting (en_US = English, pt_PT = Portuguese)
+- Progress indicator during model download
+- Multiple voice options (male/female variants)
+
+**Platform Support:**
+| Platform | Status | Notes |
+|----------|--------|-------|
+| macOS | Tested | Full support via flutter_onnxruntime |
+| Android | Expected | flutter_onnxruntime supports ARM64 |
+| iOS | Expected | flutter_onnxruntime supports iOS |
+| Linux | Untested | May need ONNX Runtime build |
+
+**Model Storage:**
+- Location: `{data-root}/bot/models/supertonic/`
+- Model: supertonic-2.onnx (~66 MB)
+- Downloaded from station server or HuggingFace
+
+**Console Integration:**
+The TTS service is also available via console commands:
+- `say <text>` - Speak text using TTS
+- `CTRL+S` - Speak the last command output
 
 ---
 

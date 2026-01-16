@@ -83,8 +83,8 @@ class VideoFolderUtils {
 
   /// Build path to thumbnail file
   ///
-  /// [ext] - File extension (default: 'jpg')
-  static String buildThumbnailPath(String videoFolderPath, {String ext = 'jpg'}) {
+  /// [ext] - File extension (default: 'png' - media_kit outputs PNG format)
+  static String buildThumbnailPath(String videoFolderPath, {String ext = 'png'}) {
     return '$videoFolderPath/thumbnail.$ext';
   }
 

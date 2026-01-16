@@ -84,3 +84,4 @@ geogram-cli/.dart_tool/
 geogram-cli/.packages
 geogram-cli/pubspec.lock
 linux/fvp-cache/
+.task

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/cli_console_controller.dart';
 import '../services/i18n_service.dart';
+import '../tts/services/tts_service.dart';
 
 /// Traditional terminal page with inline input
 class ConsoleTerminalPage extends StatefulWidget {
@@ -31,6 +32,9 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
   final List<String> _commandHistory = [];
   int _historyIndex = -1;
   bool _isProcessing = false;
+
+  /// Last command output for CTRL+S (say) feature
+  String _lastOutput = '';
 
   // Colors (set in build)
   late Color _textColor;
@@ -130,6 +134,8 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
         var trimmed = output.trimRight();
         _spans.add(_TerminalSpan('$trimmed\n', isOutput: true));
         _isProcessing = false;
+        // Track last output for CTRL+S (say) feature
+        _lastOutput = trimmed;
       });
     } else {
       setState(() => _isProcessing = false);
@@ -251,6 +257,25 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
     }
   }
 
+  /// Handle CTRL+S - speak last output using TTS
+  Future<void> _handleSay() async {
+    if (_lastOutput.isEmpty) {
+      return;
+    }
+
+    // Strip ANSI escape codes for clean TTS output
+    final cleanText = _lastOutput.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
+    if (cleanText.trim().isEmpty) {
+      return;
+    }
+
+    try {
+      await TtsService().speak(cleanText);
+    } catch (e) {
+      // Silently ignore TTS errors to not interrupt terminal flow
+    }
+  }
+
   /// Build TextSpan list from terminal spans (including inline input)
   List<InlineSpan> _buildTextSpans() {
     final spans = <InlineSpan>[];
@@ -290,6 +315,7 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
           shortcuts: {
             LogicalKeySet(LogicalKeyboardKey.tab): const _TabIntent(),
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyV): const _PasteIntent(),
+            LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyS): const _SayIntent(),
           },
           child: Actions(
             actions: {
@@ -302,6 +328,12 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
               _PasteIntent: CallbackAction<_PasteIntent>(
                 onInvoke: (_) {
                   _handlePaste();
+                  return null;
+                },
+              ),
+              _SayIntent: CallbackAction<_SayIntent>(
+                onInvoke: (_) {
+                  _handleSay();
                   return null;
                 },
               ),
@@ -420,4 +452,9 @@ class _TabIntent extends Intent {
 /// Intent for paste (CTRL+V)
 class _PasteIntent extends Intent {
   const _PasteIntent();
+}
+
+/// Intent for say (CTRL+S) - read last output with TTS
+class _SayIntent extends Intent {
+  const _SayIntent();
 }

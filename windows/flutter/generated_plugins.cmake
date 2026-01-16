@@ -7,14 +7,16 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_windows
   flutter_onnxruntime
   flutter_webrtc
-  fvp
   geolocator_windows
+  media_kit_libs_windows_video
+  media_kit_video
   objectbox_flutter_libs
   pdfx
   permission_handler_windows
   record_windows
   screen_retriever_windows
   share_plus
+  sqlite3_flutter_libs
   url_launcher_windows
   window_manager
 )

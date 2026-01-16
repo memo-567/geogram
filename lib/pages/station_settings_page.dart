@@ -32,6 +32,9 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
   late int _retentionDays;
   late bool _foreverChatRetention;
   late int _chatRetentionDays;
+  late bool _nostrRequireAuthForWrites;
+  late int _blossomMaxStorageMb;
+  late int _blossomMaxFileMb;
 
   // Connection settings
   late bool _acceptConnections;
@@ -61,6 +64,8 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
   late TextEditingController _thumbnailMaxKbController;
   late TextEditingController _retentionDaysController;
   late TextEditingController _chatRetentionDaysController;
+  late TextEditingController _blossomMaxStorageMbController;
+  late TextEditingController _blossomMaxFileMbController;
 
   @override
   void initState() {
@@ -79,6 +84,8 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
     _thumbnailMaxKbController = TextEditingController(text: _thumbnailMaxKb.toString());
     _retentionDaysController = TextEditingController(text: _retentionDays.toString());
     _chatRetentionDaysController = TextEditingController(text: _chatRetentionDays.toString());
+    _blossomMaxStorageMbController = TextEditingController(text: _blossomMaxStorageMb.toString());
+    _blossomMaxFileMbController = TextEditingController(text: _blossomMaxFileMb.toString());
   }
 
   void _updateControllersFromConfig() {
@@ -91,6 +98,8 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
     _thumbnailMaxKbController.text = _thumbnailMaxKb.toString();
     _retentionDaysController.text = _retentionDays.toString();
     _chatRetentionDaysController.text = _chatRetentionDays.toString();
+    _blossomMaxStorageMbController.text = _blossomMaxStorageMb.toString();
+    _blossomMaxFileMbController.text = _blossomMaxFileMb.toString();
   }
 
   @override
@@ -103,6 +112,8 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
     _thumbnailMaxKbController.dispose();
     _retentionDaysController.dispose();
     _chatRetentionDaysController.dispose();
+    _blossomMaxStorageMbController.dispose();
+    _blossomMaxFileMbController.dispose();
     super.dispose();
   }
 
@@ -122,6 +133,9 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
     _chatRetentionDays = _config.storage.chatRetentionDays;
     _foreverChatRetention = _chatRetentionDays == 0;
     if (_chatRetentionDays == 0) _chatRetentionDays = 90; // Default for display
+    _nostrRequireAuthForWrites = _config.storage.nostrRequireAuthForWrites;
+    _blossomMaxStorageMb = _config.storage.blossomMaxStorageMb;
+    _blossomMaxFileMb = _config.storage.blossomMaxFileMb;
 
     // Connections
     _acceptConnections = _config.acceptConnections;
@@ -727,6 +741,68 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
                   ],
                 ),
               ),
+            SizedBox(height: 24),
+            Text('NOSTR Relay'),
+            SizedBox(height: 8),
+            SwitchListTile(
+              title: Text('Require AUTH for writes'),
+              value: _nostrRequireAuthForWrites,
+              onChanged: (value) {
+                setState(() {
+                  _nostrRequireAuthForWrites = value;
+                  _hasChanges = true;
+                });
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+            SizedBox(height: 16),
+            Text('Blossom Storage'),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(child: Text('Max disk usage:')),
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      suffixText: 'MB',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    ),
+                    controller: _blossomMaxStorageMbController,
+                    onChanged: (v) {
+                      _blossomMaxStorageMb = int.tryParse(v) ?? 1024;
+                      _hasChanges = true;
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(child: Text('Max file size:')),
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      suffixText: 'MB',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    ),
+                    controller: _blossomMaxFileMbController,
+                    onChanged: (v) {
+                      _blossomMaxFileMb = int.tryParse(v) ?? 10;
+                      _hasChanges = true;
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -957,6 +1033,9 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
         thumbnailMaxKb: _thumbnailMaxKb,
         retentionDays: _foreverRetention ? 0 : _retentionDays,
         chatRetentionDays: _foreverChatRetention ? 0 : _chatRetentionDays,
+        nostrRequireAuthForWrites: _nostrRequireAuthForWrites,
+        blossomMaxStorageMb: _blossomMaxStorageMb,
+        blossomMaxFileMb: _blossomMaxFileMb,
       );
 
       GeographicCoverage? newCoverage;
@@ -986,6 +1065,9 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
         sslEmail: _sslEmail.isNotEmpty ? _sslEmail : null,
         sslAutoRenew: _sslAutoRenew,
         maxConnections: _maxConnections,
+        nostrRequireAuthForWrites: _nostrRequireAuthForWrites,
+        blossomMaxStorageMb: _blossomMaxStorageMb,
+        blossomMaxFileMb: _blossomMaxFileMb,
       );
 
       setState(() {

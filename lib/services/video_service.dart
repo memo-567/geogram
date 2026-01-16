@@ -174,11 +174,24 @@ class VideoService {
         folderPath: videoFolderPath,
       );
 
-      // Find thumbnail
-      final thumbnailPath = await VideoFolderUtils.findThumbnailPath(videoFolderPath);
-
-      // Find video file
+      // Find video file first (needed for thumbnail generation)
       final videoMediaPath = await VideoFolderUtils.findVideoMediaPath(videoFolderPath);
+
+      // Find thumbnail, generate if missing
+      String? thumbnailPath = await VideoFolderUtils.findThumbnailPath(videoFolderPath);
+      if (thumbnailPath == null && videoMediaPath != null) {
+        // Auto-generate thumbnail for existing videos
+        final thumbnailOutputPath = VideoFolderUtils.buildThumbnailPath(videoFolderPath);
+        final thumbnailTime = VideoMetadataExtractor.getRecommendedThumbnailTime(video.duration);
+        thumbnailPath = await VideoMetadataExtractor.generateThumbnail(
+          videoMediaPath,
+          thumbnailOutputPath,
+          atSeconds: thumbnailTime,
+        );
+        if (thumbnailPath != null) {
+          LogService().log('VideoService: Auto-generated thumbnail for $videoId');
+        }
+      }
 
       // Load feedback counts
       final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(videoFolderPath);

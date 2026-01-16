@@ -3,19 +3,38 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import '../platform/file_image_helper.dart' as file_helper;
-import '../platform/video_controller_factory.dart'
-    if (dart.library.html) '../platform/video_controller_factory_web.dart'
-    as video_factory;
 import '../services/i18n_service.dart';
 import '../util/file_icon_helper.dart';
+
+/// Video player state wrapper for photo viewer
+class _VideoState {
+  final Player player;
+  final VideoController controller;
+  bool isInitialized = false;
+  bool isPlaying = false;
+  Duration position = Duration.zero;
+  Duration duration = Duration.zero;
+  final List<StreamSubscription> subscriptions = [];
+
+  _VideoState(this.player, this.controller);
+
+  void dispose() {
+    for (final sub in subscriptions) {
+      sub.cancel();
+    }
+    player.dispose();
+  }
+}
 
 /// Full-screen photo viewer with zoom, pan, and swipe navigation
 class PhotoViewerPage extends StatefulWidget {
@@ -36,7 +55,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late PageController _pageController;
   late int _currentIndex;
   final Map<int, TransformationController> _transformationControllers = {};
-  final Map<int, VideoPlayerController> _videoControllers = {};
+  final Map<int, _VideoState> _videoStates = {};
   final FocusNode _focusNode = FocusNode();
   final I18nService _i18n = I18nService();
   bool _isSaving = false;
@@ -55,8 +74,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     for (final controller in _transformationControllers.values) {
       controller.dispose();
     }
-    for (final controller in _videoControllers.values) {
-      controller.dispose();
+    for (final state in _videoStates.values) {
+      state.dispose();
     }
     super.dispose();
   }
@@ -404,42 +423,72 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   }
 
   Widget _buildVideoView(int index, String videoPath) {
-    // Initialize controller if needed (uses platform-specific factory)
-    if (!_videoControllers.containsKey(index)) {
-      final controller = video_factory.createVideoController(videoPath);
-      if (controller == null) {
-        // Video file playback not supported on this platform (e.g., web)
-        return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.videocam_off, size: 64, color: Colors.white54),
-              const SizedBox(height: 16),
-              Text(
-                path.basename(videoPath),
-                style: const TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Video playback not available on this platform',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-            ],
-          ),
-        );
-      }
-      controller.initialize().then((_) {
-        if (mounted) setState(() {});
-      });
-      controller.addListener(() {
-        if (mounted) setState(() {});
-      });
-      _videoControllers[index] = controller;
+    // Check for web platform
+    if (kIsWeb) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.videocam_off, size: 64, color: Colors.white54),
+            const SizedBox(height: 16),
+            Text(
+              path.basename(videoPath),
+              style: const TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Video playback not available on this platform',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          ],
+        ),
+      );
     }
 
-    final controller = _videoControllers[index]!;
+    // Initialize player if needed
+    if (!_videoStates.containsKey(index)) {
+      final player = Player();
+      final controller = VideoController(player);
+      final state = _VideoState(player, controller);
 
-    if (!controller.value.isInitialized) {
+      // Listen to state changes
+      state.subscriptions.add(
+        player.stream.playing.listen((playing) {
+          if (mounted) {
+            setState(() => state.isPlaying = playing);
+          }
+        }),
+      );
+
+      state.subscriptions.add(
+        player.stream.position.listen((position) {
+          if (mounted) {
+            setState(() => state.position = position);
+          }
+        }),
+      );
+
+      state.subscriptions.add(
+        player.stream.duration.listen((duration) {
+          if (mounted) {
+            setState(() => state.duration = duration);
+          }
+        }),
+      );
+
+      // Open the media
+      player.open(Media(videoPath), play: false).then((_) {
+        if (mounted) {
+          setState(() => state.isInitialized = true);
+        }
+      });
+
+      _videoStates[index] = state;
+    }
+
+    final state = _videoStates[index]!;
+
+    if (!state.isInitialized) {
       return const Center(
         child: CircularProgressIndicator(color: Colors.white),
       );
@@ -447,23 +496,19 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
 
     return GestureDetector(
       onTap: () {
-        if (controller.value.isPlaying) {
-          controller.pause();
-        } else {
-          controller.play();
-        }
+        state.player.playOrPause();
       },
       child: Stack(
         alignment: Alignment.center,
         children: [
           Center(
-            child: AspectRatio(
-              aspectRatio: controller.value.aspectRatio,
-              child: VideoPlayer(controller),
+            child: Video(
+              controller: state.controller,
+              controls: NoVideoControls,
             ),
           ),
           // Play button overlay when paused
-          if (!controller.value.isPlaying)
+          if (!state.isPlaying)
             Container(
               decoration: const BoxDecoration(
                 color: Colors.black45,
@@ -477,13 +522,24 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             bottom: 48,
             left: 16,
             right: 16,
-            child: VideoProgressIndicator(
-              controller,
-              allowScrubbing: true,
-              colors: const VideoProgressColors(
-                playedColor: Colors.white,
-                bufferedColor: Colors.white38,
-                backgroundColor: Colors.white24,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                activeTrackColor: Colors.white,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: Colors.white,
+              ),
+              child: Slider(
+                value: state.duration.inMilliseconds > 0
+                    ? state.position.inMilliseconds / state.duration.inMilliseconds
+                    : 0,
+                onChanged: (value) {
+                  final newPosition = Duration(
+                    milliseconds: (value * state.duration.inMilliseconds).round(),
+                  );
+                  state.player.seek(newPosition);
+                },
               ),
             ),
           ),
@@ -492,7 +548,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             bottom: 60,
             right: 16,
             child: Text(
-              '${_formatDuration(controller.value.position)} / ${_formatDuration(controller.value.duration)}',
+              '${_formatDuration(state.position)} / ${_formatDuration(state.duration)}',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
           ),

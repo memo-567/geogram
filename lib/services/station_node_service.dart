@@ -542,6 +542,9 @@ class StationNodeService {
     bool? sslAutoRenew,
     int? maxConnections,
     bool? enabled,
+    bool? nostrRequireAuthForWrites,
+    int? blossomMaxStorageMb,
+    int? blossomMaxFileMb,
   }) async {
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) {
@@ -570,6 +573,11 @@ class StationNodeService {
     if (sslAutoRenew != null) settings['sslAutoRenew'] = sslAutoRenew;
     if (maxConnections != null) settings['maxConnectedDevices'] = maxConnections;
     if (enabled != null) settings['enabled'] = enabled;
+    if (nostrRequireAuthForWrites != null) {
+      settings['nostrRequireAuthForWrites'] = nostrRequireAuthForWrites;
+    }
+    if (blossomMaxStorageMb != null) settings['blossomMaxStorageMb'] = blossomMaxStorageMb;
+    if (blossomMaxFileMb != null) settings['blossomMaxFileMb'] = blossomMaxFileMb;
 
     // Save to file
     await configFile.writeAsString(

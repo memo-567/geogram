@@ -8,9 +8,10 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
-import '../models/video.dart';
+import '../models/video.dart' as geogram;
 import '../models/blog_comment.dart';
 import '../services/video_service.dart';
 import '../services/log_service.dart';
@@ -47,13 +48,13 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
   final TextEditingController _commentController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  List<Video> _allVideos = [];
-  List<Video> _filteredVideos = [];
+  List<geogram.Video> _allVideos = [];
+  List<geogram.Video> _filteredVideos = [];
   bool _isLoading = true;
   String? _stationUrl;
   String? _profileIdentifier;
   String? _currentUserNpub;
-  VideoCategory? _selectedCategory;
+  geogram.VideoCategory? _selectedCategory;
 
   @override
   void initState() {
@@ -123,14 +124,14 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
     });
   }
 
-  void _selectCategory(VideoCategory? category) {
+  void _selectCategory(geogram.VideoCategory? category) {
     setState(() {
       _selectedCategory = category;
     });
     _loadVideos();
   }
 
-  Future<void> _openVideoDetail(Video video) async {
+  Future<void> _openVideoDetail(geogram.Video video) async {
     final fullVideo = await _videoService.loadFullVideoWithFeedback(
       video.id,
       userNpub: _currentUserNpub,
@@ -203,8 +204,8 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
           title: result['title'] as String,
           description: result['description'] as String?,
           sourceVideoPath: result['videoFilePath'] as String,
-          category: result['category'] as VideoCategory,
-          visibility: result['visibility'] as VideoVisibility,
+          category: result['category'] as geogram.VideoCategory,
+          visibility: result['visibility'] as geogram.VideoVisibility,
           tags: result['tags'] as List<String>?,
           npub: profile.npub,
           nsec: profile.nsec,
@@ -347,7 +348,7 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
               ),
             ),
             // Individual category chips
-            ...VideoCategory.values.take(10).map((category) {
+            ...geogram.VideoCategory.values.take(10).map((category) {
               return Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: FilterChip(
@@ -441,7 +442,7 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
               crossAxisCount: crossAxisCount,
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
-              childAspectRatio: 0.9, // More compact card
+              childAspectRatio: 1.25, // Compact card - wider than tall
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
@@ -462,7 +463,7 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
 
 /// Full-screen video watch page (like YouTube video page)
 class _VideoWatchPage extends StatefulWidget {
-  final Video video;
+  final geogram.Video video;
   final List<BlogComment> comments;
   final String collectionPath;
   final VideoService videoService;
@@ -489,7 +490,7 @@ class _VideoWatchPage extends StatefulWidget {
 }
 
 class _VideoWatchPageState extends State<_VideoWatchPage> {
-  late Video _video;
+  late geogram.Video _video;
   late List<BlogComment> _comments;
   final TextEditingController _commentController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -850,13 +851,17 @@ class _FullscreenVideoPage extends StatefulWidget {
 }
 
 class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
-  VideoPlayerController? _controller;
+  Player? _player;
+  VideoController? _controller;
   bool _isInitialized = false;
   bool _isPlaying = false;
   bool _showControls = true;
   Timer? _hideTimer;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
   static const _hideDelay = Duration(seconds: 5);
   final FocusNode _focusNode = FocusNode();
+  final List<StreamSubscription> _subscriptions = [];
 
   @override
   void initState() {
@@ -870,8 +875,10 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
   void dispose() {
     _hideTimer?.cancel();
     _focusNode.dispose();
-    _controller?.removeListener(_onVideoUpdate);
-    _controller?.dispose();
+    for (final sub in _subscriptions) {
+      sub.cancel();
+    }
+    _player?.dispose();
     _exitFullscreen();
     super.dispose();
   }
@@ -908,24 +915,43 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
     final file = File(widget.videoPath);
     if (!await file.exists()) return;
 
-    _controller = VideoPlayerController.file(file);
-    await _controller!.initialize();
-    _controller!.addListener(_onVideoUpdate);
-    _controller!.play(); // Auto-play in fullscreen
+    _player = Player();
+    _controller = VideoController(_player!);
+
+    // Listen to state changes
+    _subscriptions.add(
+      _player!.stream.playing.listen((playing) {
+        if (mounted) {
+          setState(() => _isPlaying = playing);
+        }
+      }),
+    );
+
+    _subscriptions.add(
+      _player!.stream.position.listen((position) {
+        if (mounted) {
+          setState(() => _position = position);
+        }
+      }),
+    );
+
+    _subscriptions.add(
+      _player!.stream.duration.listen((duration) {
+        if (mounted) {
+          setState(() => _duration = duration);
+        }
+      }),
+    );
+
+    // Open and auto-play
+    await _player!.open(Media(widget.videoPath));
+    _player!.play();
 
     if (mounted) {
       setState(() {
         _isInitialized = true;
         _isPlaying = true;
       });
-    }
-  }
-
-  void _onVideoUpdate() {
-    if (!mounted || _controller == null) return;
-    final playing = _controller!.value.isPlaying;
-    if (playing != _isPlaying) {
-      setState(() => _isPlaying = playing);
     }
   }
 
@@ -944,13 +970,9 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
   }
 
   void _togglePlayPause() {
-    if (_controller == null) return;
+    if (_player == null) return;
     _onUserInteraction();
-    if (_isPlaying) {
-      _controller!.pause();
-    } else {
-      _controller!.play();
-    }
+    _player!.playOrPause();
   }
 
   void _exitPage() {
@@ -975,18 +997,15 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
     // Arrow keys for seeking
     if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
       _onUserInteraction();
-      final pos = _controller?.value.position ?? Duration.zero;
-      final newPos = pos - const Duration(seconds: 10);
-      _controller?.seekTo(newPos < Duration.zero ? Duration.zero : newPos);
+      final newPos = _position - const Duration(seconds: 10);
+      _player?.seek(newPos < Duration.zero ? Duration.zero : newPos);
       return KeyEventResult.handled;
     }
 
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       _onUserInteraction();
-      final pos = _controller?.value.position ?? Duration.zero;
-      final dur = _controller?.value.duration ?? Duration.zero;
-      final newPos = pos + const Duration(seconds: 10);
-      _controller?.seekTo(newPos > dur ? dur : newPos);
+      final newPos = _position + const Duration(seconds: 10);
+      _player?.seek(newPos > _duration ? _duration : newPos);
       return KeyEventResult.handled;
     }
 
@@ -1013,9 +1032,9 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
                 // Video - centered and filling screen
                 if (_isInitialized && _controller != null)
                   Center(
-                    child: AspectRatio(
-                      aspectRatio: _controller!.value.aspectRatio,
-                      child: VideoPlayer(_controller!),
+                    child: Video(
+                      controller: _controller!,
+                      controls: NoVideoControls,
                     ),
                   )
                 else

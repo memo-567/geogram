@@ -3,8 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import '../services/log_service.dart';
 
 /// Video metadata extracted from a video file
 class VideoMetadata {
@@ -50,31 +54,20 @@ class VideoMetadata {
 
 /// Cross-platform video metadata extractor
 ///
-/// Uses FFmpeg/FFprobe on desktop (Windows/Linux/macOS) and
-/// ffmpeg_kit_flutter on mobile (Android/iOS).
+/// Uses media_kit for metadata extraction and thumbnail generation.
+/// Falls back to ffprobe CLI on desktop if available.
 class VideoMetadataExtractor {
   VideoMetadataExtractor._();
 
-  /// Check if FFmpeg is available on the system
+  /// Check if video extraction is available (always true with media_kit)
   static Future<bool> isFFmpegAvailable() async {
-    if (Platform.isAndroid || Platform.isIOS) {
-      // Mobile requires ffmpeg_kit_flutter package
-      // For now, return false - implement when package is added
-      return false;
-    }
-
-    // Desktop: check if ffprobe is in PATH
-    try {
-      final result = await Process.run('ffprobe', ['-version']);
-      return result.exitCode == 0;
-    } catch (e) {
-      return false;
-    }
+    // media_kit is always bundled with the app
+    return true;
   }
 
   /// Extract metadata from a video file
   ///
-  /// Returns null if extraction fails or FFmpeg is not available
+  /// Returns null if extraction fails
   static Future<VideoMetadata?> extract(String videoPath) async {
     final file = File(videoPath);
     if (!await file.exists()) return null;
@@ -86,11 +79,12 @@ class VideoMetadataExtractor {
     // Get MIME type from extension
     final mimeType = _getMimeType(videoPath);
 
-    if (Platform.isAndroid || Platform.isIOS) {
-      return _extractWithFFmpegKit(videoPath, fileSize, mimeType);
-    } else {
-      return _extractWithFFmpegCli(videoPath, fileSize, mimeType);
-    }
+    // Try media_kit first, then fall back to CLI ffprobe
+    final result = await _extractWithMediaKit(videoPath, fileSize, mimeType);
+    if (result != null) return result;
+
+    // Fall back to CLI ffprobe (if available on system)
+    return _extractWithFFmpegCli(videoPath, fileSize, mimeType);
   }
 
   /// Extract metadata using FFmpeg CLI (desktop)
@@ -112,7 +106,7 @@ class VideoMetadataExtractor {
       ]);
 
       if (result.exitCode != 0) {
-        print('FFprobe error: ${result.stderr}');
+        LogService().log('FFprobe CLI error: ${result.stderr}');
         return null;
       }
 
@@ -199,55 +193,108 @@ class VideoMetadataExtractor {
         audioCodec: audioCodec,
       );
     } catch (e) {
-      print('Error extracting video metadata: $e');
+      LogService().log('Error extracting video metadata with CLI: $e');
       return null;
     }
   }
 
-  /// Extract metadata using ffmpeg_kit_flutter (mobile)
-  ///
-  /// Note: Requires ffmpeg_kit_flutter package to be added
-  static Future<VideoMetadata?> _extractWithFFmpegKit(
+  /// Extract metadata using media_kit (all platforms)
+  static Future<VideoMetadata?> _extractWithMediaKit(
     String videoPath,
     int fileSize,
     String mimeType,
   ) async {
-    // TODO: Implement when ffmpeg_kit_flutter is added
-    // For now, return basic metadata based on file
-    print('FFmpeg Kit not implemented yet for mobile');
-    return null;
+    Player? player;
+    try {
+      player = Player();
+      // VideoController is needed for proper media loading
+      final videoController = VideoController(player);
+
+      // Wait for duration to be set (indicates file is loaded)
+      final completer = Completer<Duration>();
+      late StreamSubscription sub;
+      sub = player.stream.duration.listen((duration) {
+        if (duration > Duration.zero && !completer.isCompleted) {
+          completer.complete(duration);
+          sub.cancel();
+        }
+      });
+
+      // Open the media file without playing
+      await player.open(Media(videoPath), play: false);
+
+      // Wait for duration with timeout
+      final duration = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => Duration.zero,
+      );
+
+      if (duration == Duration.zero) {
+        LogService().log('media_kit: Failed to get duration for $videoPath');
+        await player.dispose();
+        // Keep reference for lint
+        videoController.hashCode;
+        return null;
+      }
+
+      // Get dimensions from player state
+      final width = player.state.width ?? 0;
+      final height = player.state.height ?? 0;
+
+      await player.dispose();
+
+      return VideoMetadata(
+        duration: duration.inSeconds,
+        width: width,
+        height: height,
+        fileSize: fileSize,
+        mimeType: mimeType,
+        // media_kit doesn't provide these directly - use CLI fallback if needed
+        frameRate: null,
+        bitrate: null,
+        videoCodec: null,
+        audioCodec: null,
+      );
+    } catch (e) {
+      LogService().log('media_kit error extracting metadata: $e');
+      await player?.dispose();
+      return null;
+    }
   }
 
-  /// Generate thumbnail from video file
+  /// Generate thumbnail from video file using media_kit
   ///
   /// [videoPath] - Source video file path
-  /// [outputPath] - Output thumbnail path (should end in .jpg or .png)
+  /// [outputPath] - Output thumbnail path (will be .png format from media_kit)
   /// [atSeconds] - Time position to capture (default: 1 second)
-  /// [width] - Output width (default: 1280, height scaled proportionally)
+  /// [width] - Output width (ignored - media_kit returns native resolution)
   ///
   /// Returns output path on success, null on failure
   static Future<String?> generateThumbnail(
     String videoPath,
     String outputPath, {
     int atSeconds = 1,
-    int width = 1280,
+    int width = 1280, // Ignored - media_kit returns native resolution
   }) async {
-    if (!await File(videoPath).exists()) return null;
-
-    if (Platform.isAndroid || Platform.isIOS) {
-      return _thumbnailWithFFmpegKit(videoPath, outputPath, atSeconds, width);
-    } else {
-      return _thumbnailWithFFmpegCli(videoPath, outputPath, atSeconds, width);
+    if (!await File(videoPath).exists()) {
+      LogService().log('generateThumbnail: Video file not found: $videoPath');
+      return null;
     }
+
+    // Use media_kit for all platforms
+    return _thumbnailWithMediaKit(videoPath, outputPath, atSeconds);
   }
 
-  /// Generate thumbnail using FFmpeg CLI (desktop)
-  static Future<String?> _thumbnailWithFFmpegCli(
+  /// Generate thumbnail using media_kit (all platforms)
+  ///
+  /// This method creates a Player, seeks to the desired position,
+  /// takes a screenshot, and saves it to disk.
+  static Future<String?> _thumbnailWithMediaKit(
     String videoPath,
     String outputPath,
     int atSeconds,
-    int width,
   ) async {
+    Player? player;
     try {
       // Delete existing output file
       final outputFile = File(outputPath);
@@ -255,49 +302,77 @@ class VideoMetadataExtractor {
         await outputFile.delete();
       }
 
-      // Use ffmpeg to extract frame
-      final result = await Process.run('ffmpeg', [
-        '-ss',
-        atSeconds.toString(),
-        '-i',
-        videoPath,
-        '-vframes',
-        '1',
-        '-vf',
-        'scale=$width:-1',
-        '-q:v',
-        '2', // High quality JPEG
-        '-y', // Overwrite output
-        outputPath,
-      ]);
+      // Ensure output directory exists
+      await outputFile.parent.create(recursive: true);
 
-      if (result.exitCode != 0) {
-        print('FFmpeg thumbnail error: ${result.stderr}');
+      // Create player and attach VideoController (required for screenshot)
+      player = Player();
+      final videoController = VideoController(player);
+
+      // Wait for duration to confirm media is loaded
+      final completer = Completer<Duration>();
+      late StreamSubscription sub;
+      sub = player.stream.duration.listen((duration) {
+        if (duration > Duration.zero && !completer.isCompleted) {
+          completer.complete(duration);
+          sub.cancel();
+        }
+      });
+
+      // Open the media file without playing
+      await player.open(Media(videoPath), play: false);
+
+      // Wait for media to load with timeout
+      final duration = await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => Duration.zero,
+      );
+
+      if (duration == Duration.zero) {
+        LogService().log('media_kit thumbnail: Failed to load video $videoPath');
+        await player.dispose();
+        videoController.hashCode; // Keep reference for lint
         return null;
       }
 
-      // Verify output was created
+      // Seek to desired position
+      final seekPosition = Duration(seconds: atSeconds);
+      await player.seek(seekPosition);
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Play briefly to ensure frames are decoded, then pause
+      player.play();
+      await Future.delayed(const Duration(milliseconds: 200));
+      player.pause();
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Take screenshot (returns PNG bytes)
+      final bytes = await player.screenshot();
+
+      await player.dispose();
+
+      if (bytes == null || bytes.isEmpty) {
+        LogService().log('media_kit thumbnail: Screenshot returned null/empty');
+        return null;
+      }
+
+      // Save to file (media_kit returns PNG format)
+      // If outputPath expects .jpg, we still save PNG data - caller should use .png extension
+      await outputFile.writeAsBytes(bytes, flush: true);
+
       if (await outputFile.exists()) {
+        final stat = await outputFile.stat();
+        LogService().log('media_kit thumbnail created: $outputPath (${stat.size} bytes)');
         return outputPath;
       }
 
+      LogService().log('media_kit thumbnail: Output file not created');
       return null;
     } catch (e) {
-      print('Error generating thumbnail: $e');
+      LogService().log('media_kit thumbnail error: $e');
+      await player?.dispose();
       return null;
     }
-  }
-
-  /// Generate thumbnail using ffmpeg_kit_flutter (mobile)
-  static Future<String?> _thumbnailWithFFmpegKit(
-    String videoPath,
-    String outputPath,
-    int atSeconds,
-    int width,
-  ) async {
-    // TODO: Implement when ffmpeg_kit_flutter is added
-    print('FFmpeg Kit thumbnail not implemented yet for mobile');
-    return null;
   }
 
   /// Get recommended thumbnail time based on video duration

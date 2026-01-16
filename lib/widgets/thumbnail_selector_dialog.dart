@@ -94,13 +94,13 @@ class _ThumbnailSelectorDialogState extends State<ThumbnailSelectorDialog> {
 
   Future<void> _generatePreviews() async {
     try {
-      // Check if FFmpeg is available
-      final ffmpegAvailable = await VideoMetadataExtractor.isFFmpegAvailable();
-      if (!ffmpegAvailable) {
+      // Check if video extraction is available
+      final extractorAvailable = await VideoMetadataExtractor.isFFmpegAvailable();
+      if (!extractorAvailable) {
         if (mounted) {
           setState(() {
             _isLoading = false;
-            _error = 'FFmpeg not available. Please install FFmpeg.';
+            _error = 'Video thumbnail generation not available.';
           });
         }
         return;
@@ -127,13 +127,14 @@ class _ThumbnailSelectorDialogState extends State<ThumbnailSelectorDialog> {
 
       for (int i = 0; i < timestamps.length; i++) {
         final timestamp = timestamps[i];
-        final outputPath = '$_tempDir/preview_$i.jpg';
+        // Use .png extension - media_kit returns PNG format
+        final outputPath = '$_tempDir/preview_$i.png';
 
         final result = await VideoMetadataExtractor.generateThumbnail(
           widget.videoPath,
           outputPath,
           atSeconds: timestamp,
-          width: 320, // Smaller for preview grid
+          width: 320, // Smaller for preview grid (ignored by media_kit)
         );
 
         if (result != null && mounted) {
@@ -150,7 +151,7 @@ class _ThumbnailSelectorDialogState extends State<ThumbnailSelectorDialog> {
         setState(() {
           _isLoading = false;
           if (_previews.isEmpty) {
-            _error = 'FFmpeg failed to extract frames';
+            _error = 'Failed to extract frames from video';
           }
         });
       }
