@@ -64,6 +64,12 @@ jobs:
           fi
         done
 
+    - name: Clean dangling symlinks
+      run: |
+        cd build/linux/x64/release/bundle/lib
+        # Remove dangling symlinks (e.g., libonnxruntime.so pointing to non-existent target)
+        find . -maxdepth 1 -type l ! -exec test -e {} \; -delete
+
     - name: Create portable archive
       run: |
         cd build/linux/x64/release
