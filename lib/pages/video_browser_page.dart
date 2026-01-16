@@ -3,7 +3,13 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:video_player/video_player.dart';
+import 'package:window_manager/window_manager.dart';
 import '../models/video.dart';
 import '../models/blog_comment.dart';
 import '../services/video_service.dart';
@@ -14,6 +20,7 @@ import '../services/i18n_service.dart';
 import '../widgets/video_tile_widget.dart';
 import '../widgets/video_detail_widget.dart';
 import '../widgets/blog_comment_widget.dart';
+import '../widgets/thumbnail_selector_dialog.dart';
 import '../dialogs/new_video_dialog.dart';
 
 /// YouTube-style video browser with grid layout
@@ -580,6 +587,35 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
     }
   }
 
+  Future<void> _changeThumbnail() async {
+    if (!_video.isLocal || _video.videoFilePath == null) return;
+
+    final selectedTimestamp = await ThumbnailSelectorDialog.show(
+      context: context,
+      videoPath: _video.videoFilePath!,
+      durationSeconds: _video.duration,
+      i18n: widget.i18n,
+    );
+
+    if (selectedTimestamp != null && mounted) {
+      final result = await widget.videoService.updateThumbnail(
+        _video.id,
+        atSeconds: selectedTimestamp,
+      );
+
+      if (result != null && mounted) {
+        setState(() {
+          _video = _video.copyWith(thumbnailPath: result);
+          _hasChanges = true;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.i18n.t('save'))),
+        );
+      }
+    }
+  }
+
   Future<void> _deleteVideo() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -610,6 +646,22 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
     }
   }
 
+  void _openFullscreen() {
+    if (_video.videoFilePath == null) return;
+
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: true,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return _FullscreenVideoPage(videoPath: _video.videoFilePath!);
+        },
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -624,31 +676,7 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
         }
       },
       child: Scaffold(
-        body: LayoutBuilder(
-          builder: (context, constraints) {
-            final isWide = constraints.maxWidth > 900;
-
-            if (isWide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Video and description (main content)
-                  Expanded(
-                    flex: 3,
-                    child: _buildMainContent(theme, canEdit),
-                  ),
-                  // Comments sidebar
-                  SizedBox(
-                    width: 400,
-                    child: _buildCommentsSidebar(theme),
-                  ),
-                ],
-              );
-            } else {
-              return _buildMainContent(theme, canEdit, showComments: true);
-            }
-          },
-        ),
+        body: _buildMainContent(theme, canEdit, showComments: true),
       ),
     );
   }
@@ -674,6 +702,19 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
             onPressed: () => Navigator.pop(context, _hasChanges),
           ),
           actions: [
+            // Fullscreen button (only for local videos)
+            if (_video.isLocal && _video.videoFilePath != null)
+              IconButton(
+                icon: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.fullscreen, color: Colors.white),
+                ),
+                onPressed: _openFullscreen,
+              ),
             if (canEdit)
               PopupMenuButton<String>(
                 icon: Container(
@@ -685,9 +726,21 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
                   child: const Icon(Icons.more_vert, color: Colors.white),
                 ),
                 onSelected: (value) {
+                  if (value == 'thumbnail') _changeThumbnail();
                   if (value == 'delete') _deleteVideo();
                 },
                 itemBuilder: (context) => [
+                  if (_video.isLocal && _video.videoFilePath != null)
+                    PopupMenuItem(
+                      value: 'thumbnail',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.image),
+                          const SizedBox(width: 8),
+                          Text(widget.i18n.t('change_thumbnail')),
+                        ],
+                      ),
+                    ),
                   PopupMenuItem(
                     value: 'delete',
                     child: Row(
@@ -751,74 +804,6 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
     );
   }
 
-  Widget _buildCommentsSidebar(ThemeData theme) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(
-            color: theme.colorScheme.outlineVariant,
-            width: 1,
-          ),
-        ),
-      ),
-      child: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  '${widget.i18n.t('comments')} (${_comments.length})',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Comment input
-          _buildCommentInput(theme),
-          // Comments list
-          Expanded(
-            child: _comments.isEmpty
-                ? Center(
-                    child: Text(
-                      widget.i18n.t('no_comments_yet'),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _comments.length,
-                    itemBuilder: (context, index) {
-                      final comment = _comments[index];
-                      final canDelete = widget.videoService.isAdmin(widget.currentUserNpub) ||
-                          comment.npub == widget.currentUserNpub;
-                      return BlogCommentWidget(
-                        comment: comment,
-                        canDelete: canDelete,
-                        onDelete: canDelete && comment.id != null
-                            ? () => _deleteComment(comment.id!)
-                            : null,
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildCommentInput(ThemeData theme) {
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -849,6 +834,239 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
             onPressed: _addComment,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// True fullscreen video page - shows ONLY video and controls
+class _FullscreenVideoPage extends StatefulWidget {
+  final String videoPath;
+
+  const _FullscreenVideoPage({required this.videoPath});
+
+  @override
+  State<_FullscreenVideoPage> createState() => _FullscreenVideoPageState();
+}
+
+class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
+  VideoPlayerController? _controller;
+  bool _isInitialized = false;
+  bool _isPlaying = false;
+  bool _showControls = true;
+  Timer? _hideTimer;
+  static const _hideDelay = Duration(seconds: 5);
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _enterFullscreen();
+    _initializePlayer();
+    _startHideTimer();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    _focusNode.dispose();
+    _controller?.removeListener(_onVideoUpdate);
+    _controller?.dispose();
+    _exitFullscreen();
+    super.dispose();
+  }
+
+  Future<void> _enterFullscreen() async {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      await windowManager.setFullScreen(true);
+    } else {
+      // Mobile: landscape + immersive
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+  }
+
+  Future<void> _exitFullscreen() async {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      await windowManager.setFullScreen(false);
+    } else {
+      // Mobile: restore orientations and UI
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
+
+  Future<void> _initializePlayer() async {
+    final file = File(widget.videoPath);
+    if (!await file.exists()) return;
+
+    _controller = VideoPlayerController.file(file);
+    await _controller!.initialize();
+    _controller!.addListener(_onVideoUpdate);
+    _controller!.play(); // Auto-play in fullscreen
+
+    if (mounted) {
+      setState(() {
+        _isInitialized = true;
+        _isPlaying = true;
+      });
+    }
+  }
+
+  void _onVideoUpdate() {
+    if (!mounted || _controller == null) return;
+    final playing = _controller!.value.isPlaying;
+    if (playing != _isPlaying) {
+      setState(() => _isPlaying = playing);
+    }
+  }
+
+  void _startHideTimer() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(_hideDelay, () {
+      if (mounted && _isPlaying) {
+        setState(() => _showControls = false);
+      }
+    });
+  }
+
+  void _onUserInteraction() {
+    setState(() => _showControls = true);
+    _startHideTimer();
+  }
+
+  void _togglePlayPause() {
+    if (_controller == null) return;
+    _onUserInteraction();
+    if (_isPlaying) {
+      _controller!.pause();
+    } else {
+      _controller!.play();
+    }
+  }
+
+  void _exitPage() {
+    Navigator.of(context).pop();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // ESCAPE - exit fullscreen
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _exitPage();
+      return KeyEventResult.handled;
+    }
+
+    // SPACE - toggle play/pause
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      _togglePlayPause();
+      return KeyEventResult.handled;
+    }
+
+    // Arrow keys for seeking
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _onUserInteraction();
+      final pos = _controller?.value.position ?? Duration.zero;
+      final newPos = pos - const Duration(seconds: 10);
+      _controller?.seekTo(newPos < Duration.zero ? Duration.zero : newPos);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _onUserInteraction();
+      final pos = _controller?.value.position ?? Duration.zero;
+      final dur = _controller?.value.duration ?? Duration.zero;
+      final newPos = pos + const Duration(seconds: 10);
+      _controller?.seekTo(newPos > dur ? dur : newPos);
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKeyEvent,
+        child: MouseRegion(
+          onHover: (_) => _onUserInteraction(),
+          onEnter: (_) => _onUserInteraction(),
+          child: GestureDetector(
+            onTap: _onUserInteraction,
+            onDoubleTap: _togglePlayPause,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Video - centered and filling screen
+                if (_isInitialized && _controller != null)
+                  Center(
+                    child: AspectRatio(
+                      aspectRatio: _controller!.value.aspectRatio,
+                      child: VideoPlayer(_controller!),
+                    ),
+                  )
+                else
+                  const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                // Controls overlay - only visible when _showControls is true
+                if (_showControls) ...[
+                  // Center play/pause button
+                  Center(
+                    child: IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.white,
+                          size: 48,
+                        ),
+                      ),
+                      onPressed: _togglePlayPause,
+                    ),
+                  ),
+                  // Exit fullscreen button (top-right)
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.fullscreen_exit,
+                          color: Colors.white,
+                          size: 32,
+                        ),
+                      ),
+                      onPressed: _exitPage,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [CLI Console Terminal](#cli-console-terminal)
 - [File Organization](#file-organization)
 - [Session Format](#session-format)
 - [VM Configuration](#vm-configuration)
@@ -46,6 +47,249 @@ This document specifies the format for the Console app in the Geogram system. Th
 - **File Processing**: Use Unix tools on geogram collection files
 - **Learning**: Educational environment for learning Linux/Unix
 - **Offline Computing**: Portable computing environment independent of host OS
+
+## CLI Console Terminal
+
+The Geogram console also provides a lightweight CLI terminal that runs the same commands as the station server CLI. This is a simpler alternative to the full VM console for quick administrative tasks.
+
+### Architecture
+
+The CLI console uses a platform-agnostic architecture with shared command logic:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ConsoleIO (Interface)                     │
+│  lib/cli/console_io.dart                                    │
+│  void writeln(String text)                                  │
+│  void write(String text)                                    │
+│  Future<String?> readLine()                                 │
+│  Future<int> readByte()                                     │
+│  void clear()                                               │
+└─────────────────────────────────────────────────────────────┘
+              │                    │                    │
+              ▼                    ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   CliConsoleIO  │  │ BufferConsoleIO │  │TelegramConsoleIO│
+│  (stdin/stdout) │  │  (StringBuffer) │  │  (Telegram API) │
+│  console_io_cli │  │console_io_buffer│  │    (future)     │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+              │                    │                    │
+              └────────────────────┼────────────────────┘
+                                   ▼
+                    ┌─────────────────────────────────┐
+                    │      ConsoleHandler (Shared)    │
+                    │  lib/cli/console_handler.dart   │
+                    │  - Virtual filesystem           │
+                    │  - Command parsing              │
+                    │  - All command handlers         │
+                    │  - Profile, Station, Games...   │
+                    └─────────────────────────────────┘
+```
+
+### Key Files
+
+| File | Description |
+|------|-------------|
+| `lib/cli/console_io.dart` | Platform-agnostic I/O interface |
+| `lib/cli/console_io_cli.dart` | CLI implementation (stdin/stdout) |
+| `lib/cli/console_io_buffer.dart` | Buffer implementation (Flutter UI/Telegram) |
+| `lib/cli/console_handler.dart` | Shared command logic and handlers |
+| `lib/services/cli_console_controller.dart` | Flutter UI controller using ConsoleHandler |
+| `lib/pages/console_terminal_page.dart` | Flutter terminal UI widget |
+
+### Service Interfaces
+
+The ConsoleHandler uses abstract interfaces to support different service implementations:
+
+**ProfileServiceInterface**:
+```dart
+abstract class ProfileServiceInterface {
+  String get activeCallsign;
+  String get activeNpub;
+  String? get activeNickname;
+  bool get isStationProfile;
+  List<ProfileInfo> getAllProfiles();
+  String? get activeProfileId;
+  ProfileInfo? getProfileByCallsign(String callsign);
+  ProfileInfo? getProfileById(String id);
+  Future<ProfileInfo> createProfile({bool isStation = false});
+  Future<void> switchToProfile(String id);
+}
+```
+
+**StationServiceInterface**:
+```dart
+abstract class StationServiceInterface {
+  bool get isRunning;
+  int get port;
+  String get callsign;
+  int get connectedDevices;
+  int get uptime;
+  int get cacheSize;
+  double get cacheSizeMB;
+  double get maxCacheSize;
+  bool get tileServerEnabled;
+  bool get osmFallbackEnabled;
+  int get maxZoomLevel;
+  Future<bool> start();
+  Future<void> stop();
+  Future<void> setPort(int port);
+  void clearCache();
+}
+```
+
+### Virtual Filesystem
+
+The CLI console implements a virtual filesystem for navigation:
+
+```
+/
+├── profiles/     List all profiles/callsigns
+├── config/       Configuration settings
+├── logs/         View logs
+├── station/      Station status and commands
+└── games/        Available text adventure games
+```
+
+### Commands
+
+**Navigation**:
+- `ls [path]` - List directory contents
+- `cd <path>` - Change directory
+- `pwd` - Print working directory
+
+**Profile Management**:
+- `profile list` - List all profiles
+- `profile switch <id|callsign>` - Switch active profile
+- `profile create [--station]` - Create new profile
+- `profile info [id]` - Show profile details
+
+**Station Server**:
+- `station start` - Start the station server
+- `station stop` - Stop the station server
+- `station status` - Show station server status
+- `station port <port>` - Set station server port
+- `station cache clear` - Clear tile cache
+- `station cache stats` - Show cache statistics
+
+**Games**:
+- `games list` - List available games
+- `games info <name>` - Show game details
+- `play <name>` - Play a game (CLI only)
+
+**General**:
+- `status` - Show application status
+- `help` - Show help message
+- `clear` - Clear the screen
+- `quit` - Exit the console
+
+### Directory-Specific Commands
+
+Commands available depend on current path:
+
+| Path | Additional Commands |
+|------|---------------------|
+| `/` | profile, station, games, play |
+| `/profiles` | profile |
+| `/station` | start, stop, port, cache |
+| `/games` | games, play |
+
+### Adding New Platforms
+
+To add a new platform (e.g., Telegram):
+
+1. **Create ConsoleIO implementation**:
+```dart
+class TelegramConsoleIO implements ConsoleIO {
+  final TelegramBot bot;
+  final int chatId;
+  final StringBuffer _output = StringBuffer();
+
+  @override
+  void writeln([String text = '']) => _output.writeln(text);
+
+  @override
+  void write(String text) => _output.write(text);
+
+  @override
+  Future<String?> readLine() async => null; // Telegram sends messages
+
+  @override
+  Future<int> readByte() async => -1; // Not supported
+
+  @override
+  void clear() => _output.clear();
+
+  @override
+  set echoMode(bool value) {} // Not applicable
+
+  @override
+  set lineMode(bool value) {} // Not applicable
+
+  @override
+  bool get supportsRawMode => false;
+
+  @override
+  String? getOutput() => _output.toString();
+
+  @override
+  void clearOutput() => _output.clear();
+
+  /// Send collected output as Telegram message
+  Future<void> flush() async {
+    final text = _output.toString();
+    if (text.isNotEmpty) {
+      await bot.sendMessage(chatId, text);
+      _output.clear();
+    }
+  }
+}
+```
+
+2. **Create service adapters** for your platform's services
+
+3. **Instantiate ConsoleHandler**:
+```dart
+final io = TelegramConsoleIO(bot: bot, chatId: chatId);
+final handler = ConsoleHandler(
+  io: io,
+  profileService: TelegramProfileAdapter(),
+  stationService: null, // Optional
+  gameConfig: null, // Optional
+);
+
+// Process incoming message
+await handler.processCommand(message.text);
+await io.flush();
+```
+
+### Flutter Terminal UI
+
+The Flutter console terminal (`console_terminal_page.dart`) provides:
+
+- Traditional terminal appearance (text flows top-to-bottom)
+- Inline input field at prompt position
+- TAB completion for commands
+- UP/DOWN arrow for command history
+- Cyan prompt color, green text color
+- Black background (dark terminal theme)
+
+### Games Support
+
+The console supports text adventure games via the game engine:
+
+**Files**:
+- `lib/cli/game/game_config.dart` - Game directory management
+- `lib/cli/game/game_parser.dart` - Markdown game file parser
+- `lib/cli/game/game_engine.dart` - Game execution engine
+- `lib/cli/game/game_screen.dart` - Console I/O for games
+
+**Game File Format**: Markdown with special headers (see game documentation)
+
+**Limitations**:
+- Games require raw terminal mode (single-key input)
+- Only supported in CLI mode (not Flutter UI or Telegram)
+- Flutter console shows message directing users to CLI for games
 
 ## File Organization
 

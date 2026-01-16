@@ -477,8 +477,8 @@ class PureConsole {
       _sslManager!.setStationServer(_station);
       _sslManager!.startAutoRenewal();
 
-      // Initialize game engine
-      await _gameConfig.initialize(_station.dataDir!);
+      // Initialize game engine (games stored in console folder)
+      await _gameConfig.initialize('${_station.dataDir!}/console');
 
       // Initialize cache service
       await _cacheService.initialize();

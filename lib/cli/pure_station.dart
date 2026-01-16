@@ -737,7 +737,19 @@ class PureStationServer {
   // File-based logging
   IOSink? _logSink;
   IOSink? _crashSink;
+  IOSink? _accessLogSink;
   DateTime? _currentLogDay;
+  DateTime? _currentAccessLogDay;
+
+  // Rate limiting and security
+  final Map<String, _IpRateLimit> _ipRateLimits = {};
+  final Set<String> _bannedIps = {};
+  final Map<String, DateTime> _banExpiry = {};
+  Set<String> _permanentBlacklist = {};
+  Set<String> _whitelist = {};
+  static const int _maxConnectionsPerIp = 10;
+  static const int _maxRequestsPerMinute = 100;
+  static const Duration _baseBanDuration = Duration(minutes: 5);
 
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
@@ -1438,6 +1450,12 @@ class PureStationServer {
     // Reload settings to pick up any config changes
     await _loadSettings();
 
+    // Load security lists (blacklist/whitelist)
+    await _loadSecurityLists();
+
+    // Setup signal handlers for graceful shutdown (Linux/macOS only)
+    _setupSignalHandlers();
+
     try {
       // Start HTTP server
       _httpServer = await HttpServer.bind(
@@ -1771,6 +1789,9 @@ class PureStationServer {
     if (clientsToRemove.isNotEmpty) {
       _log('INFO', 'Removed ${clientsToRemove.length} stale client(s). Active clients: ${_clients.length}');
     }
+
+    // Cleanup expired bans and stale rate limit entries
+    _cleanupExpiredBans();
   }
 
   /// Safely send data to a WebSocket client, handling errors gracefully
@@ -2066,11 +2087,41 @@ class PureStationServer {
   Future<void> _handleRequest(HttpRequest request) async {
     final path = request.uri.path;
     final method = request.method;
+    final ip = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+    final stopwatch = Stopwatch()..start();
     _stats.totalApiRequests++;
 
     try {
+      // Check if IP is banned
+      if (_isIpBanned(ip)) {
+        request.response.statusCode = 429;
+        request.response.write('Too Many Requests');
+        await request.response.close();
+        stopwatch.stop();
+        _logAccess(ip, method, path, 429, stopwatch.elapsedMilliseconds,
+            request.headers.value('user-agent'));
+        return;
+      }
+
+      // Check rate limits
+      if (!_checkRateLimit(ip)) {
+        _banIp(ip);
+        request.response.statusCode = 429;
+        request.response.write('Rate limit exceeded');
+        await request.response.close();
+        stopwatch.stop();
+        _logAccess(ip, method, path, 429, stopwatch.elapsedMilliseconds,
+            request.headers.value('user-agent'));
+        return;
+      }
+
       if (WebSocketTransformer.isUpgradeRequest(request)) {
-        await _handleWebSocket(request);
+        _incrementConnection(ip);
+        try {
+          await _handleWebSocket(request);
+        } finally {
+          _decrementConnection(ip);
+        }
         return;
       }
 
@@ -2220,6 +2271,9 @@ class PureStationServer {
     }
 
     await request.response.close();
+    stopwatch.stop();
+    _logAccess(ip, method, path, request.response.statusCode, stopwatch.elapsedMilliseconds,
+        request.headers.value('user-agent'));
   }
 
   Future<void> _handleWebSocket(HttpRequest request) async {
@@ -9754,6 +9808,287 @@ ${WebNavigation.getHeaderNavCss()}
     _logSink!.writeln('=== Log start ${now.toIso8601String()} ===');
   }
 
+  /// Ensure access log sink exists and rotates per day
+  void _ensureAccessLogSink(DateTime now) {
+    if (_dataDir == null) return;
+    final logsRoot = Directory('$_dataDir/logs');
+    if (!logsRoot.existsSync()) {
+      logsRoot.createSync(recursive: true);
+    }
+
+    final today = DateTime(now.year, now.month, now.day);
+    if (_currentAccessLogDay != null &&
+        _currentAccessLogDay!.year == today.year &&
+        _currentAccessLogDay!.month == today.month &&
+        _currentAccessLogDay!.day == today.day) {
+      return; // already set for today
+    }
+
+    // Close previous sink
+    try {
+      _accessLogSink?.flush();
+      _accessLogSink?.close();
+    } catch (_) {}
+
+    final dateStr =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final accessLogFile = File('${logsRoot.path}/access-$dateStr.txt');
+    _accessLogSink = accessLogFile.openWrite(mode: FileMode.append);
+    _currentAccessLogDay = today;
+  }
+
+  /// Log HTTP access for forensics analysis
+  void _logAccess(String ip, String method, String path, int status, int responseTimeMs, String? userAgent) {
+    final now = DateTime.now();
+    _ensureAccessLogSink(now);
+
+    // Truncate user-agent to prevent log injection and keep logs manageable
+    final ua = userAgent != null
+        ? userAgent.substring(0, userAgent.length.clamp(0, 50)).replaceAll('"', "'")
+        : '-';
+    // Sanitize IP to prevent log injection
+    final safeIp = ip.replaceAll(RegExp(r'[^\w.:]'), '');
+    final safePath = path.replaceAll(RegExp(r'[\r\n]'), '');
+
+    final entry = '${now.toIso8601String()} $safeIp $method $safePath $status ${responseTimeMs}ms "$ua"';
+    try {
+      _accessLogSink?.writeln(entry);
+      _accessLogSink?.flush();
+    } catch (_) {}
+  }
+
+  // ============================================
+  // Rate Limiting and Security Methods
+  // ============================================
+
+  /// Check if an IP address is currently banned
+  bool _isIpBanned(String ip) {
+    // Check permanent blacklist first
+    if (_permanentBlacklist.contains(ip)) {
+      return true;
+    }
+
+    // Check temporary ban
+    if (_bannedIps.contains(ip)) {
+      final expiry = _banExpiry[ip];
+      if (expiry != null && DateTime.now().isBefore(expiry)) {
+        return true;
+      }
+      // Ban expired, remove it
+      _bannedIps.remove(ip);
+      _banExpiry.remove(ip);
+    }
+    return false;
+  }
+
+  /// Check rate limit for an IP and record the request
+  /// Returns true if request is allowed, false if rate limited
+  bool _checkRateLimit(String ip) {
+    // Whitelisted IPs bypass rate limiting
+    if (_whitelist.contains(ip) || ip == '127.0.0.1' || ip == '::1') {
+      return true;
+    }
+
+    final rateLimit = _ipRateLimits.putIfAbsent(ip, () => _IpRateLimit());
+    rateLimit.recordRequest();
+
+    // Check if rate limited
+    if (rateLimit.isRateLimited(_maxRequestsPerMinute)) {
+      return false;
+    }
+
+    // Check concurrent connections
+    if (rateLimit.activeConnections >= _maxConnectionsPerIp) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Ban an IP address temporarily
+  void _banIp(String ip) {
+    final rateLimit = _ipRateLimits.putIfAbsent(ip, () => _IpRateLimit());
+    final banDuration = rateLimit.getBanDuration(_baseBanDuration);
+    rateLimit.banCount++;
+
+    _bannedIps.add(ip);
+    _banExpiry[ip] = DateTime.now().add(banDuration);
+    _log('WARN', 'Banned IP $ip for ${banDuration.inMinutes} minutes (ban #${rateLimit.banCount})');
+  }
+
+  /// Increment active connection count for an IP
+  void _incrementConnection(String ip) {
+    final rateLimit = _ipRateLimits.putIfAbsent(ip, () => _IpRateLimit());
+    rateLimit.activeConnections++;
+  }
+
+  /// Decrement active connection count for an IP
+  void _decrementConnection(String ip) {
+    final rateLimit = _ipRateLimits[ip];
+    if (rateLimit != null && rateLimit.activeConnections > 0) {
+      rateLimit.activeConnections--;
+    }
+  }
+
+  /// Cleanup expired bans and stale rate limit entries
+  void _cleanupExpiredBans() {
+    final now = DateTime.now();
+
+    // Remove expired temporary bans
+    final expiredIps = <String>[];
+    for (final entry in _banExpiry.entries) {
+      if (now.isAfter(entry.value)) {
+        expiredIps.add(entry.key);
+      }
+    }
+    for (final ip in expiredIps) {
+      _bannedIps.remove(ip);
+      _banExpiry.remove(ip);
+    }
+
+    // Remove stale rate limit entries (no activity in last 10 minutes)
+    final staleThreshold = now.subtract(const Duration(minutes: 10));
+    final staleIps = <String>[];
+    for (final entry in _ipRateLimits.entries) {
+      final rateLimit = entry.value;
+      if (rateLimit.activeConnections == 0 &&
+          (rateLimit.requestTimestamps.isEmpty ||
+              rateLimit.requestTimestamps.last.isBefore(staleThreshold))) {
+        staleIps.add(entry.key);
+      }
+    }
+    for (final ip in staleIps) {
+      _ipRateLimits.remove(ip);
+    }
+  }
+
+  /// Load security lists (blacklist/whitelist) from files
+  Future<void> _loadSecurityLists() async {
+    if (_dataDir == null) return;
+
+    final securityDir = Directory('$_dataDir/security');
+    if (!await securityDir.exists()) {
+      await securityDir.create(recursive: true);
+    }
+
+    // Load blacklist
+    final blacklistFile = File('${securityDir.path}/blacklist.txt');
+    if (await blacklistFile.exists()) {
+      try {
+        final lines = await blacklistFile.readAsLines();
+        _permanentBlacklist = lines
+            .where((l) => l.trim().isNotEmpty && !l.startsWith('#'))
+            .map((l) => l.trim())
+            .toSet();
+        _log('INFO', 'Loaded ${_permanentBlacklist.length} blacklisted IPs');
+      } catch (e) {
+        _log('ERROR', 'Failed to load blacklist: $e');
+      }
+    }
+
+    // Load whitelist
+    final whitelistFile = File('${securityDir.path}/whitelist.txt');
+    if (await whitelistFile.exists()) {
+      try {
+        final lines = await whitelistFile.readAsLines();
+        _whitelist = lines
+            .where((l) => l.trim().isNotEmpty && !l.startsWith('#'))
+            .map((l) => l.trim())
+            .toSet();
+        _log('INFO', 'Loaded ${_whitelist.length} whitelisted IPs');
+      } catch (e) {
+        _log('ERROR', 'Failed to load whitelist: $e');
+      }
+    }
+  }
+
+  // ============================================
+  // Signal Handlers (Crash Detection)
+  // ============================================
+
+  /// Setup signal handlers for graceful shutdown (Linux/macOS only)
+  void _setupSignalHandlers() {
+    // Only setup on Linux/macOS (not Windows)
+    if (!Platform.isLinux && !Platform.isMacOS) {
+      _log('INFO', 'Signal handlers not available on ${Platform.operatingSystem}');
+      return;
+    }
+
+    // SIGTERM - graceful shutdown (e.g., systemctl stop)
+    ProcessSignal.sigterm.watch().listen((_) {
+      _logCrash('SIGTERM received - graceful shutdown requested');
+      _gracefulShutdown();
+    });
+
+    // SIGINT - interrupt (Ctrl+C)
+    ProcessSignal.sigint.watch().listen((_) {
+      _logCrash('SIGINT received - interrupt signal');
+      _gracefulShutdown();
+    });
+
+    // SIGHUP - reload configuration
+    ProcessSignal.sighup.watch().listen((_) {
+      _log('INFO', 'SIGHUP received - reloading security lists');
+      _loadSecurityLists();
+    });
+
+    _log('INFO', 'Signal handlers installed (SIGTERM, SIGINT, SIGHUP)');
+  }
+
+  /// Log a crash/shutdown event to crash.txt
+  void _logCrash(String reason) {
+    final entry = '[${DateTime.now().toIso8601String()}] [SHUTDOWN] $reason';
+    try {
+      _crashSink?.writeln(entry);
+      _crashSink?.flush();
+    } catch (_) {}
+    _log('WARN', reason);
+  }
+
+  /// Perform graceful shutdown
+  Future<void> _gracefulShutdown() async {
+    _log('INFO', 'Initiating graceful shutdown...');
+
+    // Stop accepting new connections
+    _running = false;
+
+    // Close heartbeat timer
+    _stopHeartbeat();
+
+    // Close all client connections
+    for (final client in _clients.values) {
+      try {
+        await client.socket.close();
+      } catch (_) {}
+    }
+    _clients.clear();
+
+    // Close HTTP servers
+    try {
+      await _httpServer?.close(force: true);
+    } catch (_) {}
+    try {
+      await _httpsServer?.close(force: true);
+    } catch (_) {}
+
+    // Flush and close log sinks
+    try {
+      _logSink?.flush();
+      _logSink?.close();
+    } catch (_) {}
+    try {
+      _accessLogSink?.flush();
+      _accessLogSink?.close();
+    } catch (_) {}
+    try {
+      _crashSink?.flush();
+      _crashSink?.close();
+    } catch (_) {}
+
+    _log('INFO', 'Shutdown complete');
+    exit(0);
+  }
+
   // ============================================
   // Update Mirror Methods
   // ============================================
@@ -11029,5 +11364,33 @@ class SslCertificateManager {
     } catch (e) {
       rethrow;
     }
+  }
+}
+
+/// Rate limiting tracking per IP address
+class _IpRateLimit {
+  int activeConnections = 0;
+  final List<DateTime> requestTimestamps = [];
+  int banCount = 0;
+
+  /// Check if this IP has exceeded the request rate limit
+  bool isRateLimited(int maxRequestsPerMinute) {
+    final now = DateTime.now();
+    final oneMinuteAgo = now.subtract(const Duration(minutes: 1));
+    requestTimestamps.removeWhere((t) => t.isBefore(oneMinuteAgo));
+    return requestTimestamps.length >= maxRequestsPerMinute;
+  }
+
+  /// Record a new request from this IP
+  void recordRequest() {
+    requestTimestamps.add(DateTime.now());
+  }
+
+  /// Get ban duration with exponential backoff
+  Duration getBanDuration(Duration baseDuration) {
+    // Exponential backoff: 5min -> 15min -> 1hr -> 24hr
+    final multipliers = [1, 3, 12, 288];
+    final idx = banCount.clamp(0, multipliers.length - 1);
+    return baseDuration * multipliers[idx];
   }
 }

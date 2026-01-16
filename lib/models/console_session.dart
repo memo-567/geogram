@@ -2,7 +2,7 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Model representing a console session running Alpine Linux VM.
+ * Model representing a console terminal session.
  */
 
 /// State of a console session
@@ -11,6 +11,10 @@ enum ConsoleSessionState {
   running,
   suspended,
 }
+
+// Note: vmType, memory, networkEnabled, keepRunning, and mounts fields
+// are kept for backward compatibility with existing session files but
+// are no longer used for CLI terminal sessions.
 
 /// Mount point configuration for VM filesystem access
 class ConsoleMount {

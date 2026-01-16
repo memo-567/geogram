@@ -2,6 +2,10 @@
 cmake_minimum_required(VERSION 3.14)
 project(geogram LANGUAGES CXX)
 
+# Override ONNX Runtime version to fix dxcore.dll dependency issue on older Windows
+# See: https://github.com/microsoft/onnxruntime/issues/24771
+set(ONNXRUNTIME_VERSION "1.21.1" CACHE STRING "ONNX Runtime version" FORCE)
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "geogram")

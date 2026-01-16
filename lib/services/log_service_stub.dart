@@ -3,6 +3,19 @@ import 'dart:collection';
 /// Log levels for filtering
 enum LogLevel { debug, info, warn, error }
 
+/// Result of reading log file
+class LogReadResult {
+  final List<String> lines;
+  final int totalLines;
+  final bool truncated;
+
+  LogReadResult({
+    required this.lines,
+    required this.totalLines,
+    required this.truncated,
+  });
+}
+
 /// Console-only log service for CLI and web
 class LogService {
   static final LogService _instance = LogService._internal();
@@ -109,6 +122,9 @@ class LogService {
   void error(String message) => log(message, level: LogLevel.error);
 
   Future<String?> readTodayLog() async => null;
+  Future<LogReadResult> readTodayLogAsync({int maxLines = 1000}) async {
+    return LogReadResult(lines: [], totalLines: 0, truncated: false);
+  }
   Future<String?> readCrashLog() async => null;
   Future<void> clearCrashLog() async {}
   Future<void> adoptStorageConfigLogsDir() async {}

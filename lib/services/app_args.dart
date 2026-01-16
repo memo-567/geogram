@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 ///   --port=PORT, -p PORT       API server port (default: 3456)
 ///   --data-dir=PATH, -d PATH   Data directory (default: ~/.local/share/geogram)
 ///   --cli                      Run in CLI mode (no GUI)
+///   --auto-station             Auto-start station mode (no interactive prompt)
 ///   --http-api                 Enable HTTP API on startup
 ///   --debug-api                Enable Debug API on startup
 ///   --new-identity             Create a new identity on startup (useful for testing)
@@ -52,6 +53,7 @@ class AppArgs {
   int _port = defaultPort;
   String? _dataDir;
   bool _cliMode = false;
+  bool _autoStation = false;
   bool _httpApi = false;
   bool _debugApi = false;
   bool _newIdentity = false;
@@ -74,6 +76,9 @@ class AppArgs {
 
   /// Whether running in CLI mode (no GUI)
   bool get cliMode => _cliMode;
+
+  /// Whether to auto-start station mode (no interactive prompt)
+  bool get autoStation => _autoStation;
 
   /// Whether to enable HTTP API on startup
   bool get httpApi => _httpApi;
@@ -277,6 +282,11 @@ class AppArgs {
         continue;
       }
 
+      if (arg == '--auto-station') {
+        _autoStation = true;
+        continue;
+      }
+
       if (arg == '--http-api') {
         _httpApi = true;
         continue;
@@ -361,6 +371,7 @@ class AppArgs {
     _port = defaultPort;
     _dataDir = null;
     _cliMode = false;
+    _autoStation = false;
     _httpApi = false;
     _debugApi = false;
     _newIdentity = false;
@@ -388,6 +399,7 @@ Options:
   --port=PORT, -p PORT       API server port (default: $defaultPort)
   --data-dir=PATH, -d PATH   Data directory path
   --cli                      Run in CLI mode (no GUI)
+  --auto-station             Auto-start station mode (for systemd services)
   --http-api                 Enable HTTP API on startup
   --debug-api                Enable Debug API on startup
   --new-identity             Create a new identity on startup
@@ -436,6 +448,7 @@ Examples:
       'port': _port,
       'dataDir': _dataDir,
       'cliMode': _cliMode,
+      'autoStation': _autoStation,
       'httpApi': _httpApi,
       'debugApi': _debugApi,
       'newIdentity': _newIdentity,

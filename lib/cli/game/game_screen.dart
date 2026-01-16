@@ -30,7 +30,7 @@ class GameScreen {
     }
 
     stdout.writeln();
-    stdout.writeln('    \x1B[90mPress Enter to start...\x1B[0m');
+    stdout.writeln('    Press Enter to start...');
 
     // Use raw mode to wait for Enter specifically
     // This also consumes any buffered garbage bytes
@@ -61,9 +61,9 @@ class GameScreen {
 
     // Build compact status line
     final hpBar = _miniHealthBar(hp, maxHp);
-    stdout.writeln('\x1B[90m┌─────────────────────────────────────────────────────────────┐\x1B[0m');
-    stdout.writeln('\x1B[90m│\x1B[0m HP: $hpBar  \x1B[33mGold: $gold\x1B[0m  ATK: \x1B[31m$atk\x1B[0m  DEF: \x1B[34m$def\x1B[0m  \x1B[36m[I]nventory\x1B[0m \x1B[90m│\x1B[0m');
-    stdout.writeln('\x1B[90m└─────────────────────────────────────────────────────────────┘\x1B[0m');
+    stdout.writeln('┌─────────────────────────────────────────────────────────────┐');
+    stdout.writeln('│ HP: $hpBar  Gold: $gold  ATK: $atk  DEF: $def  [I]nventory │');
+    stdout.writeln('└─────────────────────────────────────────────────────────────┘');
   }
 
   /// Mini health bar for status display
@@ -72,37 +72,36 @@ class GameScreen {
     final percent = max > 0 ? (current / max * width).round().clamp(0, width) : 0;
     final filled = '█' * percent;
     final empty = '░' * (width - percent);
-    final color = percent > 5 ? '\x1B[32m' : (percent > 2 ? '\x1B[33m' : '\x1B[31m');
-    return '$color$filled\x1B[90m$empty\x1B[0m $current/$max';
+    return '$filled$empty $current/$max';
   }
 
   /// Show inventory screen
   Future<void> showInventory(Player player, Map<String, Item> items) async {
     stdout.writeln();
-    stdout.writeln('\x1B[1;36m╔════════════════════════════════════════╗\x1B[0m');
-    stdout.writeln('\x1B[1;36m║            INVENTORY                   ║\x1B[0m');
-    stdout.writeln('\x1B[1;36m╚════════════════════════════════════════╝\x1B[0m');
+    stdout.writeln('╔════════════════════════════════════════╗');
+    stdout.writeln('║            INVENTORY                   ║');
+    stdout.writeln('╚════════════════════════════════════════╝');
     stdout.writeln();
 
     // Show stats
-    stdout.writeln('  \x1B[1mStats:\x1B[0m');
-    stdout.writeln('    Health:     \x1B[32m${player.health}/${player.maxHealth}\x1B[0m');
-    stdout.writeln('    Attack:     \x1B[31m${player.attack}\x1B[0m');
-    stdout.writeln('    Defense:    \x1B[34m${player.defense}\x1B[0m');
-    stdout.writeln('    Gold:       \x1B[33m${player.gold}\x1B[0m');
+    stdout.writeln('  Stats:');
+    stdout.writeln('    Health:     ${player.health}/${player.maxHealth}');
+    stdout.writeln('    Attack:     ${player.attack}');
+    stdout.writeln('    Defense:    ${player.defense}');
+    stdout.writeln('    Gold:       ${player.gold}');
     stdout.writeln();
 
     // Show inventory items
-    stdout.writeln('  \x1B[1mItems:\x1B[0m');
+    stdout.writeln('  Items:');
     if (player.inventory.isEmpty) {
-      stdout.writeln('    \x1B[90m(empty)\x1B[0m');
+      stdout.writeln('    (empty)');
     } else {
       for (final itemId in player.inventory) {
         final item = items[itemId];
         if (item != null) {
-          stdout.writeln('    • \x1B[36m${item.name}\x1B[0m');
+          stdout.writeln('    • ${item.name}');
           if (item.description.isNotEmpty) {
-            stdout.writeln('      \x1B[90m${item.description}\x1B[0m');
+            stdout.writeln('      ${item.description}');
           }
         } else {
           stdout.writeln('    • $itemId');
@@ -110,7 +109,7 @@ class GameScreen {
       }
     }
     stdout.writeln();
-    stdout.writeln('  \x1B[90mPress Enter to continue...\x1B[0m');
+    stdout.writeln('  Press Enter to continue...');
     stdin.readLineSync();
   }
 
@@ -123,7 +122,7 @@ class GameScreen {
     for (final line in lines) {
       final wrapped = StoryUtils.wrapText(line, 70);
       for (final w in wrapped) {
-        stdout.writeln('  \x1B[37m$w\x1B[0m');
+        stdout.writeln('  $w');
       }
     }
     stdout.writeln();
@@ -132,21 +131,21 @@ class GameScreen {
   /// Get player choice from a list (single keypress)
   Future<Choice?> getChoice(List<Choice> choices) async {
     if (choices.isEmpty) {
-      stdout.writeln('  \x1B[90m(End of scene)\x1B[0m');
+      stdout.writeln('  (End of scene)');
       return null;
     }
 
-    stdout.writeln('\x1B[33mWhat do you do?\x1B[0m');
+    stdout.writeln('What do you do?');
     stdout.writeln();
 
     for (var i = 0; i < choices.length; i++) {
       final choice = choices[i];
-      stdout.writeln('  \x1B[36m${i + 1})\x1B[0m ${choice.text}');
+      stdout.writeln('  ${i + 1}) ${choice.text}');
     }
-    stdout.writeln('  \x1B[90m[I] Inventory  [Q] Quit\x1B[0m');
+    stdout.writeln('  [I] Inventory  [Q] Quit');
 
     stdout.writeln();
-    stdout.write('\x1B[33m> \x1B[0m');
+    stdout.write('> ');
 
     final key = _readSingleKey();
     stdout.writeln(key); // Echo the key
@@ -167,7 +166,7 @@ class GameScreen {
     }
 
     // Invalid input - default to first choice
-    stdout.writeln('\x1B[31mInvalid. Defaulting to option 1.\x1B[0m');
+    stdout.writeln('Invalid. Defaulting to option 1.');
     return choices.first;
   }
 
@@ -245,8 +244,8 @@ class GameScreen {
           // First CTRL+C - warn user
           _lastCtrlC = now;
           stdout.writeln();
-          stdout.writeln('\x1B[33mPress CTRL+C again within 2 seconds to quit...\x1B[0m');
-          stdout.write('\x1B[33m> \x1B[0m');
+          stdout.writeln('Press CTRL+C again within 2 seconds to quit...');
+          stdout.write('> ');
           // Continue reading for another key
           return _readSingleKey();
         }
@@ -264,7 +263,7 @@ class GameScreen {
   /// Show combat intro with both characters and ASCII art side by side
   Future<void> showCombatIntro(Player player, Opponent opponent) async {
     stdout.writeln();
-    stdout.writeln('\x1B[1;33m══════════════════════════════════════════════════════════════\x1B[0m');
+    stdout.writeln('══════════════════════════════════════════════════════════════');
     stdout.writeln();
 
     // Get combat art for both (use getAsciiArt to get custom art from markdown)
@@ -280,7 +279,7 @@ class GameScreen {
     _showCombatStats(player, opponent);
 
     stdout.writeln();
-    stdout.writeln('\x1B[1;33m══════════════════════════════════════════════════════════════\x1B[0m');
+    stdout.writeln('══════════════════════════════════════════════════════════════');
     stdout.writeln();
 
     await _pause(500);
@@ -289,19 +288,19 @@ class GameScreen {
   /// Show combat status display (stats only, no ASCII art)
   Future<void> showCombatStatus(Player player, Opponent opponent) async {
     stdout.writeln();
-    stdout.writeln('\x1B[1;33m────────────────────────────────────────────────────────────────\x1B[0m');
+    stdout.writeln('────────────────────────────────────────────────────────────────');
 
     // Show stats side by side
     _showCombatStats(player, opponent);
 
-    stdout.writeln('\x1B[1;33m────────────────────────────────────────────────────────────────\x1B[0m');
+    stdout.writeln('────────────────────────────────────────────────────────────────');
     stdout.writeln();
   }
 
   /// Display combat arena with characters facing each other
   /// Both characters are aligned at the bottom (feet on ground)
   void _showCombatArena(List<String> playerArt, List<String> opponentArt) {
-    // Calculate the maximum width needed for each side
+    // Calculate max width for each character's art
     int playerWidth = 0;
     int opponentWidth = 0;
     for (final line in playerArt) {
@@ -311,22 +310,21 @@ class GameScreen {
       if (line.length > opponentWidth) opponentWidth = line.length;
     }
 
-    // Use at least minimum widths for consistent display
+    // Ensure minimum widths
     const minWidth = 15;
     final leftWidth = playerWidth > minWidth ? playerWidth : minWidth;
     final rightWidth = opponentWidth > minWidth ? opponentWidth : minWidth;
-    const middleGap = 6;
 
-    // Calculate heights and offsets to align both at the bottom
+    // Fixed middle section width (must be consistent for all lines!)
+    const middleText = '   VS   '; // 8 chars, centered
+    const middleWidth = 8;
+
+    // Calculate heights for vertical alignment
     final playerHeight = playerArt.length;
     final opponentHeight = opponentArt.length;
     final maxLines = playerHeight > opponentHeight ? playerHeight : opponentHeight;
-
-    // Calculate top padding for each character to align at bottom
     final playerTopPad = maxLines - playerHeight;
     final opponentTopPad = maxLines - opponentHeight;
-
-    // VS marker in the middle (at the center of the tallest character)
     final vsLine = maxLines ~/ 2;
 
     for (var i = 0; i < maxLines; i++) {
@@ -348,19 +346,14 @@ class GameScreen {
         rightArt = '';
       }
 
-      // Pad art to consistent width
+      // Pad to fixed widths (CRITICAL: all lines must have same total width)
       final leftPadded = leftArt.padRight(leftWidth);
-      final rightPadded = rightArt.padLeft(rightWidth);
+      final rightPadded = rightArt.padRight(rightWidth); // padRight, not padLeft
 
-      // Middle section with VS
-      String middle;
-      if (i == vsLine) {
-        middle = '\x1B[1;31m  VS  \x1B[0m'.padLeft(middleGap + 6).padRight(middleGap + 6);
-      } else {
-        middle = ' ' * middleGap;
-      }
+      // Middle section - MUST be same width for all lines
+      final middle = (i == vsLine) ? middleText : ' ' * middleWidth;
 
-      stdout.writeln('    \x1B[36m$leftPadded\x1B[0m$middle\x1B[31m$rightPadded\x1B[0m');
+      stdout.writeln('    $leftPadded$middle$rightPadded');
     }
   }
 
@@ -369,44 +362,44 @@ class GameScreen {
     const colWidth = 28;
 
     // Player stats (left) | Opponent stats (right)
-    final playerName = '\x1B[1;36m${player.name}\x1B[0m';
-    final opponentName = '\x1B[1;31m${opponent.name}\x1B[0m';
+    final playerName = player.name;
+    final opponentName = opponent.name;
 
     // Header with names
-    stdout.writeln('    ${playerName.padRight(colWidth + 10)}${opponentName.padLeft(colWidth)}');
+    stdout.writeln('    ${playerName.padRight(colWidth)}${opponentName.padLeft(colWidth)}');
     stdout.writeln();
 
     // Health bars
-    final pHealth = _compactHealthBar(player.health, player.maxHealth, '\x1B[32m');
-    final oHealth = _compactHealthBar(opponent.health, opponent.maxHealth, '\x1B[31m');
+    final pHealth = _compactHealthBar(player.health, player.maxHealth);
+    final oHealth = _compactHealthBar(opponent.health, opponent.maxHealth);
     stdout.writeln('    HP: $pHealth      HP: $oHealth');
 
     // Stats line
-    final pStats = 'ATK: \x1B[33m${player.attack}\x1B[0m  DEF: \x1B[34m${player.defense}\x1B[0m';
-    final oStats = 'ATK: \x1B[33m${opponent.attack}\x1B[0m  DEF: \x1B[34m${opponent.defense}\x1B[0m';
+    final pStats = 'ATK: ${player.attack}  DEF: ${player.defense}';
+    final oStats = 'ATK: ${opponent.attack}  DEF: ${opponent.defense}';
     stdout.writeln('    $pStats          $oStats');
   }
 
-  /// Compact health bar with color
-  String _compactHealthBar(int current, int max, String color) {
+  /// Compact health bar
+  String _compactHealthBar(int current, int max) {
     final width = 15;
     final percent = max > 0 ? (current / max * width).round().clamp(0, width) : 0;
     final filled = '█' * percent;
     final empty = '░' * (width - percent);
-    return '$color$filled\x1B[90m$empty\x1B[0m $current/$max';
+    return '$filled$empty $current/$max';
   }
 
   /// Get combat action from player (single keypress, Attack or Run)
   Future<String?> getCombatAction(List<String> availableActions) async {
-    stdout.writeln('\x1B[33mChoose your action:\x1B[0m');
+    stdout.writeln('Choose your action:');
     stdout.writeln();
 
     // Fixed combat options: Attack and Run
-    stdout.writeln('  \x1B[36m1)\x1B[0m Attack');
-    stdout.writeln('  \x1B[36m2)\x1B[0m Run away');
+    stdout.writeln('  1) Attack');
+    stdout.writeln('  2) Run away');
 
     stdout.writeln();
-    stdout.write('\x1B[33m> \x1B[0m');
+    stdout.write('> ');
 
     final key = _readSingleKey();
     stdout.writeln(key); // Echo the key
@@ -426,18 +419,18 @@ class GameScreen {
   /// Show combat result message
   Future<void> showCombatMessage(String message) async {
     stdout.writeln();
-    stdout.writeln('  \x1B[1m$message\x1B[0m');
+    stdout.writeln('  $message');
     await _pause(500);
   }
 
   /// Show victory message
   Future<void> showVictory(String opponentName) async {
     stdout.writeln();
-    stdout.writeln('  \x1B[32m╔════════════════════════════════╗\x1B[0m');
-    stdout.writeln('  \x1B[32m║        VICTORY!                ║\x1B[0m');
-    stdout.writeln('  \x1B[32m╚════════════════════════════════╝\x1B[0m');
+    stdout.writeln('  ╔════════════════════════════════╗');
+    stdout.writeln('  ║        VICTORY!                ║');
+    stdout.writeln('  ╚════════════════════════════════╝');
     stdout.writeln();
-    stdout.writeln('  \x1B[32mYou defeated $opponentName!\x1B[0m');
+    stdout.writeln('  You defeated $opponentName!');
     stdout.writeln();
     await _pause(1000);
   }
@@ -445,11 +438,11 @@ class GameScreen {
   /// Show defeat message
   Future<void> showDefeat() async {
     stdout.writeln();
-    stdout.writeln('  \x1B[31m╔════════════════════════════════╗\x1B[0m');
-    stdout.writeln('  \x1B[31m║          DEFEAT                ║\x1B[0m');
-    stdout.writeln('  \x1B[31m╚════════════════════════════════╝\x1B[0m');
+    stdout.writeln('  ╔════════════════════════════════╗');
+    stdout.writeln('  ║          DEFEAT                ║');
+    stdout.writeln('  ╚════════════════════════════════╝');
     stdout.writeln();
-    stdout.writeln('  \x1B[31mYou have been defeated...\x1B[0m');
+    stdout.writeln('  You have been defeated...');
     stdout.writeln();
     await _pause(1000);
   }
@@ -457,9 +450,9 @@ class GameScreen {
   /// Show game over screen
   Future<void> showGameOver() async {
     stdout.writeln();
-    stdout.writeln('  \x1B[31m╔════════════════════════════════╗\x1B[0m');
-    stdout.writeln('  \x1B[31m║         GAME OVER              ║\x1B[0m');
-    stdout.writeln('  \x1B[31m╚════════════════════════════════╝\x1B[0m');
+    stdout.writeln('  ╔════════════════════════════════╗');
+    stdout.writeln('  ║         GAME OVER              ║');
+    stdout.writeln('  ╚════════════════════════════════╝');
     stdout.writeln();
     await _pause(1500);
   }
@@ -467,30 +460,30 @@ class GameScreen {
   /// Show game completion
   Future<void> showGameComplete(String title) async {
     stdout.writeln();
-    stdout.writeln('  \x1B[33m╔════════════════════════════════╗\x1B[0m');
-    stdout.writeln('  \x1B[33m║      THE END                   ║\x1B[0m');
-    stdout.writeln('  \x1B[33m╚════════════════════════════════╝\x1B[0m');
+    stdout.writeln('  ╔════════════════════════════════╗');
+    stdout.writeln('  ║      THE END                   ║');
+    stdout.writeln('  ╚════════════════════════════════╝');
     stdout.writeln();
-    stdout.writeln('  \x1B[33mThanks for playing $title!\x1B[0m');
+    stdout.writeln('  Thanks for playing $title!');
     stdout.writeln();
   }
 
   /// Show item pickup
   Future<void> showItemPickup(String itemName) async {
     stdout.writeln();
-    stdout.writeln('  \x1B[32m★ You found: $itemName\x1B[0m');
+    stdout.writeln('  * You found: $itemName');
     stdout.writeln();
     await _pause(500);
   }
 
   /// Print error message
   void printError(String message) {
-    stdout.writeln('\x1B[31mError: $message\x1B[0m');
+    stdout.writeln('Error: $message');
   }
 
   /// Print info message
   void printInfo(String message) {
-    stdout.writeln('\x1B[36m$message\x1B[0m');
+    stdout.writeln(message);
   }
 
   /// Clear the screen
@@ -503,9 +496,8 @@ class GameScreen {
     await Future.delayed(Duration(milliseconds: milliseconds));
   }
 
-  /// Wait for user to press enter
+  /// Wait for user to press enter (no-op for Telegram compatibility)
   Future<void> waitForEnter() async {
-    stdout.writeln('  \x1B[90mPress Enter to continue...\x1B[0m');
-    stdin.readLineSync();
+    // No-op: removed prompt for platforms that don't support empty input
   }
 }

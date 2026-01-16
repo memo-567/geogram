@@ -404,4 +404,14 @@ class ConfigService {
       return null;
     }
   }
+
+  /// Get video auto-play setting (defaults to true)
+  bool get videoAutoPlay {
+    return getNestedValue('settings.videoAutoPlay', true) as bool;
+  }
+
+  /// Set video auto-play setting
+  Future<void> setVideoAutoPlay(bool value) async {
+    setNestedValue('settings.videoAutoPlay', value);
+  }
 }

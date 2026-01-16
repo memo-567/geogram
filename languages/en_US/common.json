@@ -2095,5 +2095,9 @@
   "upload_video": "Upload Video",
   "uploading_video": "Uploading video...",
   "upload_first_video": "Upload your first video to get started",
-  "nostr_key_required": "NOSTR key required"
+  "nostr_key_required": "NOSTR key required",
+  "auto_play": "Auto-play",
+  "change_thumbnail": "Change thumbnail",
+  "select_thumbnail": "Select thumbnail",
+  "generating_previews": "Generating previews..."
 }

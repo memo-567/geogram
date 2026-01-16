@@ -20,22 +20,51 @@ class Console {
   String _currentPath = '/';
 
   /// Root directories in virtual filesystem
-  static const List<String> rootDirs = ['profiles', 'config', 'logs', 'station'];
+  static const List<String> rootDirs = ['profiles', 'config', 'logs', 'station', 'games'];
 
   /// Directory-specific commands
   static const Map<String, List<String>> dirCommands = {
-    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'station', 'theme'],
+    '/': ['ls', 'cd', 'pwd', 'status', 'help', 'quit', 'exit', 'clear', 'station', 'theme', 'games', 'play'],
     '/profiles': ['ls', 'cd', 'pwd', 'profile', 'status', 'help', 'quit', 'exit', 'clear'],
     '/config': ['ls', 'cd', 'pwd', 'set', 'get', 'theme', 'status', 'help', 'quit', 'exit', 'clear'],
     '/logs': ['ls', 'cd', 'pwd', 'tail', 'status', 'help', 'quit', 'exit', 'clear'],
     '/station': ['ls', 'cd', 'pwd', 'start', 'stop', 'status', 'port', 'cache', 'help', 'quit', 'exit', 'clear'],
+    '/games': ['ls', 'cd', 'pwd', 'games', 'play', 'status', 'help', 'quit', 'exit', 'clear'],
   };
 
   /// Run CLI mode
   Future<void> run(List<String> args) async {
     await _initializeServices();
+
+    // Check for auto-station mode (for systemd services)
+    if (AppArgs().autoStation) {
+      await _runAutoStation();
+      return;
+    }
+
     _printBanner();
     await _commandLoop();
+  }
+
+  /// Run in auto-station mode (no interactive prompt)
+  /// Used for systemd services and headless operation
+  Future<void> _runAutoStation() async {
+    stdout.writeln('Geogram v$appVersion - Auto-station mode');
+
+    // Start station server
+    stdout.writeln('Starting station server...');
+    final success = await StationServerService().start();
+
+    if (!success) {
+      stderr.writeln('ERROR: Failed to start station server');
+      exit(1);
+    }
+
+    stdout.writeln('Station server started on port ${StationServerService().settings.port}');
+    stdout.writeln('Press Ctrl+C to stop (SIGINT/SIGTERM for graceful shutdown)');
+
+    // Block indefinitely - signal handlers will handle shutdown
+    await Future.delayed(const Duration(days: 365 * 100));
   }
 
   /// Initialize services for CLI mode

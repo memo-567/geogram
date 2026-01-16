@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
+import 'package:fvp/fvp.dart' as fvp;
 import 'services/crash_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -149,6 +150,9 @@ void main() async {
   _setupCrashHandlers();
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Register fvp for desktop video playback
+  fvp.registerWith();
 
   // Re-initialize CrashService with proper paths now that binding is ready
   await CrashService().reinitialize();

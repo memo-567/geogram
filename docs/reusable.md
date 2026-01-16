@@ -52,6 +52,12 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [PlaceService.findPlacesWithinRadius](#placeservicefindplaceswithinradius) - Find places within GPS radius
 - [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
 
+### CLI/Console Abstractions
+- [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
+- [ConsoleHandler](#consolehandler) - Shared command logic for CLI/UI/Telegram
+- [ConsoleCompleter](#consolecompleter) - Shared TAB completion logic
+- [LogService Isolate Reading](#logservice-isolate-reading) - Read large logs off UI thread
+
 ### Web Theme Components
 - [WebNavigation](#webnavigation) - Reusable navigation menu generator (shared library)
 - [getChatPageScripts](#getchatpagescripts) - Reusable chat page JavaScript (shared library)
@@ -2673,6 +2679,209 @@ All types from `knownAppTypesConst` are supported with consistent icons and grad
 
 ---
 
+## CLI/Console Abstractions
+
+### ConsoleIO
+
+**File:** `lib/cli/console_io.dart`
+
+Platform-agnostic interface for console I/O. Allows the same command logic to work across different platforms.
+
+**Implementations:**
+- `CliConsoleIO` (`lib/cli/console_io_cli.dart`) - CLI mode using stdin/stdout
+- `BufferConsoleIO` (`lib/cli/console_io_buffer.dart`) - Buffer-based for Flutter UI and async platforms
+
+**Interface:**
+```dart
+abstract class ConsoleIO {
+  void writeln([String text = '']);
+  void write(String text);
+  Future<String?> readLine();
+  Future<int> readByte();
+  void clear();
+  set echoMode(bool value);
+  set lineMode(bool value);
+  bool get supportsRawMode;
+  String? getOutput();
+  void clearOutput();
+}
+```
+
+**Usage - CLI Mode:**
+```dart
+final io = CliConsoleIO();
+io.writeln('Hello, world!');
+final input = await io.readLine();
+```
+
+**Usage - Flutter/Buffer Mode:**
+```dart
+final io = BufferConsoleIO();
+io.writeln('Hello, world!');
+final output = io.getOutput(); // Returns collected output
+io.clearOutput();
+```
+
+---
+
+### ConsoleHandler
+
+**File:** `lib/cli/console_handler.dart`
+
+Shared command logic for all console interfaces. Platform-agnostic - uses ConsoleIO for I/O.
+
+**Service Interfaces:**
+- `ProfileServiceInterface` - Profile management operations
+- `StationServiceInterface` - Station server control
+
+**Commands Supported:**
+- Navigation: `ls`, `cd`, `pwd`
+- Profile: `profile list`, `profile switch`, `profile create`, `profile info`
+- Station: `station start`, `station stop`, `station status`, `station port`, `station cache`
+- Games: `games list`, `games info`, `play <name>`
+- General: `help`, `status`, `clear`, `quit`
+
+**Virtual Filesystem:**
+- `/profiles/` - Profile management
+- `/config/` - Configuration
+- `/logs/` - Log files
+- `/station/` - Station control
+- `/games/` - Text adventure games
+
+**Usage:**
+```dart
+final io = BufferConsoleIO();
+final handler = ConsoleHandler(
+  io: io,
+  profileService: MyProfileServiceAdapter(),
+  stationService: MyStationServiceAdapter(),
+  gameConfig: GameConfig(),
+);
+
+// Process command
+await handler.processCommand('station status');
+final output = io.getOutput();
+```
+
+**Adding New Platforms:**
+To add support for a new platform (e.g., Telegram):
+
+1. Create a new ConsoleIO implementation:
+```dart
+class TelegramConsoleIO implements ConsoleIO {
+  final TelegramBot bot;
+  final int chatId;
+  final StringBuffer _output = StringBuffer();
+
+  @override
+  void writeln([String text = '']) => _output.writeln(text);
+
+  @override
+  String? getOutput() => _output.toString();
+
+  // Implement other methods...
+}
+```
+
+2. Create service adapters for your platform
+3. Instantiate ConsoleHandler with your ConsoleIO
+
+---
+
+### ConsoleCompleter
+
+**File:** `lib/cli/console_completer.dart`
+
+Shared TAB completion logic for console interfaces. Used by both CLI and Flutter UI.
+
+**Key Classes:**
+- `Candidate` - Completion candidate with value, display text, and grouping
+- `CompletionResult` - Result of a completion operation (completed text, candidates)
+- `CompletionDataProvider` - Interface for dynamic data (profiles, devices, chat rooms)
+- `ConsoleCompleter` - Main completion logic
+
+**Features:**
+- Command completion (global and context-aware)
+- Sub-command completion with descriptions
+- Virtual filesystem path completion
+- Game file completion
+- Profile callsign completion
+
+**Usage:**
+```dart
+final completer = ConsoleCompleter(
+  gameConfig: myGameConfig,
+  dataProvider: myDataProvider,
+  rootDirs: ['profiles', 'config', 'logs', 'station', 'games'],
+);
+
+final result = completer.complete('play tu', '/games');
+if (result.exactMatch) {
+  // Single match - use result.completedText
+} else if (result.candidates.isNotEmpty) {
+  // Multiple matches - display candidates
+  final lines = completer.formatCandidatesForDisplay(result.candidates);
+}
+```
+
+**Implementing CompletionDataProvider:**
+```dart
+class MyDataProvider implements CompletionDataProvider {
+  @override
+  List<String> getConnectedCallsigns() => ['ABC123', 'XYZ789'];
+
+  @override
+  Map<String, String> getChatRooms() => {'room1': 'General'};
+
+  @override
+  List<({String callsign, String? nickname, bool isStation})> getProfiles() {
+    return [(callsign: 'ABC123', nickname: 'Alice', isStation: false)];
+  }
+}
+```
+
+---
+
+### LogService Isolate Reading
+
+**File:** `lib/services/log_service_native.dart`
+
+Read large log files off the UI thread using Flutter's `compute()` function for isolate-based processing.
+
+**Classes:**
+- `LogReadResult` - Result containing lines, total count, and truncation status
+- `_LogReadParams` - Parameters for the isolate function
+
+**Method:**
+```dart
+Future<LogReadResult> readTodayLogAsync({int maxLines = 1000})
+```
+
+**Usage:**
+```dart
+// Read log lines in isolate (non-blocking)
+final result = await LogService().readTodayLogAsync(maxLines: 1000);
+
+// Access results
+print('Lines: ${result.lines.length}');
+print('Total: ${result.totalLines}');
+print('Truncated: ${result.truncated}');
+
+// Display with ListView.builder for performance
+ListView.builder(
+  itemCount: result.lines.length,
+  itemBuilder: (context, index) => Text(result.lines[index]),
+);
+```
+
+**Performance Notes:**
+- Uses `compute()` to read files in a separate isolate
+- Returns only the last N lines (default 1000) to limit memory
+- Indicates if log was truncated for UI display
+- Combines with `ListView.builder` for efficient rendering of large log files
+
+---
+
 ## Summary Table
 
 | Component | Location | Type | Main Use |
@@ -2708,3 +2917,7 @@ All types from `knownAppTypesConst` are supported with consistent icons and grad
 | TranscribeButtonWidget | widgets/ | Input | Voice-to-text for text fields |
 | App Constants | util/ | Constants | Centralized app type definitions |
 | App Type Theme | util/ | Utility | Centralized icons and gradients for app types |
+| ConsoleIO | cli/ | Interface | Platform-agnostic console I/O |
+| ConsoleHandler | cli/ | Service | Shared command logic for CLI/UI/Telegram |
+| ConsoleCompleter | cli/ | Service | Shared TAB completion logic |
+| LogService.readTodayLogAsync | services/ | Service | Read logs off UI thread in isolate |

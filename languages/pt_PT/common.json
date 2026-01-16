@@ -2042,5 +2042,9 @@
   "upload_video": "Carregar Vídeo",
   "uploading_video": "A carregar vídeo...",
   "upload_first_video": "Carregue o seu primeiro vídeo para começar",
-  "nostr_key_required": "Chave NOSTR necessária"
+  "nostr_key_required": "Chave NOSTR necessária",
+  "auto_play": "Reprodução automática",
+  "change_thumbnail": "Mudar miniatura",
+  "select_thumbnail": "Selecionar miniatura",
+  "generating_previews": "A gerar pré-visualizações..."
 }

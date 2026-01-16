@@ -1,10 +1,55 @@
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'storage_config.dart';
+
+/// Result of reading log file in isolate
+class LogReadResult {
+  final List<String> lines;
+  final int totalLines;
+  final bool truncated;
+
+  LogReadResult({
+    required this.lines,
+    required this.totalLines,
+    required this.truncated,
+  });
+}
+
+/// Parameters for reading log file in isolate
+class _LogReadParams {
+  final String filePath;
+  final int maxLines;
+
+  _LogReadParams(this.filePath, this.maxLines);
+}
+
+/// Read log file in isolate - returns last N lines
+Future<LogReadResult> _readLogFileInIsolate(_LogReadParams params) async {
+  try {
+    final file = File(params.filePath);
+    if (!await file.exists()) {
+      return LogReadResult(lines: [], totalLines: 0, truncated: false);
+    }
+
+    final content = await file.readAsString();
+    final allLines = content.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    final totalLines = allLines.length;
+
+    if (totalLines <= params.maxLines) {
+      return LogReadResult(lines: allLines, totalLines: totalLines, truncated: false);
+    }
+
+    // Return only last N lines
+    final lines = allLines.sublist(totalLines - params.maxLines);
+    return LogReadResult(lines: lines, totalLines: totalLines, truncated: true);
+  } catch (e) {
+    return LogReadResult(lines: ['Error reading log: $e'], totalLines: 1, truncated: false);
+  }
+}
 
 /// Log levels for filtering
 enum LogLevel { debug, info, warn, error }
@@ -297,6 +342,27 @@ class LogService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Read today's log file in a separate isolate for performance
+  /// Returns last [maxLines] lines to avoid UI freeze
+  Future<LogReadResult> readTodayLogAsync({int maxLines = 1000}) async {
+    if (kIsWeb) {
+      return LogReadResult(lines: [], totalLines: 0, truncated: false);
+    }
+    if (!_initialized) {
+      await init();
+    }
+    if (_logsDir == null) {
+      return LogReadResult(lines: [], totalLines: 0, truncated: false);
+    }
+
+    final now = DateTime.now();
+    final dateStr =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final filePath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
+
+    return await compute(_readLogFileInIsolate, _LogReadParams(filePath, maxLines));
   }
 
   Future<String?> readCrashLog() async {

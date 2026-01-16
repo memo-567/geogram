@@ -10,6 +10,7 @@
 #include <file_selector_windows/file_selector_windows.h>
 #include <flutter_onnxruntime/flutter_onnxruntime_plugin.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
+#include <fvp/fvp_plugin_c_api.h>
 #include <geolocator_windows/geolocator_windows.h>
 #include <objectbox_flutter_libs/objectbox_flutter_libs_plugin.h>
 #include <pdfx/pdfx_plugin.h>
@@ -29,6 +30,8 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FlutterOnnxruntimePlugin"));
   FlutterWebRTCPluginRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FlutterWebRTCPlugin"));
+  FvpPluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("FvpPluginCApi"));
   GeolocatorWindowsRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("GeolocatorWindows"));
   ObjectboxFlutterLibsPluginRegisterWithRegistrar(

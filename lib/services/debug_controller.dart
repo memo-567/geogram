@@ -4,13 +4,10 @@
  */
 
 import 'dart:async';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path/path.dart' as p;
 import '../models/collection.dart';
 import 'chat_service.dart';
 import 'collection_service.dart';
-import 'console_vm_manager.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 
@@ -644,7 +641,7 @@ class DebugController {
       },
       {
         'action': 'console_status',
-        'description': 'Get Console VM status (files present, log tail)',
+        'description': 'Get Console terminal status and logs',
         'params': {},
       },
     ];
@@ -843,18 +840,6 @@ class DebugController {
         return {'success': true, 'message': 'Console open triggered'};
 
       case 'console_status':
-        final vmManager = ConsoleVmManager();
-        await vmManager.initialize();
-        final vmPath = await vmManager.vmPath;
-        final Map<String, bool> files = {};
-        for (final f in vmManager.requiredFilesForPlatform()) {
-          files[f] = await File(vmManager.getVmFilePath(f)).exists();
-        }
-
-        final rootfsExtracted = await File(
-          p.join(vmPath, '.rootfs_extracted'),
-        ).exists();
-
         // Tail console-related logs (last 50 containing "Console")
         final logs = LogService().messages
             .where((m) => m.contains('Console'))
@@ -875,9 +860,7 @@ class DebugController {
 
         return {
           'success': true,
-          'vm_path': vmPath,
-          'files': files,
-          'rootfs_extracted': rootfsExtracted,
+          'type': 'cli_terminal',
           'console_collection': consoleCollection != null
               ? {
                   'id': consoleCollection.id,

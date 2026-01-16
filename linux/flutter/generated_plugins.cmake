@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_linux
   flutter_onnxruntime
   flutter_webrtc
+  fvp
   objectbox_flutter_libs
   record_linux
   screen_retriever_linux

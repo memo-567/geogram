@@ -3,12 +3,16 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import 'package:window_manager/window_manager.dart';
 
 /// Video player widget for local video playback
+/// Uses video_player package with fvp backend for cross-platform support
 class VideoPlayerWidget extends StatefulWidget {
   final String videoPath;
   final bool autoPlay;
@@ -16,12 +20,12 @@ class VideoPlayerWidget extends StatefulWidget {
   final VoidCallback? onFullscreenToggle;
 
   const VideoPlayerWidget({
-    Key? key,
+    super.key,
     required this.videoPath,
     this.autoPlay = false,
     this.showControls = true,
     this.onFullscreenToggle,
-  }) : super(key: key);
+  });
 
   @override
   State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
@@ -38,18 +42,42 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   double _volume = 1.0;
   bool _isMuted = false;
   String? _errorMessage;
+  Timer? _hideOverlayTimer;
+  static const _overlayHideDelay = Duration(seconds: 5);
 
   @override
   void initState() {
     super.initState();
     _initializePlayer();
+    _startHideOverlayTimer();
   }
 
   @override
   void dispose() {
+    _hideOverlayTimer?.cancel();
     _controller?.removeListener(_onVideoUpdate);
     _controller?.dispose();
     super.dispose();
+  }
+
+  /// Start or restart the timer to hide overlay after inactivity
+  void _startHideOverlayTimer() {
+    _hideOverlayTimer?.cancel();
+    _hideOverlayTimer = Timer(_overlayHideDelay, () {
+      if (mounted && _isPlaying) {
+        setState(() {
+          _showOverlay = false;
+        });
+      }
+    });
+  }
+
+  /// Show overlay and restart hide timer
+  void _onUserInteraction() {
+    setState(() {
+      _showOverlay = true;
+    });
+    _startHideOverlayTimer();
   }
 
   @override
@@ -153,25 +181,37 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     });
   }
 
-  void _toggleFullscreen() {
+  void _toggleFullscreen() async {
     setState(() {
       _isFullscreen = !_isFullscreen;
+      _showOverlay = !_isFullscreen; // Hide overlay in fullscreen
     });
 
-    if (_isFullscreen) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    // Auto-play when entering fullscreen
+    if (_isFullscreen && _controller != null && !_isPlaying) {
+      _controller!.play();
+    }
+
+    // Desktop: use window_manager for true fullscreen
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      await windowManager.setFullScreen(_isFullscreen);
     } else {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      // Mobile: use orientation and system UI mode
+      if (_isFullscreen) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      } else {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      }
     }
 
     widget.onFullscreenToggle?.call();
@@ -200,23 +240,24 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       return _buildLoadingState(theme);
     }
 
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _showOverlay = !_showOverlay;
-        });
-      },
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Video
-          AspectRatio(
-            aspectRatio: _controller!.value.aspectRatio,
-            child: VideoPlayer(_controller!),
-          ),
-          // Controls overlay
-          if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
-        ],
+    return MouseRegion(
+      onHover: (_) => _onUserInteraction(),
+      onEnter: (_) => _onUserInteraction(),
+      child: GestureDetector(
+        onTap: _onUserInteraction,
+        onPanDown: (_) => _onUserInteraction(),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Video
+            AspectRatio(
+              aspectRatio: _controller!.value.aspectRatio,
+              child: VideoPlayer(_controller!),
+            ),
+            // Controls overlay
+            if (widget.showControls && _showOverlay) _buildControlsOverlay(theme),
+          ],
+        ),
       ),
     );
   }
@@ -260,28 +301,18 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   }
 
   Widget _buildControlsOverlay(ThemeData theme) {
+    // In fullscreen mode, only show the exit fullscreen button
+    if (_isFullscreen) {
+      return _buildFullscreenOverlay();
+    }
+
     return Container(
-      color: Colors.black.withOpacity(0.4),
+      color: Colors.black.withValues(alpha: 0.4),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Top bar (title area)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                const Spacer(),
-                // Fullscreen button
-                IconButton(
-                  icon: Icon(
-                    _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                    color: Colors.white,
-                  ),
-                  onPressed: _toggleFullscreen,
-                ),
-              ],
-            ),
-          ),
+          // Top bar spacer
+          const SizedBox(height: 48),
           // Center play/pause area
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -321,7 +352,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
                     thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                     overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                     activeTrackColor: theme.colorScheme.primary,
-                    inactiveTrackColor: Colors.white.withOpacity(0.3),
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
                     thumbColor: theme.colorScheme.primary,
                   ),
                   child: Slider(
@@ -368,7 +399,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
                           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
                           overlayShape: const RoundSliderOverlayShape(overlayRadius: 8),
                           activeTrackColor: Colors.white,
-                          inactiveTrackColor: Colors.white.withOpacity(0.3),
+                          inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
                           thumbColor: Colors.white,
                         ),
                         child: Slider(
@@ -386,6 +417,24 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       ),
     );
   }
+
+  /// Minimal overlay for fullscreen mode - only exit button
+  Widget _buildFullscreenOverlay() {
+    return Align(
+      alignment: Alignment.topRight,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: IconButton(
+          icon: const Icon(
+            Icons.fullscreen_exit,
+            color: Colors.white,
+            size: 32,
+          ),
+          onPressed: _toggleFullscreen,
+        ),
+      ),
+    );
+  }
 }
 
 /// Compact video player for preview/thumbnail with play overlay
@@ -395,11 +444,11 @@ class VideoPreviewWidget extends StatelessWidget {
   final VoidCallback onPlay;
 
   const VideoPreviewWidget({
-    Key? key,
+    super.key,
     this.thumbnailPath,
     required this.formattedDuration,
     required this.onPlay,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -426,7 +475,7 @@ class VideoPreviewWidget extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
+                color: Colors.black.withValues(alpha: 0.6),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
@@ -443,7 +492,7 @@ class VideoPreviewWidget extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.7),
+                color: Colors.black.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -462,15 +511,9 @@ class VideoPreviewWidget extends StatelessWidget {
   }
 
   Widget _buildPlaceholder(ThemeData theme) {
+    // Dark background only - the play button overlay is shown separately
     return Container(
-      color: theme.colorScheme.surfaceVariant,
-      child: Center(
-        child: Icon(
-          Icons.videocam,
-          size: 64,
-          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-        ),
-      ),
+      color: theme.colorScheme.surfaceContainerHighest,
     );
   }
 }

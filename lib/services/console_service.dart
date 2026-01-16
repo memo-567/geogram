@@ -2,7 +2,7 @@
  * Copyright (c) geogram
  * License: Apache-2.0
  *
- * Service for managing console sessions running Alpine Linux VMs.
+ * Service for managing console terminal sessions.
  */
 
 import 'dart:convert';
@@ -225,12 +225,7 @@ class ConsoleService {
   /// Create a new session
   Future<ConsoleSession> createSession({
     required String name,
-    String vmType = 'alpine-x86',
-    int memory = 128,
-    bool networkEnabled = false,
-    bool keepRunning = false,
     String? description,
-    List<ConsoleMount> mounts = const [],
   }) async {
     if (_collectionPath == null) {
       throw Exception('ConsoleService not initialized');
@@ -256,13 +251,8 @@ class ConsoleService {
       name: name,
       created: created,
       author: author,
-      vmType: vmType,
-      memory: memory,
-      networkEnabled: networkEnabled,
-      keepRunning: keepRunning,
       state: ConsoleSessionState.stopped,
       description: description,
-      mounts: mounts,
       sessionPath: sessionPath,
       collectionPath: _collectionPath,
     );

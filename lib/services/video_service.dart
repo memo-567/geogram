@@ -493,6 +493,52 @@ class VideoService {
     }
   }
 
+  /// Update video thumbnail by extracting frame at specified timestamp
+  ///
+  /// Returns the new thumbnail path on success, null on failure
+  Future<String?> updateThumbnail(
+    String videoId, {
+    required int atSeconds,
+    String? callsign,
+  }) async {
+    final targetCallsign = callsign ?? _callsign;
+    if (_collectionPath == null || targetCallsign == null) return null;
+
+    try {
+      final videosPath = '$_collectionPath/$targetCallsign';
+      final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
+
+      if (videoFolderPath == null) {
+        LogService().log('VideoService: Video folder not found for $videoId');
+        return null;
+      }
+
+      // Find the video file
+      final videoFilePath = await VideoFolderUtils.findVideoMediaPath(videoFolderPath);
+      if (videoFilePath == null) {
+        LogService().log('VideoService: Video file not found in $videoFolderPath');
+        return null;
+      }
+
+      // Generate new thumbnail
+      final thumbnailPath = VideoFolderUtils.buildThumbnailPath(videoFolderPath);
+      final result = await VideoMetadataExtractor.generateThumbnail(
+        videoFilePath,
+        thumbnailPath,
+        atSeconds: atSeconds,
+      );
+
+      if (result != null) {
+        LogService().log('VideoService: Updated thumbnail for $videoId at ${atSeconds}s');
+      }
+
+      return result;
+    } catch (e) {
+      LogService().log('VideoService: Error updating thumbnail: $e');
+      return null;
+    }
+  }
+
   /// Move video to a different folder
   Future<bool> moveVideo(
     String videoId, {

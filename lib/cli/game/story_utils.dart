@@ -33,9 +33,9 @@ class StoryUtils {
     final width = paddedText.length + 2;
 
     return [
-      '\x1B[1;36m' + '╔' + '═' * width + '╗' + '\x1B[0m',
-      '\x1B[1;36m' + '║ $paddedText ║' + '\x1B[0m',
-      '\x1B[1;36m' + '╚' + '═' * width + '╝' + '\x1B[0m',
+      '╔' + '═' * width + '╗',
+      '║ $paddedText ║',
+      '╚' + '═' * width + '╝',
     ];
   }
 
@@ -57,18 +57,7 @@ class StoryUtils {
     final filled = '#' * percent;
     final empty = '-' * (width - percent);
 
-    // Color based on health percentage
-    final percentage = max > 0 ? current / max : 0;
-    String color;
-    if (percentage > 0.6) {
-      color = '\x1B[32m'; // Green
-    } else if (percentage > 0.3) {
-      color = '\x1B[33m'; // Yellow
-    } else {
-      color = '\x1B[31m'; // Red
-    }
-
-    return '[$color$filled\x1B[90m$empty\x1B[0m] $current/$max';
+    return '[$filled$empty] $current/$max';
   }
 
   /// Print text with typewriter effect
@@ -90,22 +79,22 @@ class StoryUtils {
     stdout.write('\x1B[$row;${col}H');
   }
 
-  /// Print colored text
+  /// Print text (color parameter ignored for plain text output)
   static void printColored(String text, String colorCode) {
-    stdout.writeln('$colorCode$text\x1B[0m');
+    stdout.writeln(text);
   }
 
-  /// ANSI color codes
-  static const String red = '\x1B[31m';
-  static const String green = '\x1B[32m';
-  static const String yellow = '\x1B[33m';
-  static const String blue = '\x1B[34m';
-  static const String magenta = '\x1B[35m';
-  static const String cyan = '\x1B[36m';
-  static const String white = '\x1B[37m';
-  static const String bold = '\x1B[1m';
-  static const String dim = '\x1B[2m';
-  static const String reset = '\x1B[0m';
+  /// Color codes (empty for plain text output)
+  static const String red = '';
+  static const String green = '';
+  static const String yellow = '';
+  static const String blue = '';
+  static const String magenta = '';
+  static const String cyan = '';
+  static const String white = '';
+  static const String bold = '';
+  static const String dim = '';
+  static const String reset = '';
 
   /// Print a horizontal line
   static void printLine({int width = 60, String char = '-'}) {

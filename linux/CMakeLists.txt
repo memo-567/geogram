@@ -2,6 +2,11 @@
 cmake_minimum_required(VERSION 3.13)
 project(runner LANGUAGES CXX)
 
+# Override ONNX Runtime version for consistency with Windows
+# Using 1.21.1 to avoid dxcore.dll dependency issue in 1.22.0+
+# See: https://github.com/microsoft/onnxruntime/issues/24771
+set(ONNXRUNTIME_VERSION "1.21.1" CACHE STRING "ONNX Runtime version" FORCE)
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "geogram")
@@ -166,7 +171,7 @@ endif()
 
 # Bundle ONNX Runtime versioned libraries
 # The flutter_onnxruntime plugin only bundles the symlink, but we need the actual versioned .so files
-set(ONNXRUNTIME_VERSION "1.22.0")
+# Note: ONNXRUNTIME_VERSION is set at the top of this file
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   set(ONNXRUNTIME_ARCH "aarch64")
 else()

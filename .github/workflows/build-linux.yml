@@ -53,6 +53,17 @@ jobs:
     - name: Build Linux Release
       run: flutter build linux --release
 
+    - name: Fix library rpaths for portability
+      run: |
+        sudo apt-get install -y patchelf
+        cd build/linux/x64/release/bundle/lib
+        for lib in *.so*; do
+          if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+            echo "Patching rpath for $lib"
+            patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+          fi
+        done
+
     - name: Create portable archive
       run: |
         cd build/linux/x64/release

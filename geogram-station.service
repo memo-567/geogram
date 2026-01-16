@@ -1,0 +1,56 @@
+# Geogram Station Server - Systemd Service File
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/geogram-station.service
+#   2. Adjust paths if your installation is not in /root/geogram
+#   3. Run: systemctl daemon-reload
+#   4. Run: systemctl enable geogram-station
+#   5. Run: systemctl start geogram-station
+#
+# Management:
+#   - Status: systemctl status geogram-station
+#   - Logs:   journalctl -u geogram-station -f
+#   - Stop:   systemctl stop geogram-station
+#   - Start:  systemctl start geogram-station
+#   - Restart: systemctl restart geogram-station
+#
+# The service will automatically restart on failure.
+# Signal handlers (SIGTERM, SIGINT, SIGHUP) are implemented for graceful shutdown.
+
+[Unit]
+Description=Geogram Station Server
+Documentation=https://github.com/geograms/geogram
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/geogram
+ExecStart=/root/geogram/geogram-cli --data-dir=/root/geogram --auto-station
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/root/geogram
+
+# Resource limits (adjust as needed)
+# LimitNOFILE=65535
+# LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=geogram-station
+
+# Environment (optional)
+# Environment="GEOGRAM_LOG_LEVEL=INFO"
+
+[Install]
+WantedBy=multi-user.target

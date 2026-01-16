@@ -34,17 +34,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the geogram directory
 cd "$SCRIPT_DIR"
 
+# FVP cache directory
+FVP_CACHE="linux/fvp-cache"
+
+# Function to restore fvp cache if needed
+restore_fvp_if_needed() {
+    local build_type=$1
+    local cache_src="$FVP_CACHE/$build_type/fvp"
+    local build_dst="build/linux/x64/$build_type/plugins"
+
+    if [ -d "$cache_src" ] && [ ! -d "$build_dst/fvp" ]; then
+        echo "📦 Restoring fvp $build_type build from cache..."
+        mkdir -p "$build_dst"
+        cp -r "$cache_src" "$build_dst/"
+    fi
+}
+
+# Function to cache fvp build
+cache_fvp() {
+    local build_type=$1
+    local build_src="build/linux/x64/$build_type/plugins/fvp"
+    local cache_dst="$FVP_CACHE/$build_type"
+
+    if [ -d "$build_src" ]; then
+        mkdir -p "$cache_dst"
+        rm -rf "$cache_dst/fvp"
+        cp -r "$build_src" "$cache_dst/"
+    fi
+}
+
 echo "🚀 Launching Geogram Desktop..."
 echo "📍 Working directory: $SCRIPT_DIR"
-echo "🔧 Flutter version:"
-"$FLUTTER_BIN" --version
-
-echo ""
-echo "🖥️  Available devices:"
-"$FLUTTER_BIN" devices
-
-echo ""
-echo "▶️  Starting app on Linux desktop..."
 
 # Kill any existing geogram processes to free up ports
 if pgrep -f "geogram" > /dev/null 2>&1; then
@@ -53,8 +73,6 @@ if pgrep -f "geogram" > /dev/null 2>&1; then
     sleep 1
 fi
 
-echo ""
-
 # Get dependencies - try offline first, fall back to online
 echo "📦 Checking dependencies..."
 if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
@@ -62,5 +80,16 @@ if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
     "$FLUTTER_BIN" pub get
 fi
 
-# Run the app on Linux desktop (--no-pub since we already ran pub get)
+# Restore fvp cache if available
+restore_fvp_if_needed "debug"
+restore_fvp_if_needed "release"
+
+echo ""
+echo "▶️  Starting app..."
+
+# Run the app on Linux desktop
 "$FLUTTER_BIN" run -d linux --no-pub "$@"
+
+# Cache fvp builds after successful run
+cache_fvp "debug"
+cache_fvp "release"
