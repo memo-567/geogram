@@ -13,6 +13,7 @@ import '../models/whisper_model_info.dart';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
 import '../../services/storage_config.dart';
+import '../../services/whisper_library_service.dart';
 import '../../transfer/models/transfer_models.dart';
 import '../../transfer/services/transfer_service.dart';
 import '../../util/event_bus.dart';
@@ -46,6 +47,36 @@ class WhisperModelManager {
   /// Preferred model preference key
   static const String _preferredModelKey = 'whisper_preferred_model';
 
+  /// Library service for managing native library downloads
+  final WhisperLibraryService _libraryService = WhisperLibraryService();
+
+  /// Check if the whisper native library is available
+  /// Returns true if bundled (normal builds) or downloaded (F-Droid)
+  Future<bool> isLibraryAvailable() async {
+    return _libraryService.isWhisperAvailable();
+  }
+
+  /// Check if the native library needs to be downloaded (F-Droid builds)
+  Future<bool> needsLibraryDownload() async {
+    if (await _libraryService.isLibraryBundled()) {
+      return false;
+    }
+    return !(await _libraryService.isLibraryDownloaded());
+  }
+
+  /// Download the native library from a station server
+  /// This is needed for F-Droid builds where binaries aren't bundled
+  Future<void> downloadLibrary({
+    required String stationUrl,
+    void Function(double progress)? onProgress,
+  }) async {
+    await _libraryService.downloadLibrary(
+      stationUrl: stationUrl,
+      onProgress: onProgress,
+    );
+    _downloadStateController.add('library');
+  }
+
   /// Initialize the manager
   Future<void> initialize() async {
     final storageConfig = StorageConfig();
@@ -62,6 +93,9 @@ class WhisperModelManager {
     }
 
     LogService().log('WhisperModelManager: Initialized at $_modelsPath');
+
+    // Ensure whisper library is ready (for F-Droid builds that downloaded it)
+    await _libraryService.ensureLibraryReady();
   }
 
   /// Get path to models directory

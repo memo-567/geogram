@@ -243,3 +243,54 @@ UpdateCheckMode: Tags ^fdroid-v.*$
 - Use commit hashes, not tags
 - Keep prebuild scripts to patch GMS dependencies
 - Enable auto update for future versions
+
+## Speech-to-Text on F-Droid
+
+F-Droid builds cannot include the `whisper_flutter_new` package because it contains pre-built native libraries (`.so` files). However, F-Droid users can still use speech-to-text by downloading the library from a station server.
+
+### How It Works
+
+1. F-Droid build removes pre-built binaries from `whisper_flutter_new/android/.cxx/` but keeps the package
+2. When user tries to use speech-to-text, app checks if library is available
+3. If not available, user is prompted to download from a connected station
+4. Station serves the library from `/whisper/{abi}/libwhisper.so`
+5. After download, speech-to-text works normally
+
+### Station Setup for Whisper Libraries
+
+Station operators who want to support speech-to-text for F-Droid users need to:
+
+1. Extract `libwhisper.so` from a regular Android build:
+   ```bash
+   # Build the Android APK
+   flutter build apk --release
+
+   # Extract libraries from APK
+   cd build/app/outputs/flutter-apk
+   unzip -j app-release.apk "lib/*/libwhisper.so" -d whisper_libs/
+   ```
+
+2. Place libraries in the station's storage directory:
+   ```
+   <storage_dir>/whisper/
+   ├── arm64-v8a/
+   │   └── libwhisper.so
+   ├── armeabi-v7a/
+   │   └── libwhisper.so
+   ├── x86_64/
+   │   └── libwhisper.so
+   └── x86/
+       └── libwhisper.so
+   ```
+
+3. The station will automatically serve these at:
+   - `http://station:port/whisper/arm64-v8a/libwhisper.so`
+   - `http://station:port/whisper/armeabi-v7a/libwhisper.so`
+   - etc.
+
+### Library Sizes
+
+- `arm64-v8a/libwhisper.so` - ~4-6 MB (most common, modern devices)
+- `armeabi-v7a/libwhisper.so` - ~4-6 MB (older 32-bit devices)
+- `x86_64/libwhisper.so` - ~4-6 MB (emulators, Chromebooks)
+- `x86/libwhisper.so` - ~4-6 MB (older emulators)

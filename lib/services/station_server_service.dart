@@ -491,6 +491,9 @@ class StationServerService {
     // Scan for existing whisper models
     await _scanWhisperModels();
 
+    // Scan for existing Supertonic TTS models
+    await _scanSupertonicModels();
+
     LogService().log('StationServerService initialized');
 
     // Auto-start station server if it was enabled
@@ -710,6 +713,8 @@ class StationServerService {
         await _handleTileRequest(request);
       } else if (path.startsWith('/bot/models/')) {
         await _handleBotModelRequest(request);
+      } else if (path.startsWith('/whisper/')) {
+        await _handleWhisperLibraryRequest(request);
       } else if (path.startsWith('/console/vm/')) {
         await _handleConsoleVmRequest(request);
       } else if (_isBlogPath(path)) {
@@ -3037,6 +3042,72 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   }
 
   // ============================================================
+  // Whisper Native Library Server (F-Droid Support)
+  // ============================================================
+
+  /// Handle whisper native library downloads for F-Droid builds
+  /// URL pattern: /whisper/{abi}/libwhisper.so
+  /// Supported ABIs: arm64-v8a, armeabi-v7a, x86_64, x86
+  Future<void> _handleWhisperLibraryRequest(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method not allowed');
+      return;
+    }
+
+    final requestPath = request.uri.path;
+    // Parse: /whisper/{abi}/libwhisper.so
+    final regex = RegExp(r'^/whisper/(arm64-v8a|armeabi-v7a|x86_64|x86)/libwhisper\.so$');
+    final match = regex.firstMatch(requestPath);
+
+    if (match == null) {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid path. Use /whisper/{abi}/libwhisper.so',
+        'supported_abis': ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'],
+      }));
+      return;
+    }
+
+    final abi = match.group(1)!;
+    LogService().log('StationServerService: Whisper library request for ABI: $abi');
+
+    // Look for the library in the station's whisper directory
+    final storageConfig = StorageConfig();
+    final whisperDir = path.join(storageConfig.baseDir, 'whisper', abi);
+    final libPath = path.join(whisperDir, 'libwhisper.so');
+
+    final file = File(libPath);
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Library not found',
+        'abi': abi,
+        'path': libPath,
+        'hint': 'Place libwhisper.so in $whisperDir',
+      }));
+      return;
+    }
+
+    try {
+      final bytes = await file.readAsBytes();
+      request.response.statusCode = 200;
+      request.response.headers.contentType = ContentType.binary;
+      request.response.headers.set('Content-Disposition', 'attachment; filename="libwhisper.so"');
+      request.response.contentLength = bytes.length;
+      request.response.add(bytes);
+      LogService().log('StationServerService: Served whisper library for $abi (${bytes.length} bytes)');
+    } catch (e) {
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Failed to read library: $e',
+      }));
+    }
+  }
+
   // Bot Vision Models Server (Offline-First Pattern)
   // ============================================================
 
@@ -3066,8 +3137,8 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       return;
     }
 
-    final modelType = segments[2]; // 'vision', 'music', or 'whisper'
-    if (modelType != 'vision' && modelType != 'music' && modelType != 'whisper') {
+    final modelType = segments[2]; // 'vision', 'music', 'whisper', or 'supertonic'
+    if (modelType != 'vision' && modelType != 'music' && modelType != 'whisper' && modelType != 'supertonic') {
       request.response.statusCode = 400;
       request.response.write('Invalid model type');
       return;
@@ -6840,6 +6911,9 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
       // Also sync whisper models
       await _downloadWhisperModels();
+
+      // Also sync Supertonic TTS models
+      await _downloadSupertonicModels();
     } catch (e) {
       LogService().log('Error polling for updates: $e');
     } finally {
@@ -6854,6 +6928,9 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
   /// Whisper model mirror state
   Set<String> _availableWhisperModels = {};
+
+  /// Supertonic TTS model mirror state
+  Set<String> _availableSupertonicModels = {};
 
   /// Download all assets from GitHub release
   Future<void> _downloadAllPlatformBinaries(Map<String, dynamic> releaseJson) async {
@@ -7068,6 +7145,112 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   List<Map<String, dynamic>> getAvailableWhisperModels() {
     return _whisperModels
         .where((m) => _availableWhisperModels.contains(m['id']))
+        .toList();
+  }
+
+  // ========== Supertonic TTS Model Mirror Methods ==========
+
+  /// Supertonic model definitions for mirroring
+  static const List<Map<String, dynamic>> _supertonicModels = [
+    {
+      'id': 'supertonic-2.onnx',
+      'name': 'Supertonic 2',
+      'size': 66 * 1024 * 1024, // ~66MB
+      'url': 'https://huggingface.co/Supertone/supertonic-2/resolve/main/supertonic-2.onnx',
+      'description': 'Fast on-device text-to-speech (EN, PT, ES, FR, KO)',
+    },
+  ];
+
+  /// Download Supertonic models from HuggingFace
+  Future<void> _downloadSupertonicModels() async {
+    if (_appDir == null) return;
+
+    final supertonicDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
+    if (!await supertonicDir.exists()) {
+      await supertonicDir.create(recursive: true);
+    }
+
+    LogService().log('Checking Supertonic TTS models for mirroring...');
+    _availableSupertonicModels.clear();
+
+    int downloaded = 0;
+    int existed = 0;
+
+    for (final model in _supertonicModels) {
+      final filename = model['id'] as String;
+      final url = model['url'] as String;
+      final expectedSize = model['size'] as int;
+
+      final filePath = path.join(supertonicDir.path, filename);
+      final file = File(filePath);
+
+      // Check if file exists with reasonable size
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          _availableSupertonicModels.add(filename);
+          existed++;
+          continue;
+        }
+      }
+
+      // Download the model
+      try {
+        LogService().log('Downloading Supertonic model: $filename...');
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {'User-Agent': 'Geogram-Station-Updater'},
+        ).timeout(const Duration(minutes: 30));
+
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+          final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
+          LogService().log('Downloaded Supertonic model $filename: ${sizeMb}MB');
+          _availableSupertonicModels.add(filename);
+          downloaded++;
+        } else {
+          LogService().log('Failed to download Supertonic model $filename: ${response.statusCode}');
+        }
+      } catch (e) {
+        LogService().log('Error downloading Supertonic model $filename: $e');
+      }
+    }
+
+    LogService().log('Supertonic model sync: $downloaded new, $existed existing, ${_availableSupertonicModels.length} total');
+  }
+
+  /// Scan for existing Supertonic models on disk
+  Future<void> _scanSupertonicModels() async {
+    if (_appDir == null) return;
+
+    final supertonicDir = Directory(path.join(_appDir!, 'bot', 'models', 'supertonic'));
+    if (!await supertonicDir.exists()) return;
+
+    _availableSupertonicModels.clear();
+
+    for (final model in _supertonicModels) {
+      final filename = model['id'] as String;
+      final expectedSize = model['size'] as int;
+      final filePath = path.join(supertonicDir.path, filename);
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        if (fileSize > expectedSize * 0.9) {
+          _availableSupertonicModels.add(filename);
+        }
+      }
+    }
+
+    if (_availableSupertonicModels.isNotEmpty) {
+      LogService().log('Found ${_availableSupertonicModels.length} Supertonic models on disk');
+    }
+  }
+
+  /// Get list of available Supertonic models for download page
+  List<Map<String, dynamic>> getAvailableSupertonicModels() {
+    return _supertonicModels
+        .where((m) => _availableSupertonicModels.contains(m['id']))
         .toList();
   }
 

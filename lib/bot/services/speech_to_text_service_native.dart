@@ -121,6 +121,29 @@ class SpeechToTextService {
     return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
   }
 
+  /// Check if the whisper native library is available
+  /// On F-Droid builds, the library may need to be downloaded first
+  Future<bool> isLibraryAvailable() async {
+    return _modelManager.isLibraryAvailable();
+  }
+
+  /// Check if the library needs to be downloaded (F-Droid builds)
+  Future<bool> needsLibraryDownload() async {
+    return _modelManager.needsLibraryDownload();
+  }
+
+  /// Download the whisper library from a station server
+  /// Required for F-Droid builds before speech-to-text can be used
+  Future<void> downloadLibrary({
+    required String stationUrl,
+    void Function(double progress)? onProgress,
+  }) async {
+    await _modelManager.downloadLibrary(
+      stationUrl: stationUrl,
+      onProgress: onProgress,
+    );
+  }
+
   /// Check if preload is in progress
   bool get isPreloading =>
       _preloadCompleter != null && !_preloadCompleter!.isCompleted;
@@ -193,6 +216,12 @@ class SpeechToTextService {
   ///
   /// Returns true if model was loaded successfully
   Future<bool> loadModel(String modelId) async {
+    // Check if whisper library is available (may need download on F-Droid)
+    if (!await isLibraryAvailable()) {
+      LogService().log('SpeechToTextService: Whisper library not available');
+      return false;
+    }
+
     if (_loadedModelId == modelId && _whisper != null) {
       LogService().log('SpeechToTextService: Model $modelId already loaded, skipping reload');
       return true; // Already loaded - instant
@@ -341,6 +370,13 @@ class SpeechToTextService {
     if (!isSupported) {
       return TranscriptionResult.failure(
         error: 'Speech-to-text not supported on this platform',
+      );
+    }
+
+    // Check if whisper library is available (may need download on F-Droid)
+    if (!await isLibraryAvailable()) {
+      return TranscriptionResult.failure(
+        error: 'Whisper library not available. Please download from station.',
       );
     }
 

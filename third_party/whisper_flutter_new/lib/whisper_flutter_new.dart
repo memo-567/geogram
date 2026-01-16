@@ -38,8 +38,37 @@ class Whisper {
   // override of model download host
   final String? downloadHost;
 
+  /// Custom library path for runtime-loaded libraries (e.g., F-Droid builds)
+  static String? _customLibraryPath;
+
+  /// Set custom path to libwhisper.so for runtime loading
+  /// Used when the library is not bundled (e.g., F-Droid builds)
+  static void setLibraryPath(String path) {
+    _customLibraryPath = path;
+  }
+
+  /// Check if the whisper library is available (either bundled or custom path set)
+  static bool isLibraryAvailable() {
+    if (_customLibraryPath != null) {
+      return File(_customLibraryPath!).existsSync();
+    }
+    // For bundled library, try to open it
+    if (Platform.isAndroid) {
+      try {
+        DynamicLibrary.open("libwhisper.so");
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return true; // Other platforms use process()
+  }
+
   DynamicLibrary _openLib() {
     if (Platform.isAndroid) {
+      if (_customLibraryPath != null) {
+        return DynamicLibrary.open(_customLibraryPath!);
+      }
       return DynamicLibrary.open("libwhisper.so");
     } else {
       return DynamicLibrary.process();
