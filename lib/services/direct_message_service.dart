@@ -44,6 +44,28 @@ class DMDeliveryFailedException implements Exception {
   String toString() => message;
 }
 
+/// Cache entry for DM messages
+/// Used to avoid repeated file I/O for message loading
+class _MessageCache {
+  List<ChatMessage> messages;
+  DateTime lastLoaded;
+  String? newestTimestamp;
+  bool isComplete; // true if all messages loaded (reached end of conversation)
+
+  _MessageCache({
+    required this.messages,
+    required this.lastLoaded,
+    this.newestTimestamp,
+    this.isComplete = false,
+  });
+
+  /// Check if cache is still fresh (less than 5 seconds old)
+  bool get isFresh => DateTime.now().difference(lastLoaded).inSeconds < 5;
+
+  /// Check if cache has enough messages for the requested limit
+  bool hasEnoughMessages(int limit) => messages.length >= limit || isComplete;
+}
+
 /// Service for managing 1:1 direct message conversations
 class DirectMessageService {
   static final DirectMessageService _instance = DirectMessageService._internal();
@@ -58,6 +80,10 @@ class DirectMessageService {
 
   /// Cached conversations
   final Map<String, DMConversation> _conversations = {};
+
+  /// Message cache: callsign -> cached messages
+  /// Used to avoid repeated file I/O for message loading
+  final Map<String, _MessageCache> _messageCache = {};
 
   /// Stream controller for conversation updates
   final _conversationsController = StreamController<List<DMConversation>>.broadcast();
@@ -108,6 +134,7 @@ class DirectMessageService {
     _basePath = null;
     _chatBasePath = null;
     _conversations.clear();
+    _messageCache.clear();
   }
 
   /// Get the current user's callsign
@@ -389,6 +416,7 @@ class DirectMessageService {
 
   /// Load a single conversation from its path
   /// Path format: chat/{otherCallsign}/
+  /// Optimized to avoid full message loading during conversation list build
   Future<void> _loadConversationFromPath(String chatPath) async {
     final otherCallsign = p.basename(chatPath).toUpperCase();
 
@@ -399,6 +427,7 @@ class DirectMessageService {
     // Check if this is a direct message channel by looking for config.json with type=direct
     bool isDMChannel = false;
     final configPath = '$chatPath/config.json';
+    Map<String, dynamic>? config;
 
     try {
       String? configContent;
@@ -415,7 +444,7 @@ class DirectMessageService {
       }
 
       if (configContent != null) {
-        final config = json.decode(configContent) as Map<String, dynamic>;
+        config = json.decode(configContent) as Map<String, dynamic>;
         isDMChannel = config['type'] == 'direct';
       }
     } catch (e) {
@@ -426,7 +455,7 @@ class DirectMessageService {
     if (!isDMChannel) return;
 
     // Load stored npub from config.json for identity binding
-    final storedNpub = await _loadConversationNpub(chatPath);
+    final storedNpub = config?['otherNpub'] as String?;
 
     final conversation = DMConversation(
       otherCallsign: otherCallsign,
@@ -435,13 +464,81 @@ class DirectMessageService {
       otherNpub: storedNpub,
     );
 
-    // Load messages to update conversation metadata
-    final messages = await loadMessages(otherCallsign, limit: 1);
-    if (messages.isNotEmpty) {
-      conversation.updateFromMessages(messages);
+    // Try to get cached metadata from config.json first (fast path)
+    if (config != null) {
+      final lastMsgTime = config['lastMessageTime'] as String?;
+      final lastMsgPreview = config['lastMessagePreview'] as String?;
+      final lastMsgAuthor = config['lastMessageAuthor'] as String?;
+      if (lastMsgTime != null) {
+        conversation.lastMessageTime = DateTime.tryParse(lastMsgTime);
+        conversation.lastMessagePreview = lastMsgPreview;
+        conversation.lastMessageAuthor = lastMsgAuthor;
+      }
+    }
+
+    // If no cached metadata, load last message from file (slow path, but only happens once)
+    if (conversation.lastMessageTime == null) {
+      final lastMsg = await _loadLastMessageQuick(chatPath);
+      if (lastMsg != null) {
+        conversation.lastMessageTime = lastMsg.dateTime;
+        conversation.lastMessagePreview = lastMsg.content;
+        conversation.lastMessageAuthor = lastMsg.author;
+      }
     }
 
     _conversations[otherCallsign] = conversation;
+  }
+
+  /// Quickly load just the last message from a conversation (no signature verification)
+  /// Used during conversation list loading to avoid expensive full message parsing
+  Future<ChatMessage?> _loadLastMessageQuick(String chatPath) async {
+    try {
+      // Find message files
+      final messagesPath = '$chatPath/messages.txt';
+      String? content;
+
+      if (kIsWeb) {
+        final fs = FileSystemService.instance;
+        if (await fs.exists(messagesPath)) {
+          content = await fs.readAsString(messagesPath);
+        }
+      } else {
+        final file = File(messagesPath);
+        if (await file.exists()) {
+          content = await file.readAsString();
+        }
+      }
+
+      if (content == null || content.isEmpty) return null;
+
+      // Parse only the last message block (look for last occurrence of timestamp pattern)
+      // Message blocks start with a blank line followed by timestamp
+      final lines = content.split('\n');
+      int lastMsgStart = -1;
+
+      // Find the last message block by looking for timestamp pattern from the end
+      for (int i = lines.length - 1; i >= 0; i--) {
+        final line = lines[i].trim();
+        // Timestamp format: YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD HH:MM:SS
+        if (RegExp(r'^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}').hasMatch(line)) {
+          lastMsgStart = i;
+          break;
+        }
+      }
+
+      if (lastMsgStart == -1) return null;
+
+      // Extract just the last message block
+      final msgLines = lines.sublist(lastMsgStart);
+      final msgText = msgLines.join('\n');
+
+      // Parse the single message (without signature verification for speed)
+      final messages = ChatService.parseMessageText(msgText);
+      return messages.isNotEmpty ? messages.first : null;
+    } catch (e) {
+      LogService().log('Error loading last message quick: $e');
+      return null;
+    }
   }
 
   Future<bool> _canReachDevice(String callsign) async {
@@ -554,12 +651,15 @@ class DirectMessageService {
     // 7. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
+    // 8. Add to cache (incremental update - avoids full reload)
+    _addMessageToCache(normalizedCallsign, message);
+
     // Update conversation metadata
     conversation.lastMessageTime = message.dateTime;
     conversation.lastMessagePreview = content;
     conversation.lastMessageAuthor = profile.callsign;
 
-    // 8. Fire event and notify listeners
+    // 9. Fire event and notify listeners
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
   }
@@ -656,12 +756,15 @@ class DirectMessageService {
     // 8. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
+    // 9. Add to cache (incremental update - avoids full reload)
+    _addMessageToCache(normalizedCallsign, message);
+
     // Update conversation metadata
     conversation.lastMessageTime = message.dateTime;
     conversation.lastMessagePreview = '🎤 Voice message (${durationSeconds}s)';
     conversation.lastMessageAuthor = profile.callsign;
 
-    // 9. Fire event and notify listeners
+    // 10. Fire event and notify listeners
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
 
@@ -782,12 +885,15 @@ class DirectMessageService {
     // 10. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
+    // 11. Add to cache (incremental update - avoids full reload)
+    _addMessageToCache(normalizedCallsign, message);
+
     // Update conversation metadata
     conversation.lastMessageTime = message.dateTime;
     conversation.lastMessagePreview = '📎 $originalName';
     conversation.lastMessageAuthor = profile.callsign;
 
-    // 11. Fire event and notify listeners
+    // 12. Fire event and notify listeners
     _fireMessageEvent(message, otherCallsign, fromSync: false);
     _notifyListeners();
 
@@ -915,6 +1021,9 @@ class DirectMessageService {
 
     // Save to queue file (separate from delivered messages)
     await _saveToQueue(normalizedCallsign, message);
+
+    // Add to cache (incremental update - avoids full reload)
+    _addMessageToCache(normalizedCallsign, message);
 
     // Update conversation metadata
     conversation.lastMessageTime = message.dateTime;
@@ -1417,6 +1526,9 @@ class DirectMessageService {
     // Use the message's npub for the filename (the sender's identity)
     await _saveMessage(conversation.path, message, otherNpub: message.npub);
 
+    // Add to cache (incremental update - avoids full reload)
+    _addMessageToCache(normalizedCallsign, message);
+
     // Update conversation metadata
     if (conversation.lastMessageTime == null ||
         message.dateTime.isAfter(conversation.lastMessageTime!)) {
@@ -1600,12 +1712,51 @@ class DirectMessageService {
   }
 
   /// Load messages from a DM conversation
+  /// Uses in-memory cache to avoid repeated file I/O
   /// Loads from all messages-{npub}.txt files and legacy messages.txt
   /// Each file is tied to a specific cryptographic identity
   Future<List<ChatMessage>> loadMessages(String otherCallsign, {int limit = 100, String? filterNpub}) async {
     await initialize();
 
     final normalizedCallsign = otherCallsign.toUpperCase();
+
+    // Check cache first (skip for npub filtering as it's rare)
+    if (filterNpub == null) {
+      final cache = _messageCache[normalizedCallsign];
+      if (cache != null && cache.isFresh && cache.hasEnoughMessages(limit)) {
+        // Return cached messages (most recent `limit` messages)
+        final cached = cache.messages;
+        if (cached.length <= limit) {
+          return List.from(cached);
+        }
+        return cached.sublist(cached.length - limit);
+      }
+    }
+
+    // Cache miss or stale - load from disk
+    final messages = await _loadMessagesFromDisk(normalizedCallsign, filterNpub: filterNpub);
+
+    // Update cache (only for non-filtered queries)
+    if (filterNpub == null) {
+      _messageCache[normalizedCallsign] = _MessageCache(
+        messages: messages,
+        lastLoaded: DateTime.now(),
+        newestTimestamp: messages.isNotEmpty ? messages.last.timestamp : null,
+        isComplete: true, // We loaded all messages
+      );
+    }
+
+    // Apply limit
+    if (messages.length > limit) {
+      return messages.sublist(messages.length - limit);
+    }
+
+    return messages;
+  }
+
+  /// Load messages from disk (without cache)
+  /// This is the expensive operation that reads files and verifies signatures
+  Future<List<ChatMessage>> _loadMessagesFromDisk(String normalizedCallsign, {String? filterNpub}) async {
     final path = getDMPath(normalizedCallsign);
 
     try {
@@ -1673,7 +1824,7 @@ class DirectMessageService {
             // If message is FROM them, recipient was me (_myCallsign)
             final isFromMe = msg.author.toUpperCase() == _myCallsign.toUpperCase();
             final roomIdForVerification = isFromMe ? normalizedCallsign : _myCallsign;
-            final verified = verifySignature(msg, roomId: roomIdForVerification);
+            verifySignature(msg, roomId: roomIdForVerification);
 
             // For messages from the other party in npub-specific files,
             // verify the message's npub matches the file's npub
@@ -1705,11 +1856,6 @@ class DirectMessageService {
 
       // Sort by timestamp
       allMessages.sort();
-
-      // Apply limit
-      if (allMessages.length > limit) {
-        return allMessages.sublist(allMessages.length - limit);
-      }
 
       return allMessages;
     } catch (e) {
@@ -1968,8 +2114,17 @@ class DirectMessageService {
   }
 
   /// Merge incoming messages using timestamp-based deduplication
+  /// Optimized to use message cache when available
   Future<int> _mergeMessages(String otherCallsign, List<ChatMessage> incoming) async {
-    final local = await loadMessages(otherCallsign, limit: 99999);
+    // Use cache if available, otherwise load from disk
+    final cache = _messageCache[otherCallsign];
+    final List<ChatMessage> local;
+    if (cache != null && cache.isComplete) {
+      local = cache.messages;
+    } else {
+      // Load all messages from disk (will populate cache)
+      local = await loadMessages(otherCallsign, limit: 99999);
+    }
 
     // Create set of existing message identifiers (timestamp + author)
     final existing = <String>{};
@@ -2000,6 +2155,9 @@ class DirectMessageService {
       for (final msg in newMessages) {
         await _saveMessage(path, msg);
 
+        // Add to cache if available
+        _addMessageToCache(otherCallsign, msg);
+
         // Fire event for each new message
         _fireMessageEvent(msg, otherCallsign, fromSync: true);
       }
@@ -2020,6 +2178,26 @@ class DirectMessageService {
     }
 
     return newMessages.length;
+  }
+
+  /// Add a single message to the cache (incremental update)
+  /// Used when sending/receiving individual messages to avoid full reload
+  void _addMessageToCache(String callsign, ChatMessage message) {
+    final key = callsign.toUpperCase();
+    final cache = _messageCache[key];
+    if (cache != null) {
+      // Add message and re-sort to maintain order
+      cache.messages.add(message);
+      cache.messages.sort();
+      cache.newestTimestamp = cache.messages.last.timestamp;
+      cache.lastLoaded = DateTime.now(); // Refresh cache timestamp
+    }
+  }
+
+  /// Invalidate message cache for a conversation
+  /// Call this when messages are deleted or history is cleared
+  void invalidateMessageCache(String callsign) {
+    _messageCache.remove(callsign.toUpperCase());
   }
 
   /// Verify a message signature per chat-format-specification.md
@@ -2147,6 +2325,7 @@ class DirectMessageService {
       }
 
       _conversations.remove(normalizedCallsign);
+      _messageCache.remove(normalizedCallsign); // Invalidate cache
       _notifyListeners();
     } catch (e) {
       LogService().log('Error deleting conversation: $e');

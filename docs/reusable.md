@@ -53,6 +53,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [CollectionService.generateBlogCache](#collectionservicegenerateblogcache) - Generate blog posts cache
 - [StunServerService](#stunserverservice) - Self-hosted STUN server for WebRTC NAT traversal
 - [VideoMetadataExtractor](#videometadataextractor) - Video metadata and thumbnail generation using media_kit
+- [DirectMessageService Message Cache](#directmessageservice-message-cache) - DM message caching for performance
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -3013,6 +3014,73 @@ All types from `knownAppTypesConst` are supported with consistent icons and grad
 2. Add to `singleInstanceTypesConst` if it should be single-instance
 3. Add icon case to `getAppTypeIcon()` in `app_type_theme.dart`
 4. Add gradient case to `getAppTypeGradient()` in `app_type_theme.dart`
+
+---
+
+### DirectMessageService Message Cache
+
+**File:** `lib/services/direct_message_service.dart`
+
+In-memory message caching pattern to avoid repeated file I/O and expensive signature verification. The cache:
+- Returns cached messages if fresh (< 5 seconds old) and has enough messages for the request
+- Automatically updates cache when new messages are sent/received (incremental updates)
+- Invalidates cache when conversation is deleted
+
+**Cache Structure:**
+```dart
+class _MessageCache {
+  List<ChatMessage> messages;
+  DateTime lastLoaded;
+  String? newestTimestamp;
+  bool isComplete; // true if all messages loaded
+
+  bool get isFresh => DateTime.now().difference(lastLoaded).inSeconds < 5;
+  bool hasEnoughMessages(int limit) => messages.length >= limit || isComplete;
+}
+
+// Cache map: callsign -> cached messages
+final Map<String, _MessageCache> _messageCache = {};
+```
+
+**Usage Pattern:**
+```dart
+// Cache-aware message loading
+Future<List<ChatMessage>> loadMessages(String callsign, {int limit = 100}) async {
+  // Check cache first
+  final cache = _messageCache[callsign];
+  if (cache != null && cache.isFresh && cache.hasEnoughMessages(limit)) {
+    return cache.messages.take(limit).toList();
+  }
+
+  // Cache miss - load from disk
+  final messages = await _loadMessagesFromDisk(callsign);
+
+  // Update cache
+  _messageCache[callsign] = _MessageCache(
+    messages: messages,
+    lastLoaded: DateTime.now(),
+    isComplete: true,
+  );
+
+  return messages;
+}
+
+// Incremental cache update (avoids full reload)
+void _addMessageToCache(String callsign, ChatMessage message) {
+  final cache = _messageCache[callsign];
+  if (cache != null) {
+    cache.messages.add(message);
+    cache.messages.sort();
+    cache.lastLoaded = DateTime.now();
+  }
+}
+```
+
+**Benefits:**
+- Second open of same conversation returns instantly from cache
+- Sending/receiving messages updates cache incrementally
+- No "Not responding" dialog from Android on large conversations
+- Cache auto-expires after 5 seconds for freshness
 
 ---
 

@@ -43,6 +43,7 @@ class _DMChatPageState extends State<DMChatPage> {
   bool _isLoading = true;
   bool _isSending = false;
   bool _isRecording = false;
+  bool _isSyncing = false;
   String? _error;
   ChatMessage? _quotedMessage;
 
@@ -503,34 +504,42 @@ class _DMChatPageState extends State<DMChatPage> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_i18n.t('syncing'))),
-    );
+    setState(() {
+      _isSyncing = true;
+    });
 
-    // First, flush any queued messages
-    final delivered = await _dmService.flushQueue(widget.otherCallsign);
+    try {
+      // First, flush any queued messages
+      final delivered = await _dmService.flushQueue(widget.otherCallsign);
 
-    // Then sync to get messages from them
-    final result = await _dmService.syncWithDevice(
-      widget.otherCallsign,
-      deviceUrl: device!.url,
-    );
+      // Then sync to get messages from them
+      final result = await _dmService.syncWithDevice(
+        widget.otherCallsign,
+        deviceUrl: device!.url,
+      );
 
-    if (mounted) {
-      if (result.success) {
-        await _loadMessages();
-        final queueInfo = delivered > 0 ? ', $delivered queued sent' : '';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent$queueInfo',
+      if (mounted) {
+        if (result.success) {
+          await _loadMessages();
+          final queueInfo = delivered > 0 ? ', $delivered queued sent' : '';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent$queueInfo',
+              ),
             ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed: ${result.error}')),
-        );
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Sync failed: ${result.error}')),
+          );
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncing = false;
+        });
       }
     }
   }
@@ -558,12 +567,22 @@ class _DMChatPageState extends State<DMChatPage> {
           ],
         ),
         actions: [
-          // Sync button
-          IconButton(
-            icon: const Icon(Icons.sync),
-            tooltip: _i18n.t('sync'),
-            onPressed: _syncMessages,
-          ),
+          // Sync button with spinner when syncing
+          if (_isSyncing)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.sync),
+              tooltip: _i18n.t('sync'),
+              onPressed: _syncMessages,
+            ),
           // Info button
           IconButton(
             icon: const Icon(Icons.info_outline),
@@ -602,8 +621,32 @@ class _DMChatPageState extends State<DMChatPage> {
 
     return Column(
       children: [
+        // Syncing banner
+        if (_isSyncing)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: Colors.blue.shade100,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _i18n.t('syncing'),
+                  style: TextStyle(color: Colors.blue.shade900, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
         // Offline banner - messages will be queued
-        if (!isOnline)
+        if (!isOnline && !_isSyncing)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
