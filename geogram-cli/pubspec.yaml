@@ -22,4 +22,5 @@ dependencies:
   bech32: ^0.2.2
   mime: ^1.0.5
   archive: ^3.6.1
+  sqlite3: ^2.4.0               # SQLite for NOSTR relay storage (pure Dart FFI)
   # Note: shared_preferences and ensemble_ts_interpreter removed - they depend on Flutter
