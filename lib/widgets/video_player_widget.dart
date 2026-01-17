@@ -103,12 +103,15 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   Future<void> _initializePlayer() async {
     final file = File(widget.videoPath);
     if (!await file.exists()) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Video file not found';
         _isInitialized = false;
       });
       return;
     }
+
+    if (!mounted) return;
 
     try {
       _player = Player();
@@ -161,15 +164,18 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       // Open the media file
       await _player!.open(Media(widget.videoPath));
 
+      if (!mounted) return;
+
       setState(() {
         _isInitialized = true;
         _errorMessage = null;
       });
 
       if (widget.autoPlay) {
-        _player!.play();
+        _player?.play();
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load video: $e';
         _isInitialized = false;

@@ -71,7 +71,10 @@ class MainActivity : FlutterActivity() {
                 "onFlutterCrash" -> {
                     val error = call.argument<String>("error") ?: "Unknown error"
                     val timestamp = call.argument<Long>("timestamp") ?: System.currentTimeMillis()
-                    GeogramApplication.onFlutterCrash(error, timestamp)
+                    val stackTrace = call.argument<String>("stackTrace") ?: ""
+                    val appVersion = call.argument<String>("appVersion") ?: ""
+                    val recentLogs = call.argument<String>("recentLogs") ?: ""
+                    GeogramApplication.onFlutterCrash(error, timestamp, stackTrace, appVersion, recentLogs)
                     result.success(true)
                 }
                 "setRestartOnCrash" -> {

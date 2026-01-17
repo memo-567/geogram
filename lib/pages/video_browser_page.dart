@@ -914,6 +914,7 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
   Future<void> _initializePlayer() async {
     final file = File(widget.videoPath);
     if (!await file.exists()) return;
+    if (!mounted) return;
 
     _player = Player();
     _controller = VideoController(_player!);
@@ -945,14 +946,14 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
 
     // Open and auto-play
     await _player!.open(Media(widget.videoPath));
-    _player!.play();
+    if (!mounted) return;
 
-    if (mounted) {
-      setState(() {
-        _isInitialized = true;
-        _isPlaying = true;
-      });
-    }
+    _player?.play();
+
+    setState(() {
+      _isInitialized = true;
+      _isPlaying = true;
+    });
   }
 
   void _startHideTimer() {

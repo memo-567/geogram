@@ -94,12 +94,13 @@ public class GeogramApplication extends Application {
      * Called from Flutter when Flutter isolate crashes.
      * This allows the native side to trigger restart even if Flutter is dead.
      */
-    public static void onFlutterCrash(String error, long timestamp) {
+    public static void onFlutterCrash(String error, long timestamp, String stackTrace,
+                                       String appVersion, String recentLogs) {
         Log.e(TAG, "Flutter crash reported: " + error);
 
         if (instance != null) {
             // Log to native crash file as well
-            instance.logFlutterCrashToFile(error, timestamp);
+            instance.logFlutterCrashToFile(error, timestamp, stackTrace, appVersion, recentLogs);
 
             if (restartOnCrash && instance.shouldRestart()) {
                 instance.scheduleRestart();
@@ -153,8 +154,10 @@ public class GeogramApplication extends Application {
 
     /**
      * Log Flutter crash to native crash file for unified crash log access.
+     * Includes stack trace and recent logs for comprehensive debugging.
      */
-    private void logFlutterCrashToFile(String error, long timestamp) {
+    private void logFlutterCrashToFile(String error, long timestamp, String stackTrace,
+                                        String appVersion, String recentLogs) {
         try {
             File crashDir = new File(getFilesDir(), "geogram/logs");
             if (!crashDir.exists()) {
@@ -171,11 +174,36 @@ public class GeogramApplication extends Application {
             sb.append("=== CRASH REPORT ===\n");
             sb.append("Timestamp: ").append(timestampStr).append("\n");
             sb.append("Type: FlutterCrash\n");
+
+            // App version
+            if (appVersion != null && !appVersion.isEmpty()) {
+                sb.append("App Version: ").append(appVersion).append("\n");
+            }
+
+            // Device info
             sb.append("Android Version: ").append(Build.VERSION.RELEASE)
               .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
             sb.append("Device: ").append(Build.MANUFACTURER).append(" ")
               .append(Build.MODEL).append("\n");
-            sb.append("Error: ").append(error).append("\n");
+            sb.append("Device Product: ").append(Build.PRODUCT).append("\n");
+            sb.append("Device Hardware: ").append(Build.HARDWARE).append("\n");
+
+            // Error message
+            sb.append("\nError: ").append(error).append("\n");
+
+            // Stack trace
+            if (stackTrace != null && !stackTrace.isEmpty()) {
+                sb.append("\nStack Trace:\n");
+                sb.append(stackTrace).append("\n");
+            }
+
+            // Recent logs for context
+            if (recentLogs != null && !recentLogs.isEmpty()) {
+                sb.append("\n--- Recent Log Entries (before crash) ---\n");
+                sb.append(recentLogs).append("\n");
+                sb.append("--- End Recent Logs ---\n");
+            }
+
             sb.append("=== END CRASH REPORT ===\n\n");
 
             fos.write(sb.toString().getBytes());

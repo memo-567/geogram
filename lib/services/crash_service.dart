@@ -135,16 +135,37 @@ class CrashService {
   }
 
   /// Notify native side that Flutter crashed (for restart logic)
-  Future<void> notifyNativeCrash(String error) async {
+  /// Includes stack trace and recent logs for better debugging
+  Future<void> notifyNativeCrash(String error, {StackTrace? stackTrace}) async {
     if (kIsWeb || !Platform.isAndroid) return;
 
     try {
+      // Get recent log entries for context
+      final recentLogs = _getRecentLogs();
+
       await _channel.invokeMethod('onFlutterCrash', {
         'error': error,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'stackTrace': stackTrace?.toString() ?? '',
+        'appVersion': '$appVersion ($appBuildNumber)',
+        'recentLogs': recentLogs,
       });
     } catch (e) {
       // Native side might already be dead, ignore
+    }
+  }
+
+  /// Get recent log entries for crash context
+  String _getRecentLogs() {
+    try {
+      final logs = LogService().messages;
+      // Get last 20 log entries
+      final recentLogs = logs.length > 20
+          ? logs.sublist(logs.length - 20)
+          : logs;
+      return recentLogs.join('\n');
+    } catch (e) {
+      return 'Unable to retrieve logs: $e';
     }
   }
 

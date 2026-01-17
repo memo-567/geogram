@@ -522,16 +522,19 @@ void _setupCrashHandlers() {
     // Present error in debug mode
     FlutterError.presentError(details);
 
-    // For fatal errors, notify native for potential restart
+    // For fatal errors, notify native for potential restart (with stack trace)
     if (details.silent != true) {
-      CrashService().notifyNativeCrash(details.exceptionAsString());
+      CrashService().notifyNativeCrash(
+        details.exceptionAsString(),
+        stackTrace: details.stack,
+      );
     }
   };
 
   // Handle async errors that escape zones (platform dispatcher errors)
   PlatformDispatcher.instance.onError = (error, stack) {
     CrashService().logCrashSync('PlatformDispatcher', error, stack);
-    CrashService().notifyNativeCrash(error.toString());
+    CrashService().notifyNativeCrash(error.toString(), stackTrace: stack);
     // Return true to prevent the error from propagating
     return true;
   };
