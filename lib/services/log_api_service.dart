@@ -21,6 +21,7 @@ import 'chat_service.dart';
 import 'direct_message_service.dart';
 import 'devices_service.dart';
 import 'device_apps_service.dart';
+import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
@@ -3101,6 +3102,26 @@ class LogApiService {
         signature = event.sig;
         eventId = event.id;
 
+        // Extract file metadata from event tags (for file messages)
+        final fileTag = event.getTagValue('file');
+        final fileSizeTag = event.getTagValue('file_size');
+        final fileNameTag = event.getTagValue('file_name');
+        final sha1Tag = event.getTagValue('sha1');
+
+        // Store file metadata in a temporary map to merge later
+        if (fileTag != null) {
+          body['_file_from_event'] = fileTag;
+        }
+        if (fileSizeTag != null) {
+          body['_file_size_from_event'] = fileSizeTag;
+        }
+        if (fileNameTag != null) {
+          body['_file_name_from_event'] = fileNameTag;
+        }
+        if (sha1Tag != null) {
+          body['_sha1_from_event'] = sha1Tag;
+        }
+
       } else if (body.containsKey('content')) {
         // Simple message - use device's profile
         content = body['content'] as String;
@@ -3130,11 +3151,26 @@ class LogApiService {
       if (body.containsKey('metadata') && body['metadata'] is Map) {
         final extraMeta = body['metadata'] as Map;
         extraMeta.forEach((key, value) {
-          if (key is String && value is String) {
-            metadata[key] = value;
+          if (key is String && value != null) {
+            metadata[key] = value.toString();
           }
         });
       }
+
+      // Add file metadata from event tags (priority over body metadata)
+      if (body['_file_from_event'] != null) {
+        metadata['file'] = body['_file_from_event'].toString();
+      }
+      if (body['_file_size_from_event'] != null) {
+        metadata['file_size'] = body['_file_size_from_event'].toString();
+      }
+      if (body['_file_name_from_event'] != null) {
+        metadata['file_name'] = body['_file_name_from_event'].toString();
+      }
+      if (body['_sha1_from_event'] != null) {
+        metadata['sha1'] = body['_sha1_from_event'].toString();
+      }
+
       // Add signature-related fields (order: created_at, npub, event_id, signature last)
       if (createdAt != null) metadata['created_at'] = createdAt.toString();
       if (npub != null) metadata['npub'] = npub;
@@ -4647,15 +4683,21 @@ class LogApiService {
   }
 
   /// Handle GET /api/dm/{callsign}/files/{filename} - serve DM file
+  /// Tracks upload progress for sender's UI
   Future<shelf.Response> _handleDMFileGetRequest(
     shelf.Request request,
     String senderCallsign,
     String filename,
     Map<String, String> headers,
   ) async {
+    // Get the receiver's callsign (the device requesting the file)
+    final receiverCallsign = request.headers['x-device-callsign']?.toUpperCase() ?? senderCallsign;
+    final uploadManager = ChatFileUploadManager();
+
     try {
       // Security: prevent path traversal
       if (filename.contains('..') || filename.contains('/') || filename.contains('\\')) {
+        uploadManager.failUpload(receiverCallsign, filename, 'Invalid filename');
         return shelf.Response.forbidden(
           jsonEncode({'error': 'Invalid filename'}),
           headers: headers,
@@ -4670,6 +4712,7 @@ class LogApiService {
       filePath ??= await dmService.getFilePath(senderCallsign, filename);
 
       if (filePath == null) {
+        uploadManager.failUpload(receiverCallsign, filename, 'File not found');
         return shelf.Response.notFound(
           jsonEncode({'error': 'File not found'}),
           headers: headers,
@@ -4678,6 +4721,7 @@ class LogApiService {
 
       final file = io.File(filePath);
       if (!await file.exists()) {
+        uploadManager.failUpload(receiverCallsign, filename, 'File not found');
         return shelf.Response.notFound(
           jsonEncode({'error': 'File not found'}),
           headers: headers,
@@ -4708,16 +4752,49 @@ class LogApiService {
       }
 
       final fileBytes = await file.readAsBytes();
+      final totalBytes = fileBytes.length;
+
+      // Start tracking upload
+      uploadManager.startUpload(receiverCallsign, filename, totalBytes);
+      LogService().log('LogApiService: Serving DM file to $receiverCallsign: $filename ($totalBytes bytes)');
+
+      // Stream the file in chunks with progress tracking
+      const chunkSize = 32 * 1024; // 32KB chunks
+      var bytesSent = 0;
+
+      Stream<List<int>> fileStream() async* {
+        for (var offset = 0; offset < totalBytes; offset += chunkSize) {
+          final end = (offset + chunkSize > totalBytes) ? totalBytes : offset + chunkSize;
+          final chunk = fileBytes.sublist(offset, end);
+          bytesSent += chunk.length;
+
+          // Update progress
+          uploadManager.updateProgress(receiverCallsign, filename, bytesSent);
+
+          yield chunk;
+
+          // Small delay to allow UI updates and prevent overwhelming slow connections
+          if (bytesSent < totalBytes) {
+            await Future.delayed(const Duration(milliseconds: 5));
+          }
+        }
+
+        // Mark upload as completed
+        uploadManager.completeUpload(receiverCallsign, filename);
+        LogService().log('LogApiService: DM file upload completed: $filename to $receiverCallsign');
+      }
+
       return shelf.Response.ok(
-        fileBytes,
+        fileStream(),
         headers: {
           ...headers,
           'Content-Type': contentType,
-          'Content-Length': fileBytes.length.toString(),
+          'Content-Length': totalBytes.toString(),
         },
       );
     } catch (e) {
       LogService().log('LogApiService: Error serving DM file: $e');
+      uploadManager.failUpload(receiverCallsign, filename, e.toString());
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': e.toString()}),
         headers: headers,

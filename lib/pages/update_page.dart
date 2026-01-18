@@ -35,6 +35,12 @@ class _UpdatePageState extends State<UpdatePage> {
     super.initState();
     // Mark that UpdatePage is visible to suppress the update banner
     _updateService.isUpdatePageVisible = true;
+    // Clear any existing update banner since we're now on the Updates page
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+      }
+    });
     _completedDownloadListener = () {
       _setStateIfMounted(() {
         _completedDownloadPath = _updateService.completedDownloadPathNotifier.value;
@@ -540,10 +546,10 @@ class _UpdatePageState extends State<UpdatePage> {
                       _buildInfoRow(_i18n.t('version'), 'v$currentVersion'),
                       _buildInfoRow(_i18n.t('platform'), platform.name.toUpperCase()),
                       _buildInfoRow(_i18n.t('binary_type'), platform.binaryPattern),
-                      if (settings.lastCheckTime != null)
+                      if (settings.currentVersionPublishedAt != null)
                         _buildInfoRow(
-                          _i18n.t('last_check'),
-                          _formatDateTime(settings.lastCheckTime!),
+                          _i18n.t('released'),
+                          _formatDateString(settings.currentVersionPublishedAt!),
                         ),
                     ],
                   ),

@@ -187,3 +187,5 @@ dependency_overrides:
     path: third_party/flutter_webrtc
   whisper_flutter_new:
     path: third_party/whisper_flutter_new
+  ble_peripheral:
+    path: third_party/ble_peripheral  # Patched to skip bonding/pairing

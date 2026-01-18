@@ -73,12 +73,12 @@ class BluetoothClassicService {
   bool get isInitialized => _isInitialized;
 
   /// Check if Bluetooth Classic is available on this platform
-  /// Currently restricted to Android only as it's the only fully tested platform
+  /// BLE+ (Bluetooth Classic) completely disabled - use pure BLE
   static bool get isAvailable {
-    if (kIsWeb) return false;
-    if (AppArgs().internetOnly) return false;
-    // Only Android is fully tested for BLE+
-    return Platform.isAndroid;
+    return false; // Disabled - using pure BLE without pairing
+    // if (kIsWeb) return false;
+    // if (AppArgs().internetOnly) return false;
+    // return Platform.isAndroid;
   }
 
   /// Check if this platform can act as a Bluetooth Classic server

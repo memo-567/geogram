@@ -48,11 +48,11 @@ class BluetoothClassicTransport extends Transport with TransportMixin {
 
   @override
   bool get isAvailable {
-    // Not available on web or in internet-only mode
-    if (kIsWeb) return false;
-    if (AppArgs().internetOnly) return false;
-    // Check platform-level availability
-    return BluetoothClassicService.isAvailable;
+    // BLE+ (Bluetooth Classic) completely disabled - use pure BLE
+    return false;
+    // if (kIsWeb) return false;
+    // if (AppArgs().internetOnly) return false;
+    // return BluetoothClassicService.isAvailable;
   }
 
   final BluetoothClassicService _btService = BluetoothClassicService();

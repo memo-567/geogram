@@ -132,16 +132,18 @@ class BLEMessageService {
       await _identityService.initialize();
       LogService().log('BLEMessageService: Identity service initialized (device: ${_identityService.deviceId})');
 
-      if (BluetoothClassicService.isAvailable) {
-        final btClassic = BluetoothClassicService();
-        await btClassic.initialize();
-        _localClassicMac = _sanitizeClassicMac(await btClassic.getLocalMacAddress());
-        if (_localClassicMac != null) {
-          LogService().log('BLEMessageService: Bluetooth Classic available (mac: $_localClassicMac)');
-        } else {
-          LogService().log('BLEMessageService: Bluetooth Classic MAC unavailable, BLE+ disabled');
-        }
-      }
+      // BLE+ (Bluetooth Classic) disabled - use pure BLE without pairing
+      // if (BluetoothClassicService.isAvailable) {
+      //   final btClassic = BluetoothClassicService();
+      //   await btClassic.initialize();
+      //   _localClassicMac = _sanitizeClassicMac(await btClassic.getLocalMacAddress());
+      //   if (_localClassicMac != null) {
+      //     LogService().log('BLEMessageService: Bluetooth Classic available (mac: $_localClassicMac)');
+      //   } else {
+      //     LogService().log('BLEMessageService: Bluetooth Classic MAC unavailable, BLE+ disabled');
+      //   }
+      // }
+      LogService().log('BLEMessageService: BLE+ disabled - using pure BLE');
 
       // Initialize GATT server on Android/iOS
       if (canBeServer) {
@@ -261,32 +263,10 @@ class BLEMessageService {
   }
 
   bool _handleBlePlusPairRequest(String deviceId, BLEChatPayload payload) {
+    // BLE+ pairing disabled - using pure BLE without pairing
     if (payload.channel != _blePlusPairChannel) return false;
-
-    try {
-      final data = json.decode(payload.content);
-      if (data is! Map<String, dynamic>) return false;
-      if (data['type'] != 'pair_request') return false;
-      final classicMac = data['classic_mac'] as String?;
-      if (classicMac == null || classicMac.isEmpty) return false;
-
-      final pairingService = BluetoothClassicPairingService();
-      pairingService.initialize().then((_) {
-        pairingService.initiatePairingFromBLE(
-          callsign: payload.author.toUpperCase(),
-          classicMac: classicMac,
-          bleMac: deviceId,
-        );
-      });
-
-      LogService().log(
-        'BLEMessageService: Received BLE+ pairing request from ${payload.author} ($classicMac)',
-      );
-      return true;
-    } catch (e) {
-      LogService().log('BLEMessageService: Invalid BLE+ pairing request: $e');
-      return false;
-    }
+    LogService().log('BLEMessageService: BLE+ pair request ignored (feature disabled)');
+    return false; // Don't process pair requests
   }
 
   /// Send HELLO to a discovered device (client mode)

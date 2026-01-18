@@ -24,6 +24,7 @@ import '../services/i18n_service.dart';
 import '../services/debug_controller.dart';
 import '../services/group_sync_service.dart';
 import '../services/signing_service.dart';
+import '../services/chat_file_download_manager.dart';
 import '../models/device_source.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -78,6 +79,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   final RelayCacheService _cacheService = RelayCacheService();
   final ChatNotificationService _chatNotificationService = ChatNotificationService();
   final I18nService _i18n = I18nService();
+  final ChatFileDownloadManager _downloadManager = ChatFileDownloadManager();
 
   List<ChatChannel> _channels = [];
   ChatChannel? _selectedChannel;
@@ -133,6 +135,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Debug action subscription for select_chat_room
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
 
+  // Download progress event subscription
+  EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
+
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
   String? _groupsCollectionPath;
@@ -145,8 +150,26 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToUnreadCounts();
     _subscribeToFileChanges();
     _subscribeToDebugActions();
+    _subscribeToDownloadEvents();
     _startRelayStatusChecker();
     _startMessagePolling();
+  }
+
+  void _subscribeToDownloadEvents() {
+    _downloadSubscription = EventBus().on<ChatDownloadProgressEvent>((event) {
+      // Check if this download belongs to the currently selected station room
+      if (_selectedStationRoom != null) {
+        final sourceId = 'STATION_${_selectedStationRoom!.id}'.toUpperCase();
+        if (event.downloadId.startsWith(sourceId)) {
+          // Refresh UI to show progress
+          if (mounted) setState(() {});
+          // Reload messages when download completes to show the image
+          if (event.status == 'completed') {
+            _syncStationMessages();
+          }
+        }
+      }
+    });
   }
 
   /// Listen for debug API actions to select a chat room or send messages
@@ -247,6 +270,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _unreadSubscription?.cancel();
     _fileChangeSubscription?.cancel();
     _debugActionSubscription?.cancel();
+    _downloadSubscription?.cancel();
     _chatService.stopWatching();
     _stationStatusTimer?.cancel();
     _messagePollingTimer?.cancel();
@@ -1931,6 +1955,85 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     );
   }
 
+  /// Get source ID for station room download manager
+  String get _stationSourceId =>
+      _selectedStationRoom != null ? 'STATION_${_selectedStationRoom!.id}'.toUpperCase() : '';
+
+  /// Check if download button should be shown for a station message
+  bool _shouldShowStationDownloadButton(ChatMessage message) {
+    if (!message.hasFile) return false;
+    if (_selectedStationRoom == null) return false;
+
+    final filename = message.attachedFile;
+    if (filename == null) return false;
+
+    // Check if file already downloaded locally
+    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, filename);
+    final downloadState = _downloadManager.getDownload(downloadId);
+    if (downloadState?.status == ChatDownloadStatus.completed) return false;
+
+    // Check file size against threshold (station uses LAN bandwidth)
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    if (fileSize <= 0) return false;
+
+    return !_downloadManager.shouldAutoDownload(ConnectionBandwidth.lan, fileSize);
+  }
+
+  /// Get file size for a station message
+  int? _getStationFileSize(ChatMessage message) {
+    if (!message.hasFile) return null;
+    return int.tryParse(message.getMeta('file_size') ?? '0');
+  }
+
+  /// Get download state for a station message
+  ChatDownload? _getStationDownloadState(ChatMessage message) {
+    if (!message.hasFile || message.attachedFile == null) return null;
+    if (_selectedStationRoom == null) return null;
+    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, message.attachedFile!);
+    return _downloadManager.getDownload(downloadId);
+  }
+
+  /// Handle download button pressed for station message
+  Future<void> _onStationDownloadPressed(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+    if (_selectedStationRoom == null || _lastRelayCacheKey == null) return;
+
+    final filename = message.attachedFile!;
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, filename);
+
+    await _downloadManager.downloadFile(
+      id: downloadId,
+      sourceId: _stationSourceId,
+      filename: filename,
+      expectedBytes: fileSize,
+      downloadFn: (resumeFrom, onProgress) async {
+        // Download via station service
+        final localPath = await _stationService.downloadRoomFile(
+          _selectedStationRoom!.stationUrl,
+          _selectedStationRoom!.id,
+          filename,
+          cacheKey: _lastRelayCacheKey,
+        );
+
+        // Simulate progress for non-streaming download
+        if (localPath != null) {
+          onProgress(fileSize);
+        }
+
+        return localPath;
+      },
+    );
+  }
+
+  /// Handle download cancel pressed for station message
+  Future<void> _onStationCancelDownload(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, message.attachedFile!);
+    await _downloadManager.cancelDownload(downloadId);
+  }
+
   bool _isMessageHidden(ChatMessage message) {
     if (_selectedChannel == null) return false;
     return _chatService.isMessageHidden(_selectedChannel!.id, message);
@@ -2574,6 +2677,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             getAttachmentPath: _getStationAttachmentPath,
             getVoiceFilePath: _getStationVoiceFilePath,
             onImageOpen: _openStationImage,
+            // Download manager integration for station rooms
+            shouldShowDownloadButton: _shouldShowStationDownloadButton,
+            getFileSize: _getStationFileSize,
+            getDownloadState: _getStationDownloadState,
+            onDownloadPressed: _onStationDownloadPressed,
+            onCancelDownload: _onStationCancelDownload,
           ),
         ),
         // Message input with voice recording and file attachments - same as other chat UIs

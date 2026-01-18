@@ -808,20 +808,9 @@ class DirectMessageService {
     final fileSha1 = copyResult.sha1Hash;
     final originalName = copyResult.originalName;
 
-    // 5. Upload file to remote device BEFORE sending the message
-    // The receiver needs the file to display the image/attachment
-    final localFilePath = p.join(conversation.path, 'files', storedFileName);
-    final uploaded = await _uploadFileToRemote(
-      normalizedCallsign,
-      localFilePath,
-      storedFileName,
-      profile.callsign,
-    );
-    if (!uploaded) {
-      // Clean up copied file on failure
-      await _deleteFile(conversation.path, storedFileName);
-      throw DMDeliveryFailedException('Failed to upload file to $normalizedCallsign');
-    }
+    // 5. File stays on sender's device - receiver will fetch on demand (pull model)
+    // The GET /api/dm/{callsign}/files/{filename} endpoint serves the file
+    // No upload - receiver pulls when they click Download button
 
     // 6. Create the message with file metadata
     // SHA1 hash is included in metadata for integrity verification
@@ -850,6 +839,8 @@ class DirectMessageService {
           'room': normalizedCallsign,
           'callsign': profile.callsign,
           'file': storedFileName,
+          'file_size': fileSize.toString(),
+          'file_name': originalName,
           'sha1': fileSha1,
         },
         profile,
@@ -1337,9 +1328,9 @@ class DirectMessageService {
     try {
       // Request file from the sender's device
       // The sender stored it in their chat/{myCallsign}/files/ folder
-      // Path: /{senderCallsign}/api/dm/{myCallsign}/files/{filename}
+      // Path: /api/dm/{myCallsign}/files/{filename}
       final myCallsign = _myCallsign;
-      final apiPath = '/$normalizedCallsign/api/dm/$myCallsign/files/$fileName';
+      final apiPath = '/api/dm/$myCallsign/files/$fileName';
 
       LogService().log('DM: Downloading file from $normalizedCallsign: $fileName');
 
@@ -1375,6 +1366,113 @@ class DirectMessageService {
       return filePath;
     } catch (e) {
       LogService().log('DM: File download error: $e');
+      return null;
+    }
+  }
+
+  /// Download a file attachment with progress tracking
+  /// Used by ChatFileDownloadManager for large file downloads with progress UI
+  /// [resumeFrom] - Number of bytes already downloaded (for resume capability)
+  /// [onProgress] - Callback to report download progress (bytes received so far)
+  /// Returns local file path on success, null on failure
+  Future<String?> downloadFileWithProgress(
+    String otherCallsign,
+    String fileName, {
+    int resumeFrom = 0,
+    void Function(int bytesReceived)? onProgress,
+  }) async {
+    if (kIsWeb) return null;
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+
+    // Check if already exists locally and is complete
+    if (resumeFrom == 0) {
+      final existingPath = await getFilePath(normalizedCallsign, fileName);
+      if (existingPath != null) {
+        return existingPath;
+      }
+    }
+
+    // Security: prevent path traversal
+    if (fileName.contains('..') || fileName.contains('/') || fileName.contains('\\')) {
+      LogService().log('DM: Invalid file name: $fileName');
+      return null;
+    }
+
+    try {
+      // Request file from the sender's device
+      // The sender stored it in their chat/{myCallsign}/files/ folder
+      // Path: /{senderCallsign}/api/dm/{myCallsign}/files/{filename}
+      final myCallsign = _myCallsign;
+      final apiPath = '/api/dm/$myCallsign/files/$fileName';
+
+      LogService().log('DM: Downloading file with progress from $normalizedCallsign: $fileName (resume from $resumeFrom)');
+
+      // TODO: When the underlying HTTP client supports range requests,
+      // add Range header for resume capability:
+      // headers: resumeFrom > 0 ? {'Range': 'bytes=$resumeFrom-'} : null
+
+      final response = await DevicesService().makeDeviceApiRequest(
+        callsign: normalizedCallsign,
+        method: 'GET',
+        path: apiPath,
+      );
+
+      if (response == null) {
+        LogService().log('DM: No route to $normalizedCallsign for file download');
+        return null;
+      }
+
+      if (response.statusCode != 200) {
+        LogService().log('DM: File download failed: ${response.statusCode}');
+        return null;
+      }
+
+      final bytes = response.bodyBytes;
+      final totalBytes = bytes.length;
+
+      // Create local files directory if needed
+      final storagePath = StorageConfig().baseDir;
+      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
+      if (!await filesDir.exists()) {
+        await filesDir.create(recursive: true);
+      }
+
+      // Save the file with progress simulation
+      // Note: Since we're receiving all bytes at once, we simulate progress
+      final filePath = p.join(filesDir.path, fileName);
+      final file = File(filePath);
+
+      // Write bytes in chunks to report progress
+      const chunkSize = 32 * 1024; // 32 KB chunks
+      final sink = file.openWrite();
+      try {
+        int bytesWritten = 0;
+        for (var offset = 0; offset < totalBytes; offset += chunkSize) {
+          final end = (offset + chunkSize < totalBytes) ? offset + chunkSize : totalBytes;
+          sink.add(bytes.sublist(offset, end));
+          bytesWritten = end;
+
+          // Report progress
+          onProgress?.call(bytesWritten);
+
+          // Small delay to allow UI to update (prevents blocking)
+          if (bytesWritten < totalBytes) {
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+
+      // Final progress callback
+      onProgress?.call(totalBytes);
+
+      LogService().log('DM: File downloaded with progress: $filePath ($totalBytes bytes)');
+      return filePath;
+    } catch (e) {
+      LogService().log('DM: File download with progress error: $e');
       return null;
     }
   }
@@ -1450,69 +1548,6 @@ class DirectMessageService {
       filtered[key] = value;
     });
     return filtered;
-  }
-
-  /// Upload a file to the remote device before sending the DM message
-  /// Uses the same pattern as station chat file uploads
-  /// Returns true if upload successful, false otherwise
-  Future<bool> _uploadFileToRemote(
-    String targetCallsign,
-    String localFilePath,
-    String remoteFileName,
-    String myCallsign,
-  ) async {
-    if (kIsWeb) return false;
-
-    try {
-      final file = File(localFilePath);
-      if (!await file.exists()) {
-        LogService().log('DM: Upload failed - file not found: $localFilePath');
-        return false;
-      }
-
-      final bytes = await file.readAsBytes();
-
-      // 10 MB limit
-      if (bytes.length > 10 * 1024 * 1024) {
-        LogService().log('DM: Upload failed - file too large: ${bytes.length} bytes');
-        return false;
-      }
-
-      // POST to: /api/dm/{myCallsign}/files/{filename}
-      // The receiver stores it in their chat/{myCallsign}/files/ folder
-      final path = '/api/dm/$myCallsign/files/$remoteFileName';
-
-      LogService().log('DM: Uploading file to $targetCallsign: $remoteFileName (${bytes.length} bytes)');
-
-      // Use base64 encoding like station chat uploads
-      final response = await DevicesService().makeDeviceApiRequest(
-        callsign: targetCallsign,
-        method: 'POST',
-        path: path,
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'Content-Transfer-Encoding': 'base64',
-          'X-Filename': remoteFileName,
-        },
-        body: base64Encode(bytes),
-      );
-
-      if (response == null) {
-        LogService().log('DM: No route to $targetCallsign for file upload');
-        return false;
-      }
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        LogService().log('DM: File uploaded successfully to $targetCallsign');
-        return true;
-      } else {
-        LogService().log('DM: File upload failed: ${response.statusCode} - ${response.body}');
-        return false;
-      }
-    } catch (e) {
-      LogService().log('DM: File upload error: $e');
-      return false;
-    }
   }
 
   /// Save an incoming/synced message without re-signing

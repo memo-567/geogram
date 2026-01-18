@@ -54,6 +54,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [StunServerService](#stunserverservice) - Self-hosted STUN server for WebRTC NAT traversal
 - [VideoMetadataExtractor](#videometadataextractor) - Video metadata and thumbnail generation using media_kit
 - [DirectMessageService Message Cache](#directmessageservice-message-cache) - DM message caching for performance
+- [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -3084,6 +3085,100 @@ void _addMessageToCache(String callsign, ChatMessage message) {
 
 ---
 
+### ChatFileDownloadManager
+
+**File:** `lib/services/chat_file_download_manager.dart`
+
+Unified file download manager for all chat types. Handles connection-aware auto-download thresholds, progress tracking, and resume capability.
+
+**Features:**
+- Connection-aware thresholds: BLE (100KB), LAN/WiFi/Internet (5MB)
+- Progress tracking with speed display
+- Resume capability for partial downloads
+- Reusable across DM, remote rooms, and station rooms
+
+**Enums:**
+```dart
+enum ConnectionBandwidth { ble, lan, internet }
+enum ChatDownloadStatus { idle, downloading, paused, completed, failed }
+```
+
+**ChatDownload Class:**
+```dart
+class ChatDownload {
+  final String id;              // Unique identifier (sourceId_filename)
+  final String sourceId;        // Callsign or room ID
+  final String filename;
+  final int expectedBytes;
+  int bytesTransferred = 0;
+  ChatDownloadStatus status;
+  double? speedBytesPerSecond;
+  String? localPath;            // Final path after completion
+
+  double get progressPercent => (bytesTransferred / expectedBytes * 100);
+  String get fileSizeFormatted => _formatBytes(expectedBytes);
+  String? get speedFormatted => speedBytesPerSecond != null
+      ? '${_formatBytes(speedBytesPerSecond!.toInt())}/s' : null;
+}
+```
+
+**Usage:**
+```dart
+final _downloadManager = ChatFileDownloadManager();
+
+// Check if file should auto-download
+bool _shouldShowDownloadButton(ChatMessage message) {
+  final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+  final bandwidth = _downloadManager.getDeviceBandwidth(callsign);
+  return !_downloadManager.shouldAutoDownload(bandwidth, fileSize);
+}
+
+// Start download with progress
+await _downloadManager.downloadFile(
+  id: '${callsign}_$filename',
+  sourceId: callsign,
+  filename: filename,
+  expectedBytes: fileSize,
+  downloadFn: (resumeFrom, onProgress) async {
+    return await _dmService.downloadFileWithProgress(
+      callsign, filename, resumeFrom: resumeFrom, onProgress: onProgress,
+    );
+  },
+);
+
+// Get current download state
+final download = _downloadManager.getDownload(downloadId);
+
+// Subscribe to progress events
+EventBus().on<ChatDownloadProgressEvent>((event) {
+  if (event.downloadId.startsWith(sourceId)) {
+    setState(() {});
+    if (event.status == 'completed') _loadMessages();
+  }
+});
+```
+
+**UI Integration (MessageBubbleWidget):**
+```dart
+MessageBubbleWidget(
+  // ... existing props ...
+  showDownloadButton: _shouldShowDownloadButton(message),
+  fileSize: int.tryParse(message.getMeta('file_size') ?? '0'),
+  downloadState: _downloadManager.getDownload(downloadId),
+  onDownloadPressed: () => _onDownloadPressed(message),
+  onCancelDownload: () => _onCancelDownload(message),
+)
+```
+
+**Thresholds:**
+| Connection | Auto-download threshold |
+|------------|------------------------|
+| BLE        | < 100 KB               |
+| LAN/WiFi   | < 5 MB                 |
+| Internet   | < 5 MB                 |
+
+---
+
 ## CLI/Console Abstractions
 
 ### ConsoleIO
@@ -3376,3 +3471,128 @@ if (response.statusCode == 200) {
 ### Station-Side Initialization
 - Flutter station: `GeoIpService().initFromAssets()` (loads from Flutter assets)
 - CLI station: `GeoIpService().initFromFile(path)` (loads from filesystem)
+
+## ChatFileUploadManager
+
+Singleton service for tracking file uploads (sender-side progress when serving files to receivers).
+
+**Location**: `lib/services/chat_file_upload_manager.dart`
+
+### Purpose
+
+In the pull model for BLE file transfers:
+1. Sender stores file locally and sends message with metadata
+2. Receiver sees download button and requests file on demand
+3. Sender serves the file when receiver requests it
+4. **ChatFileUploadManager tracks the serving progress for sender's UI**
+
+### Upload States
+
+```dart
+enum ChatUploadStatus {
+  pending,     // File sent, waiting for receiver to request
+  uploading,   // Transfer in progress (receiver downloading)
+  completed,   // File fully transferred
+  failed,      // Transfer failed (can retry)
+}
+```
+
+### Key Features
+
+1. **Progress Tracking**: Tracks bytes transferred, speed, percentage
+2. **Auto-Resume**: Listens for `DeviceStatusChangedEvent` and auto-retries failed uploads when device reconnects
+3. **Event Bus Integration**: Fires `ChatUploadProgressEvent` for UI updates
+4. **Retry Support**: `requestRetry()` sends notification to receiver to re-request file
+
+### Usage Pattern
+
+**1. Initialize in page state:**
+```dart
+final ChatFileUploadManager _uploadManager = ChatFileUploadManager();
+
+@override
+void initState() {
+  _uploadManager.initialize(); // Start listening for device reconnections
+}
+```
+
+**2. Subscribe to upload events:**
+```dart
+EventBus().on<ChatUploadProgressEvent>((event) {
+  if (event.receiverCallsign == targetCallsign) {
+    setState(() {}); // Refresh UI
+  }
+});
+```
+
+**3. Get upload state for a message:**
+```dart
+ChatUpload? getUploadState(ChatMessage message) {
+  if (!message.hasFile) return null;
+  return _uploadManager.getUploadForFile(
+    receiverCallsign,
+    message.attachedFile!,
+  );
+}
+```
+
+**4. Handle retry button:**
+```dart
+Future<void> onRetryUpload(ChatMessage message) async {
+  final success = await _uploadManager.requestRetry(
+    receiverCallsign,
+    message.attachedFile!,
+  );
+}
+```
+
+### Server-Side Integration
+
+In `log_api_service.dart`, the GET file handler tracks progress:
+
+```dart
+// In _handleDMFileGetRequest:
+uploadManager.startUpload(receiverCallsign, filename, totalBytes);
+
+Stream<List<int>> fileStream() async* {
+  for (var offset = 0; offset < totalBytes; offset += chunkSize) {
+    final chunk = fileBytes.sublist(offset, end);
+    bytesSent += chunk.length;
+    uploadManager.updateProgress(receiverCallsign, filename, bytesSent);
+    yield chunk;
+  }
+  uploadManager.completeUpload(receiverCallsign, filename);
+}
+```
+
+### ChatUpload Data Model
+
+```dart
+class ChatUpload {
+  final String id;              // "{receiverCallsign}_{filename}"
+  final String messageId;
+  final String receiverCallsign;
+  final String filename;
+  final int totalBytes;
+  int bytesTransferred;
+  ChatUploadStatus status;
+  double? speedBytesPerSecond;
+  String? error;
+  int retryCount;
+
+  double get progressPercent;
+  String get fileSizeFormatted;
+  String get bytesTransferredFormatted;
+  String? get speedFormatted;
+}
+```
+
+### Related Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| ChatUploadProgressEvent | util/event_bus.dart | Event for UI updates |
+| DeviceStatusChangedEvent | util/event_bus.dart | Triggers auto-resume |
+| ChatFileDownloadManager | services/ | Similar pattern for downloads |
+| MessageBubbleWidget | widgets/ | Shows upload progress UI |
+| DMChatPage | pages/ | Integrates upload tracking |

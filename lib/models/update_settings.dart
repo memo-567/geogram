@@ -166,6 +166,7 @@ class UpdateSettings {
   String? lastCheckedStationUrl; // Station URL if from station (null = GitHub)
   String? lastCheckedPublishedAt; // Release date ISO string
   bool? lastCheckedAssetAvailable; // Whether an asset existed for this platform
+  String? currentVersionPublishedAt; // Release date of currently installed version
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -182,6 +183,7 @@ class UpdateSettings {
     this.lastCheckedStationUrl,
     this.lastCheckedPublishedAt,
     this.lastCheckedAssetAvailable,
+    this.currentVersionPublishedAt,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -203,6 +205,7 @@ class UpdateSettings {
       lastCheckedStationUrl: json['lastCheckedStationUrl'] as String?,
       lastCheckedPublishedAt: json['lastCheckedPublishedAt'] as String?,
       lastCheckedAssetAvailable: json['lastCheckedAssetAvailable'] as bool?,
+      currentVersionPublishedAt: json['currentVersionPublishedAt'] as String?,
     );
   }
 
@@ -222,6 +225,7 @@ class UpdateSettings {
       'lastCheckedStationUrl': lastCheckedStationUrl,
       'lastCheckedPublishedAt': lastCheckedPublishedAt,
       'lastCheckedAssetAvailable': lastCheckedAssetAvailable,
+      'currentVersionPublishedAt': currentVersionPublishedAt,
     };
   }
 
@@ -240,6 +244,7 @@ class UpdateSettings {
     String? lastCheckedStationUrl,
     String? lastCheckedPublishedAt,
     bool? lastCheckedAssetAvailable,
+    String? currentVersionPublishedAt,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -256,6 +261,7 @@ class UpdateSettings {
       lastCheckedStationUrl: lastCheckedStationUrl ?? this.lastCheckedStationUrl,
       lastCheckedPublishedAt: lastCheckedPublishedAt ?? this.lastCheckedPublishedAt,
       lastCheckedAssetAvailable: lastCheckedAssetAvailable ?? this.lastCheckedAssetAvailable,
+      currentVersionPublishedAt: currentVersionPublishedAt ?? this.currentVersionPublishedAt,
     );
   }
 }

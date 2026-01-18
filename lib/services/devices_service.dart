@@ -691,7 +691,8 @@ class DevicesService {
   /// Handle BLE discovered devices
   void _handleBLEDevices(List<BLEDevice> bleDevices) {
     LogService().log('DevicesService: _handleBLEDevices called with ${bleDevices.length} devices');
-    final pairingService = BluetoothClassicPairingService();
+    // BLE+ (Bluetooth Classic) disabled - use pure BLE
+    // final pairingService = BluetoothClassicPairingService();
 
     // Track which callsigns are currently visible via BLE
     final bleCallsigns = <String>{};
@@ -705,8 +706,8 @@ class DevicesService {
       // Track this device as visible via BLE
       bleCallsigns.add(callsign);
 
-      // Check if this device is BLE+ paired
-      final isBLEPlus = pairingService.isBLEPlus(callsign);
+      // BLE+ disabled - always false
+      const isBLEPlus = false;
 
       if (_devices.containsKey(callsign)) {
         // Update existing device
@@ -1481,6 +1482,22 @@ class DevicesService {
     // In internet-only mode, sync happens via station proxy
     if (!wasOnline && isNowOnline) {
       _triggerDMSync(device.callsign, device.url);
+
+      // Fire event for upload manager and other listeners
+      final connectionMethod = hasBLEConnection
+          ? 'bluetooth'
+          : (directOk ? 'lan' : 'internet');
+      EventBus().fire(DeviceStatusChangedEvent(
+        callsign: device.callsign,
+        isReachable: true,
+        connectionMethod: connectionMethod,
+      ));
+    } else if (wasOnline && !isNowOnline) {
+      // Device went offline
+      EventBus().fire(DeviceStatusChangedEvent(
+        callsign: device.callsign,
+        isReachable: false,
+      ));
     }
 
     return isNowOnline;
@@ -1778,15 +1795,28 @@ class DevicesService {
       _discoverBLEDevices();
     }
 
-    // Check reachability for all known devices
+    // Check reachability for all known devices (non-blocking)
     // Create a copy of callsigns to avoid concurrent modification
     final callsigns = _devices.keys.toList();
-    for (final callsign in callsigns) {
-      await checkReachability(callsign);
-    }
 
-    // Update last refresh time
-    _lastFullRefreshTime = DateTime.now();
+    // Fire event to notify UI that scanning started
+    EventBus().fire(DeviceScanEvent(isScanning: true, totalDevices: callsigns.length));
+
+    // Run all checks in parallel (non-blocking)
+    final futures = callsigns.map((c) =>
+      checkReachability(c).catchError((_) => false)
+    ).toList();
+
+    // Track completion in background (don't await - keeps UI responsive)
+    unawaited(Future.wait(futures).then((_) {
+      _lastFullRefreshTime = DateTime.now();
+      EventBus().fire(DeviceScanEvent(
+        isScanning: false,
+        totalDevices: callsigns.length,
+        completedDevices: callsigns.length,
+      ));
+    }));
+
     return true;
   }
 

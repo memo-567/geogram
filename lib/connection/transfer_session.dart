@@ -99,30 +99,13 @@ class TransferSession {
 
     _activeSessions[callsign] = session;
 
-    // Check if we should use BLE+
-    final pairingService = BluetoothClassicPairingService();
-    final threshold = pairingService.getAutoUpgradeThreshold();
+    // BLE+ (Bluetooth Classic) completely disabled - use pure BLE
+    // final pairingService = BluetoothClassicPairingService();
+    // final threshold = pairingService.getAutoUpgradeThreshold();
+    const threshold = 0;
 
-    if (expectedTotalBytes >= threshold && pairingService.isBLEPlus(callsign)) {
-      final classicMac = pairingService.getClassicMac(callsign);
-      if (classicMac != null) {
-        // Try to establish BLE+ connection
-        final btService = BluetoothClassicService();
-        final connected = await btService.connect(classicMac);
-
-        if (connected) {
-          session._usingBLEPlus = true;
-          session._classicMac = classicMac;
-          LogService().log(
-            'TransferSession[$sessionId]: Started with BLE+ for $callsign '
-            '(expected ${_formatBytes(expectedTotalBytes)})',
-          );
-        } else {
-          LogService().log(
-            'TransferSession[$sessionId]: BLE+ connection failed, falling back to BLE',
-          );
-        }
-      }
+    if (false) { // BLE+ disabled
+      // This block is disabled
     } else {
       LogService().log(
         'TransferSession[$sessionId]: Started with BLE for $callsign '

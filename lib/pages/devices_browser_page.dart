@@ -50,7 +50,8 @@ class DevicesBrowserPage extends StatefulWidget {
   State<DevicesBrowserPage> createState() => _DevicesBrowserPageState();
 }
 
-class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
+class _DevicesBrowserPageState extends State<DevicesBrowserPage>
+    with SingleTickerProviderStateMixin {
   final DevicesService _devicesService = DevicesService();
   final RelayCacheService _cacheService = RelayCacheService();
   final ProfileService _profileService = ProfileService();
@@ -87,20 +88,44 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
   EventSubscription<BLEStatusEvent>? _bleStatusSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
 
+  // Scan animation
+  late AnimationController _refreshAnimationController;
+  EventSubscription<DeviceScanEvent>? _scanEventSubscription;
+
   static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
   void initState() {
     super.initState();
+    _refreshAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
     _initialize();
     _subscribeToUnreadCounts();
     _subscribeToConnectionStateChanges();
     _subscribeToBLEStatus();
     _subscribeToDebugActions();
+    _subscribeToScanEvents();
     _startAutoRefresh();
 
     // Register back button handler for HomePage to call
     DevicesBrowserPage.onBackPressed = _handleBackFromHomePage;
+  }
+
+  void _subscribeToScanEvents() {
+    _scanEventSubscription = EventBus().on<DeviceScanEvent>((event) {
+      if (!mounted) return;
+      if (event.isScanning) {
+        _refreshAnimationController.repeat();
+      } else {
+        _refreshAnimationController.stop();
+        _refreshAnimationController.reset();
+      }
+      setState(() {
+        _isScanning = event.isScanning;
+      });
+    });
   }
 
   void _subscribeToDebugActions() {
@@ -380,6 +405,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
 
   @override
   void dispose() {
+    _refreshAnimationController.dispose();
     _refreshTimer?.cancel();
     _unreadSubscription?.cancel();
     _dmUnreadSubscription?.cancel();
@@ -387,6 +413,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
     _connectionStateSubscription?.cancel();
     _bleStatusSubscription?.cancel();
     _debugActionSubscription?.cancel();
+    _scanEventSubscription?.cancel();
     // Clear back button handler
     DevicesBrowserPage.onBackPressed = null;
     super.dispose();
@@ -726,7 +753,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                     )
                   : null),
           actions: [
-            if (_isLoading || _isScanning)
+            if (_isLoading)
               const Padding(
                 padding: EdgeInsets.all(16),
                 child: SizedBox(
@@ -736,10 +763,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
                 ),
               )
             else
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _scanAndRefresh,
-                tooltip: _i18n.t('refresh'),
+              RotationTransition(
+                turns: _refreshAnimationController,
+                child: IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _isScanning ? null : _scanAndRefresh,
+                  tooltip: _i18n.t('refresh'),
+                ),
               ),
             // Hamburger menu for bulk actions
             PopupMenuButton<String>(
@@ -1564,7 +1594,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage> {
             itemBuilder: (context) {
               final hasBLE = device.connectionMethods.contains('bluetooth');
               final hasBLEPlus = device.connectionMethods.contains('bluetooth_plus');
-              final canUpgrade = BluetoothClassicService.isAvailable && !hasBLEPlus;
+              // BLE+ disabled - use pure BLE without pairing
+              const canUpgrade = false; // BluetoothClassicService.isAvailable && !hasBLEPlus;
 
               return [
                 // Upgrade to BLE+ option (show for all, enabled only when BLE is active)

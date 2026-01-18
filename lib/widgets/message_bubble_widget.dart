@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import '../services/profile_service.dart';
 import '../services/devices_service.dart';
+import '../services/chat_file_download_manager.dart';
+import '../services/chat_file_upload_manager.dart';
 import '../util/reaction_utils.dart';
 import 'voice_player_widget.dart';
 import '../platform/file_image_helper.dart' as file_helper;
@@ -45,6 +47,20 @@ class MessageBubbleWidget extends StatefulWidget {
   final Future<String?> Function()? onAttachmentPathRequested;
   /// Callback when content size changes (e.g., image loaded)
   final VoidCallback? onContentSizeChanged;
+  /// Whether to show download button (file exceeds auto-download threshold)
+  final bool showDownloadButton;
+  /// File size in bytes for display (when showing download card)
+  final int? fileSize;
+  /// Current download state (from ChatFileDownloadManager)
+  final ChatDownload? downloadState;
+  /// Callback to start download
+  final VoidCallback? onDownloadPressed;
+  /// Callback to cancel download
+  final VoidCallback? onCancelDownload;
+  /// Current upload state (for sender-side progress tracking)
+  final ChatUpload? uploadState;
+  /// Callback to retry failed upload
+  final VoidCallback? onRetryUpload;
 
   const MessageBubbleWidget({
     Key? key,
@@ -64,6 +80,13 @@ class MessageBubbleWidget extends StatefulWidget {
     this.onImageOpen,
     this.onReact,
     this.onContentSizeChanged,
+    this.showDownloadButton = false,
+    this.fileSize,
+    this.downloadState,
+    this.onDownloadPressed,
+    this.onCancelDownload,
+    this.uploadState,
+    this.onRetryUpload,
   }) : super(key: key);
 
   @override
@@ -162,7 +185,14 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
 
     final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null);
     final isImageAttachment = _isImageAttachment();
-    final imageWidget = isImageAttachment && _attachmentPath != null
+    final isDownloading = widget.downloadState?.status == ChatDownloadStatus.downloading;
+    final showDownloadCard = widget.showDownloadButton && !isDownloading && _attachmentPath == null;
+    // Upload state for sender-side progress tracking
+    final isUploading = widget.uploadState?.status == ChatUploadStatus.uploading;
+    final uploadFailed = widget.uploadState?.status == ChatUploadStatus.failed;
+    final uploadPending = widget.uploadState?.status == ChatUploadStatus.pending;
+    final showUploadProgress = isOwnMessage && isImageAttachment && (isUploading || uploadFailed || uploadPending);
+    final imageWidget = isImageAttachment && _attachmentPath != null && !showDownloadCard
         ? file_helper.buildFileImage(
             _attachmentPath!,
             width: 280,
@@ -214,7 +244,20 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                       _buildHiddenMessage(theme, textColor)
                     else ...[
                       if (widget.message.isQuote) _buildQuotePreview(theme),
-                      if (showImagePreview)
+                      // Show download card for large files that need manual download
+                      if (showDownloadCard && isImageAttachment)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _buildImageDownloadCard(theme),
+                        )
+                      // Show download progress while downloading
+                      else if (isDownloading && isImageAttachment)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _buildDownloadProgress(theme),
+                        )
+                      // Show image preview when downloaded
+                      else if (showImagePreview)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: InkWell(
@@ -224,6 +267,12 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
                               child: imageWidget,
                             ),
                           ),
+                        ),
+                      // Show upload progress for sender (when receiver is downloading)
+                      if (showUploadProgress)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _buildUploadProgress(theme),
                         ),
                       // Voice message player (takes priority over text content)
                       if (widget.message.hasVoice)
@@ -516,6 +565,338 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
         ],
       ),
     );
+  }
+
+  /// Build download card for large files that need manual download
+  Widget _buildImageDownloadCard(ThemeData theme) {
+    final filename = widget.message.attachedFile ?? 'file';
+    final displayName = filename.length > 25 ? '${filename.substring(0, 22)}...' : filename;
+    final fileSize = widget.fileSize ?? 0;
+
+    return Container(
+      width: 280,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant,
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // File info row
+          Row(
+            children: [
+              Icon(
+                Icons.image,
+                size: 32,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatBytes(fileSize),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Download button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: widget.onDownloadPressed,
+              icon: const Icon(Icons.download, size: 18),
+              label: const Text('Download'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build download progress indicator
+  Widget _buildDownloadProgress(ThemeData theme) {
+    final download = widget.downloadState;
+    if (download == null) return const SizedBox.shrink();
+
+    final filename = widget.message.attachedFile ?? 'file';
+    final displayName = filename.length > 25 ? '${filename.substring(0, 22)}...' : filename;
+    final progress = download.progressPercent;
+    final speed = download.speedFormatted;
+
+    return Container(
+      width: 280,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant,
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // File info row
+          Row(
+            children: [
+              Icon(
+                Icons.image,
+                size: 24,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  displayName,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Progress bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress / 100,
+              minHeight: 6,
+              backgroundColor: theme.colorScheme.surfaceContainerHighest,
+              valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Progress text and speed
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${progress.toStringAsFixed(0)}%',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (speed != null)
+                Text(
+                  speed,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Cancel button
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: widget.onCancelDownload,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                minimumSize: Size.zero,
+              ),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build upload progress indicator (for sender side)
+  Widget _buildUploadProgress(ThemeData theme) {
+    final upload = widget.uploadState;
+    if (upload == null) return const SizedBox.shrink();
+
+    final filename = widget.message.attachedFile ?? 'file';
+    final displayName = filename.length > 25 ? '${filename.substring(0, 22)}...' : filename;
+    final progress = upload.progressPercent;
+    final speed = upload.speedFormatted;
+    final isFailed = upload.status == ChatUploadStatus.failed;
+    final isPending = upload.status == ChatUploadStatus.pending;
+    final isUploading = upload.status == ChatUploadStatus.uploading;
+
+    // Status text and icon based on state
+    String statusText;
+    IconData statusIcon;
+    Color statusColor;
+    if (isFailed) {
+      statusText = 'Upload failed';
+      statusIcon = Icons.error_outline;
+      statusColor = theme.colorScheme.error;
+    } else if (isPending) {
+      statusText = 'Waiting for receiver...';
+      statusIcon = Icons.hourglass_empty;
+      statusColor = theme.colorScheme.onSurfaceVariant;
+    } else {
+      statusText = 'Uploading to receiver';
+      statusIcon = Icons.upload;
+      statusColor = theme.colorScheme.primary;
+    }
+
+    return Container(
+      width: 280,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isFailed ? theme.colorScheme.error.withOpacity(0.5) : theme.colorScheme.outlineVariant,
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // File info row
+          Row(
+            children: [
+              Icon(
+                statusIcon,
+                size: 24,
+                color: statusColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      statusText,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: statusColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // Progress bar (only when uploading)
+          if (isUploading) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress / 100,
+                minHeight: 6,
+                backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Progress text: bytes sent / total and speed
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${upload.bytesTransferredFormatted} / ${upload.fileSizeFormatted}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  '${progress.toStringAsFixed(0)}%',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w500,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ],
+            ),
+            if (speed != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  speed,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+          // Retry button (when failed)
+          if (isFailed && widget.onRetryUpload != null) ...[
+            const SizedBox(height: 8),
+            if (upload.error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  upload.error!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: widget.onRetryUpload,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Retry'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: theme.colorScheme.primary,
+                  side: BorderSide(color: theme.colorScheme.primary),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Format bytes to human-readable string
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
   /// Build metadata chips (file, location, etc.)

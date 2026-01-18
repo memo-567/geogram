@@ -322,9 +322,18 @@ class UpdateService {
     );
     _saveSettings();
 
-    final isNewer = isNewerVersion(getCurrentVersion(), release.version);
+    final currentVersion = getCurrentVersion();
+    final isNewer = isNewerVersion(currentVersion, release.version);
     final updateReady = isNewer && hasAsset;
     updateAvailable.value = updateReady;
+
+    // If current version matches the latest release, save its release date
+    if (!isNewer && release.publishedAt != null) {
+      _settings = _settings?.copyWith(
+        currentVersionPublishedAt: release.publishedAt,
+      );
+      _saveSettings();
+    }
 
     LogService().log(
         'Update check complete: current=$appVersion, latest=${release.version}, assetReady=$hasAsset, updateAvailable=$updateReady');

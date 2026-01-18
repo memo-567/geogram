@@ -11,6 +11,8 @@ import '../services/direct_message_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
+import '../services/chat_file_download_manager.dart';
+import '../services/chat_file_upload_manager.dart';
 import '../util/event_bus.dart';
 import '../widgets/message_list_widget.dart';
 import '../widgets/message_input_widget.dart';
@@ -37,6 +39,8 @@ class _DMChatPageState extends State<DMChatPage> {
   final DirectMessageService _dmService = DirectMessageService();
   final DevicesService _devicesService = DevicesService();
   final I18nService _i18n = I18nService();
+  final ChatFileDownloadManager _downloadManager = ChatFileDownloadManager();
+  final ChatFileUploadManager _uploadManager = ChatFileUploadManager();
 
   List<ChatMessage> _messages = [];
   DMConversation? _conversation;
@@ -51,6 +55,8 @@ class _DMChatPageState extends State<DMChatPage> {
   EventSubscription<DirectMessageReceivedEvent>? _messageSubscription;
   EventSubscription<DirectMessageSyncEvent>? _syncSubscription;
   EventSubscription<DMMessageDeliveredEvent>? _deliverySubscription;
+  EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
+  EventSubscription<ChatUploadProgressEvent>? _uploadSubscription;
 
   @override
   void initState() {
@@ -66,14 +72,20 @@ class _DMChatPageState extends State<DMChatPage> {
     _messageSubscription?.cancel();
     _syncSubscription?.cancel();
     _deliverySubscription?.cancel();
+    _downloadSubscription?.cancel();
+    _uploadSubscription?.cancel();
     super.dispose();
   }
 
   void _subscribeToEvents() {
+    // Initialize upload manager for device reconnection tracking
+    _uploadManager.initialize();
+    final otherUpper = widget.otherCallsign.toUpperCase();
+
     // Listen for new messages
     _messageSubscription = EventBus().on<DirectMessageReceivedEvent>((event) {
-      if (event.fromCallsign.toUpperCase() == widget.otherCallsign.toUpperCase() ||
-          event.toCallsign.toUpperCase() == widget.otherCallsign.toUpperCase()) {
+      if (event.fromCallsign.toUpperCase() == otherUpper ||
+          event.toCallsign.toUpperCase() == otherUpper) {
         // Reload messages when a relevant message is received
         _loadMessages();
       }
@@ -81,7 +93,7 @@ class _DMChatPageState extends State<DMChatPage> {
 
     // Listen for sync completion
     _syncSubscription = EventBus().on<DirectMessageSyncEvent>((event) {
-      if (event.otherCallsign.toUpperCase() == widget.otherCallsign.toUpperCase()) {
+      if (event.otherCallsign.toUpperCase() == otherUpper) {
         if (event.success && event.newMessages > 0) {
           _loadMessages();
         }
@@ -90,9 +102,31 @@ class _DMChatPageState extends State<DMChatPage> {
 
     // Listen for queued message delivery
     _deliverySubscription = EventBus().on<DMMessageDeliveredEvent>((event) {
-      if (event.callsign.toUpperCase() == widget.otherCallsign.toUpperCase()) {
+      if (event.callsign.toUpperCase() == otherUpper) {
         // Reload messages to update status from pending to delivered
         _loadMessages();
+      }
+    });
+
+    // Subscribe to download progress events for UI updates
+    _downloadSubscription = EventBus().on<ChatDownloadProgressEvent>((event) {
+      // Check if this download belongs to this conversation
+      if (event.downloadId.startsWith(otherUpper)) {
+        // Refresh UI to show progress
+        if (mounted) setState(() {});
+        // Reload messages when download completes to show the image
+        if (event.status == 'completed') {
+          _loadMessages();
+        }
+      }
+    });
+
+    // Subscribe to upload progress events for UI updates (sender side)
+    _uploadSubscription = EventBus().on<ChatUploadProgressEvent>((event) {
+      // Check if this upload belongs to this conversation
+      if (event.receiverCallsign == otherUpper) {
+        // Refresh UI to show upload progress
+        if (mounted) setState(() {});
       }
     });
   }
@@ -493,6 +527,122 @@ class _DMChatPageState extends State<DMChatPage> {
         lower.endsWith('.bmp');
   }
 
+  /// Check if download button should be shown for a message
+  bool _shouldShowDownloadButton(ChatMessage message) {
+    if (!message.hasFile) return false;
+
+    final filename = message.attachedFile;
+    if (filename == null) return false;
+
+    // Check if file already downloaded locally
+    // Note: We can't use async here, so we check download manager state
+    final downloadId = _downloadManager.generateDownloadId(
+      widget.otherCallsign.toUpperCase(),
+      filename,
+    );
+    final downloadState = _downloadManager.getDownload(downloadId);
+    if (downloadState?.status == ChatDownloadStatus.completed) return false;
+
+    // Check file size against threshold
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    if (fileSize <= 0) return false;
+
+    final bandwidth = _downloadManager.getDeviceBandwidth(widget.otherCallsign);
+    return !_downloadManager.shouldAutoDownload(bandwidth, fileSize);
+  }
+
+  /// Get file size for a message
+  int? _getFileSize(ChatMessage message) {
+    if (!message.hasFile) return null;
+    return int.tryParse(message.getMeta('file_size') ?? '0');
+  }
+
+  /// Get download state for a message
+  ChatDownload? _getDownloadState(ChatMessage message) {
+    if (!message.hasFile || message.attachedFile == null) return null;
+    final downloadId = _downloadManager.generateDownloadId(
+      widget.otherCallsign.toUpperCase(),
+      message.attachedFile!,
+    );
+    return _downloadManager.getDownload(downloadId);
+  }
+
+  /// Handle download button pressed
+  Future<void> _onDownloadPressed(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final filename = message.attachedFile!;
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final downloadId = _downloadManager.generateDownloadId(
+      widget.otherCallsign.toUpperCase(),
+      filename,
+    );
+
+    await _downloadManager.downloadFile(
+      id: downloadId,
+      sourceId: widget.otherCallsign.toUpperCase(),
+      filename: filename,
+      expectedBytes: fileSize,
+      downloadFn: (resumeFrom, onProgress) async {
+        // Use the DM service to download with progress
+        return await _dmService.downloadFileWithProgress(
+          widget.otherCallsign,
+          filename,
+          resumeFrom: resumeFrom,
+          onProgress: onProgress,
+        );
+      },
+    );
+  }
+
+  /// Handle download cancel pressed
+  Future<void> _onCancelDownload(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final downloadId = _downloadManager.generateDownloadId(
+      widget.otherCallsign.toUpperCase(),
+      message.attachedFile!,
+    );
+    await _downloadManager.cancelDownload(downloadId);
+  }
+
+  /// Get upload state for a message (sender side progress tracking)
+  ChatUpload? _getUploadState(ChatMessage message) {
+    if (!message.hasFile || message.attachedFile == null) return null;
+
+    // Only show upload state for messages sent by current user
+    final currentCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    if (message.author.toUpperCase() != currentCallsign) return null;
+
+    return _uploadManager.getUploadForFile(
+      widget.otherCallsign.toUpperCase(),
+      message.attachedFile!,
+    );
+  }
+
+  /// Handle retry upload button pressed
+  Future<void> _onRetryUpload(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final filename = message.attachedFile!;
+    final success = await _uploadManager.requestRetry(
+      widget.otherCallsign,
+      filename,
+    );
+
+    if (mounted) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Retry notification sent to receiver')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot retry - device not reachable')),
+        );
+      }
+    }
+  }
+
   Future<void> _syncMessages() async {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final isOnline = device?.isOnline ?? false;
@@ -681,6 +831,15 @@ class _DMChatPageState extends State<DMChatPage> {
                   onMessageQuote: _setQuotedMessage,
                   onMessageReact: _toggleReaction,
                   onImageOpen: _openImage,
+                  // Download manager integration
+                  shouldShowDownloadButton: _shouldShowDownloadButton,
+                  getFileSize: _getFileSize,
+                  getDownloadState: _getDownloadState,
+                  onDownloadPressed: _onDownloadPressed,
+                  onCancelDownload: _onCancelDownload,
+                  // Upload manager integration (sender side)
+                  getUploadState: _getUploadState,
+                  onRetryUpload: _onRetryUpload,
                 ),
         ),
         // Message input / Voice recorder

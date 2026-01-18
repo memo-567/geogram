@@ -14,7 +14,9 @@ import '../services/profile_service.dart';
 import '../services/signing_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
+import '../services/chat_file_download_manager.dart';
 import '../util/chat_api.dart';
+import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/reaction_utils.dart';
@@ -47,6 +49,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final RelayCacheService _cacheService = RelayCacheService();
+  final ChatFileDownloadManager _downloadManager = ChatFileDownloadManager();
 
   List<ChatMessage> _messages = [];
   bool _isLoading = true;
@@ -58,19 +61,39 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
   /// Track pending file downloads to avoid duplicate requests
   final Set<String> _pendingDownloads = {};
 
+  /// Download progress event subscription
+  EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
+
   @override
   void initState() {
     super.initState();
     _initServices();
     _loadMessages();
+    _subscribeToDownloadEvents();
   }
 
   Future<void> _initServices() async {
     await _cacheService.initialize();
   }
 
+  void _subscribeToDownloadEvents() {
+    final sourceId = '${widget.device.callsign}_${widget.room.id}'.toUpperCase();
+    _downloadSubscription = EventBus().on<ChatDownloadProgressEvent>((event) {
+      // Check if this download belongs to this room
+      if (event.downloadId.startsWith(sourceId)) {
+        // Refresh UI to show progress
+        if (mounted) setState(() {});
+        // Reload messages when download completes to show the image
+        if (event.status == 'completed') {
+          _loadMessages();
+        }
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _downloadSubscription?.cancel();
     super.dispose();
   }
 
@@ -449,6 +472,81 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         lower.endsWith('.bmp');
   }
 
+  /// Get source ID for download manager (device + room)
+  String get _sourceId => '${widget.device.callsign}_${widget.room.id}'.toUpperCase();
+
+  /// Check if download button should be shown for a message
+  bool _shouldShowDownloadButton(ChatMessage message) {
+    if (!message.hasFile) return false;
+
+    final filename = message.attachedFile;
+    if (filename == null) return false;
+
+    // Check if file already downloaded locally
+    final downloadId = _downloadManager.generateDownloadId(_sourceId, filename);
+    final downloadState = _downloadManager.getDownload(downloadId);
+    if (downloadState?.status == ChatDownloadStatus.completed) return false;
+
+    // Check file size against threshold
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    if (fileSize <= 0) return false;
+
+    final bandwidth = _downloadManager.getDeviceBandwidth(widget.device.callsign);
+    return !_downloadManager.shouldAutoDownload(bandwidth, fileSize);
+  }
+
+  /// Get file size for a message
+  int? _getFileSize(ChatMessage message) {
+    if (!message.hasFile) return null;
+    return int.tryParse(message.getMeta('file_size') ?? '0');
+  }
+
+  /// Get download state for a message
+  ChatDownload? _getDownloadState(ChatMessage message) {
+    if (!message.hasFile || message.attachedFile == null) return null;
+    final downloadId = _downloadManager.generateDownloadId(_sourceId, message.attachedFile!);
+    return _downloadManager.getDownload(downloadId);
+  }
+
+  /// Handle download button pressed
+  Future<void> _onDownloadPressed(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final filename = message.attachedFile!;
+    final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
+    final downloadId = _downloadManager.generateDownloadId(_sourceId, filename);
+
+    await _downloadManager.downloadFile(
+      id: downloadId,
+      sourceId: _sourceId,
+      filename: filename,
+      expectedBytes: fileSize,
+      downloadFn: (resumeFrom, onProgress) async {
+        // Download via device service
+        final localPath = await _devicesService.downloadChatFile(
+          callsign: widget.device.callsign,
+          roomId: widget.room.id,
+          filename: filename,
+        );
+
+        // Simulate progress for non-streaming download
+        if (localPath != null) {
+          onProgress(fileSize);
+        }
+
+        return localPath;
+      },
+    );
+  }
+
+  /// Handle download cancel pressed
+  Future<void> _onCancelDownload(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return;
+
+    final downloadId = _downloadManager.generateDownloadId(_sourceId, message.attachedFile!);
+    await _downloadManager.cancelDownload(downloadId);
+  }
+
   bool _canDeleteMessage(ChatMessage message) {
     final profile = _profileService.getProfile();
     return message.author.toUpperCase() == profile.callsign.toUpperCase() ||
@@ -773,6 +871,12 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                         getAttachmentPath: _getAttachmentPath,
                         getVoiceFilePath: _getVoiceFilePath,
                         onImageOpen: _openImage,
+                        // Download manager integration
+                        shouldShowDownloadButton: _shouldShowDownloadButton,
+                        getFileSize: _getFileSize,
+                        getDownloadState: _getDownloadState,
+                        onDownloadPressed: _onDownloadPressed,
+                        onCancelDownload: _onCancelDownload,
                       ),
           ),
 

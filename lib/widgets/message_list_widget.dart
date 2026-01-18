@@ -5,6 +5,8 @@
 
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
+import '../services/chat_file_download_manager.dart';
+import '../services/chat_file_upload_manager.dart';
 import 'message_bubble_widget.dart';
 
 /// Widget for displaying a scrollable list of chat messages
@@ -25,6 +27,20 @@ class MessageListWidget extends StatefulWidget {
   final void Function(ChatMessage, String)? onMessageReact;
   /// Callback to get voice file path for a message
   final Future<String?> Function(ChatMessage)? getVoiceFilePath;
+  /// Check if download button should be shown for a message
+  final bool Function(ChatMessage)? shouldShowDownloadButton;
+  /// Get file size in bytes for a message
+  final int? Function(ChatMessage)? getFileSize;
+  /// Get current download state for a message
+  final ChatDownload? Function(ChatMessage)? getDownloadState;
+  /// Callback when download button pressed
+  final void Function(ChatMessage)? onDownloadPressed;
+  /// Callback when download cancel pressed
+  final void Function(ChatMessage)? onCancelDownload;
+  /// Get current upload state for a message (sender side)
+  final ChatUpload? Function(ChatMessage)? getUploadState;
+  /// Callback when retry upload button pressed
+  final void Function(ChatMessage)? onRetryUpload;
 
   const MessageListWidget({
     Key? key,
@@ -43,6 +59,13 @@ class MessageListWidget extends StatefulWidget {
     this.onImageOpen,
     this.onMessageReact,
     this.getVoiceFilePath,
+    this.shouldShowDownloadButton,
+    this.getFileSize,
+    this.getDownloadState,
+    this.onDownloadPressed,
+    this.onCancelDownload,
+    this.getUploadState,
+    this.onRetryUpload,
   }) : super(key: key);
 
   @override
@@ -248,6 +271,21 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                         : null,
                     // Scroll to bottom when image loads
                     onContentSizeChanged: _autoScroll ? _onContentSizeChanged : null,
+                    // Download manager integration
+                    showDownloadButton: widget.shouldShowDownloadButton?.call(message) ?? false,
+                    fileSize: widget.getFileSize?.call(message),
+                    downloadState: widget.getDownloadState?.call(message),
+                    onDownloadPressed: widget.onDownloadPressed != null
+                        ? () => widget.onDownloadPressed!(message)
+                        : null,
+                    onCancelDownload: widget.onCancelDownload != null
+                        ? () => widget.onCancelDownload!(message)
+                        : null,
+                    // Upload manager integration (sender side)
+                    uploadState: widget.getUploadState?.call(message),
+                    onRetryUpload: widget.onRetryUpload != null
+                        ? () => widget.onRetryUpload!(message)
+                        : null,
                   );
                 },
               ),

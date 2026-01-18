@@ -581,6 +581,115 @@ class EmailNotificationEvent extends AppEvent {
 // Location Events
 // ============================================================
 
+/// Chat file download progress event
+/// Fired by ChatFileDownloadManager when download state changes
+class ChatDownloadProgressEvent extends AppEvent {
+  final String downloadId;
+  final int bytesTransferred;
+  final int totalBytes;
+  final double? speedBytesPerSecond;
+  final String status; // 'idle', 'downloading', 'paused', 'completed', 'failed'
+
+  ChatDownloadProgressEvent({
+    required this.downloadId,
+    required this.bytesTransferred,
+    required this.totalBytes,
+    this.speedBytesPerSecond,
+    required dynamic status,
+  }) : status = status.toString().split('.').last;
+
+  double get progressPercent =>
+      totalBytes > 0 ? (bytesTransferred / totalBytes * 100) : 0;
+
+  @override
+  String toString() =>
+      'ChatDownloadProgressEvent(id: $downloadId, progress: ${progressPercent.toStringAsFixed(1)}%, status: $status)';
+}
+
+/// Chat file upload progress event
+/// Fired by ChatFileUploadManager when upload (serving file to receiver) state changes
+class ChatUploadProgressEvent extends AppEvent {
+  final String uploadId;
+  final String messageId;
+  final String receiverCallsign;
+  final String filename;
+  final int bytesTransferred;
+  final int totalBytes;
+  final double? speedBytesPerSecond;
+  final String status; // 'pending', 'uploading', 'completed', 'failed'
+  final String? error;
+
+  ChatUploadProgressEvent({
+    required this.uploadId,
+    required this.messageId,
+    required this.receiverCallsign,
+    required this.filename,
+    required this.bytesTransferred,
+    required this.totalBytes,
+    this.speedBytesPerSecond,
+    required dynamic status,
+    this.error,
+  }) : status = status.toString().split('.').last;
+
+  double get progressPercent =>
+      totalBytes > 0 ? (bytesTransferred / totalBytes * 100) : 0;
+
+  String get bytesTransferredFormatted => _formatBytes(bytesTransferred);
+  String get totalBytesFormatted => _formatBytes(totalBytes);
+  String? get speedFormatted => speedBytesPerSecond != null
+      ? '${_formatBytes(speedBytesPerSecond!.toInt())}/s'
+      : null;
+
+  static String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  @override
+  String toString() =>
+      'ChatUploadProgressEvent(id: $uploadId, receiver: $receiverCallsign, progress: ${progressPercent.toStringAsFixed(1)}%, status: $status)';
+}
+
+/// Device scanning/discovery state changed
+/// Fired by DevicesService when reachability checks start/complete
+class DeviceScanEvent extends AppEvent {
+  final bool isScanning;
+  final int totalDevices;
+  final int? completedDevices;
+
+  DeviceScanEvent({
+    required this.isScanning,
+    required this.totalDevices,
+    this.completedDevices,
+  });
+
+  @override
+  String toString() =>
+      'DeviceScanEvent(isScanning: $isScanning, total: $totalDevices, completed: $completedDevices)';
+}
+
+/// Device status changed event (reachable/unreachable)
+/// Fired by DevicesService when a device's reachability changes
+class DeviceStatusChangedEvent extends AppEvent {
+  final String callsign;
+  final bool isReachable;
+  final String? connectionMethod; // 'bluetooth', 'lan', 'internet', etc.
+
+  DeviceStatusChangedEvent({
+    required this.callsign,
+    required this.isReachable,
+    this.connectionMethod,
+  });
+
+  @override
+  String toString() =>
+      'DeviceStatusChangedEvent(callsign: $callsign, reachable: $isReachable, method: $connectionMethod)';
+}
+
 /// GPS position updated event
 /// Fired by LocationProviderService when a new position is acquired.
 /// Subscribe to this event instead of using timers for location-based features.
