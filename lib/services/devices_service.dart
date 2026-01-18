@@ -1334,13 +1334,24 @@ class DevicesService {
 
     // Try direct connection first if device has a URL and appears online
     // Skip direct connection in internet-only mode (force station proxy)
-    if (!internetOnly && device?.url != null && device!.isOnline) {
+    // Also skip if device is only reachable via BLE (no network path)
+    final hasNetworkPath = device?.connectionMethods.any(
+          (m) => m == 'lan' || m == 'wifi_local' || m == 'internet',
+        ) ??
+        false;
+
+    if (!internetOnly &&
+        device?.url != null &&
+        device!.isOnline &&
+        hasNetworkPath) {
       try {
         final uri = Uri.parse('${device.url}$path');
         LogService().log(
           'DevicesService: Direct request to $normalizedCallsign: $method $path',
         );
-        final response = await _makeHttpRequest(method, uri, headers, body);
+        // Use shorter timeout (5s) for direct connection - fail fast if unreachable
+        final response = await _makeHttpRequest(method, uri, headers, body)
+            .timeout(const Duration(seconds: 5));
         if (response.statusCode < 500) {
           return response; // Success or client error - don't retry via station
         }
@@ -1400,6 +1411,8 @@ class DevicesService {
   }
 
   /// Internal HTTP request helper
+  /// Default timeout is 10 seconds. Callers can add their own timeout for
+  /// specific use cases (e.g., 5s for direct device requests).
   Future<http.Response> _makeHttpRequest(
     String method,
     Uri uri,
@@ -1407,27 +1420,18 @@ class DevicesService {
     String? body,
   ) async {
     final h = headers ?? {'Content-Type': 'application/json'};
+    const defaultTimeout = Duration(seconds: 10);
     switch (method.toUpperCase()) {
       case 'GET':
-        return await http
-            .get(uri, headers: h)
-            .timeout(const Duration(seconds: 30));
+        return await http.get(uri, headers: h).timeout(defaultTimeout);
       case 'POST':
-        return await http
-            .post(uri, headers: h, body: body)
-            .timeout(const Duration(seconds: 30));
+        return await http.post(uri, headers: h, body: body).timeout(defaultTimeout);
       case 'PUT':
-        return await http
-            .put(uri, headers: h, body: body)
-            .timeout(const Duration(seconds: 30));
+        return await http.put(uri, headers: h, body: body).timeout(defaultTimeout);
       case 'DELETE':
-        return await http
-            .delete(uri, headers: h)
-            .timeout(const Duration(seconds: 30));
+        return await http.delete(uri, headers: h).timeout(defaultTimeout);
       default:
-        return await http
-            .get(uri, headers: h)
-            .timeout(const Duration(seconds: 30));
+        return await http.get(uri, headers: h).timeout(defaultTimeout);
     }
   }
 

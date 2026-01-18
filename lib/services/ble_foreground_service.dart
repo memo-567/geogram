@@ -17,6 +17,11 @@ typedef KeepAlivePingCallback = void Function();
 /// This allows the WebSocketService to check and reconnect if needed.
 typedef ServiceRestartedCallback = void Function();
 
+/// Callback type for when the foreground service triggers a BLE advertising ping.
+/// This allows the BLEIdentityService to receive periodic ping triggers from the
+/// Android foreground service, which runs even when the display is off.
+typedef BleAdvertisePingCallback = void Function();
+
 /// Service to manage the foreground service on Android.
 /// This keeps BLE and WebSocket connections active when app goes to background.
 ///
@@ -35,6 +40,7 @@ class BLEForegroundService {
   static const _channel = MethodChannel('dev.geogram/ble_service');
   bool _isRunning = false;
   bool _keepAliveEnabled = false;
+  bool _bleKeepAliveEnabled = false;
 
   /// Callback to invoke when the foreground service triggers a keep-alive ping
   KeepAlivePingCallback? onKeepAlivePing;
@@ -42,11 +48,17 @@ class BLEForegroundService {
   /// Callback to invoke when the foreground service restarts after Android 15+ timeout
   ServiceRestartedCallback? onServiceRestarted;
 
+  /// Callback to invoke when the foreground service triggers a BLE advertising ping
+  BleAdvertisePingCallback? onBleAdvertisePing;
+
   /// Whether the foreground service is currently running
   bool get isRunning => _isRunning;
 
   /// Whether WebSocket keep-alive is enabled in the foreground service
   bool get keepAliveEnabled => _keepAliveEnabled;
+
+  /// Whether BLE advertising keep-alive is enabled in the foreground service
+  bool get bleKeepAliveEnabled => _bleKeepAliveEnabled;
 
   /// Handle method calls from Android native code
   Future<dynamic> _handleMethodCall(MethodCall call) async {
@@ -58,6 +70,10 @@ class BLEForegroundService {
       case 'onServiceRestarted':
         LogService().log('BLEForegroundService: Service restarted after dataSync timeout');
         onServiceRestarted?.call();
+        break;
+      case 'onBleAdvertisePing':
+        LogService().log('BLEForegroundService: BLE advertising ping received from Android');
+        onBleAdvertisePing?.call();
         break;
       default:
         LogService().log('BLEForegroundService: Unknown method ${call.method}');
@@ -173,6 +189,62 @@ class BLEForegroundService {
       return !_keepAliveEnabled;
     } catch (e) {
       LogService().log('BLEForegroundService: Error disabling keep-alive: $e');
+      return false;
+    }
+  }
+
+  /// Enable BLE advertising keep-alive in the foreground service.
+  /// This should be called after BLE advertising is started.
+  /// The foreground service will periodically trigger [onBleAdvertisePing] even
+  /// when the display is off, allowing BLE advertising to stay active.
+  Future<bool> enableBleKeepAlive() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      return false; // Only needed on Android
+    }
+
+    if (_bleKeepAliveEnabled) {
+      LogService().log('BLEForegroundService: BLE keep-alive already enabled');
+      return true;
+    }
+
+    // Start the service if not running
+    if (!_isRunning) {
+      await start();
+    }
+
+    try {
+      final result = await _channel.invokeMethod<bool>('enableBleKeepAlive');
+      _bleKeepAliveEnabled = result ?? false;
+      if (_bleKeepAliveEnabled) {
+        LogService().log('BLEForegroundService: BLE advertising keep-alive enabled');
+      } else {
+        LogService().log('BLEForegroundService: Failed to enable BLE keep-alive');
+      }
+      return _bleKeepAliveEnabled;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error enabling BLE keep-alive: $e');
+      return false;
+    }
+  }
+
+  /// Disable BLE advertising keep-alive in the foreground service.
+  /// This should be called when BLE advertising is stopped.
+  Future<bool> disableBleKeepAlive() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      return false;
+    }
+
+    if (!_bleKeepAliveEnabled) {
+      return true;
+    }
+
+    try {
+      final result = await _channel.invokeMethod<bool>('disableBleKeepAlive');
+      _bleKeepAliveEnabled = !(result ?? true);
+      LogService().log('BLEForegroundService: BLE advertising keep-alive disabled');
+      return !_bleKeepAliveEnabled;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error disabling BLE keep-alive: $e');
       return false;
     }
   }

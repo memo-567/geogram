@@ -47,6 +47,7 @@ import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
 import 'connection/transports/ble_transport.dart';
+import 'services/ble_identity_service.dart';
 import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
@@ -585,6 +586,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // Verify WebSocket connection is still alive (Android background may have broken it)
       WebSocketService().onAppResumed();
+
+      // Refresh BLE advertising (Android may have throttled it while screen was off)
+      BLEIdentityService().refreshAdvertising();
 
       // Delay check to allow SharedPreferences write to complete in background isolate
       Future.delayed(const Duration(milliseconds: 500), () {

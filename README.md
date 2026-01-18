@@ -147,6 +147,27 @@ The Android and Linux versions receive the most testing and are recommended for 
 
 ---
 
+## Binary Size
+
+Geogram downloads are large (200-400 MB depending on platform). This is deliberate.
+
+Everything runs locally. No cloud APIs, no external services, no "phone home" behavior. The tradeoff is size: services that other apps outsource to Google, Amazon, or specialized SaaS providers are bundled directly into the binary.
+
+| Component | Size | Purpose |
+|-----------|------|---------|
+| IP Geolocation | ~133 MB | Offline location lookup without querying external services |
+| ONNX Runtime | ~73 MB | Local AI/ML inference for music generation |
+| Media Player | ~50 MB | libmpv for video/audio without cloud codecs |
+| WebRTC | ~43 MB | Peer-to-peer connections without relay servers |
+| TensorFlow Lite | ~15 MB | On-device vision and ML models |
+| Whisper | ~3 MB | Offline speech recognition (plus runtime models) |
+
+Most apps appear smaller because they download pieces on demand, phone home for features, or simply don't work offline. Geogram includes everything upfront because you might not have internet when you need it.
+
+The result: a larger download that works anywhere, requires no accounts, makes no network requests you didn't initiate, and can't be degraded by a company changing their API terms.
+
+---
+
 ## Download
 
 Grab the latest release from the [releases page](https://github.com/geograms/geogram/releases).

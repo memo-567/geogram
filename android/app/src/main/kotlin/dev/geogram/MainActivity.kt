@@ -58,6 +58,16 @@ class MainActivity : FlutterActivity() {
                     BLEForegroundService.disableKeepAlive(this)
                     result.success(true)
                 }
+                "enableBleKeepAlive" -> {
+                    // Enable BLE advertising keep-alive in the foreground service
+                    BLEForegroundService.enableBleKeepAlive(this)
+                    result.success(true)
+                }
+                "disableBleKeepAlive" -> {
+                    // Disable BLE advertising keep-alive in the foreground service
+                    BLEForegroundService.disableBleKeepAlive(this)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

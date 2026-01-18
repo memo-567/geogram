@@ -124,11 +124,14 @@ class BlePeripheralPlugin : FlutterPlugin, BlePeripheralChannel, ActivityAware {
 
         handler?.post { // set up advertising setting
             localName?.let { bluetoothManager?.adapter?.name = it }
+            // Use LOW_POWER mode for background operation - Android aggressively
+            // throttles or stops LOW_LATENCY mode when screen is off.
+            // LOW_POWER mode is less power-intensive and more reliably maintained.
             val advertiseSettings = AdvertiseSettings.Builder()
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .setConnectable(true)
                 .setTimeout(timeout?.toInt() ?: 0)
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
                 .build()
 
             val advertiseDataBuilder = AdvertiseData.Builder()

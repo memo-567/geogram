@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'app_args.dart';
+import 'ble_foreground_service.dart';
 import 'collection_service.dart';
 import 'log_service.dart';
 
@@ -259,20 +260,49 @@ class BLEIdentityService {
     // Advertise immediately
     _advertiseIdentity();
 
-    // Then every 30 seconds
-    _advertisementTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _advertiseIdentity(),
-    );
-
-    LogService().log('BLEIdentity: Started periodic advertisement (30s interval)');
+    // On Android, use native foreground service for reliable timing
+    // Dart timers are throttled when screen is off
+    if (Platform.isAndroid) {
+      // Set up callback from native foreground service
+      BLEForegroundService().onBleAdvertisePing = () {
+        LogService().log('BLEIdentity: Native callback triggered, refreshing advertising');
+        _advertiseIdentity();
+      };
+      // Enable native keep-alive in foreground service
+      BLEForegroundService().enableBleKeepAlive();
+      LogService().log('BLEIdentity: Started periodic advertisement via native handler (30s interval)');
+    } else {
+      // On other platforms (iOS), use Dart timer
+      _advertisementTimer = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => _advertiseIdentity(),
+      );
+      LogService().log('BLEIdentity: Started periodic advertisement via Dart timer (30s interval)');
+    }
   }
 
   /// Stop periodic advertisement
   void stopPeriodicAdvertisement() {
     _advertisementTimer?.cancel();
     _advertisementTimer = null;
+
+    // On Android, also disable native keep-alive
+    if (!kIsWeb && Platform.isAndroid) {
+      BLEForegroundService().onBleAdvertisePing = null;
+      BLEForegroundService().disableBleKeepAlive();
+    }
+
     LogService().log('BLEIdentity: Stopped periodic advertisement');
+  }
+
+  /// Refresh BLE advertising immediately (called on app resume)
+  /// This ensures advertising is active after Android may have throttled it
+  Future<void> refreshAdvertising() async {
+    if (kIsWeb) return;
+    if (AppArgs().internetOnly) return;
+
+    LogService().log('BLEIdentity: Refreshing advertising on app resume');
+    await _advertiseIdentity();
   }
 
   /// Perform BLE advertisement

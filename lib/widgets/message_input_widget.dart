@@ -139,7 +139,7 @@ class _MessageInputWidgetState extends State<MessageInputWidget> {
                       controller: _controller,
                       focusNode: _focusNode,
                       enabled: !_isSending,
-                      maxLines: null,
+                      maxLines: 6,
                       minLines: 1,
                       maxLength: widget.maxLength,
                       textCapitalization: TextCapitalization.sentences,

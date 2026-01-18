@@ -43,6 +43,9 @@ public class BLEForegroundService extends Service {
     // to ensure we always beat the server's idle timeout)
     private static final long KEEPALIVE_INTERVAL_MS = 55 * 1000;
 
+    // BLE advertising refresh interval (30 seconds - matches the Dart timer interval)
+    private static final long BLE_ADVERTISE_INTERVAL_MS = 30 * 1000;
+
     // Restart delay after crash
     private static final long RESTART_DELAY_MS = 3000; // 3 seconds
 
@@ -51,6 +54,11 @@ public class BLEForegroundService extends Service {
     private Handler keepAliveHandler;
     private Runnable keepAliveRunnable;
     private boolean keepAliveEnabled = false;
+
+    // BLE advertising keep-alive (separate from WebSocket)
+    private Handler bleAdvertiseHandler;
+    private Runnable bleAdvertiseRunnable;
+    private boolean bleAdvertiseEnabled = false;
 
     // Track if dataSync type is available (Android 15+ has 6-hour limit)
     private boolean dataSyncExhausted = false;
@@ -61,6 +69,9 @@ public class BLEForegroundService extends Service {
     // Station info for notification display
     private static String stationName = null;
     private static String stationUrl = null;
+
+    // Track if BLE keepalive was requested (survives service restart)
+    private static boolean bleKeepAliveRequested = false;
 
     // Static reference to method channel for callbacks to Flutter
     private static MethodChannel methodChannel;
@@ -144,6 +155,35 @@ public class BLEForegroundService extends Service {
         Log.d(TAG, "WebSocket keep-alive disable requested");
     }
 
+    /**
+     * Enable BLE advertising keep-alive from the foreground service.
+     * This triggers periodic BLE advertising pings even when the screen is off.
+     */
+    public static void enableBleKeepAlive(Context context) {
+        Intent intent = new Intent(context, BLEForegroundService.class);
+        intent.setAction("ENABLE_BLE_KEEPALIVE");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        Log.d(TAG, "BLE advertising keep-alive enable requested");
+    }
+
+    /**
+     * Disable BLE advertising keep-alive.
+     */
+    public static void disableBleKeepAlive(Context context) {
+        Intent intent = new Intent(context, BLEForegroundService.class);
+        intent.setAction("DISABLE_BLE_KEEPALIVE");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        Log.d(TAG, "BLE advertising keep-alive disable requested");
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -161,6 +201,19 @@ public class BLEForegroundService extends Service {
                     sendKeepAlivePing();
                     // Schedule next ping
                     keepAliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS);
+                }
+            }
+        };
+
+        // Initialize BLE advertising handler (separate from WebSocket)
+        bleAdvertiseHandler = new Handler(Looper.getMainLooper());
+        bleAdvertiseRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (bleAdvertiseEnabled) {
+                    sendBleAdvertisePing();
+                    // Schedule next ping
+                    bleAdvertiseHandler.postDelayed(this, BLE_ADVERTISE_INTERVAL_MS);
                 }
             }
         };
@@ -188,6 +241,10 @@ public class BLEForegroundService extends Service {
             startKeepAlive();
         } else if ("DISABLE_KEEPALIVE".equals(action)) {
             stopKeepAlive();
+        } else if ("ENABLE_BLE_KEEPALIVE".equals(action)) {
+            startBleAdvertise();
+        } else if ("DISABLE_BLE_KEEPALIVE".equals(action)) {
+            stopBleAdvertise();
         } else if ("SCHEDULE_RESTART".equals(action)) {
             scheduleAppRestart();
             return START_STICKY;
@@ -204,6 +261,12 @@ public class BLEForegroundService extends Service {
             // Re-enable keep-alive if it was previously enabled
             if (stationUrl != null || stationName != null) {
                 startKeepAlive();
+            }
+
+            // Re-enable BLE advertising if it was previously enabled
+            if (bleKeepAliveRequested) {
+                startBleAdvertise();
+                sendBleAdvertisePing();
             }
         }
 
@@ -315,6 +378,7 @@ public class BLEForegroundService extends Service {
         Log.d(TAG, "Foreground service destroyed");
         isInForeground = false;
         stopKeepAlive();
+        stopBleAdvertise();
         releaseWakeLock();
         super.onDestroy();
     }
@@ -330,11 +394,15 @@ public class BLEForegroundService extends Service {
         dataSyncExhausted = true;
         isInForeground = false;
 
-        // Stop keep-alive handler to prevent any pending callbacks
+        // Stop keep-alive handlers to prevent any pending callbacks
         if (keepAliveHandler != null) {
             keepAliveHandler.removeCallbacksAndMessages(null);
         }
+        if (bleAdvertiseHandler != null) {
+            bleAdvertiseHandler.removeCallbacksAndMessages(null);
+        }
         keepAliveEnabled = false;
+        bleAdvertiseEnabled = false;
 
         // CRITICAL: Stop foreground FIRST, then stopSelf
         // Android 15+ requires very fast response to onTimeout
@@ -395,6 +463,59 @@ public class BLEForegroundService extends Service {
             Log.d(TAG, "WebSocket keep-alive stopped");
             // Update notification to reflect disconnected state
             updateNotification();
+        }
+    }
+
+    private void startBleAdvertise() {
+        bleKeepAliveRequested = true;
+        if (!bleAdvertiseEnabled) {
+            bleAdvertiseEnabled = true;
+            Log.d(TAG, "BLE advertising keep-alive started (interval=" + BLE_ADVERTISE_INTERVAL_MS + "ms)");
+            // Send first ping immediately, then schedule periodic pings
+            sendBleAdvertisePing();
+            bleAdvertiseHandler.postDelayed(bleAdvertiseRunnable, BLE_ADVERTISE_INTERVAL_MS);
+        }
+    }
+
+    private void stopBleAdvertise() {
+        bleKeepAliveRequested = false;
+        if (bleAdvertiseEnabled) {
+            bleAdvertiseEnabled = false;
+            bleAdvertiseHandler.removeCallbacks(bleAdvertiseRunnable);
+            Log.d(TAG, "BLE advertising keep-alive stopped");
+        }
+    }
+
+    /**
+     * Send BLE advertising ping by invoking the Dart callback via MethodChannel.
+     * This triggers the Dart side to refresh BLE advertising.
+     */
+    private void sendBleAdvertisePing() {
+        if (methodChannel == null) {
+            Log.w(TAG, "MethodChannel not set, cannot send BLE advertising ping");
+            return;
+        }
+
+        try {
+            Log.d(TAG, "Sending BLE advertising ping via MethodChannel");
+            methodChannel.invokeMethod("onBleAdvertisePing", null, new io.flutter.plugin.common.MethodChannel.Result() {
+                @Override
+                public void success(Object result) {
+                    Log.d(TAG, "BLE advertising ping delivered to Flutter successfully");
+                }
+
+                @Override
+                public void error(String errorCode, String errorMessage, Object errorDetails) {
+                    Log.w(TAG, "BLE advertising ping failed: " + errorCode + " - " + errorMessage);
+                }
+
+                @Override
+                public void notImplemented() {
+                    Log.w(TAG, "BLE advertising ping not implemented by Flutter side");
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Exception sending BLE advertising ping: " + e.getMessage());
         }
     }
 
