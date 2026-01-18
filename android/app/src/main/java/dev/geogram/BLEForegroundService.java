@@ -326,29 +326,48 @@ public class BLEForegroundService extends Service {
     @Override
     public void onTimeout(int startId) {
         // Called on Android 15+ when dataSync foreground service times out (6 hours)
-        Log.w(TAG, "Foreground service timeout (dataSync limit reached), stopping gracefully");
+        Log.w(TAG, "Foreground service timeout (dataSync limit reached), stopping immediately");
         dataSyncExhausted = true;
         isInForeground = false;
 
-        // Stop the service to avoid ForegroundServiceDidNotStopInTimeException
-        stopSelf();
+        // Stop keep-alive handler to prevent any pending callbacks
+        if (keepAliveHandler != null) {
+            keepAliveHandler.removeCallbacksAndMessages(null);
+        }
+        keepAliveEnabled = false;
 
-        // Schedule restart with connectedDevice only (no dataSync)
-        if (hasBluetoothPermissions() && restartHandler != null) {
-            restartHandler.postDelayed(() -> {
+        // CRITICAL: Stop foreground FIRST, then stopSelf
+        // Android 15+ requires very fast response to onTimeout
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } else {
+            stopForeground(true);
+        }
+
+        // Schedule restart BEFORE calling stopSelf so the handler is still valid
+        // Use application context since service is about to be destroyed
+        final Context appContext = getApplicationContext();
+        final boolean canRestart = hasBluetoothPermissions();
+
+        // Stop the service immediately
+        stopSelf(startId);
+
+        // Restart with connectedDevice only (no dataSync) after a brief delay
+        if (canRestart) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
                 try {
                     Log.d(TAG, "Restarting service without dataSync type");
-                    Intent intent = new Intent(getApplicationContext(), BLEForegroundService.class);
+                    Intent intent = new Intent(appContext, BLEForegroundService.class);
                     intent.setAction("RESTART_WITHOUT_DATASYNC");
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        getApplicationContext().startForegroundService(intent);
+                        appContext.startForegroundService(intent);
                     } else {
-                        getApplicationContext().startService(intent);
+                        appContext.startService(intent);
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to restart service: " + e.getMessage());
                 }
-            }, 1000);
+            }, 500);
         }
     }
 
