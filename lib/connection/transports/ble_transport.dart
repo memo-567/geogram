@@ -12,6 +12,14 @@ import '../../services/ble_message_service.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
+/// Tracking info for a pending API request
+class _PendingRequest {
+  final Completer<TransportResult> completer;
+  final Stopwatch stopwatch;
+
+  _PendingRequest(this.completer, this.stopwatch);
+}
+
 /// BLE Transport for Bluetooth Low Energy communication
 ///
 /// This transport has the lowest priority (40) as it:
@@ -45,11 +53,17 @@ class BleTransport extends Transport with TransportMixin {
   final BLEDiscoveryService _discoveryService = BLEDiscoveryService();
   final BLEMessageService _messageService = BLEMessageService();
 
+  /// Pending API requests waiting for responses (requestId -> pending request info)
+  final Map<String, _PendingRequest> _pendingRequests = {};
+
   /// Timeout for BLE operations
   final Duration timeout;
 
   /// Stream subscription for incoming messages
   StreamSubscription<BLEChatMessage>? _incomingSubscription;
+
+  /// Stream subscription for incoming messages from GATT client (notifications from server)
+  StreamSubscription<Map<String, dynamic>>? _clientNotificationSubscription;
 
   BleTransport({
     this.timeout = const Duration(seconds: 30),
@@ -62,13 +76,21 @@ class BleTransport extends Transport with TransportMixin {
       return;
     }
 
-    LogService().log('BleTransport: Initializing...');
+    LogService().log('BleTransport: [INIT] Starting initialization...');
 
-    // Subscribe to incoming BLE messages
+    // Subscribe to incoming BLE messages from GATT server (we are server receiving from clients)
     _incomingSubscription = _messageService.incomingChats.listen(_handleIncomingMessage);
+    LogService().log('BleTransport: [INIT] Subscribed to incomingChats (server mode)');
+
+    // Subscribe to incoming messages from GATT client (we are client receiving from server)
+    _clientNotificationSubscription = _discoveryService.incomingChatsFromClient.listen((msg) {
+      LogService().log('BleTransport: [STREAM] Received message from incomingChatsFromClient stream');
+      _handleClientNotification(msg);
+    });
+    LogService().log('BleTransport: [INIT] Subscribed to incomingChatsFromClient (client mode)');
 
     markInitialized();
-    LogService().log('BleTransport: Initialized (server=${BLEMessageService.canBeServer}, client=${BLEMessageService.canBeClient})');
+    LogService().log('BleTransport: [INIT] Complete (server=${BLEMessageService.canBeServer}, client=${BLEMessageService.canBeClient})');
   }
 
   @override
@@ -76,6 +98,8 @@ class BleTransport extends Transport with TransportMixin {
     LogService().log('BleTransport: Disposing...');
     await _incomingSubscription?.cancel();
     _incomingSubscription = null;
+    await _clientNotificationSubscription?.cancel();
+    _clientNotificationSubscription = null;
     await disposeMixin();
     LogService().log('BleTransport: Disposed');
   }
@@ -142,6 +166,9 @@ class BleTransport extends Transport with TransportMixin {
         case TransportMessageType.apiRequest:
           return await _handleApiRequest(message, stopwatch);
 
+        case TransportMessageType.apiResponse:
+          return await _handleApiResponse(message, stopwatch);
+
         case TransportMessageType.directMessage:
           return await _handleDirectMessage(message, stopwatch);
 
@@ -173,10 +200,20 @@ class BleTransport extends Transport with TransportMixin {
   ///
   /// BLE doesn't natively support HTTP-style requests, so we encode
   /// the request as a JSON message and send via BLE chat channel.
+  /// The response is correlated using a Completer that waits for the
+  /// response to come back on the _api_response channel.
   Future<TransportResult> _handleApiRequest(
     TransportMessage message,
     Stopwatch stopwatch,
   ) async {
+    LogService().log('BleTransport: [API-REQ] START ${message.method} ${message.path} to ${message.targetCallsign}');
+    LogService().log('BleTransport: [API-REQ] Request ID: ${message.id}');
+
+    // Create a Completer to track this request
+    final completer = Completer<TransportResult>();
+    _pendingRequests[message.id] = _PendingRequest(completer, stopwatch);
+    LogService().log('BleTransport: [API-REQ] Added to pending requests. Total pending: ${_pendingRequests.length}');
+
     // Encode API request as JSON payload
     final requestPayload = jsonEncode({
       'type': 'api_request',
@@ -187,30 +224,82 @@ class BleTransport extends Transport with TransportMixin {
       'body': message.payload,
     });
 
-    LogService().log('BleTransport: API request ${message.method} ${message.path} to ${message.targetCallsign}');
+    LogService().log('BleTransport: [API-REQ] Payload size: ${requestPayload.length} bytes');
 
     // Send via BLE using a special channel for API requests
+    LogService().log('BleTransport: [API-REQ] Calling sendChatToCallsign...');
     final success = await _messageService.sendChatToCallsign(
       targetCallsign: message.targetCallsign,
       content: requestPayload,
       channel: '_api', // Special channel for API messages
     );
 
+    LogService().log('BleTransport: [API-REQ] sendChatToCallsign returned: $success');
+
+    if (!success) {
+      _pendingRequests.remove(message.id);
+      stopwatch.stop();
+      LogService().log('BleTransport: [API-REQ] FAILED - BLE send failed');
+      final result = TransportResult.failure(
+        error: 'BLE send failed',
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
+
+    // Wait for response with timeout
+    LogService().log('BleTransport: [API-REQ] Send OK, waiting for response (timeout: ${timeout.inSeconds}s)...');
+    try {
+      final result = await completer.future.timeout(timeout);
+      LogService().log('BleTransport: [API-REQ] SUCCESS - Got response');
+      recordMetrics(result);
+      return result;
+    } on TimeoutException {
+      _pendingRequests.remove(message.id);
+      stopwatch.stop();
+      LogService().log('BleTransport: [API-REQ] TIMEOUT after ${timeout.inSeconds}s for ${message.id}');
+      LogService().log('BleTransport: [API-REQ] Remaining pending: ${_pendingRequests.keys.toList()}');
+      final result = TransportResult.failure(
+        error: 'BLE API request timeout',
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
+  }
+
+  /// Handle API response messages - send back to requester via BLE
+  Future<TransportResult> _handleApiResponse(
+    TransportMessage message,
+    Stopwatch stopwatch,
+  ) async {
+    // The payload is already JSON-encoded in ConnectionManager._sendApiResponse
+    final content = message.payload is String
+        ? message.payload as String
+        : jsonEncode(message.payload);
+
+    LogService().log('BleTransport: Sending API response to ${message.targetCallsign}');
+
+    // Send via BLE using a special channel for API responses
+    final success = await _messageService.sendChatToCallsign(
+      targetCallsign: message.targetCallsign,
+      content: content,
+      channel: '_api_response', // Special channel for API response messages
+    );
+
     stopwatch.stop();
 
     if (success) {
-      // Note: BLE API requests are fire-and-forget by nature
-      // The response would come back as a separate incoming message
       final result = TransportResult.success(
         transportUsed: id,
         latency: stopwatch.elapsed,
-        // No response data for BLE API requests (async)
       );
       recordMetrics(result);
       return result;
     } else {
       final result = TransportResult.failure(
-        error: 'BLE send failed',
+        error: 'BLE API response send failed',
         transportUsed: id,
       );
       recordMetrics(result);
@@ -354,6 +443,9 @@ class BleTransport extends Transport with TransportMixin {
         case '_api':
           type = TransportMessageType.apiRequest;
           break;
+        case '_api_response':
+          type = TransportMessageType.apiResponse;
+          break;
         case '_system':
           type = TransportMessageType.ping;
           break;
@@ -375,6 +467,32 @@ class BleTransport extends Transport with TransportMixin {
         }
       } catch (_) {
         // Not JSON, use raw content
+      }
+
+      // Handle API responses - complete pending request and don't emit as incoming message
+      if (type == TransportMessageType.apiResponse &&
+          payload is Map &&
+          payload['type'] == 'api_response') {
+        final requestId = payload['id']?.toString();
+        if (requestId != null) {
+          final pendingRequest = _pendingRequests.remove(requestId);
+          if (pendingRequest != null) {
+            pendingRequest.stopwatch.stop();
+            final statusCode = payload['statusCode'] as int? ?? 200;
+            final body = payload['body'];
+            LogService().log('BleTransport: Received API response for request $requestId (status: $statusCode)');
+            pendingRequest.completer.complete(TransportResult.success(
+              transportUsed: id,
+              statusCode: statusCode,
+              responseData: body,
+              latency: pendingRequest.stopwatch.elapsed,
+            ));
+            return; // Don't emit as incoming message
+          } else {
+            LogService().log('BleTransport: Received API response for unknown request $requestId');
+          }
+        }
+        return; // Don't emit orphan API responses
       }
 
       TransportMessage message;
@@ -422,6 +540,44 @@ class BleTransport extends Transport with TransportMixin {
       );
     } catch (e) {
       LogService().log('BleTransport: Error handling incoming message: $e');
+    }
+  }
+
+  /// Handle incoming notifications from GATT client connections
+  /// This is called when we (as GATT client) receive notifications from a GATT server
+  void _handleClientNotification(Map<String, dynamic> message) {
+    try {
+      final deviceId = message['_deviceId'] as String?;
+      final messageType = message['type'] as String?;
+      final messageId = message['id'] as String?;
+
+      LogService().log('BleTransport: Client notification received (type=$messageType, id=$messageId, deviceId=$deviceId)');
+
+      // Handle API responses
+      if (messageType == 'api_response' && messageId != null) {
+        final pendingRequest = _pendingRequests.remove(messageId);
+        if (pendingRequest != null) {
+          pendingRequest.stopwatch.stop();
+          final statusCode = message['statusCode'] as int? ?? 200;
+          final body = message['body'];
+          LogService().log('BleTransport: Completed pending API request $messageId (status: $statusCode)');
+          pendingRequest.completer.complete(TransportResult.success(
+            transportUsed: id,
+            statusCode: statusCode,
+            responseData: body,
+            latency: pendingRequest.stopwatch.elapsed,
+          ));
+          return;
+        } else {
+          LogService().log('BleTransport: No pending request for API response $messageId (pending: ${_pendingRequests.keys.toList()})');
+        }
+      }
+
+      // For non-API messages, we could emit them as incoming messages
+      // but for now just log them
+      LogService().log('BleTransport: Unhandled client notification type: $messageType');
+    } catch (e) {
+      LogService().log('BleTransport: Error handling client notification: $e');
     }
   }
 

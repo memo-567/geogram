@@ -15,6 +15,7 @@ import 'ble_discovery_service.dart';
 import 'ble_gatt_server_service.dart';
 import 'ble_identity_service.dart';
 import 'ble_queue_service.dart';
+import 'ble_linux_peripheral.dart';
 import 'bluetooth_classic_service.dart';
 import 'bluetooth_classic_pairing_service.dart';
 import 'log_service.dart';
@@ -50,6 +51,7 @@ class BLEMessageService {
   /// Services
   final _discoveryService = BLEDiscoveryService();
   final _gattServer = BLEGattServerService();
+  final BleLinuxPeripheral _linuxPeripheral = BleLinuxPeripheral();
   final _identityService = BLEIdentityService();
   final _queueService = BLEQueueService();
 
@@ -96,7 +98,8 @@ class BLEMessageService {
   /// Check if platform can act as server (Android/iOS)
   static bool get canBeServer {
     if (kIsWeb) return false;
-    return Platform.isAndroid || Platform.isIOS;
+    // Linux desktops can run the BlueZ backend to advertise + host GATT.
+    return Platform.isAndroid || Platform.isIOS || Platform.isLinux;
   }
 
   /// Check if platform can act as client (all non-web platforms)
@@ -145,8 +148,18 @@ class BLEMessageService {
       // }
       LogService().log('BLEMessageService: BLE+ disabled - using pure BLE');
 
-      // Initialize GATT server on Android/iOS
-      if (canBeServer) {
+      // Initialize GATT server
+      if (Platform.isLinux) {
+        LogService().log('BLEMessageService: Platform can be server - initializing BlueZ peripheral');
+        await _linuxPeripheral.initialize(
+          callsign: callsign,
+          deviceId: _identityService.deviceId,
+          onMessage: _handleIncomingMessage,
+        );
+        await _linuxPeripheral.start(callsign);
+        LogService().log('BLEMessageService: BlueZ peripheral started');
+        _identityService.startPeriodicAdvertisement();
+      } else if (canBeServer) {
         LogService().log('BLEMessageService: Platform can be server - initializing GATT server');
         await _gattServer.initialize();
         LogService().log('BLEMessageService: GATT server initialized');
@@ -213,6 +226,15 @@ class BLEMessageService {
     final payload = BLEHelloPayload.fromJson(message.payload);
     LogService().log('BLEMessageService: HELLO from ${payload.callsign ?? deviceId}');
 
+    // Register the client's callsign for server-side responses
+    if (payload.callsign != null && payload.callsign!.isNotEmpty) {
+      _gattServer.registerClientCallsign(deviceId, payload.callsign!);
+      // Also register on Linux peripheral for direct client tracking
+      if (Platform.isLinux) {
+        _linuxPeripheral.registerClientCallsign(deviceId, payload.callsign!);
+      }
+    }
+
     // Store peer capabilities
     final peerCaps = payload.capabilities;
     _peerCapabilities[deviceId] = peerCaps.toSet();
@@ -234,6 +256,15 @@ class BLEMessageService {
   /// Handle CHAT message
   Map<String, dynamic> _handleChat(String deviceId, BLEMessage message) {
     final payload = BLEChatPayload.fromJson(message.payload);
+
+    // Register the client's callsign for server-side responses
+    if (payload.author.isNotEmpty) {
+      _gattServer.registerClientCallsign(deviceId, payload.author);
+      // Also register on Linux peripheral for direct client tracking
+      if (Platform.isLinux) {
+        _linuxPeripheral.registerClientCallsign(deviceId, payload.author);
+      }
+    }
 
     if (_handleBlePlusPairRequest(deviceId, payload)) {
       return BLEMessageBuilder.chatAck(
@@ -326,12 +357,16 @@ class BLEMessageService {
   }
 
   /// Send chat message to a discovered device (client mode)
+  ///
+  /// Set [waitForAck] to false for fire-and-forget mode (used for API requests
+  /// where we wait for the actual response, not just an ack)
   Future<bool> sendChat({
     required BLEDevice device,
     required String content,
     String channel = 'main',
     String? signature,
     String? npub,
+    bool waitForAck = true,
   }) async {
     if (!canBeClient || _ourCallsign == null) {
       LogService().log('BLEMessageService: Cannot send chat - not initialized or not a client');
@@ -347,6 +382,23 @@ class BLEMessageService {
         npub: npub,
       );
 
+      // Fire-and-forget mode: just send the message, don't wait for ack
+      // Used for API requests where we wait for the actual api_response instead
+      if (!waitForAck) {
+        LogService().log('BLEMessageService: Sending in fire-and-forget mode (no ack wait)');
+        final sent = await _discoveryService.sendMessageAsync(
+          device,
+          chatMessage.toJson(),
+        );
+        if (sent) {
+          LogService().log('BLEMessageService: Message sent (fire-and-forget) to ${device.callsign ?? device.deviceId}');
+        } else {
+          LogService().log('BLEMessageService: Failed to send message (fire-and-forget)');
+        }
+        return sent;
+      }
+
+      // Normal mode: wait for chat_ack
       final response = await _discoveryService.sendMessage(
         device,
         chatMessage.toJson(),
@@ -392,31 +444,89 @@ class BLEMessageService {
   }
 
   /// Send chat to a device by callsign (finds device first)
+  /// Prefers sending via GATT server if the target is a connected client
+  ///
+  /// Set [waitForAck] to false for fire-and-forget mode (used for API requests)
   Future<bool> sendChatToCallsign({
     required String targetCallsign,
     required String content,
     String channel = 'main',
     String? signature,
     String? npub,
+    bool? waitForAck,
   }) async {
-    // Find device by callsign
-    final devices = _discoveryService.getAllDevices();
     final target = targetCallsign.toUpperCase();
-    final device = devices
-        .where((d) => d.callsign?.toUpperCase() == target)
-        .firstOrNull;
+    // For API requests (_api channel), use fire-and-forget mode by default
+    final shouldWaitForAck = waitForAck ?? (channel != '_api');
+    LogService().log('BLEMessageService: [SEND] sendChatToCallsign to $target, channel=$channel, waitForAck=$shouldWaitForAck');
 
-    if (device == null) {
-      LogService().log('BLEMessageService: Device with callsign $targetCallsign not found');
+    // First, check if target is a connected client (server mode)
+    // This is preferred because it uses the existing connection
+    if (canBeServer && _ourCallsign != null) {
+      LogService().log('BLEMessageService: [SEND] Checking if $target is connected client (we are server)');
+      final clientDeviceId = _gattServer.getDeviceIdForCallsign(target);
+      if (clientDeviceId != null) {
+        LogService().log('BLEMessageService: [SEND] Found $target as connected client: $clientDeviceId');
+
+        // For API responses, send raw JSON to preserve request ID
+        if (channel == '_api_response') {
+          try {
+            final rawData = json.decode(content) as Map<String, dynamic>;
+            LogService().log('BLEMessageService: [SEND] Sending raw API response to client');
+            await sendRawToClient(deviceId: clientDeviceId, data: rawData);
+            return true;
+          } catch (e) {
+            LogService().log('BLEMessageService: [SEND] Failed to parse API response as JSON: $e');
+          }
+        }
+
+        // For other channels, wrap in chat message
+        LogService().log('BLEMessageService: [SEND] Sending wrapped chat to client');
+        await sendChatToClient(
+          deviceId: clientDeviceId,
+          content: content,
+          channel: channel,
+          signature: signature,
+          npub: npub,
+        );
+        return true;
+      } else {
+        LogService().log('BLEMessageService: [SEND] $target is NOT a connected client');
+      }
+    } else {
+      LogService().log('BLEMessageService: [SEND] We are not server (canBeServer=$canBeServer, ourCallsign=$_ourCallsign)');
+    }
+
+    // Fall back to client mode - find device and connect
+    LogService().log('BLEMessageService: [SEND] Falling back to client mode');
+    final devices = _discoveryService.getAllDevices();
+    LogService().log('BLEMessageService: [SEND] Known devices: ${devices.length}');
+    for (final d in devices) {
+      LogService().log('BLEMessageService: [SEND]   - ${d.deviceId}: callsign=${d.callsign}');
+    }
+
+    final matchingDevices = devices
+        .where((d) => d.callsign?.toUpperCase() == target)
+        .toList();
+
+    if (matchingDevices.isEmpty) {
+      LogService().log('BLEMessageService: [SEND] FAILED - Device with callsign $target not found in ${devices.length} devices');
       return false;
     }
 
+    // Sort by lastSeen (most recent first) and pick the freshest address
+    // This handles BLE address rotation where old addresses become stale
+    matchingDevices.sort((a, b) => (b.lastSeen).compareTo(a.lastSeen));
+    final device = matchingDevices.first;
+
+    LogService().log('BLEMessageService: [SEND] Found ${matchingDevices.length} devices for $target, using freshest: ${device.deviceId} (lastSeen: ${device.lastSeen})');
     return sendChat(
       device: device,
       content: content,
       channel: channel,
       signature: signature,
       npub: npub,
+      waitForAck: shouldWaitForAck,
     );
   }
 
@@ -466,6 +576,21 @@ class BLEMessageService {
     );
 
     await _gattServer.sendNotification(deviceId, chatMessage.toJson());
+  }
+
+  /// Send raw data to a specific connected client (server mode)
+  /// Used for API responses that need to preserve original request ID
+  Future<void> sendRawToClient({
+    required String deviceId,
+    required Map<String, dynamic> data,
+  }) async {
+    if (!canBeServer) {
+      LogService().log('BLEMessageService: Cannot send raw to client - not a server');
+      return;
+    }
+
+    LogService().log('BLEMessageService: Sending raw data to client $deviceId');
+    await _gattServer.sendNotification(deviceId, data);
   }
 
   /// Get list of connected client IDs (server mode)
@@ -606,11 +731,11 @@ class BLEMessageService {
       // Discover services
       final services = await device.bleDevice!.discoverServices();
 
-      // Find Geogram service
+      // Find Geogram service (0xFFE0)
       final geogramService = services.firstWhere(
         (s) {
           final uuid = s.uuid.toString().toLowerCase();
-          return uuid.contains('fff0');
+          return uuid.contains('ffe0');
         },
         orElse: () => throw Exception('Geogram service not found'),
       );

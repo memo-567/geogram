@@ -422,6 +422,9 @@ class ConnectionManager {
       return;
     }
 
+    int statusCode = 500;
+    String responseBody = '';
+
     try {
       final localPort = LogApiService().port;
       final uri = Uri.parse('http://localhost:$localPort$path');
@@ -468,18 +471,109 @@ class ConnectionManager {
           response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 25));
       }
 
+      statusCode = response.statusCode;
+      responseBody = response.body;
+
       LogService().log('ConnectionManager: Forwarded P2P request $method $path -> ${response.statusCode}');
     } catch (e) {
       LogService().log('ConnectionManager: Error forwarding P2P API request: $e');
+      responseBody = jsonEncode({'error': e.toString()});
     }
+
+    // Send response back to requester
+    await _sendApiResponse(
+      requestId: message.id,
+      targetCallsign: message.targetCallsign,
+      statusCode: statusCode,
+      body: responseBody,
+    );
+  }
+
+  /// Send API response back to the requester
+  Future<void> _sendApiResponse({
+    required String requestId,
+    required String targetCallsign,
+    required int statusCode,
+    required String body,
+  }) async {
+    // Encode response as JSON payload
+    final responsePayload = jsonEncode({
+      'type': 'api_response',
+      'id': requestId,
+      'statusCode': statusCode,
+      'body': body,
+    });
+
+    // Create response message
+    final responseMessage = TransportMessage(
+      id: 'response-$requestId',
+      targetCallsign: targetCallsign,
+      type: TransportMessageType.apiResponse,
+      payload: responsePayload,
+    );
+
+    // Find a transport that can reach the requester
+    for (final transport in availableTransports) {
+      try {
+        final canReachDevice = await transport.canReach(targetCallsign).timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => false,
+        );
+        if (canReachDevice) {
+          await transport.sendAsync(responseMessage);
+          LogService().log('ConnectionManager: Sent API response to $targetCallsign via ${transport.id}');
+          return;
+        }
+      } catch (e) {
+        LogService().log('ConnectionManager: Error sending response via ${transport.id}: $e');
+      }
+    }
+
+    LogService().log('ConnectionManager: No transport available to send API response to $targetCallsign');
   }
 
   /// Handle incoming direct message
+  ///
+  /// Forwards the signed event to the local chat API for processing.
+  /// The sender's callsign becomes the room ID (DM conversation identifier).
   Future<void> _handleDirectMessage(TransportMessage message) async {
-    // DMs come via apiRequest with signed_event in the body
-    // The apiRequest handler will forward POST /api/chat/{callsign}/messages to local server
-    // This method is for future direct DM handling if needed
-    LogService().log('ConnectionManager: Received DM from ${message.targetCallsign}');
+    final senderCallsign = message.targetCallsign;
+    LogService().log('ConnectionManager: Received DM from $senderCallsign');
+
+    if (message.signedEvent == null) {
+      LogService().log('ConnectionManager: DM has no signed event, ignoring');
+      return;
+    }
+
+    try {
+      // Forward to local chat API: POST /api/chat/{senderCallsign}/messages
+      // The roomId (path param) is the sender's callsign for DM conversations
+      final localPort = LogApiService().port;
+      final path = '/api/chat/$senderCallsign/messages';
+      final uri = Uri.parse('http://localhost:$localPort$path');
+
+      final body = jsonEncode({
+        'event': message.signedEvent,
+      });
+
+      LogService().log('ConnectionManager: Forwarding DM to local API: POST $path');
+
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        LogService().log('ConnectionManager: DM delivered to local chat API');
+      } else {
+        LogService().log(
+          'ConnectionManager: DM delivery failed: ${response.statusCode} - ${response.body}',
+        );
+      }
+    } catch (e) {
+      LogService().log('ConnectionManager: Error forwarding DM: $e');
+    }
   }
 
   // ============================================================

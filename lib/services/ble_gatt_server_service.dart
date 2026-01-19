@@ -11,6 +11,7 @@ import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'app_args.dart';
 import 'ble_permission_service.dart';
+import 'ble_linux_peripheral.dart';
 import 'log_service.dart';
 
 /// Represents a connected BLE client
@@ -41,7 +42,8 @@ class BLEGattServerService {
   BLEGattServerService._internal();
 
   /// GATT service/characteristic UUIDs (same as ble_discovery_service.dart)
-  static const String serviceUUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+  /// Using 0xFFE0 to avoid conflict with Android's PKOC service at 0xFFF0
+  static const String serviceUUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
   static const String writeCharUUID = '0000fff1-0000-1000-8000-00805f9b34fb';
   static const String notifyCharUUID = '0000fff2-0000-1000-8000-00805f9b34fb';
   static const String statusCharUUID = '0000fff3-0000-1000-8000-00805f9b34fb';
@@ -50,10 +52,38 @@ class BLEGattServerService {
   bool _isInitialized = false;
   bool _isRunning = false;
   bool get isRunning => _isRunning;
+  final bool _useLinuxBackend = !kIsWeb && Platform.isLinux;
+  BleLinuxPeripheral? _linuxPeripheral;
 
   /// Connected clients
   final Map<String, ConnectedBLEClient> _connectedClients = {};
   List<String> get connectedDeviceIds => _connectedClients.keys.toList();
+
+  /// Mapping of deviceId to callsign (for sending responses back via server)
+  final Map<String, String> _deviceIdToCallsign = {};
+
+  /// Register a client's callsign (called when we learn who they are)
+  void registerClientCallsign(String deviceId, String callsign) {
+    _deviceIdToCallsign[deviceId] = callsign.toUpperCase();
+    LogService().log('BLEGattServer: Registered $deviceId as $callsign');
+  }
+
+  /// Get the deviceId for a callsign (reverse lookup)
+  /// Returns null if the callsign is not a connected client
+  String? getDeviceIdForCallsign(String callsign) {
+    final target = callsign.toUpperCase();
+    for (final entry in _deviceIdToCallsign.entries) {
+      if (entry.value == target && _connectedClients.containsKey(entry.key)) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  /// Check if a callsign corresponds to a connected client
+  bool isConnectedClient(String callsign) {
+    return getDeviceIdForCallsign(callsign) != null;
+  }
 
   /// Message handler
   BLEMessageHandler? _messageHandler;
@@ -65,7 +95,7 @@ class BLEGattServerService {
   /// Check if platform supports GATT server
   static bool get isSupported {
     if (kIsWeb) return false;
-    return Platform.isAndroid || Platform.isIOS;
+    return Platform.isAndroid || Platform.isIOS || Platform.isLinux;
   }
 
   /// Initialize the GATT server (must be called before startServer)
@@ -79,6 +109,13 @@ class BLEGattServerService {
     // Refuse in internet-only mode
     if (AppArgs().internetOnly) {
       LogService().log('BLEGattServer: Disabled in internet-only mode');
+      return;
+    }
+
+    // Linux uses the BlueZ backend instead of the ble_peripheral plugin.
+    if (_useLinuxBackend) {
+      _linuxPeripheral ??= BleLinuxPeripheral(log: LogService());
+      _isInitialized = true;
       return;
     }
 
@@ -193,6 +230,24 @@ class BLEGattServerService {
     if (!isSupported) return;
 
     try {
+      if (_useLinuxBackend) {
+        // Note: On Linux, BLEMessageService handles peripheral directly
+        // This code path is a fallback; deviceId 0 is a placeholder
+        await _linuxPeripheral?.initialize(
+          callsign: callsign,
+          deviceId: 0,
+          onMessage: (deviceIdParam, message) async {
+            if (_messageHandler != null) {
+              return _messageHandler!(deviceIdParam, message);
+            }
+            return null;
+          },
+        );
+        await _linuxPeripheral?.start(callsign);
+        _isRunning = true;
+        return;
+      }
+
       // Check BLE advertise permission via permission service
       final permissionService = BLEPermissionService();
       if (!permissionService.hasAdvertisePermission) {
@@ -232,9 +287,14 @@ class BLEGattServerService {
     if (!_isRunning) return;
 
     try {
-      await BlePeripheral.stopAdvertising();
-      _isRunning = false;
-      LogService().log('BLEGattServer: Stopped');
+      if (_useLinuxBackend) {
+        await _linuxPeripheral?.stop();
+        _isRunning = false;
+      } else {
+        await BlePeripheral.stopAdvertising();
+        _isRunning = false;
+        LogService().log('BLEGattServer: Stopped');
+      }
     } catch (e) {
       LogService().log('BLEGattServer: Error stopping: $e');
       _isRunning = false;
@@ -427,6 +487,12 @@ class BLEGattServerService {
     if (client == null) {
       LogService().log('BLEGattServer: Cannot send notification - client not found: $deviceId');
       LogService().log('BLEGattServer: Known clients: ${_connectedClients.keys.toList()}');
+      return;
+    }
+
+    if (_useLinuxBackend) {
+      // Pass deviceId to Linux backend for targeted send logging
+      await _linuxPeripheral?.sendNotification(message, deviceId: deviceId);
       return;
     }
 

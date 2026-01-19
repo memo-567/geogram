@@ -1505,6 +1505,23 @@ class DirectMessageService {
 
       LogService().log('DM: Pushing signed event via chat API to $targetCallsign path: $path');
 
+      // Check if device is reachable via BLE and use proper DM channel instead of API path
+      final isReachable = await ConnectionManager().isReachable(targetCallsign);
+      if (isReachable) {
+        LogService().log('DM: Device $targetCallsign is BLE-reachable, using sendDM()');
+        final result = await ConnectionManager().sendDM(
+          callsign: targetCallsign,
+          signedEvent: signedEvent.toJson(),
+          ttl: const Duration(minutes: 5),
+        );
+        if (result.success) {
+          LogService().log('DM: Message delivered successfully via BLE DM channel');
+          return true;
+        }
+        LogService().log('DM: BLE DM failed, falling back to API path: ${result.error}');
+        // Fall through to API request if BLE fails
+      }
+
       // Use DevicesService helper which tries direct connection first, then falls back to station proxy
       final response = await DevicesService().makeDeviceApiRequest(
         callsign: targetCallsign,
