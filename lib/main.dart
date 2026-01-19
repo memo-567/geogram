@@ -360,9 +360,8 @@ void main() async {
       await UserLocationService().initialize();
       LogService().log('UserLocationService initialized (deferred)');
 
-      // StationService can involve network calls - defer it
-      await StationService().initialize();
-      LogService().log('StationService initialized (deferred)');
+      // NOTE: StationService initialization moved after firstLaunchComplete check
+      // to ensure the user's chosen callsign (from WelcomePage) is used for p2p.radio registration
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
@@ -516,6 +515,14 @@ void main() async {
         LogService().log('[PROXIMITY] Skipped on first launch - will start after onboarding');
       } else {
         LogService().log('[PROXIMITY] Tracking disabled by user setting');
+      }
+
+      // StationService - skip on first launch, onboarding will start it after profile is finalized
+      if (firstLaunchComplete) {
+        await StationService().initialize();
+        LogService().log('StationService initialized (deferred)');
+      } else {
+        LogService().log('StationService skipped on first launch - will start after onboarding');
       }
 
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
@@ -1010,6 +1017,16 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Start StationService after onboarding completes
+  Future<void> _startStationServiceAfterOnboarding() async {
+    try {
+      await StationService().initialize();
+      LogService().log('StationService initialized after onboarding');
+    } catch (e) {
+      LogService().log('StationService failed to start after onboarding: $e');
+    }
+  }
+
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
@@ -1097,6 +1114,8 @@ class _HomePageState extends State<HomePage> {
         builder: (context) => WelcomePage(
           onComplete: () {
             Navigator.of(context).pop();
+            // Start StationService now that profile is finalized
+            _startStationServiceAfterOnboarding();
           },
         ),
       ),

@@ -86,11 +86,11 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     try {
       LogService().log('DeviceDetailPage._loadApps: START for ${widget.device.callsign}');
 
-      // Force fresh API check (don't use cache) to ensure we get current data
+      // Use cache first for instant display, then refresh in background
       final apps = await _appsService.discoverApps(
         widget.device.callsign,
-        useCache: false,
-        refreshInBackground: false,
+        useCache: true,
+        refreshInBackground: true,
       );
 
       // Log detailed app info
@@ -288,7 +288,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         crossAxisCount: MediaQuery.of(context).size.width < 600 ? 2 : 3,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: 1.2,
+        childAspectRatio: 0.95,
       ),
       itemCount: availableApps.length,
       itemBuilder: (context, index) {

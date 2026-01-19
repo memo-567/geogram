@@ -40,14 +40,17 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   /// Get app types sorted alphabetically by localized name
   List<_CollectionTypeInfo> get _sortedTypes {
     final types = List<_CollectionTypeInfo>.from(_collectionTypes);
-    types.sort((a, b) => _i18n.t('collection_type_${a.type}')
-        .toLowerCase()
-        .compareTo(_i18n.t('collection_type_${b.type}').toLowerCase()));
+    types.sort(
+      (a, b) => _i18n
+          .t('collection_type_${a.type}')
+          .toLowerCase()
+          .compareTo(_i18n.t('collection_type_${b.type}').toLowerCase()),
+    );
     return types;
   }
 
   // Collection types with their icons (ordered by relevance)
-  // Hidden types (not ready): forum, transfer, bot, postcards, market, www, news
+  // Hidden types (not ready): forum, bot, postcards, market, www, news
   static const List<_CollectionTypeInfo> _collectionTypes = [
     _CollectionTypeInfo('places', Icons.place),
     _CollectionTypeInfo('blog', Icons.article),
@@ -63,7 +66,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('wallet', Icons.account_balance_wallet),
     _CollectionTypeInfo('log', Icons.article_outlined),
     _CollectionTypeInfo('backup', Icons.backup),
-    // _CollectionTypeInfo('transfer', Icons.swap_horiz),  // Hidden: not ready
+    _CollectionTypeInfo('transfer', Icons.swap_horiz),
     _CollectionTypeInfo('files', Icons.folder),
     // _CollectionTypeInfo('postcards', Icons.mail),  // Hidden: not ready
     // _CollectionTypeInfo('market', Icons.storefront),  // Hidden: not ready
@@ -85,7 +88,9 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   Future<void> _checkExistingTypes() async {
     try {
       final collectionsService = CollectionService();
-      final collectionsDir = Directory('${collectionsService.getDefaultCollectionsPath()}');
+      final collectionsDir = Directory(
+        '${collectionsService.getDefaultCollectionsPath()}',
+      );
 
       if (await collectionsDir.exists()) {
         final folders = await collectionsDir.list().toList();
@@ -95,7 +100,9 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
             .toSet();
 
         setState(() {
-          _existingTypes = _singleInstanceTypes.intersection(existingFolderNames);
+          _existingTypes = _singleInstanceTypes.intersection(
+            existingFolderNames,
+          );
           // Initialize item keys for scroll-to functionality
           for (final type in _collectionTypes) {
             _itemKeys[type.type] = GlobalKey();
@@ -141,9 +148,9 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     } catch (e) {
       LogService().log('Error picking folder: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error selecting folder: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error selecting folder: $e')));
       }
     }
   }
@@ -226,7 +233,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   Widget _buildAppListItem(_CollectionTypeInfo typeInfo) {
     final theme = Theme.of(context);
-    final isDisabled = _existingTypes.contains(typeInfo.type) &&
+    final isDisabled =
+        _existingTypes.contains(typeInfo.type) &&
         _singleInstanceTypes.contains(typeInfo.type);
     final isExpanded = _selectedType == typeInfo.type;
     final description = _getTypeDescription(typeInfo.type);
@@ -263,7 +271,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                           key!.currentContext!,
                           duration: const Duration(milliseconds: 300),
                           curve: Curves.easeInOut,
-                          alignment: 0.8, // Show item near bottom to ensure Create button is visible
+                          alignment:
+                              0.8, // Show item near bottom to ensure Create button is visible
                         );
                       }
                     });
@@ -287,17 +296,16 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: _getTypeGradient(typeInfo.type, theme).colors.first.withValues(alpha: 0.3),
+                            color: _getTypeGradient(
+                              typeInfo.type,
+                              theme,
+                            ).colors.first.withValues(alpha: 0.3),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),
                         ],
                       ),
-                      child: Icon(
-                        typeInfo.icon,
-                        size: 26,
-                        color: Colors.white,
-                      ),
+                      child: Icon(typeInfo.icon, size: 26, color: Colors.white),
                     ),
                     const SizedBox(width: 16),
                     // Title + short description
@@ -329,7 +337,10 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                     // Status badge or expand indicator
                     if (isDisabled)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(20),
@@ -369,7 +380,12 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                 duration: const Duration(milliseconds: 250),
                 curve: Curves.easeInOut,
                 child: isExpanded
-                    ? _buildExpandedDetails(typeInfo, theme, description, features)
+                    ? _buildExpandedDetails(
+                        typeInfo,
+                        theme,
+                        description,
+                        features,
+                      )
                     : const SizedBox.shrink(),
               ),
             ],
@@ -404,33 +420,40 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: features.map((f) => Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.check,
-                          size: 14,
-                          color: theme.colorScheme.primary,
-                        ),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            f,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                  children: features
+                      .map(
+                        (f) => Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.check,
+                                size: 14,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  f,
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
-                  )).toList(),
+                      )
+                      .toList(),
                 ),
               ],
               // Settings for 'files' type
@@ -578,9 +601,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
             decoration: BoxDecoration(
               color: theme.colorScheme.surface,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: theme.colorScheme.outlineVariant,
-              ),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -644,7 +665,9 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                        color: theme.colorScheme.primaryContainer.withValues(
+                          alpha: 0.3,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
@@ -800,26 +823,11 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Send/receive tracking',
         ];
       case 'contacts':
-        return [
-          'Contact details',
-          'Organization info',
-          'Search',
-          'Export',
-        ];
+        return ['Contact details', 'Organization info', 'Search', 'Export'];
       case 'places':
-        return [
-          'Map integration',
-          'Coordinates',
-          'Descriptions',
-          'Photos',
-        ];
+        return ['Map integration', 'Coordinates', 'Descriptions', 'Photos'];
       case 'market':
-        return [
-          'Item listings',
-          'Pricing',
-          'Categories',
-          'Contact seller',
-        ];
+        return ['Item listings', 'Pricing', 'Categories', 'Contact seller'];
       case 'alerts':
         return [
           'Real-time notifications',
@@ -828,11 +836,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Custom filters',
         ];
       case 'groups':
-        return [
-          'Member management',
-          'Group roles',
-          'Bulk actions',
-        ];
+        return ['Member management', 'Group roles', 'Bulk actions'];
       case 'backup':
         return [
           'End-to-end encryption',
@@ -849,11 +853,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           '200+ item types with templates',
         ];
       case 'station':
-        return [
-          'Connection settings',
-          'Peer management',
-          'Bandwidth controls',
-        ];
+        return ['Connection settings', 'Peer management', 'Bandwidth controls'];
       case 'console':
         return [
           'Alpine Linux VM',

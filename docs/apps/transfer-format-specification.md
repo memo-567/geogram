@@ -1,7 +1,7 @@
 # Transfer Format Specification
 
-**Version**: 1.0
-**Last Updated**: 2026-01-01
+**Version**: 1.1
+**Last Updated**: 2026-01-18
 **Status**: Draft
 
 ## Table of Contents
@@ -12,6 +12,9 @@
 - [Configuration Files](#configuration-files)
 - [Transfer Lifecycle](#transfer-lifecycle)
 - [Transfer Types](#transfer-types)
+- [Addressing & Transport Selection](#addressing--transport-selection)
+- [Transfer Records & History](#transfer-records--history)
+- [Cache & Retention](#cache--retention)
 - [Queue Management](#queue-management)
 - [Retry Policy](#retry-policy)
 - [Patient Mode](#patient-mode)
@@ -19,6 +22,7 @@
 - [Verification](#verification)
 - [Protocol Messages](#protocol-messages)
 - [API Endpoints](#api-endpoints)
+- [Debug API](#debug-api)
 - [EventBus Integration](#eventbus-integration)
 - [Metrics & Statistics](#metrics--statistics)
 - [Error Handling](#error-handling)
@@ -34,14 +38,15 @@ The Transfer app provides a centralized download/upload/streaming center for Geo
 
 1. **Bidirectional transfers**: Downloads, uploads, and streaming
 2. **Resume capability**: Interrupted transfers can continue from last position
-3. **Automatic retry**: Exponential backoff with configurable limits
-4. **Patient mode**: Waits up to 30 days for offline peers
-5. **Priority queue**: Urgent, high, normal, and low priorities
-6. **Manual control**: Pause, resume, cancel, and retry operations
-7. **Ban list**: Block specific callsigns from initiating downloads
-8. **Verification**: Size and hash validation before final placement
-9. **Metrics**: Comprehensive statistics and visualization
-10. **EventBus integration**: Apps receive notifications on transfer events
+3. **Transport-aware**: Automatically switches between BLE/LoRa, LAN, and internet paths with resume
+4. **Automatic retry**: Exponential backoff with configurable limits
+5. **Patient mode**: Waits up to 30 days for offline peers
+6. **Priority queue**: Urgent, high, normal, and low priorities
+7. **Manual control**: Pause, resume, cancel, and retry operations
+8. **Ban list**: Block specific callsigns from initiating downloads
+9. **Verification**: Size and hash validation (negotiate SHA-1 when possible) before final placement
+10. **Metrics**: Comprehensive statistics and per-transport breakdowns
+11. **EventBus integration**: Apps receive notifications on transfer events
 
 ### Design Philosophy
 
@@ -60,9 +65,12 @@ The Transfer app provides a centralized download/upload/streaming center for Geo
 | **Worker** | Process that executes individual transfers |
 | **Worker Pool** | Manager for concurrent transfer workers |
 | **Patient Mode** | Extended waiting period for offline peers |
-| **Transport** | Connection method: LAN, WebRTC, Station, BLE |
+| **Transport** | Connection method: LAN, WebRTC, Station, BLE, LoRa |
 | **Callsign** | Unique identifier for a Geogram device |
 | **Station** | Relay server for indirect connections |
+| **Locator** | Address of a transfer target: either `http(s)://...` or `/CALLSIGN/path` |
+| **Transfer Record** | Per-transfer JSON file capturing history, verification, and segment stats |
+| **Transport Segment** | Portion of a transfer completed over a specific transport (BLE/LAN/Internet) |
 
 ## File Organization
 
@@ -75,6 +83,9 @@ Transfer data is stored in a dedicated directory:
 ├── settings.json                    # Global transfer settings
 ├── queue.json                       # Active and queued transfers
 ├── metrics.json                     # Statistics and metrics
+├── cache/                           # Verified payload cache (keyed by hash+path)
+├── records/                         # Per-transfer JSON records (auto-pruned after 30 days)
+│   └── tr_abc123.json
 └── history/                         # Completed transfer archives
     ├── 2025-12.json                 # Monthly history files
     ├── 2025-11.json
@@ -135,6 +146,8 @@ Transfer data is stored in a dedicated directory:
     {
       "id": "tr_abc123",
       "direction": "download",
+      "locator_type": "http",                // http | callsign_path
+      "remote_url": "http://p2p.radio/download.zip", // for HTTP(S) downloads
       "source_callsign": "X1ABCD",
       "source_station_url": "https://station.example.com",
       "target_callsign": "X2BCDE",
@@ -143,6 +156,8 @@ Transfer data is stored in a dedicated directory:
       "filename": "photo.jpg",
       "expected_bytes": 1048576,
       "expected_hash": "sha256:abc123...",
+      "transport_candidates": ["lan", "station", "ble"], // order attempted
+      "cache_hit": false,
       "mime_type": "image/jpeg",
       "status": "queued",
       "priority": "normal",
@@ -163,13 +178,19 @@ Transfer data is stored in a dedicated directory:
 }
 ```
 
+Notes:
+- `remote_url` is required for HTTP(S) downloads and omits callsign fields.
+- `locator_type` clarifies how the locator is interpreted (`http` vs `callsign_path` such as `/X1ABCD/file.zip` for non-IP/BLE/LoRa).
+- `transport_candidates` defines the fallback order; a new transport segment is opened on each switch.
+- `cache_hit` is set when the transfer is immediately fulfilled from the verified cache without network usage.
+
 ### History Files
 
 `{data_dir}/transfers/history/YYYY-MM.json`:
 
 ```json
 {
-  "version": "1.0",
+  "version": "1.1",
   "month": "2025-12",
   "transfers": [
     {
@@ -197,6 +218,11 @@ Transfer data is stored in a dedicated directory:
 ```
 
 ## Transfer Lifecycle
+
+The lifecycle begins before a worker is allocated:
+1. **Cache/dedup check**: If a verified cached file exists (hash match), the transfer is marked complete with `cache_hit=true`.
+2. **Resume from record**: If a prior record exists, resume from the last verified byte range and carry over completed segments.
+3. **Queue entry**: Pending work enters the priority queue and proceeds through the states below.
 
 ### States
 
@@ -257,6 +283,17 @@ Files downloaded from a remote peer to local storage.
 ```dart
 TransferRequest(
   direction: TransferDirection.download,
+  remoteUrl: "http://p2p.radio/download.zip", // HTTP/HTTPS direct download
+  localPath: "/downloads/download.zip",
+  expectedBytes: 1048576,
+  priority: TransferPriority.normal,
+  requestingApp: "gallery",
+  metadata: {},
+)
+
+// Callsign / non-IP download (BLE/LoRa/Station)
+TransferRequest(
+  direction: TransferDirection.download,
   callsign: "X1ABCD",           // Source callsign
   stationUrl: "https://...",    // Optional station URL
   remotePath: "/files/doc.pdf", // Path on remote device
@@ -302,6 +339,76 @@ TransferRequest(
   metadata: {"codec": "opus", "bitrate": 64000},
 )
 ```
+
+## Addressing & Transport Selection
+
+### Locator Rules
+
+- **HTTP(S) locator**: `remote_url` starts with `http://` or `https://`. No callsign is required; the HTTP client must support Range requests for resume.
+- **Callsign/non-IP locator**: Paths starting with `/<CALLSIGN>/...` target BLE/LoRa/radio transports first and may relay via Station/Internet when available. `stationUrl` remains optional for mediated delivery.
+- Locators are normalized before queuing to avoid duplicates (e.g., trailing slashes removed, lowercase hostnames).
+
+### Transport Selection & Switching
+
+- Default attempt order (fastest to slowest, overridable per request via `transport_candidates`): LAN > WebRTC > Station/Internet > BLE > LoRa/Radio.
+- On any transport failure, the worker opens a new transport segment and resumes from the last verified byte using HTTP Range or chunk-index negotiation.
+- Each transport switch is recorded in the transfer record with byte ranges and timings.
+- Patient mode still applies; if no transports are available, the transfer stays in `waiting` until a candidate becomes reachable or timeout occurs.
+
+### Hash Negotiation
+
+- When a hash is not supplied, the requester asks the remote peer for a SHA-1 digest:
+  - HTTP(S): try `HEAD` with `X-File-Sha1` header (fallback to `ETag`/`Content-MD5` if SHA-1 unavailable).
+  - Callsign/non-IP sessions: include `sha1` in the initial `transfer_session_start` metadata.
+- `negotiated_hash` is stored in the transfer record and used for verification and cache lookup.
+
+## Transfer Records & History
+
+Every transfer writes a detailed record under `{data_dir}/transfers/records/{transfer_id}.json` capturing per-transport progress, hashes, and outcomes.
+
+Example record:
+
+```json
+{
+  "version": "1.1",
+  "transfer_id": "tr_abc123",
+  "direction": "download",
+  "locator": "http://p2p.radio/download.zip",
+  "filename": "download.zip",
+  "expected_bytes": 1048576,
+  "expected_hash": "sha256:abc123...",
+  "negotiated_hash": "sha1:def456...",
+  "created_at": "2026-01-18T11:00:00Z",
+  "completed_at": "2026-01-18T11:05:30Z",
+  "segments": [
+    {"transport": "lan", "from_byte": 0, "to_byte": 524287, "bytes": 524288, "duration_ms": 3200, "retries": 0, "started_at": "2026-01-18T11:00:05Z"},
+    {"transport": "ble", "from_byte": 524288, "to_byte": 534527, "bytes": 10240, "duration_ms": 60000, "retries": 1, "started_at": "2026-01-18T11:02:00Z"}
+  ],
+  "totals_by_transport": {"lan": 524288, "ble": 10240},
+  "verification": {
+    "verified": true,
+    "hash_used": "sha1:def456...",
+    "verified_at": "2026-01-18T11:05:25Z"
+  },
+  "cache": {
+    "cache_hit": false,
+    "cache_path": "/data/transfers/cache/sha1/def456/download.zip",
+    "last_accessed_at": "2026-01-18T11:05:30Z"
+  },
+  "status": "completed",
+  "error": null
+}
+```
+
+- Records are used for resume (segment offsets), for metrics aggregation, and as provenance for cached files.
+- Uploads use the same schema but track `bytes_sent` per segment.
+
+## Cache & Retention
+
+- **Cache before download**: If a verified cached file exists for the requested hash/locator, fulfill the request immediately (`cache_hit=true`) and place/link the cached file to `local_path`.
+- **Cache after download**: After verification, copy/link the file into `{data_dir}/transfers/cache/{hash_type}/{hash_value}/filename` for future reuse.
+- **Retention**: Per-transfer records are deleted after 30 days. Cache entries follow an LRU policy and are eligible for deletion after 30 days without access or when exceeding size thresholds. Monthly history/metrics remain for long-term stats.
+- **Repeat requests**: New download requests first check the cache; if present and hashes match, no network transfer is attempted.
 
 ## Queue Management
 
@@ -450,12 +557,13 @@ if (transfer.expectedBytes != null) {
 
 ### Hash Verification
 
-Optional SHA-256 hash verification:
+Hash verification prefers SHA-1 negotiated from the remote peer; falls back to supplied hashes (SHA-256 supported) or HTTP `ETag` when necessary:
 
 ```dart
-if (transfer.expectedHash != null) {
-  String actualHash = await computeSha256(tempFile);
-  if (actualHash != transfer.expectedHash) {
+final hashToUse = transfer.negotiatedHash ?? transfer.expectedHash;
+if (hashToUse != null) {
+  final actualHash = await computeHash(tempFile, hashToUse);
+  if (actualHash != hashToUse) {
     // Mark as failed, trigger retry
   }
 }
@@ -633,6 +741,53 @@ Get transfer statistics.
 }
 ```
 
+## Debug API
+
+Debug endpoints are exposed in development/testing builds to force specific transports and validate resume/verification behavior end-to-end.
+
+#### POST /api/debug/transfers/test
+
+Force-start a transfer using a specific transport (e.g., BLE) and return the transfer id for observation.
+
+**Request (HTTP locator):**
+```json
+{
+  "direction": "download",
+  "remote_url": "http://p2p.radio/download.zip",
+  "local_path": "/tmp/debug-download.zip",
+  "transport": "ble",               // ble|lan|webrtc|station|internet|lora
+  "expected_bytes": 204800,
+  "expected_hash": "sha1:abc123",
+  "requesting_app": "debug-cli"
+}
+```
+
+**Request (Callsign locator):**
+```json
+{
+  "direction": "download",
+  "callsign": "X1ABCD",
+  "remote_path": "/files/test.bin",
+  "local_path": "/tmp/test.bin",
+  "transport": "ble",
+  "station_url": "https://station.example.com" // optional
+}
+```
+
+**Response:**
+```json
+{
+  "transfer_id": "tr_debug123",
+  "transport": "ble",
+  "status": "queued"
+}
+```
+
+Notes:
+- Debug transfers still emit normal events and write per-transport records for inspection.
+- Only enabled when the app/server runs in a debug/testing mode; production must reject with 403.
+- If the forced transport is unavailable, the request fails fast with an error; no fallback switching occurs.
+
 ## EventBus Integration
 
 The Transfer service fires events on the EventBus for app notifications.
@@ -788,7 +943,7 @@ class TransferPeriodStats {
 
 ```dart
 class TransportStats {
-  String transportId;  // lan, webrtc, station, ble
+  String transportId;  // lan, webrtc, station, ble, lora, internet
   int transferCount;
   int bytesTransferred;
   double averageSpeed;
@@ -852,7 +1007,9 @@ class CallsignStats {
     "lan": {"count": 500, "bytes": 10737418240, "success_rate": 0.98},
     "webrtc": {"count": 200, "bytes": 2147483648, "success_rate": 0.85},
     "station": {"count": 150, "bytes": 1073741824, "success_rate": 0.92},
-    "ble": {"count": 50, "bytes": 52428800, "success_rate": 0.80}
+    "ble": {"count": 50, "bytes": 52428800, "success_rate": 0.80},
+    "lora": {"count": 20, "bytes": 10485760, "success_rate": 0.75},
+    "internet": {"count": 75, "bytes": 2147483648, "success_rate": 0.90}
   }
 }
 ```
@@ -919,8 +1076,16 @@ class CallsignStats {
 - [Data Transmission](../data-transmission.md) - ConnectionManager details
 - [EventBus](../EventBus.md) - Event system documentation
 - [Backup Format Specification](./backup-format-specification.md) - Similar app pattern
+- [Reusable Components](../reusable.md#transferservice) - How apps should consume the TransferService
 
 ## Change Log
+
+### Version 1.1 (2026-01-18)
+
+- Add locator rules for HTTP vs callsign/non-IP downloads
+- Define transport switching with per-transport segment recording
+- Introduce per-transfer records with cache integration and 30-day retention
+- Require SHA-1 negotiation when possible for verification and caching
 
 ### Version 1.0 (2026-01-01)
 

@@ -31,6 +31,9 @@ enum DebugAction {
   /// Send data via BLE to a device
   bleSend,
 
+  /// Send DM via BLE to a specific callsign (bypasses ConnectionManager)
+  bleSendDM,
+
   /// Refresh devices list
   refreshDevices,
 
@@ -287,6 +290,14 @@ class DebugController {
     );
   }
 
+  /// Trigger BLE DM send to a specific callsign (bypasses ConnectionManager)
+  void triggerBLESendDM({required String callsign, required String content}) {
+    triggerAction(
+      DebugAction.bleSendDM,
+      params: {'callsign': callsign, 'content': content},
+    );
+  }
+
   /// Trigger device refresh
   void triggerDeviceRefresh() {
     triggerAction(DebugAction.refreshDevices);
@@ -434,6 +445,14 @@ class DebugController {
           'device_id': '(optional) BLE device ID to send to',
           'data': '(optional) String data to send',
           'size': '(optional) Generate random data of this size in bytes',
+        },
+      },
+      {
+        'action': 'ble_send_dm',
+        'description': 'Send DM directly via BLE (bypasses LAN/Station)',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+          'content': 'Message content (required)',
         },
       },
       {
@@ -704,6 +723,22 @@ class DebugController {
           'success': true,
           'message': 'BLE data send triggered',
           'size': params['size'] ?? params['data']?.toString().length ?? 0,
+        };
+
+      case 'ble_send_dm':
+        final callsign = params['callsign'] as String?;
+        final content = params['content'] as String?;
+        if (callsign == null || callsign.isEmpty) {
+          return {'success': false, 'error': 'Missing callsign parameter'};
+        }
+        if (content == null || content.isEmpty) {
+          return {'success': false, 'error': 'Missing content parameter'};
+        }
+        triggerBLESendDM(callsign: callsign, content: content);
+        return {
+          'success': true,
+          'message': 'BLE DM send triggered to $callsign',
+          'callsign': callsign,
         };
 
       case 'refresh_devices':

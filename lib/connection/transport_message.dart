@@ -3,8 +3,11 @@ library;
 
 /// Types of messages that can be sent through the connection manager
 enum TransportMessageType {
-  /// HTTP-style API request/response
+  /// HTTP-style API request
   apiRequest,
+
+  /// HTTP-style API response
+  apiResponse,
 
   /// Direct message (1-to-1 chat)
   directMessage,

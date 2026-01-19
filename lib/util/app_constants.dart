@@ -14,6 +14,7 @@ const List<String> knownAppTypesConst = [
   'places',
   'files',
   'contacts',
+  'transfer',
   'groups',
   'news',
   'postcards',

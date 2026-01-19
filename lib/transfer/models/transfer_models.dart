@@ -1,11 +1,7 @@
 import 'dart:convert';
 
 /// Transfer direction
-enum TransferDirection {
-  upload,
-  download,
-  stream,
-}
+enum TransferDirection { upload, download, stream }
 
 /// Transfer status lifecycle
 enum TransferStatus {
@@ -21,12 +17,7 @@ enum TransferStatus {
 }
 
 /// Transfer priority levels
-enum TransferPriority {
-  low,
-  normal,
-  high,
-  urgent,
-}
+enum TransferPriority { low, normal, high, urgent }
 
 /// Main Transfer model
 class Transfer {
@@ -36,6 +27,7 @@ class Transfer {
   final String? sourceStationUrl;
   final String targetCallsign;
   final String remotePath;
+  final String? remoteUrl;
   final String localPath;
   final String? filename;
   int expectedBytes;
@@ -68,6 +60,7 @@ class Transfer {
     this.sourceStationUrl,
     required this.targetCallsign,
     required this.remotePath,
+    this.remoteUrl,
     required this.localPath,
     this.filename,
     required this.expectedBytes,
@@ -114,8 +107,7 @@ class Transfer {
   bool get canResume => status == TransferStatus.paused;
 
   bool get canCancel =>
-      status != TransferStatus.completed &&
-      status != TransferStatus.cancelled;
+      status != TransferStatus.completed && status != TransferStatus.cancelled;
 
   Transfer copyWith({
     String? id,
@@ -186,6 +178,7 @@ class Transfer {
       'source_station_url': sourceStationUrl,
       'target_callsign': targetCallsign,
       'remote_path': remotePath,
+      'remote_url': remoteUrl,
       'local_path': localPath,
       'filename': filename,
       'expected_bytes': expectedBytes,
@@ -218,6 +211,7 @@ class Transfer {
       sourceStationUrl: json['source_station_url'] as String?,
       targetCallsign: json['target_callsign'] as String,
       remotePath: json['remote_path'] as String,
+      remoteUrl: json['remote_url'] as String?,
       localPath: json['local_path'] as String,
       filename: json['filename'] as String?,
       expectedBytes: json['expected_bytes'] as int? ?? 0,
@@ -270,6 +264,7 @@ class TransferRequest {
   final String callsign;
   final String? stationUrl;
   final String remotePath;
+  final String? remoteUrl;
   final String localPath;
   final int? expectedBytes;
   final String? expectedHash;
@@ -284,6 +279,7 @@ class TransferRequest {
     required this.callsign,
     this.stationUrl,
     required this.remotePath,
+    this.remoteUrl,
     required this.localPath,
     this.expectedBytes,
     this.expectedHash,
@@ -300,6 +296,7 @@ class TransferRequest {
       'callsign': callsign,
       'station_url': stationUrl,
       'remote_path': remotePath,
+      'remote_url': remoteUrl,
       'local_path': localPath,
       'expected_bytes': expectedBytes,
       'expected_hash': expectedHash,
@@ -317,6 +314,7 @@ class TransferRequest {
       callsign: json['callsign'] as String,
       stationUrl: json['station_url'] as String?,
       remotePath: json['remote_path'] as String,
+      remoteUrl: json['remote_url'] as String?,
       localPath: json['local_path'] as String,
       expectedBytes: json['expected_bytes'] as int?,
       expectedHash: json['expected_hash'] as String?,
@@ -356,8 +354,8 @@ class TransferSettings {
     this.maxQueueSize = 1000,
     List<String>? bannedCallsigns,
     DateTime? updatedAt,
-  })  : bannedCallsigns = bannedCallsigns ?? [],
-        updatedAt = updatedAt ?? DateTime.now();
+  }) : bannedCallsigns = bannedCallsigns ?? [],
+       updatedAt = updatedAt ?? DateTime.now();
 
   TransferSettings copyWith({
     bool? enabled,
@@ -420,7 +418,8 @@ class TransferSettings {
         days: json['patient_mode_timeout_days'] as int? ?? 30,
       ),
       maxQueueSize: json['max_queue_size'] as int? ?? 1000,
-      bannedCallsigns: (json['banned_callsigns'] as List<dynamic>?)
+      bannedCallsigns:
+          (json['banned_callsigns'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           [],
@@ -459,8 +458,8 @@ class RetryPolicy {
 
   /// Calculate next retry delay with exponential backoff
   Duration getNextDelay(int retryCount) {
-    final delayMs = baseDelay.inMilliseconds *
-        _pow(backoffMultiplier, retryCount).toInt();
+    final delayMs =
+        baseDelay.inMilliseconds * _pow(backoffMultiplier, retryCount).toInt();
     final cappedMs = delayMs > maxDelay.inMilliseconds
         ? maxDelay.inMilliseconds
         : delayMs;

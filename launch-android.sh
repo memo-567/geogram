@@ -46,49 +46,101 @@ sleep 1
 # Check device status
 echo ""
 echo "Checking connected devices..."
-DEVICE_STATUS=$("$ADB" devices | tail -n +2 | grep -v "^$" | head -1)
+DEVICE_LINES=$("$ADB" devices | tail -n +2 | grep -v "^$")
 
-if [ -z "$DEVICE_STATUS" ]; then
+if [ -z "$DEVICE_LINES" ]; then
     echo "No Android device connected!"
     echo "Please connect your device and enable USB debugging"
     exit 1
 fi
 
-if echo "$DEVICE_STATUS" | grep -q "unauthorized"; then
-    echo "Device is unauthorized!"
-    echo "Please accept the USB debugging prompt on your device"
-    echo "Then run this script again"
+# Collect all valid device IDs
+DEVICE_IDS=()
+while IFS= read -r line; do
+    if [ -z "$line" ]; then
+        continue
+    fi
+
+    DEVICE_ID=$(echo "$line" | awk '{print $1}')
+    DEVICE_STATE=$(echo "$line" | awk '{print $2}')
+
+    if [ "$DEVICE_STATE" = "unauthorized" ]; then
+        echo "Device $DEVICE_ID is unauthorized - skipping"
+        echo "  Please accept the USB debugging prompt on this device"
+        continue
+    fi
+
+    if [ "$DEVICE_STATE" = "offline" ]; then
+        echo "Device $DEVICE_ID is offline. Attempting to reconnect..."
+        "$ADB" -s "$DEVICE_ID" reconnect
+        sleep 2
+        # Re-check status
+        DEVICE_STATE=$("$ADB" devices | grep "^$DEVICE_ID" | awk '{print $2}')
+        if [ "$DEVICE_STATE" != "device" ]; then
+            echo "Device $DEVICE_ID still offline - skipping"
+            continue
+        fi
+    fi
+
+    if [ "$DEVICE_STATE" = "device" ]; then
+        DEVICE_IDS+=("$DEVICE_ID")
+        echo "Device found: $DEVICE_ID"
+    fi
+done <<< "$DEVICE_LINES"
+
+if [ ${#DEVICE_IDS[@]} -eq 0 ]; then
+    echo "No valid Android devices available!"
     exit 1
 fi
 
-if echo "$DEVICE_STATUS" | grep -q "offline"; then
-    echo "Device is offline. Attempting to reconnect..."
-    "$ADB" reconnect
-    sleep 2
-fi
-
-# Extract device ID from status
-DEVICE_ID=$(echo "$DEVICE_STATUS" | awk '{print $1}')
-echo "Device found: $DEVICE_ID"
+echo ""
+echo "Found ${#DEVICE_IDS[@]} device(s) ready for installation"
 
 echo ""
 echo "Flutter version:"
 "$FLUTTER_BIN" --version
 
-echo ""
-echo "Available Android devices:"
-"$FLUTTER_BIN" devices | grep -E "android|TANK|arm64" || echo "No Android devices detected by Flutter"
-
-echo ""
-echo "Starting app on Android device ($DEVICE_ID)..."
-echo ""
-
 # Get dependencies - try offline first, fall back to online
+echo ""
 echo "Checking dependencies..."
 if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
     echo "Fetching dependencies online..."
     "$FLUTTER_BIN" pub get
 fi
 
-# Run the app on the specific Android device (--no-pub since we already ran pub get)
-"$FLUTTER_BIN" run -d "$DEVICE_ID" --no-pub "$@"
+# Build the APK once
+echo ""
+echo "Building APK..."
+"$FLUTTER_BIN" build apk --release --no-pub
+
+APK_PATH="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-release.apk"
+
+if [ ! -f "$APK_PATH" ]; then
+    echo "APK not found at $APK_PATH"
+    exit 1
+fi
+
+echo ""
+echo "Installing on all devices..."
+
+# Install on each device
+FAILED_DEVICES=()
+for DEVICE_ID in "${DEVICE_IDS[@]}"; do
+    echo ""
+    echo "Installing on $DEVICE_ID..."
+    if "$ADB" -s "$DEVICE_ID" install -r "$APK_PATH"; then
+        echo "Successfully installed on $DEVICE_ID"
+    else
+        echo "Failed to install on $DEVICE_ID"
+        FAILED_DEVICES+=("$DEVICE_ID")
+    fi
+done
+
+echo ""
+echo "========================================"
+echo "Installation complete!"
+echo "Installed on ${#DEVICE_IDS[@]} device(s)"
+if [ ${#FAILED_DEVICES[@]} -gt 0 ]; then
+    echo "Failed on ${#FAILED_DEVICES[@]} device(s): ${FAILED_DEVICES[*]}"
+fi
+echo "========================================"

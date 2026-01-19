@@ -77,6 +77,9 @@ class TransferQueue {
     final now = DateTime.now();
 
     for (final transfer in _priorityQueue) {
+      if (transfer.status == TransferStatus.paused) {
+        continue; // Respect explicit pause; do not auto-resume.
+      }
       final scheduledAt = _retrySchedule[transfer.id];
       if (scheduledAt == null || scheduledAt.isBefore(now)) {
         _priorityQueue.remove(transfer);

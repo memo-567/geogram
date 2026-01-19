@@ -13,18 +13,16 @@ import '../../util/event_bus.dart';
 import '../models/transfer_models.dart';
 
 /// Callback for transfer progress updates
-typedef TransferProgressCallback = void Function(
-  Transfer transfer,
-  int bytesTransferred,
-  double? speedBytesPerSecond,
-);
+typedef TransferProgressCallback =
+    void Function(
+      Transfer transfer,
+      int bytesTransferred,
+      double? speedBytesPerSecond,
+    );
 
 /// Callback for transfer completion
-typedef TransferCompleteCallback = void Function(
-  Transfer transfer,
-  bool success,
-  String? error,
-);
+typedef TransferCompleteCallback =
+    void Function(Transfer transfer, bool success, String? error);
 
 /// Individual transfer worker that processes one transfer at a time
 ///
@@ -124,9 +122,13 @@ class TransferWorker {
       transfer.status = TransferStatus.transferring;
       _reportProgress(transfer, 0, null);
 
-      // Use ConnectionManager to download
       final cm = ConnectionManager();
-      final isBotModelPath = transfer.remotePath == '/bot/models' ||
+      final isHttpUrl =
+          transfer.remoteUrl != null &&
+          (transfer.remoteUrl!.startsWith('http://') ||
+              transfer.remoteUrl!.startsWith('https://'));
+      final isBotModelPath =
+          transfer.remotePath == '/bot/models' ||
           transfer.remotePath.startsWith('/bot/models/');
       final requestPath = isBotModelPath
           ? Uri.encodeFull(transfer.remotePath)
@@ -136,7 +138,42 @@ class TransferWorker {
       Uint8List? inMemoryBytes;
       int bytesWritten = 0;
 
-      if (isBotModelPath && transfer.sourceStationUrl != null) {
+      if (isHttpUrl) {
+        transfer.transportUsed = 'internet_http';
+        final uri = Uri.parse(transfer.remoteUrl!);
+        final client = http.Client();
+        final request = http.Request('GET', uri);
+        final response = await client.send(request).timeout(timeout);
+
+        if (_cancelled) throw Exception('Transfer cancelled');
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw Exception('HTTP download failed: ${response.statusCode}');
+        }
+
+        final sink = tempFile.openWrite();
+        final contentLength = response.contentLength;
+        int received = 0;
+
+        await for (final chunk in response.stream) {
+          if (_cancelled) {
+            await sink.close();
+            await tempFile.delete();
+            throw Exception('Transfer cancelled');
+          }
+          received += chunk.length;
+          sink.add(chunk);
+          transfer.bytesTransferred = received;
+          if (transfer.expectedBytes == 0 && contentLength != null) {
+            transfer.expectedBytes = contentLength;
+          }
+          _reportProgress(transfer, received, _calculateSpeed(received));
+        }
+
+        await sink.close();
+        bytesWritten = received;
+        transfer.bytesTransferred = bytesWritten;
+      } else if (isBotModelPath && transfer.sourceStationUrl != null) {
+        transfer.transportUsed = 'station_http';
         bytesWritten = await _streamDownloadFromStation(
           transfer,
           requestPath,
@@ -160,7 +197,8 @@ class TransferWorker {
 
         if (!result.success) {
           throw Exception(
-              'Download failed: ${result.error ?? 'Unknown error'} (${result.statusCode})');
+            'Download failed: ${result.error ?? 'Unknown error'} (${result.statusCode})',
+          );
         }
 
         final statusCode = result.statusCode;
@@ -176,7 +214,8 @@ class TransferWorker {
           inMemoryBytes = Uint8List.fromList(result.responseData as List<int>);
         } else {
           throw Exception(
-              'Unexpected response type: ${result.responseData.runtimeType}');
+            'Unexpected response type: ${result.responseData.runtimeType}',
+          );
         }
 
         await tempFile.writeAsBytes(inMemoryBytes);
@@ -186,8 +225,7 @@ class TransferWorker {
         transfer.bytesTransferred = bytesWritten;
       }
 
-      _reportProgress(
-          transfer, bytesWritten, _calculateSpeed(bytesWritten));
+      _reportProgress(transfer, bytesWritten, _calculateSpeed(bytesWritten));
 
       if (_cancelled) {
         await tempFile.delete();
@@ -205,14 +243,14 @@ class TransferWorker {
         if ((bytesWritten - expectedBytes).abs() > tolerance) {
           await tempFile.delete();
           throw Exception(
-              'Size mismatch: expected $expectedBytes, got $bytesWritten');
+            'Size mismatch: expected $expectedBytes, got $bytesWritten',
+          );
         }
       }
 
       // Verify hash if provided
       if (transfer.expectedHash != null && transfer.expectedHash!.isNotEmpty) {
-        final bytesForHash =
-            inMemoryBytes ?? await tempFile.readAsBytes();
+        final bytesForHash = inMemoryBytes ?? await tempFile.readAsBytes();
         final hash = sha256.convert(bytesForHash).toString();
         final expectedHash = transfer.expectedHash!.replaceFirst('sha256:', '');
         if (hash != expectedHash) {
@@ -234,28 +272,30 @@ class TransferWorker {
       transfer.lastActivityAt = DateTime.now();
 
       final duration = transfer.completedAt!.difference(transfer.startedAt!);
-      transfer.speedBytesPerSecond =
-          duration.inMilliseconds > 0
-              ? bytesWritten / (duration.inMilliseconds / 1000)
-              : 0;
+      transfer.speedBytesPerSecond = duration.inMilliseconds > 0
+          ? bytesWritten / (duration.inMilliseconds / 1000)
+          : 0;
 
       _log.log(
-          'TransferWorker $workerId: Download complete ${transfer.id} via ${transfer.transportUsed}');
+        'TransferWorker $workerId: Download complete ${transfer.id} via ${transfer.transportUsed}',
+      );
 
       onComplete?.call(transfer, true, null);
 
       // Fire event
-      _eventBus.fire(TransferCompletedEvent(
-        transferId: transfer.id,
-        direction: TransferEventDirection.download,
-        callsign: transfer.sourceCallsign,
-        localPath: transfer.localPath,
-        totalBytes: bytesWritten,
-        duration: duration,
-        transportUsed: transfer.transportUsed ?? 'unknown',
-        requestingApp: transfer.requestingApp,
-        metadata: transfer.metadata,
-      ));
+      _eventBus.fire(
+        TransferCompletedEvent(
+          transferId: transfer.id,
+          direction: TransferEventDirection.download,
+          callsign: transfer.sourceCallsign,
+          localPath: transfer.localPath,
+          totalBytes: bytesWritten,
+          duration: duration,
+          transportUsed: transfer.transportUsed ?? 'unknown',
+          requestingApp: transfer.requestingApp,
+          metadata: transfer.metadata,
+        ),
+      );
     } catch (e) {
       // Clean up temp file on error
       if (await tempFile.exists()) {
@@ -304,8 +344,7 @@ class TransferWorker {
         }
         sink.add(chunk);
         bytesWritten += chunk.length;
-        _reportProgress(
-            transfer, bytesWritten, _calculateSpeed(bytesWritten));
+        _reportProgress(transfer, bytesWritten, _calculateSpeed(bytesWritten));
       }
 
       await sink.close();
@@ -316,8 +355,7 @@ class TransferWorker {
   }
 
   String _resolveHttpBase(String stationUrl) {
-    if (stationUrl.startsWith('http://') ||
-        stationUrl.startsWith('https://')) {
+    if (stationUrl.startsWith('http://') || stationUrl.startsWith('https://')) {
       return stationUrl;
     }
     if (stationUrl.startsWith('ws://')) {
@@ -374,7 +412,8 @@ class TransferWorker {
 
     if (!result.success) {
       throw Exception(
-          'Upload failed: ${result.error ?? 'Unknown error'} (${result.statusCode})');
+        'Upload failed: ${result.error ?? 'Unknown error'} (${result.statusCode})',
+      );
     }
 
     transfer.bytesTransferred = bytes.length;
@@ -386,35 +425,39 @@ class TransferWorker {
     transfer.lastActivityAt = DateTime.now();
 
     final duration = transfer.completedAt!.difference(transfer.startedAt!);
-    transfer.speedBytesPerSecond =
-        duration.inMilliseconds > 0
-            ? bytes.length / (duration.inMilliseconds / 1000)
-            : 0;
+    transfer.speedBytesPerSecond = duration.inMilliseconds > 0
+        ? bytes.length / (duration.inMilliseconds / 1000)
+        : 0;
 
     _log.log(
-        'TransferWorker $workerId: Upload complete ${transfer.id} via ${transfer.transportUsed}');
+      'TransferWorker $workerId: Upload complete ${transfer.id} via ${transfer.transportUsed}',
+    );
 
     onComplete?.call(transfer, true, null);
 
     // Fire event
-    _eventBus.fire(TransferCompletedEvent(
-      transferId: transfer.id,
-      direction: TransferEventDirection.upload,
-      callsign: transfer.targetCallsign,
-      localPath: transfer.localPath,
-      totalBytes: bytes.length,
-      duration: duration,
-      transportUsed: transfer.transportUsed ?? 'unknown',
-      requestingApp: transfer.requestingApp,
-      metadata: transfer.metadata,
-    ));
+    _eventBus.fire(
+      TransferCompletedEvent(
+        transferId: transfer.id,
+        direction: TransferEventDirection.upload,
+        callsign: transfer.targetCallsign,
+        localPath: transfer.localPath,
+        totalBytes: bytes.length,
+        duration: duration,
+        transportUsed: transfer.transportUsed ?? 'unknown',
+        requestingApp: transfer.requestingApp,
+        metadata: transfer.metadata,
+      ),
+    );
   }
 
   /// Execute a stream transfer (placeholder for future implementation)
   Future<void> _executeStream(Transfer transfer) async {
     // Streaming is more complex and would require WebSocket or similar
     // For now, treat as a regular download
-    _log.log('TransferWorker $workerId: Stream mode not fully implemented, treating as download');
+    _log.log(
+      'TransferWorker $workerId: Stream mode not fully implemented, treating as download',
+    );
     await _executeDownload(transfer);
   }
 
@@ -427,20 +470,24 @@ class TransferWorker {
     if (transfer.expectedBytes > 0 && speed != null && speed > 0) {
       final remaining = transfer.expectedBytes - bytes;
       final secondsRemaining = remaining / speed;
-      transfer.estimatedTimeRemaining = Duration(seconds: secondsRemaining.round());
+      transfer.estimatedTimeRemaining = Duration(
+        seconds: secondsRemaining.round(),
+      );
     }
 
     onProgress?.call(transfer, bytes, speed);
 
     // Fire progress event (throttled - let caller handle throttling)
-    _eventBus.fire(TransferProgressEvent(
-      transferId: transfer.id,
-      status: transfer.status.name,
-      bytesTransferred: bytes,
-      totalBytes: transfer.expectedBytes,
-      speedBytesPerSecond: speed,
-      eta: transfer.estimatedTimeRemaining,
-    ));
+    _eventBus.fire(
+      TransferProgressEvent(
+        transferId: transfer.id,
+        status: transfer.status.name,
+        bytesTransferred: bytes,
+        totalBytes: transfer.expectedBytes,
+        speedBytesPerSecond: speed,
+        eta: transfer.estimatedTimeRemaining,
+      ),
+    );
   }
 
   /// Calculate transfer speed

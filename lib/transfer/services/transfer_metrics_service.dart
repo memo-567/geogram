@@ -41,6 +41,20 @@ class TransferMetricsService {
   Timer? _saveTimer;
   bool _dirty = false;
 
+  /// Reset metrics storage and in-memory counters.
+  Future<void> reset() async {
+    _activeConnections = 0;
+    _activeTransfers = 0;
+    _queuedTransfers = 0;
+    _currentSpeed = 0;
+    _transferSpeeds.clear();
+    _storedMetrics = StoredMetrics();
+    _dirty = false;
+    _metricsController.add(getMetrics());
+    await _storage.saveMetrics(_storedMetrics);
+    _log.log('TransferMetricsService: reset metrics');
+  }
+
   /// Stream of metrics updates
   Stream<TransferMetrics> get metricsStream => _metricsController.stream;
 

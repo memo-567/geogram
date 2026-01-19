@@ -62,6 +62,8 @@ import '../wallet/models/debt_entry.dart';
 import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../transfer/models/transfer_models.dart';
+import '../transfer/services/transfer_service.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -1245,6 +1247,11 @@ class LogApiService {
       // Handle device actions separately (they are async)
       if (action.toLowerCase().startsWith('device_')) {
         return await _handleDeviceAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle transfer debug actions separately (they are async)
+      if (action.toLowerCase().startsWith('transfer_')) {
+        return await _handleTransferAction(action.toLowerCase(), params, headers);
       }
 
       // Handle contact debug actions
@@ -8478,6 +8485,81 @@ class LogApiService {
           'success': false,
           'error': e.toString(),
         }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Transfer Debug Actions
+  // ============================================================
+
+  Future<shelf.Response> _handleTransferAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      switch (action) {
+        case 'transfer_http_download':
+          final remoteUrl = params['remote_url'] as String?;
+          final localPath =
+              (params['local_path'] as String?) ?? '/tmp/transfer-debug.bin';
+          final expectedBytes = params['expected_bytes'] as int?;
+
+          if (remoteUrl == null || remoteUrl.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'error': 'Missing remote_url',
+                'usage':
+                    '{"action":"transfer_http_download","remote_url":"http://p2p.radio/file.bin","local_path":"/tmp/file.bin"}',
+              }),
+              headers: headers,
+            );
+          }
+
+          final svc = TransferService();
+          if (!svc.isInitialized) {
+            await svc.initialize();
+          }
+
+          final transfer = await svc.requestDownload(
+            TransferRequest(
+              direction: TransferDirection.download,
+              callsign: 'http',
+              remotePath: Uri.parse(remoteUrl).path,
+              remoteUrl: remoteUrl,
+              localPath: localPath,
+              expectedBytes: expectedBytes,
+              requestingApp: 'debug-api',
+              metadata: {'debug': true},
+            ),
+          );
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'transfer_id': transfer.id,
+              'local_path': transfer.localPath,
+              'remote_url': remoteUrl,
+            }),
+            headers: headers,
+          );
+      }
+
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'error': 'Unknown transfer action',
+          'action': action,
+          'supported': ['transfer_http_download'],
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Transfer debug action error: $e');
+      LogService().log('LogApiService: Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
         headers: headers,
       );
     }

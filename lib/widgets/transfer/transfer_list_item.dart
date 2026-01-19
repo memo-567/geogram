@@ -17,6 +17,9 @@ class TransferListItem extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onPause;
   final VoidCallback? onResume;
+  final bool selectionMode;
+  final bool selected;
+  final ValueChanged<bool?>? onSelected;
 
   const TransferListItem({
     super.key,
@@ -26,6 +29,9 @@ class TransferListItem extends StatelessWidget {
     this.onRetry,
     this.onPause,
     this.onResume,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onSelected,
   });
 
   @override
@@ -35,7 +41,13 @@ class TransferListItem extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: InkWell(
-        onTap: onTap,
+        onTap: () {
+          if (selectionMode && onSelected != null) {
+            onSelected!(!selected);
+          } else {
+            onTap?.call();
+          }
+        },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -45,6 +57,14 @@ class TransferListItem extends StatelessWidget {
               // Header row
               Row(
                 children: [
+                  if (selectionMode) ...[
+                    Checkbox(
+                      value: selected,
+                      onChanged: onSelected,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   // Direction icon
                   _buildDirectionIcon(theme),
                   const SizedBox(width: 8),
@@ -67,12 +87,26 @@ class TransferListItem extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          _getCallsignLabel(),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                        if (_getOriginLabel().isNotEmpty)
+                          Text(
+                            _getOriginLabel(),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
+                        if (_getDestinationLabel().isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            _getDestinationLabel(),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -347,15 +381,35 @@ class TransferListItem extends StatelessWidget {
     );
   }
 
-  String _getCallsignLabel() {
-    final callsign = transfer.direction == TransferDirection.upload
-        ? transfer.targetCallsign
-        : transfer.sourceCallsign;
+  String _getOriginLabel() {
+    if (transfer.direction == TransferDirection.download) {
+      if ((transfer.remoteUrl ?? '').isNotEmpty) {
+        return 'From: ${transfer.remoteUrl}';
+      }
+      if (transfer.sourceCallsign.isNotEmpty) {
+        return 'From: ${transfer.sourceCallsign}${transfer.remotePath}';
+      }
+      return 'From: ${transfer.remotePath}';
+    }
 
-    final prefix =
-        transfer.direction == TransferDirection.upload ? 'To: ' : 'From: ';
+    if (transfer.direction == TransferDirection.upload) {
+      if (transfer.targetCallsign.isNotEmpty) {
+        return 'To: ${transfer.targetCallsign}${transfer.remotePath}';
+      }
+      return 'To: ${transfer.remotePath}';
+    }
 
-    return '$prefix$callsign';
+    return '';
+  }
+
+  String _getDestinationLabel() {
+    if (transfer.direction == TransferDirection.download) {
+      return 'To disk: ${transfer.localPath}';
+    }
+    if (transfer.direction == TransferDirection.upload) {
+      return 'From disk: ${transfer.localPath}';
+    }
+    return '';
   }
 
   bool get _hasActions =>

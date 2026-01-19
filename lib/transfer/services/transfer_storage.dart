@@ -42,6 +42,12 @@ class TransferStorage {
   /// History directory path
   String get historyDir => path.join(transfersDir, 'history');
 
+  /// Transfer records directory path (per-transfer JSON audit)
+  String get recordsDir => path.join(transfersDir, 'records');
+
+  /// Cache directory path for verified payloads
+  String get cacheDir => path.join(transfersDir, 'cache');
+
   /// Initialize storage directories
   Future<void> initialize() async {
     if (_initialized) return;
@@ -50,6 +56,9 @@ class TransferStorage {
       // Create directories
       await Directory(transfersDir).create(recursive: true);
       await Directory(historyDir).create(recursive: true);
+      // Ensure records/cache directories exist for app-level bookkeeping
+      await Directory(recordsDir).create(recursive: true);
+      await Directory(cacheDir).create(recursive: true);
       _initialized = true;
       _log.log('TransferStorage initialized: $transfersDir');
     } catch (e) {
@@ -81,7 +90,9 @@ class TransferStorage {
   Future<void> saveSettings(TransferSettings settings) async {
     try {
       final file = File(settingsPath);
-      final json = const JsonEncoder.withIndent('  ').convert(settings.toJson());
+      final json = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(settings.toJson());
       await file.writeAsString(json);
     } catch (e) {
       _log.log('TransferStorage: Error saving settings: $e');
@@ -151,7 +162,9 @@ class TransferStorage {
         final content = await file.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
         transfers =
-            (json['transfers'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+            (json['transfers'] as List<dynamic>?)
+                ?.cast<Map<String, dynamic>>() ??
+            [];
       }
 
       transfers.add(transfer.toJson());
@@ -170,10 +183,7 @@ class TransferStorage {
   }
 
   /// Load history with optional limit and date filter
-  Future<List<Transfer>> loadHistory({
-    int limit = 100,
-    DateTime? since,
-  }) async {
+  Future<List<Transfer>> loadHistory({int limit = 100, DateTime? since}) async {
     try {
       final historyDirectory = Directory(historyDir);
       if (!await historyDirectory.exists()) {
@@ -187,7 +197,9 @@ class TransferStorage {
           .toList();
 
       // Sort by filename (which is YYYY-MM.json) in descending order
-      files.sort((a, b) => path.basename(b.path).compareTo(path.basename(a.path)));
+      files.sort(
+        (a, b) => path.basename(b.path).compareTo(path.basename(a.path)),
+      );
 
       final List<Transfer> result = [];
 
@@ -203,16 +215,20 @@ class TransferStorage {
               .toList();
 
           // Sort by completed date descending
-          transfers.sort((a, b) =>
-              (b.completedAt ?? b.createdAt)
-                  .compareTo(a.completedAt ?? a.createdAt));
+          transfers.sort(
+            (a, b) => (b.completedAt ?? b.createdAt).compareTo(
+              a.completedAt ?? a.createdAt,
+            ),
+          );
 
           for (final transfer in transfers) {
             if (result.length >= limit) break;
             result.add(transfer);
           }
         } catch (e) {
-          _log.log('TransferStorage: Error reading history file ${file.path}: $e');
+          _log.log(
+            'TransferStorage: Error reading history file ${file.path}: $e',
+          );
         }
       }
 
@@ -224,7 +240,9 @@ class TransferStorage {
   }
 
   /// Prune old history files
-  Future<void> pruneHistory({Duration maxAge = const Duration(days: 90)}) async {
+  Future<void> pruneHistory({
+    Duration maxAge = const Duration(days: 90),
+  }) async {
     try {
       final historyDirectory = Directory(historyDir);
       if (!await historyDirectory.exists()) return;
@@ -238,7 +256,9 @@ class TransferStorage {
           final filename = path.basenameWithoutExtension(entity.path);
           if (filename.compareTo(cutoffMonth) < 0) {
             await entity.delete();
-            _log.log('TransferStorage: Pruned old history file: ${entity.path}');
+            _log.log(
+              'TransferStorage: Pruned old history file: ${entity.path}',
+            );
           }
         }
       }
@@ -289,6 +309,7 @@ class TransferStorage {
       }
       _initialized = false;
       await initialize();
+      _log.log('TransferStorage: cleared all transfer data');
     } catch (e) {
       _log.log('TransferStorage: Error clearing all data: $e');
       rethrow;

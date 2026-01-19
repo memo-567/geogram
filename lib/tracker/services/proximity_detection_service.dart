@@ -90,7 +90,8 @@ class ProximityDetectionService {
   /// Public method to trigger a proximity scan from external code (e.g., BLE handler).
   /// This allows piggy-backing on the BLE scan cycle which is known to work.
   Future<void> triggerScan() async {
-    LogService().log('ProximityDetectionService: triggerScan() called (isRunning=$_isRunning)');
+    if (!_isRunning) return;
+    LogService().log('[PROXIMITY] Scan triggered (background service callback)');
     await _scanNearbyDevices();
   }
 
@@ -126,7 +127,7 @@ class ProximityDetectionService {
         device.bleRssi != null
       ).toList();
 
-      LogService().log('ProximityDetectionService: Found ${nearbyDevices.length} BLE devices (of ${allDevices.length} total)');
+      LogService().log('[PROXIMITY] Scan complete: ${nearbyDevices.length} nearby BLE devices found (of ${allDevices.length} total)');
 
       for (final device in nearbyDevices) {
         await _recordProximity(
@@ -145,10 +146,10 @@ class ProximityDetectionService {
 
       // Also check for nearby places if we have a location
       if (lat != 0.0 || lon != 0.0) {
-        LogService().log('ProximityDetectionService: Checking places at ($lat, $lon)');
+        LogService().log('[PROXIMITY] Checking places at ($lat, $lon)');
         await _checkNearbyPlaces(lat, lon);
       } else {
-        LogService().log('ProximityDetectionService: Skipping place check - no GPS');
+        LogService().log('[PROXIMITY] Skipping place check - no location');
       }
 
       // Clean up stale sessions
@@ -161,8 +162,6 @@ class ProximityDetectionService {
 
   /// Check for nearby places within the radius using PlaceService
   Future<void> _checkNearbyPlaces(double lat, double lon) async {
-    LogService().log('ProximityDetectionService: _checkNearbyPlaces called at ($lat, $lon)');
-
     // Use the reusable PlaceService function with disk caching
     final nearbyPlaces = await PlaceService.findPlacesWithinRadius(
       lat: lat,
@@ -170,7 +169,10 @@ class ProximityDetectionService {
       radiusMeters: placeRadiusMeters,
     );
 
-    LogService().log('ProximityDetectionService: PlaceService returned ${nearbyPlaces.length} places within ${placeRadiusMeters}m');
+    if (nearbyPlaces.isNotEmpty) {
+      final placeNames = nearbyPlaces.map((p) => '"${p.name}" (${p.distanceMeters.toStringAsFixed(0)}m)').join(', ');
+      LogService().log('[PROXIMITY] Found ${nearbyPlaces.length} places within ${placeRadiusMeters}m: $placeNames');
+    }
 
     if (nearbyPlaces.isEmpty) return;
 

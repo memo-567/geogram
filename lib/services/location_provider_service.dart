@@ -452,11 +452,18 @@ class LocationProviderService extends ChangeNotifier {
           // IP fallback
           result = await GeolocationUtils.detectViaIP();
         }
+        if (result == null) {
+          // Profile location fallback (for desktop without GeoIP)
+          result = GeolocationUtils.getProfileLocation();
+        }
       }
 
       if (result != null) {
         final locked = LockedPosition.fromGeolocationResult(result);
         _updatePosition(locked);
+        LogService().log('[LOCATION] Position captured: ${locked.latitude.toStringAsFixed(4)}, ${locked.longitude.toStringAsFixed(4)} (source: ${locked.source})');
+      } else {
+        LogService().log('[LOCATION] No position available from any source');
       }
     } catch (e) {
       LogService().log('LocationProviderService: Error capturing position: $e');

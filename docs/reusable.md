@@ -55,6 +55,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [VideoMetadataExtractor](#videometadataextractor) - Video metadata and thumbnail generation using media_kit
 - [DirectMessageService Message Cache](#directmessageservice-message-cache) - DM message caching for performance
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
+- [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -2919,6 +2920,78 @@ Future<bool> canReachRelay() async {
 
 ---
 
+### BLE Connection Retry with Exponential Backoff
+
+**Problem:** BLE connections on Linux (BlueZ) are unreliable - connections may fail, service discovery may return empty, and notification subscriptions may not take effect immediately.
+
+**Solution:** Wrap BLE operations in retry loops with exponential backoff, and use platform-specific timeouts.
+
+**File:** `lib/services/ble_discovery_service.dart`
+
+**Connection Retry Pattern:**
+```dart
+// Platform-specific timeout: Linux/BlueZ needs more time
+final connectTimeout = Platform.isLinux
+    ? const Duration(seconds: 15)
+    : const Duration(seconds: 10);
+
+// Retry connection up to 3 times with exponential backoff
+bool connected = false;
+for (int attempt = 1; attempt <= 3; attempt++) {
+  try {
+    LogService().log('Connection attempt $attempt/3');
+    await bleDevice.connect(timeout: connectTimeout);
+    connected = true;
+    break;
+  } catch (e) {
+    LogService().log('Attempt $attempt failed: $e');
+    if (attempt == 3) rethrow;
+    // Exponential backoff: 500ms, 1000ms, 1500ms
+    await Future.delayed(Duration(milliseconds: 500 * attempt));
+  }
+}
+```
+
+**Service Discovery Retry Pattern:**
+```dart
+List<BluetoothService> services = [];
+for (int attempt = 1; attempt <= 3; attempt++) {
+  services = await bleDevice.discoverServices();
+  if (services.isNotEmpty) break;
+  LogService().log('Discovery attempt $attempt returned empty');
+  // Exponential backoff: 300ms, 600ms, 900ms
+  await Future.delayed(Duration(milliseconds: 300 * attempt));
+}
+```
+
+**Safe UUID Matching (handles BlueZ short/long formats):**
+```dart
+BluetoothService? findGeogramService(List<BluetoothService> services) {
+  const shortUUID = 'fff0';
+  const fullUUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+
+  for (final service in services) {
+    final uuid = service.uuid.toString().toLowerCase();
+    if (uuid == fullUUID ||
+        uuid == shortUUID ||
+        uuid.contains(shortUUID) ||
+        uuid.startsWith('0000fff0')) {
+      return service;
+    }
+  }
+  return null; // Return null instead of throwing
+}
+```
+
+**Key Benefits:**
+- Handles BlueZ flakiness with retries
+- Platform-specific timeouts (15s for Linux vs 10s for mobile)
+- Exponential backoff prevents overwhelming the BLE stack
+- Safe UUID matching handles both short (fff0) and full UUID formats
+- Graceful degradation instead of throwing on first failure
+
+---
+
 ## Constants
 
 ### App Constants
@@ -3176,6 +3249,72 @@ MessageBubbleWidget(
 | BLE        | < 100 KB               |
 | LAN/WiFi   | < 5 MB                 |
 | Internet   | < 5 MB                 |
+
+---
+
+### TransferService
+
+**File:** `lib/transfer/services/transfer_service.dart`  
+**Spec:** `docs/apps/transfer-format-specification.md`
+
+Centralized hub for uploads, downloads, and streaming with automatic transport switching (BLE/LAN/Internet), resume, and per-transfer records/caching.
+
+**Usage:**
+```dart
+final transfer = await TransferService().requestDownload(
+  const TransferRequest(
+    direction: TransferDirection.download,
+    callsign: 'X1ABCD',
+    remotePath: '/files/photo.jpg',
+    localPath: '/downloads/photo.jpg',
+    expectedHash: 'sha1:abc...',
+    requestingApp: 'gallery',
+  ),
+);
+// HTTP(S) downloads follow the spec's `remoteUrl` locator (add when available).
+```
+
+**Notes:**
+- Checks the transfer cache first; repeated requests return immediately on a verified cache hit (per-record `cache_hit` is set).
+- Records live under `{data_dir}/transfers/records/` and are auto-pruned after 30 days; see the spec for per-transport segment format and fallback order.
+- Negotiates SHA-1 with peers when possible; verification gates final file placement.
+- Emits `TransferProgressEvent` / `TransferCompletedEvent` on EventBus so UIs can refresh progress and consume cache hits.
+
+**Download helpers**
+- HTTP/S: set `remoteUrl` (e.g., `https://p2p.radio/bot/models/whisper/ggml-small.bin`) and `localPath`. `remotePath` is derived automatically.
+- Callsign/mesh: set `callsign` + `remotePath` (e.g., `/X1ABCD/files/doc.pdf`) and `localPath`.
+- Data strings: write the string to a temp file first (or a memory buffer if you know the bytes) and use the same download/upload calls—transfer tracks bytes regardless of payload type.
+
+**Upload helpers**
+```dart
+final upload = await TransferService().requestUpload(
+  TransferRequest(
+    direction: TransferDirection.upload,
+    callsign: 'X1ABCD',
+    remotePath: '/inbox/photo.jpg', // destination on peer
+    localPath: '/tmp/local/photo.jpg', // source on disk
+    expectedHash: 'sha1:...',
+    requestingApp: 'gallery',
+  ),
+);
+```
+- For HTTP uploads to a station URL, include `stationUrl` in the `TransferRequest`.
+- For raw data strings, serialize to a temp file and point `localPath` to it.
+
+**Querying queue/cache state**
+- `findTransfer(callsign: 'X1ABCD', remotePath: '/files/photo.jpg', remoteUrl: null)` returns the first active/queued/failed/completed match (or `null`).
+- `isAlreadyRequested(callsign, remotePath)` is a convenience check for duplicates.
+- `getTransfer(transferId)` returns the in-memory instance from active/queue/failed/completed caches.
+- Status comes from `transfer.status` (`queued`, `connecting`, `transferring`, `verifying`, `completed`, `failed`, `cancelled`, `paused`, `waiting`).
+- Progress: `transfer.bytesTransferred`, `transfer.expectedBytes`, `transfer.progressPercent`, `transfer.speedBytesPerSecond`, `transfer.estimatedTimeRemaining`.
+- Transport and origin: `transfer.transportUsed` (e.g., `internet_http`, `ble`) and `remoteUrl`/`sourceCallsign` help other dialogs show the source and path.
+
+**Events for UI/dialogs**
+- Subscribe to `TransferProgressEvent` / `TransferCompletedEvent` / `TransferFailedEvent` on `EventBus` to refresh UI badges or dialogs.
+- Each event carries `transferId`, `status`, `bytesTransferred`, `totalBytes`, and ETA so dialogs can display live percentage and state (paused/in queue/failed/cancelled/completed).
+
+**Cleaning transfer state**
+- Use `TransferService().clearAll()` to purge queue, records, metrics, and cache (also exposed in the Transfers settings UI).
 
 ---
 

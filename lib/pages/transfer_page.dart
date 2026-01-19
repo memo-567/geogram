@@ -42,6 +42,8 @@ class _TransferPageState extends State<TransferPage>
 
   bool _isLoading = true;
   String? _error;
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
 
   StreamSubscription? _metricsSubscription;
   EventSubscription<TransferProgressEvent>? _progressSubscription;
@@ -51,7 +53,7 @@ class _TransferPageState extends State<TransferPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _initService();
   }
 
@@ -116,6 +118,7 @@ class _TransferPageState extends State<TransferPage>
           _completedTransfers = completed;
           _failedTransfers = failed;
           _historyPoints = history;
+          _pruneSelection();
         });
       }
     } catch (e) {
@@ -151,11 +154,16 @@ class _TransferPageState extends State<TransferPage>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.error_outline,
-                  size: 64, color: theme.colorScheme.error),
+              Icon(
+                Icons.error_outline,
+                size: 64,
+                color: theme.colorScheme.error,
+              ),
               const SizedBox(height: 16),
-              Text('Error initializing transfers',
-                  style: theme.textTheme.titleMedium),
+              Text(
+                'Error initializing transfers',
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               Text(_error!, style: theme.textTheme.bodySmall),
               const SizedBox(height: 24),
@@ -179,15 +187,37 @@ class _TransferPageState extends State<TransferPage>
       appBar: AppBar(
         title: const Text('Transfer Center'),
         actions: [
+          if (_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.close_fullscreen),
+              tooltip: 'Exit selection',
+              onPressed: () {
+                setState(() {
+                  _selectionMode = false;
+                  _selectedIds.clear();
+                });
+              },
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.checklist),
+              tooltip: 'Select transfers',
+              onPressed: () {
+                setState(() {
+                  _selectionMode = true;
+                });
+              },
+            ),
+          if (_selectionMode && _selectedIds.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.cancel_schedule_send),
+              tooltip: 'Cancel selected',
+              onPressed: _confirmCancelSelected,
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: _showSettings,
             tooltip: 'Settings',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshData,
-            tooltip: 'Refresh',
           ),
         ],
         bottom: TabBar(
@@ -195,13 +225,23 @@ class _TransferPageState extends State<TransferPage>
           isScrollable: true,
           tabs: [
             _buildTab(
-                'Active', _activeTransfers.length, Icons.sync, Colors.blue),
-            _buildTab('Queued', _queuedTransfers.length, Icons.queue,
-                Colors.orange),
-            _buildTab('Completed', _completedTransfers.length,
-                Icons.check_circle, Colors.green),
+              'In Progress',
+              _activeTransfers.length + _queuedTransfers.length,
+              Icons.sync,
+              Colors.blue,
+            ),
             _buildTab(
-                'Failed', _failedTransfers.length, Icons.error, Colors.red),
+              'Completed',
+              _completedTransfers.length,
+              Icons.check_circle,
+              Colors.green,
+            ),
+            _buildTab(
+              'Failed',
+              _failedTransfers.length,
+              Icons.error,
+              Colors.red,
+            ),
             const Tab(icon: Icon(Icons.analytics), text: 'Stats'),
           ],
         ),
@@ -209,8 +249,7 @@ class _TransferPageState extends State<TransferPage>
       body: TabBarView(
         controller: _tabController,
         children: [
-          _buildActiveTab(),
-          _buildQueuedTab(),
+          _buildInProgressTab(),
           _buildCompletedTab(),
           _buildFailedTab(),
           _buildStatsTab(),
@@ -250,11 +289,70 @@ class _TransferPageState extends State<TransferPage>
     );
   }
 
-  Widget _buildActiveTab() {
-    if (_activeTransfers.isEmpty) {
+  void _toggleSelection(String transferId, bool selected) {
+    setState(() {
+      if (selected) {
+        _selectedIds.add(transferId);
+      } else {
+        _selectedIds.remove(transferId);
+      }
+    });
+  }
+
+  void _pruneSelection() {
+    final validIds = {
+      ..._activeTransfers.map((t) => t.id),
+      ..._queuedTransfers.map((t) => t.id),
+    };
+    _selectedIds.removeWhere((id) => !validIds.contains(id));
+  }
+
+  Future<void> _confirmCancelSelected() async {
+    if (_selectedIds.isEmpty) return;
+    final count = _selectedIds.length;
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cancel selected transfers'),
+            content: Text('Cancel $count selected transfer(s)?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Keep'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Cancel Transfers'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) return;
+    for (final id in List<String>.from(_selectedIds)) {
+      await _service.cancel(id);
+    }
+    await _refreshData();
+    if (mounted) {
+      setState(() {
+        _selectedIds.clear();
+        _selectionMode = false;
+      });
+    }
+  }
+
+  Widget _buildInProgressTab() {
+    final List<Transfer> combined = [
+      ..._activeTransfers,
+      ..._queuedTransfers,
+    ];
+
+    if (combined.isEmpty) {
       return _buildEmptyState(
-        'No active transfers',
-        'Transfers in progress will appear here',
+        'No transfers in progress',
+        'Active and queued transfers will appear here',
         Icons.sync,
       );
     }
@@ -263,45 +361,24 @@ class _TransferPageState extends State<TransferPage>
       onRefresh: _refreshData,
       child: ListView.builder(
         padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _activeTransfers.length,
+        itemCount: combined.length,
         itemBuilder: (context, index) {
-          final transfer = _activeTransfers[index];
+          final transfer = combined[index];
+          final isSelected = _selectedIds.contains(transfer.id);
           return TransferListItem(
             transfer: transfer,
-            onPause: transfer.canPause
+            selectionMode: _selectionMode,
+            selected: isSelected,
+            onSelected: _selectionMode
+                ? (selected) => _toggleSelection(transfer.id, selected ?? false)
+                : null,
+            onTap: _selectionMode
+                ? () => _toggleSelection(transfer.id, !isSelected)
+                : () => _showTransferDetails(transfer),
+            onPause: !_selectionMode && transfer.canPause
                 ? () => _service.pause(transfer.id)
                 : null,
-            onCancel: transfer.canCancel
-                ? () => _confirmCancel(transfer)
-                : null,
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildQueuedTab() {
-    if (_queuedTransfers.isEmpty) {
-      return _buildEmptyState(
-        'No queued transfers',
-        'Pending transfers will appear here',
-        Icons.queue,
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _refreshData,
-      child: ListView.builder(
-        padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _queuedTransfers.length,
-        itemBuilder: (context, index) {
-          final transfer = _queuedTransfers[index];
-          return TransferListItem(
-            transfer: transfer,
-            onResume: transfer.canResume
-                ? () => _service.resume(transfer.id)
-                : null,
-            onCancel: transfer.canCancel
+            onCancel: !_selectionMode && transfer.canCancel
                 ? () => _confirmCancel(transfer)
                 : null,
           );
@@ -326,7 +403,10 @@ class _TransferPageState extends State<TransferPage>
         itemCount: _completedTransfers.length,
         itemBuilder: (context, index) {
           final transfer = _completedTransfers[index];
-          return TransferListItem(transfer: transfer);
+          return TransferListItem(
+            transfer: transfer,
+            onTap: () => _showTransferDetails(transfer),
+          );
         },
       ),
     );
@@ -361,16 +441,17 @@ class _TransferPageState extends State<TransferPage>
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.only(bottom: 80),
-              itemCount: _failedTransfers.length,
-              itemBuilder: (context, index) {
-                final transfer = _failedTransfers[index];
-                return TransferListItem(
-                  transfer: transfer,
-                  onRetry: transfer.canRetry
-                      ? () async {
-                          await _service.retry(transfer.id);
-                          _refreshData();
-                        }
+                itemCount: _failedTransfers.length,
+                itemBuilder: (context, index) {
+                  final transfer = _failedTransfers[index];
+                  return TransferListItem(
+                    transfer: transfer,
+                    onTap: () => _showTransferDetails(transfer),
+                    onRetry: transfer.canRetry
+                        ? () async {
+                            await _service.retry(transfer.id);
+                            _refreshData();
+                          }
                       : null,
                 );
               },
@@ -404,6 +485,21 @@ class _TransferPageState extends State<TransferPage>
             ),
             TransportBreakdownChart(byTransport: _metrics.byTransport),
             _buildCallsignLeaderboard(),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => _confirmClearAll(context),
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text('Clean all transfer data'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -431,7 +527,9 @@ class _TransferPageState extends State<TransferPage>
               ),
             ),
             const SizedBox(height: 12),
-            ..._metrics.topCallsigns.take(5).map((stats) => _buildCallsignRow(stats)),
+            ..._metrics.topCallsigns
+                .take(5)
+                .map((stats) => _buildCallsignRow(stats)),
           ],
         ),
       ),
@@ -451,8 +549,11 @@ class _TransferPageState extends State<TransferPage>
             height: 24,
             decoration: BoxDecoration(
               color: index <= 3
-                  ? [Colors.amber, Colors.grey, Colors.brown][index - 1]
-                      .withOpacity(0.2)
+                  ? [
+                      Colors.amber,
+                      Colors.grey,
+                      Colors.brown,
+                    ][index - 1].withOpacity(0.2)
                   : theme.colorScheme.surfaceContainerHighest,
               shape: BoxShape.circle,
             ),
@@ -522,7 +623,213 @@ class _TransferPageState extends State<TransferPage>
           await _service.updateSettings(settings);
           _refreshData();
         },
+        onClearAll: () async {
+          await _service.clearAll();
+          await _refreshData();
+        },
       ),
+    );
+  }
+
+  Future<void> _showTransferDetails(Transfer transfer) async {
+    Map<String, dynamic>? record;
+    try {
+      record = await _service.getRecord(transfer.id);
+    } catch (_) {
+      record = null;
+    }
+
+    if (!mounted) return;
+
+    final totalsByTransport = _extractTransportTotals(record, transfer);
+    final createdAt =
+        _parseTime(record?['created_at']) ?? transfer.createdAt.toLocal();
+    final startedAt =
+        _parseTime(record?['started_at']) ?? transfer.startedAt?.toLocal();
+    final completedAt =
+        _parseTime(record?['completed_at']) ?? transfer.completedAt?.toLocal();
+    final duration = (startedAt != null && completedAt != null)
+        ? completedAt.difference(startedAt)
+        : null;
+
+    final bytesTransferred =
+        _asInt(record?['bytes_transferred']) ?? transfer.bytesTransferred;
+    final expectedBytes =
+        _asInt(record?['expected_bytes']) ?? transfer.expectedBytes;
+    final transportUsed = record?['transport_used'] as String? ??
+        transfer.transportUsed ??
+        (totalsByTransport.isNotEmpty ? totalsByTransport.keys.first : null);
+
+    final originUrl =
+        transfer.remoteUrl ?? (record?['remote_url'] as String? ?? '');
+    final origin = originUrl.isNotEmpty
+        ? originUrl
+        : transfer.sourceCallsign.isNotEmpty
+            ? '${transfer.sourceCallsign}${transfer.remotePath}'
+            : transfer.remotePath;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: theme.dividerColor,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        transfer.filename ?? 'Transfer details',
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Chip(
+                      label: Text(transfer.status.name),
+                      backgroundColor:
+                          theme.colorScheme.surfaceVariant.withOpacity(0.7),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'ID: ${transfer.id}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.link),
+                  title: const Text('From'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(origin.isNotEmpty ? origin : 'Unknown'),
+                      if (originUrl.isNotEmpty)
+                        Text(
+                          'HTTP/HTTPS URL',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else if (transfer.sourceCallsign.isNotEmpty)
+                        Text(
+                          'Callsign ${transfer.sourceCallsign}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      if (transfer.remotePath.isNotEmpty)
+                        Text(
+                          'Remote path: ${transfer.remotePath}',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                    ],
+                  ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.download_done),
+                  title: const Text('Saving to'),
+                  subtitle: Text(
+                    transfer.localPath,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.route),
+                  title: const Text('Transfer methods'),
+                  subtitle: totalsByTransport.isNotEmpty
+                      ? Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: totalsByTransport.entries
+                              .map(
+                                (entry) => Chip(
+                                  label: Text(
+                                    '${_formatTransportLabel(entry.key)}: ${_formatBytes(entry.value)}',
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        )
+                      : Text(
+                          'Not recorded yet',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.network_check),
+                  title: const Text('Active transport'),
+                  subtitle: Text(
+                    _formatTransportLabel(transportUsed),
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.storage),
+                  title: const Text('Size'),
+                  subtitle: Text(
+                    '${_formatBytes(bytesTransferred)} of '
+                    '${expectedBytes > 0 ? _formatBytes(expectedBytes) : 'unknown'}',
+                  ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.access_time),
+                  title: const Text('Timing'),
+                  subtitle: Text(
+                    [
+                      if (createdAt != null)
+                        'Created ${_formatTimestamp(createdAt)}',
+                      if (startedAt != null)
+                        'Started ${_formatTimestamp(startedAt)}',
+                      if (completedAt != null)
+                        'Finished ${_formatTimestamp(completedAt)}',
+                      if (duration != null)
+                        'Duration ${_formatDuration(duration)}',
+                    ].join(' • '),
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -550,6 +857,111 @@ class _TransferPageState extends State<TransferPage>
     );
   }
 
+  Future<void> _confirmClearAll(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Clean all transfer data'),
+            content: const Text(
+              'This removes queue, records, metrics, and cache. Continue?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Keep data'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                ),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) return;
+    await _service.clearAll();
+    await _refreshData();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Transfer data cleaned')),
+      );
+    }
+  }
+
+  Map<String, int> _extractTransportTotals(
+    Map<String, dynamic>? record,
+    Transfer transfer,
+  ) {
+    final totals =
+        (record?['totals_by_transport'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{};
+    final result = <String, int>{};
+    totals.forEach((key, value) {
+      if (value is num) {
+        result[key] = value.toInt();
+      }
+    });
+
+    if (result.isEmpty && transfer.transportUsed != null) {
+      result[transfer.transportUsed!] = transfer.bytesTransferred;
+    }
+    return result;
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return null;
+  }
+
+  DateTime? _parseTime(dynamic value) {
+    if (value is String) return DateTime.tryParse(value)?.toLocal();
+    if (value is DateTime) return value.toLocal();
+    return null;
+  }
+
+  String _formatTimestamp(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${local.year}-${two(local.month)}-${two(local.day)} '
+        '${two(local.hour)}:${two(local.minute)}';
+  }
+
+  String _formatDuration(Duration? duration) {
+    if (duration == null) return '—';
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    if (hours > 0) return '${hours}h ${minutes}m';
+    if (minutes > 0) return '${minutes}m ${seconds}s';
+    return '${seconds}s';
+  }
+
+  String _formatTransportLabel(String? id) {
+    switch (id) {
+      case 'internet_http':
+      case 'station_http':
+        return 'HTTP (TCP/IP)';
+      case 'ble':
+      case 'bluetooth':
+        return 'BLE';
+      case 'lora':
+        return 'LoRa';
+      case 'radio':
+        return 'Radio';
+      case null:
+      case '':
+        return 'Unknown';
+      default:
+        return id;
+    }
+  }
+
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -564,10 +976,12 @@ class _TransferPageState extends State<TransferPage>
 class _SettingsSheet extends StatefulWidget {
   final TransferSettings settings;
   final Future<void> Function(TransferSettings) onSave;
+  final Future<void> Function() onClearAll;
 
   const _SettingsSheet({
     required this.settings,
     required this.onSave,
+    required this.onClearAll,
   });
 
   @override
@@ -642,10 +1056,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 // Enabled toggle
                 SwitchListTile(
                   title: const Text('Enable Transfers'),
-                  subtitle: const Text('Process queued transfers automatically'),
+                  subtitle: const Text(
+                    'Process queued transfers automatically',
+                  ),
                   value: _settings.enabled,
                   onChanged: (value) {
-                    setState(() => _settings = _settings.copyWith(enabled: value));
+                    setState(
+                      () => _settings = _settings.copyWith(enabled: value),
+                    );
                   },
                 ),
                 const Divider(),
@@ -660,9 +1078,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     divisions: 9,
                     label: '${_settings.maxConcurrentTransfers}',
                     onChanged: (value) {
-                      setState(() => _settings = _settings.copyWith(
-                            maxConcurrentTransfers: value.round(),
-                          ));
+                      setState(
+                        () => _settings = _settings.copyWith(
+                          maxConcurrentTransfers: value.round(),
+                        ),
+                      );
                     },
                   ),
                   trailing: Text('${_settings.maxConcurrentTransfers}'),
@@ -678,9 +1098,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     divisions: 19,
                     label: '${_settings.maxRetries}',
                     onChanged: (value) {
-                      setState(() => _settings = _settings.copyWith(
-                            maxRetries: value.round(),
-                          ));
+                      setState(
+                        () => _settings = _settings.copyWith(
+                          maxRetries: value.round(),
+                        ),
+                      );
                     },
                   ),
                   trailing: Text('${_settings.maxRetries}'),
@@ -700,19 +1122,22 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 Wrap(
                   spacing: 8,
                   children: _settings.bannedCallsigns
-                      .map((callsign) => Chip(
-                            label: Text(callsign),
-                            onDeleted: () {
-                              setState(() {
-                                final list =
-                                    List<String>.from(_settings.bannedCallsigns);
-                                list.remove(callsign);
-                                _settings = _settings.copyWith(
-                                  bannedCallsigns: list,
-                                );
-                              });
-                            },
-                          ))
+                      .map(
+                        (callsign) => Chip(
+                          label: Text(callsign),
+                          onDeleted: () {
+                            setState(() {
+                              final list = List<String>.from(
+                                _settings.bannedCallsigns,
+                              );
+                              list.remove(callsign);
+                              _settings = _settings.copyWith(
+                                bannedCallsigns: list,
+                              );
+                            });
+                          },
+                        ),
+                      )
                       .toList(),
                 ),
                 const SizedBox(height: 8),
@@ -732,15 +1157,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     const SizedBox(width: 8),
                     IconButton.filled(
                       onPressed: () {
-                        final callsign = _banController.text.trim().toUpperCase();
+                        final callsign = _banController.text
+                            .trim()
+                            .toUpperCase();
                         if (callsign.isNotEmpty &&
                             !_settings.bannedCallsigns.contains(callsign)) {
                           setState(() {
-                            final list =
-                                List<String>.from(_settings.bannedCallsigns);
+                            final list = List<String>.from(
+                              _settings.bannedCallsigns,
+                            );
                             list.add(callsign);
-                            _settings =
-                                _settings.copyWith(bannedCallsigns: list);
+                            _settings = _settings.copyWith(
+                              bannedCallsigns: list,
+                            );
                             _banController.clear();
                           });
                         }
@@ -748,6 +1177,50 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       icon: const Icon(Icons.add),
                     ),
                   ],
+                ),
+                const Divider(),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: theme.colorScheme.error,
+                  ),
+                  onPressed: () async {
+                    final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Clean all transfer data'),
+                            content: const Text(
+                              'This removes queue, records, metrics, and cache. Continue?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Keep data'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor:
+                                      theme.colorScheme.errorContainer,
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        ) ??
+                        false;
+
+                    if (!confirmed) return;
+                    await widget.onClearAll();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Transfer data cleaned'),
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text('Clean all transfer data'),
                 ),
               ],
             ),

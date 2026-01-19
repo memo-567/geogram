@@ -59,6 +59,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.cell_tower;
     case 'videos':
       return Icons.video_library;
+    case 'transfer':
+      return Icons.swap_horiz;
     default:
       return Icons.folder;
   }
@@ -234,6 +236,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF6A1B9A), const Color(0xFF8E24AA)]
             : [const Color(0xFFCE93D8), const Color(0xFFAB47BC)],
+      );
+    case 'transfer':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF1565C0), const Color(0xFF00695C)]
+            : [const Color(0xFF42A5F5), const Color(0xFF26A69A)],
       );
     default:
       return LinearGradient(

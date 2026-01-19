@@ -159,6 +159,8 @@ class CollectionService {
     'places',
     'events',
     'groups',
+    'transfer',
+    'tracker',
   ];
 
   /// Ensure default collections exist for the current profile

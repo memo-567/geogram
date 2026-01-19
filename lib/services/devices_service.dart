@@ -304,6 +304,14 @@ class DevicesService {
         await _sendBLEDataToDevice(deviceId, data, size);
         break;
 
+      case DebugAction.bleSendDM:
+        final bleCallsign = event.params['callsign'] as String?;
+        final bleContent = event.params['content'] as String?;
+        if (bleCallsign != null && bleContent != null) {
+          await _sendDirectMessageViaBLE(bleCallsign, bleContent);
+        }
+        break;
+
       case DebugAction.sendDM:
         final callsign = event.params['callsign'] as String?;
         final content = event.params['content'] as String?;
@@ -1277,14 +1285,18 @@ class DevicesService {
     String? body,
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
+    LogService().log('DevicesService: [API] makeDeviceApiRequest $method $path to $normalizedCallsign');
 
     // Sync device info to ConnectionManager before request
     _syncDeviceToConnectionManager(normalizedCallsign);
 
     // Use ConnectionManager for routing
     final connectionManager = ConnectionManager();
+    LogService().log('DevicesService: [API] ConnectionManager.isInitialized=${connectionManager.isInitialized}');
+
     if (!connectionManager.isInitialized) {
       // Fallback to legacy routing if ConnectionManager not ready
+      LogService().log('DevicesService: [API] Using LEGACY routing (ConnectionManager not initialized)');
       return _makeDeviceApiRequestLegacy(
         callsign: normalizedCallsign,
         method: method,
@@ -1293,6 +1305,9 @@ class DevicesService {
         body: body,
       );
     }
+
+    final transports = connectionManager.availableTransports;
+    LogService().log('DevicesService: [API] Available transports: ${transports.map((t) => t.id).toList()}');
 
     final result = await connectionManager.apiRequest(
       callsign: normalizedCallsign,
@@ -1304,8 +1319,7 @@ class DevicesService {
 
     if (result.success) {
       LogService().log(
-        'DevicesService: Request to $normalizedCallsign succeeded via ${result.transportUsed} '
-        '(${result.latency?.inMilliseconds ?? "?"}ms)',
+        'DevicesService: [API] SUCCESS via ${result.transportUsed} (${result.latency?.inMilliseconds ?? "?"}ms)',
       );
       // Convert TransportResult to http.Response for backward compatibility
       return http.Response(
@@ -1314,7 +1328,7 @@ class DevicesService {
       );
     } else {
       LogService().log(
-        'DevicesService: Request to $normalizedCallsign failed: ${result.error}',
+        'DevicesService: [API] FAILED: ${result.error}',
       );
       return null;
     }
@@ -2565,6 +2579,68 @@ class DevicesService {
       LogService().log('DevicesService: DM sent to $callsign');
     } catch (e) {
       LogService().log('DevicesService: Error sending DM to $callsign: $e');
+    }
+  }
+
+  /// Send a direct message via BLE only (bypasses ConnectionManager)
+  /// This is useful for testing BLE connectivity directly
+  Future<bool> _sendDirectMessageViaBLE(String callsign, String content) async {
+    if (_bleMessageService == null || _bleService == null) {
+      LogService().log('DevicesService: BLE not available for DM send');
+      return false;
+    }
+
+    try {
+      LogService().log('DevicesService: Sending DM to $callsign via BLE...');
+
+      // Get profile for signing
+      final profile = ProfileService().getProfile();
+
+      // Create a signed Nostr event for the DM using SigningService
+      final signingService = SigningService();
+      await signingService.initialize();
+
+      if (!signingService.canSign(profile)) {
+        LogService().log('DevicesService: Cannot sign - no keys available');
+        return false;
+      }
+
+      // Generate signed event for DM
+      final signedEvent = await signingService.generateSignedEvent(
+        content,
+        {
+          'room': callsign.toUpperCase(), // DM room is the target callsign
+          'callsign': profile.callsign,
+        },
+        profile,
+      );
+
+      if (signedEvent == null || signedEvent.sig == null) {
+        LogService().log('DevicesService: Failed to sign BLE DM event');
+        return false;
+      }
+
+      final eventJson = signedEvent.toJson();
+
+      // Send via BLE message service
+      final success = await _bleMessageService!.sendChatToCallsign(
+        targetCallsign: callsign,
+        content: json.encode(eventJson),
+        channel: '_dm', // Special channel for DMs
+        signature: eventJson['sig'] as String?,
+        npub: eventJson['pubkey'] as String?,
+      );
+
+      if (success) {
+        LogService().log('DevicesService: BLE DM sent to $callsign');
+      } else {
+        LogService().log('DevicesService: BLE DM failed to $callsign');
+      }
+
+      return success;
+    } catch (e) {
+      LogService().log('DevicesService: Error sending BLE DM to $callsign: $e');
+      return false;
     }
   }
 

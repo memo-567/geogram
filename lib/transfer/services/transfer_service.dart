@@ -10,6 +10,7 @@ import '../models/transfer_models.dart';
 import 'transfer_metrics_service.dart';
 import 'transfer_queue.dart';
 import 'transfer_storage.dart';
+import 'transfer_record_service.dart';
 import 'transfer_worker_pool.dart';
 
 /// TransferService - Main entry point for file transfers
@@ -57,6 +58,7 @@ class TransferService {
   late final TransferQueue _queue;
   late final TransferWorkerPool _workerPool;
   late final TransferMetricsService _metricsService;
+  late final TransferRecordService _recordService;
 
   // State
   bool _initialized = false;
@@ -69,6 +71,39 @@ class TransferService {
 
   /// Stream of metrics updates
   Stream<TransferMetrics> get metricsStream => _metricsService.metricsStream;
+
+  /// Fetch persisted record data for a transfer (if available).
+  Future<Map<String, dynamic>?> getRecord(String transferId) async {
+    _ensureInitialized();
+    return _recordService.getRecord(transferId);
+  }
+
+  /// Clear all transfer data (queue, records, metrics, cache).
+  Future<void> clearAll() async {
+    _ensureInitialized();
+    _retryTimer?.cancel();
+    await _workerPool.stop();
+    _queue.clear();
+    _completedCache.clear();
+    _failedCache.clear();
+    await _storage.clearAll();
+    await _metricsService.reset();
+    await _recordService.initialize();
+
+    // Recreate queue/state after purge
+    _queue = TransferQueue(maxQueueSize: _settings.maxQueueSize);
+    _workerPool = TransferWorkerPool(
+      queue: _queue,
+      maxWorkers: _settings.maxConcurrentTransfers,
+    );
+    _workerPool.onProgress = _handleProgress;
+    _workerPool.onTransferComplete = _handleTransferComplete;
+    if (_settings.enabled) {
+      await _workerPool.start();
+    }
+    _startRetryTimer();
+    _log.log('TransferService: Cleared all transfer data');
+  }
 
   /// Check if initialized
   bool get isInitialized => _initialized;
@@ -83,6 +118,9 @@ class TransferService {
     _storage = TransferStorage();
     await _storage.initialize();
 
+    _recordService = TransferRecordService();
+    await _recordService.initialize();
+
     // Load settings
     _settings = await _storage.loadSettings();
 
@@ -93,6 +131,8 @@ class TransferService {
     final persistedTransfers = await _storage.loadQueue();
     _queue.loadFrom(persistedTransfers);
     _log.log('TransferService: Loaded ${_queue.length} queued transfers');
+    // Backfill per-transfer record files for existing queue
+    await _recordService.backfill(_queue.all);
 
     // Initialize metrics service
     _metricsService = TransferMetricsService();
@@ -133,7 +173,9 @@ class TransferService {
   /// Request a download transfer
   Future<Transfer> requestDownload(TransferRequest request) async {
     _ensureInitialized();
-    return _createTransfer(request.copyWithDirection(TransferDirection.download));
+    return _createTransfer(
+      request.copyWithDirection(TransferDirection.download),
+    );
   }
 
   /// Request an upload transfer
@@ -154,6 +196,7 @@ class TransferService {
     final existing = findTransfer(
       callsign: request.callsign,
       remotePath: request.remotePath,
+      remoteUrl: request.remoteUrl,
     );
     if (existing != null) {
       _log.log('TransferService: Transfer already exists: ${existing.id}');
@@ -167,12 +210,16 @@ class TransferService {
     }
 
     // Validate path
-    if (!_isPathSafe(request.remotePath)) {
+    if (!_isPathSafe(request.remotePath, request.remoteUrl)) {
       throw Exception('Invalid path: ${request.remotePath}');
     }
 
     // Create transfer
     final transferId = request.id ?? 'tr_${_uuid.v4().substring(0, 8)}';
+    final derivedRemotePath = request.remoteUrl != null
+        ? Uri.parse(request.remoteUrl!).path
+        : request.remotePath;
+
     final transfer = Transfer(
       id: transferId,
       direction: request.direction,
@@ -183,7 +230,8 @@ class TransferService {
       targetCallsign: request.direction == TransferDirection.upload
           ? request.callsign
           : '', // Local device is target
-      remotePath: request.remotePath,
+      remotePath: derivedRemotePath,
+      remoteUrl: request.remoteUrl,
       localPath: request.localPath,
       filename: path.basename(request.localPath),
       expectedBytes: request.expectedBytes ?? 0,
@@ -202,14 +250,19 @@ class TransferService {
 
     await _persistQueue();
 
+    // Persist per-transfer record
+    unawaited(_recordService.recordRequested(transfer, cacheHit: false));
+
     // Fire event
-    _eventBus.fire(TransferRequestedEvent(
-      transferId: transfer.id,
-      direction: _toEventDirection(transfer.direction),
-      callsign: request.callsign,
-      path: request.remotePath,
-      requestingApp: request.requestingApp,
-    ));
+    _eventBus.fire(
+      TransferRequestedEvent(
+        transferId: transfer.id,
+        direction: _toEventDirection(transfer.direction),
+        callsign: request.callsign,
+        path: request.remotePath,
+        requestingApp: request.requestingApp,
+      ),
+    );
 
     _log.log('TransferService: Created transfer ${transfer.id}');
 
@@ -248,27 +301,38 @@ class TransferService {
     return null;
   }
 
-  /// Find transfer by callsign and path
+  /// Find transfer by callsign/path or remoteUrl
   Transfer? findTransfer({
-    required String callsign,
-    required String remotePath,
+    String? callsign,
+    String? remotePath,
+    String? remoteUrl,
   }) {
     _ensureInitialized();
 
     // Check active transfers
     for (final t in _workerPool.activeTransfers) {
-      if ((t.sourceCallsign == callsign || t.targetCallsign == callsign) &&
-          t.remotePath == remotePath) {
+      if ((remoteUrl != null && t.remoteUrl == remoteUrl) ||
+          ((t.sourceCallsign == callsign || t.targetCallsign == callsign) &&
+              t.remotePath == remotePath)) {
         return t;
       }
     }
 
     // Check queue
     for (final t in _queue.all) {
-      if ((t.sourceCallsign == callsign || t.targetCallsign == callsign) &&
-          t.remotePath == remotePath) {
+      if ((remoteUrl != null && t.remoteUrl == remoteUrl) ||
+          ((t.sourceCallsign == callsign || t.targetCallsign == callsign) &&
+              t.remotePath == remotePath)) {
         return t;
       }
+    }
+
+    // Check caches
+    if (remoteUrl != null && _completedCache.containsKey(remoteUrl)) {
+      return _completedCache[remoteUrl];
+    }
+    if (remoteUrl != null && _failedCache.containsKey(remoteUrl)) {
+      return _failedCache[remoteUrl];
     }
 
     return null;
@@ -295,8 +359,11 @@ class TransferService {
   List<Transfer> getCompletedTransfers({int limit = 50}) {
     _ensureInitialized();
     final list = _completedCache.values.toList()
-      ..sort((a, b) =>
-          (b.completedAt ?? b.createdAt).compareTo(a.completedAt ?? a.createdAt));
+      ..sort(
+        (a, b) => (b.completedAt ?? b.createdAt).compareTo(
+          a.completedAt ?? a.createdAt,
+        ),
+      );
     return list.take(limit).toList();
   }
 
@@ -340,10 +407,12 @@ class TransferService {
       _queue.remove(transferId);
       await _persistQueue();
 
-      _eventBus.fire(TransferCancelledEvent(
-        transferId: transferId,
-        requestingApp: transfer.requestingApp,
-      ));
+      _eventBus.fire(
+        TransferCancelledEvent(
+          transferId: transferId,
+          requestingApp: transfer.requestingApp,
+        ),
+      );
       _log.log('TransferService: Cancelled $transferId');
     }
   }
@@ -447,7 +516,9 @@ class TransferService {
 
   void _ensureInitialized() {
     if (!_initialized) {
-      throw StateError('TransferService not initialized. Call initialize() first.');
+      throw StateError(
+        'TransferService not initialized. Call initialize() first.',
+      );
     }
   }
 
@@ -459,6 +530,7 @@ class TransferService {
           ? DateTime.now().difference(transfer.startedAt!)
           : Duration.zero,
     );
+    unawaited(_recordService.recordProgress(transfer));
   }
 
   void _handleTransferComplete(Transfer transfer, bool success, String? error) {
@@ -468,13 +540,18 @@ class TransferService {
 
       // Archive to history
       _storage.archiveTransfer(transfer);
+      unawaited(_recordService.recordCompleted(transfer));
 
       // Limit cache size
       while (_completedCache.length > 100) {
-        final oldest = _completedCache.values.reduce((a, b) =>
-            (a.completedAt ?? a.createdAt).isBefore(b.completedAt ?? b.createdAt)
-                ? a
-                : b);
+        final oldest = _completedCache.values.reduce(
+          (a, b) =>
+              (a.completedAt ?? a.createdAt).isBefore(
+                b.completedAt ?? b.createdAt,
+              )
+              ? a
+              : b,
+        );
         _completedCache.remove(oldest.id);
       }
     } else {
@@ -492,18 +569,28 @@ class TransferService {
         _queue.enqueue(transfer);
         _queue.scheduleRetry(transfer.id, nextRetry);
 
-        _eventBus.fire(TransferFailedEvent(
-          transferId: transfer.id,
-          direction: _toEventDirection(transfer.direction),
-          callsign: transfer.sourceCallsign.isNotEmpty
-              ? transfer.sourceCallsign
-              : transfer.targetCallsign,
-          path: transfer.remotePath,
-          error: error ?? 'Unknown error',
-          willRetry: true,
-          nextRetryAt: nextRetry,
-          requestingApp: transfer.requestingApp,
-        ));
+        _eventBus.fire(
+          TransferFailedEvent(
+            transferId: transfer.id,
+            direction: _toEventDirection(transfer.direction),
+            callsign: transfer.sourceCallsign.isNotEmpty
+                ? transfer.sourceCallsign
+                : transfer.targetCallsign,
+            path: transfer.remotePath,
+            error: error ?? 'Unknown error',
+            willRetry: true,
+            nextRetryAt: nextRetry,
+            requestingApp: transfer.requestingApp,
+          ),
+        );
+        unawaited(
+          _recordService.recordFailed(
+            transfer,
+            error: error ?? 'Unknown error',
+            willRetry: true,
+            nextRetryAt: nextRetry,
+          ),
+        );
       } else {
         // Final failure
         transfer.status = TransferStatus.failed;
@@ -512,18 +599,28 @@ class TransferService {
 
         // Archive to history
         _storage.archiveTransfer(transfer);
+        unawaited(
+          _recordService.recordFailed(
+            transfer,
+            error: error ?? 'Unknown error',
+            willRetry: false,
+            nextRetryAt: transfer.nextRetryAt,
+          ),
+        );
 
-        _eventBus.fire(TransferFailedEvent(
-          transferId: transfer.id,
-          direction: _toEventDirection(transfer.direction),
-          callsign: transfer.sourceCallsign.isNotEmpty
-              ? transfer.sourceCallsign
-              : transfer.targetCallsign,
-          path: transfer.remotePath,
-          error: error ?? 'Unknown error',
-          willRetry: false,
-          requestingApp: transfer.requestingApp,
-        ));
+        _eventBus.fire(
+          TransferFailedEvent(
+            transferId: transfer.id,
+            direction: _toEventDirection(transfer.direction),
+            callsign: transfer.sourceCallsign.isNotEmpty
+                ? transfer.sourceCallsign
+                : transfer.targetCallsign,
+            path: transfer.remotePath,
+            error: error ?? 'Unknown error',
+            willRetry: false,
+            requestingApp: transfer.requestingApp,
+          ),
+        );
       }
     }
 
@@ -543,7 +640,11 @@ class TransferService {
     });
   }
 
-  bool _isPathSafe(String filePath) {
+  bool _isPathSafe(String filePath, String? remoteUrl) {
+    if (remoteUrl != null &&
+        (remoteUrl.startsWith('http://') || remoteUrl.startsWith('https://'))) {
+      return true;
+    }
     // Prevent directory traversal
     if (filePath.contains('..')) return false;
     if (filePath.contains('//')) return false;
@@ -554,7 +655,8 @@ class TransferService {
         !normalized.startsWith('/files/') &&
         !normalized.startsWith('/chat/') &&
         !normalized.startsWith('/api/') &&
-        !(normalized == '/bot/models' || normalized.startsWith('/bot/models/'))) {
+        !(normalized == '/bot/models' ||
+            normalized.startsWith('/bot/models/'))) {
       return false;
     }
 
@@ -582,6 +684,7 @@ extension TransferRequestExtension on TransferRequest {
       callsign: callsign,
       stationUrl: stationUrl,
       remotePath: remotePath,
+      remoteUrl: remoteUrl,
       localPath: localPath,
       expectedBytes: expectedBytes,
       expectedHash: expectedHash,

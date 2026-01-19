@@ -51,7 +51,7 @@ class DeviceAppsService {
     return await _fetchFromApi(callsign);
   }
 
-  /// Load apps from cached data on disk
+  /// Load apps from cached metadata or content on disk
   Future<Map<String, DeviceAppInfo>> _loadFromCache(String callsign) async {
     final Map<String, DeviceAppInfo> apps = {};
 
@@ -69,6 +69,34 @@ class DeviceAppsService {
         };
       }
 
+      // First try to load from apps_meta.json (cached API response)
+      final metaFile = File('$devicePath/apps_meta.json');
+      if (await metaFile.exists()) {
+        try {
+          final metaJson = await metaFile.readAsString();
+          final meta = json.decode(metaJson) as Map<String, dynamic>;
+          LogService().log('DeviceAppsService: Loaded apps_meta.json for $callsign');
+
+          for (final appType in ['blog', 'chat', 'events', 'alerts']) {
+            if (meta.containsKey(appType)) {
+              final appMeta = meta[appType] as Map<String, dynamic>;
+              apps[appType] = DeviceAppInfo(
+                type: appType,
+                isAvailable: appMeta['isAvailable'] as bool? ?? false,
+                itemCount: appMeta['itemCount'] as int? ?? 0,
+              );
+            } else {
+              apps[appType] = DeviceAppInfo(type: appType, isAvailable: false);
+            }
+          }
+
+          return apps;
+        } catch (e) {
+          LogService().log('DeviceAppsService: Error reading apps_meta.json: $e');
+        }
+      }
+
+      // Fallback: check actual content directories
       // Check blog cache
       final blogDir = Directory('$devicePath/blog');
       if (await blogDir.exists()) {
@@ -114,6 +142,34 @@ class DeviceAppsService {
     return apps;
   }
 
+  /// Save app availability metadata to disk
+  Future<void> _saveToCache(String callsign, Map<String, DeviceAppInfo> apps) async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final devicePath = '$dataDir/devices/$callsign';
+      final deviceDir = Directory(devicePath);
+
+      if (!await deviceDir.exists()) {
+        await deviceDir.create(recursive: true);
+      }
+
+      final meta = <String, dynamic>{};
+      for (final entry in apps.entries) {
+        meta[entry.key] = {
+          'isAvailable': entry.value.isAvailable,
+          'itemCount': entry.value.itemCount,
+          'cachedAt': DateTime.now().toIso8601String(),
+        };
+      }
+
+      final metaFile = File('$devicePath/apps_meta.json');
+      await metaFile.writeAsString(json.encode(meta));
+      LogService().log('DeviceAppsService: Saved apps_meta.json for $callsign');
+    } catch (e) {
+      LogService().log('DeviceAppsService: Error saving cache for $callsign: $e');
+    }
+  }
+
   /// Fetch fresh data from API
   Future<Map<String, DeviceAppInfo>> _fetchFromApi(String callsign) async {
     final Map<String, DeviceAppInfo> apps = {};
@@ -132,6 +188,11 @@ class DeviceAppsService {
     apps['alerts'] = futures[3];
 
     LogService().log('DeviceAppsService: Fetched apps from API for $callsign: ${apps.entries.where((e) => e.value.isAvailable).map((e) => e.key).toList()}');
+
+    // Cache the result if any app is available
+    if (apps.values.any((app) => app.isAvailable)) {
+      await _saveToCache(callsign, apps);
+    }
 
     return apps;
   }
