@@ -60,6 +60,15 @@ public class GeogramApplication extends Application {
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             Log.e(TAG, "Uncaught exception in thread " + thread.getName(), throwable);
 
+            // Check if this is Android 15+ foreground service timeout exception
+            // This is expected and already handled by BLEForegroundService.onTimeout()
+            // Just log it and return without crashing
+            if (isForegroundServiceTimeoutException(throwable)) {
+                Log.w(TAG, "Suppressing ForegroundServiceDidNotStopInTimeException - already handled by onTimeout()");
+                logCrashToFile(throwable, "ForegroundServiceTimeout_Suppressed");
+                return; // Don't crash - the service already stopped itself
+            }
+
             // Log crash to file synchronously
             logCrashToFile(throwable, "NativeUncaughtException");
 
@@ -79,6 +88,30 @@ public class GeogramApplication extends Application {
 
     public static GeogramApplication getInstance() {
         return instance;
+    }
+
+    /**
+     * Check if the exception is a ForegroundServiceDidNotStopInTimeException.
+     * This exception is thrown by Android 15+ when a foreground service with a time limit
+     * (like dataSync) doesn't stop within its timeout. Since BLEForegroundService.onTimeout()
+     * already handles this gracefully, we suppress this exception to prevent crashes.
+     */
+    private static boolean isForegroundServiceTimeoutException(Throwable throwable) {
+        if (throwable == null) return false;
+
+        // Check exception class name (using string to avoid compile-time dependency on API 35)
+        String className = throwable.getClass().getName();
+        if (className.contains("ForegroundServiceDidNotStopInTimeException")) {
+            return true;
+        }
+
+        // Also check the message for the specific service
+        String message = throwable.getMessage();
+        if (message != null && message.contains("did not stop within its timeout")) {
+            return true;
+        }
+
+        return false;
     }
 
     public static void setCrashChannel(MethodChannel channel) {

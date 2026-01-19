@@ -657,6 +657,15 @@ class ProfileService {
     }
   }
 
+  /// Finalize a profile identity by creating default collections/folders.
+  /// Called after user confirms their chosen callsign (e.g., from WelcomePage).
+  /// This is separate from saveProfile() to allow previewing callsigns without
+  /// creating folders on disk.
+  Future<void> finalizeProfileIdentity(Profile profile) async {
+    await _applyActiveIdentityChanges(profile);
+    LogService().log('ProfileService: Finalized identity for ${profile.callsign}');
+  }
+
   /// Set profile picture from file
   Future<String?> setProfilePicture(String sourcePath) async {
     // On web, profile pictures are handled differently (e.g., base64 in config)

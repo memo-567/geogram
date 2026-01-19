@@ -91,6 +91,7 @@ import 'pages/dm_chat_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
+import 'pages/welcome_page.dart';
 import 'pages/security_settings_page.dart';
 import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
@@ -347,7 +348,9 @@ void main() async {
       if (!kIsWeb && Platform.isAndroid) {
         final recoveredFromCrash = await CrashService().didRecoverFromCrash();
         if (recoveredFromCrash) {
-          LogService().warn('App recovered from a previous crash - check crash logs in Settings > Security for details');
+          LogService().warn(
+            'App recovered from a previous crash - check crash logs in Settings > Security for details',
+          );
           await CrashService().clearRecoveredFromCrash();
         }
       }
@@ -465,21 +468,54 @@ void main() async {
         }
       }
 
-      // Auto-start ProximityDetectionService if enabled
-      final proximityEnabled = ConfigService().getNestedValue('tracker.proximityTrackingEnabled') == true;
-      final proximityCollectionPath = ConfigService().getNestedValue('tracker.proximityCollectionPath');
-      LogService().log('ProximityDetectionService: Auto-start check - enabled=$proximityEnabled, path=$proximityCollectionPath');
-      if (proximityEnabled && proximityCollectionPath is String && proximityCollectionPath.isNotEmpty) {
+      // Auto-start ProximityDetectionService (enabled by default, opt-out)
+      // Skip on first launch - onboarding will handle permissions first
+      final proximityDisabled =
+          ConfigService().getNestedValue('tracker.proximityTrackingEnabled') ==
+          false;
+      LogService().log(
+        '[PROXIMITY] Auto-start check - disabled=$proximityDisabled, firstLaunch=${!firstLaunchComplete}',
+      );
+
+      if (!proximityDisabled && firstLaunchComplete) {
         try {
-          final profileCallsign = ProfileService().getProfile().callsign;
-          await TrackerService().initializeCollection(proximityCollectionPath, callsign: profileCallsign);
-          await ProximityDetectionService().start(TrackerService());
-          LogService().log('ProximityDetectionService auto-started successfully');
+          // Get or find tracker collection path
+          var collectionPath = ConfigService().getNestedValue(
+            'tracker.proximityCollectionPath',
+          );
+
+          if (collectionPath is! String || collectionPath.isEmpty) {
+            // Auto-find tracker collection
+            LogService().log('[PROXIMITY] No saved path, searching for tracker collection...');
+            final collections = await CollectionService().loadCollections();
+            final tracker = collections.where((c) => c.type == 'tracker').firstOrNull;
+            if (tracker?.storagePath != null) {
+              collectionPath = tracker!.storagePath;
+              ConfigService().setNestedValue('tracker.proximityCollectionPath', collectionPath);
+              LogService().log('[PROXIMITY] Found tracker collection: $collectionPath');
+            }
+          }
+
+          if (collectionPath is String && collectionPath.isNotEmpty) {
+            final profileCallsign = ProfileService().getProfile().callsign;
+            await TrackerService().initializeCollection(
+              collectionPath,
+              callsign: profileCallsign,
+            );
+            await ProximityDetectionService().start(TrackerService());
+            LogService().log(
+              '[PROXIMITY] Background tracking STARTED - collection: $collectionPath',
+            );
+          } else {
+            LogService().log('[PROXIMITY] No tracker collection found, tracking not started');
+          }
         } catch (e) {
-          LogService().log('ProximityDetectionService: Failed to auto-start: $e');
+          LogService().log('[PROXIMITY] Failed to auto-start: $e');
         }
+      } else if (!firstLaunchComplete) {
+        LogService().log('[PROXIMITY] Skipped on first launch - will start after onboarding');
       } else {
-        LogService().log('ProximityDetectionService: Auto-start skipped (not enabled or no path)');
+        LogService().log('[PROXIMITY] Tracking disabled by user setting');
       }
 
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
@@ -560,9 +596,15 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     _themeService.addListener(_onThemeChanged);
 
     // Subscribe to DM notification tap events for deep linking (foreground only)
-    _dmNotificationSubscription = EventBus().on<DMNotificationTappedEvent>((event) {
-      print('NOTIFICATION_DEBUG: *** DMNotificationTappedEvent received for ${event.targetCallsign} ***');
-      LogService().log('GeogramApp: DM notification tapped for ${event.targetCallsign}');
+    _dmNotificationSubscription = EventBus().on<DMNotificationTappedEvent>((
+      event,
+    ) {
+      print(
+        'NOTIFICATION_DEBUG: *** DMNotificationTappedEvent received for ${event.targetCallsign} ***',
+      );
+      LogService().log(
+        'GeogramApp: DM notification tapped for ${event.targetCallsign}',
+      );
       _navigateToDMChat(event.targetCallsign);
     });
 
@@ -582,7 +624,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    print('NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state');
+    print(
+      'NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state',
+    );
     if (state == AppLifecycleState.resumed) {
       // Verify WebSocket connection is still alive (Android background may have broken it)
       WebSocketService().onAppResumed();
@@ -592,7 +636,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
 
       // Delay check to allow SharedPreferences write to complete in background isolate
       Future.delayed(const Duration(milliseconds: 500), () {
-        print('NOTIFICATION_DEBUG: ${DateTime.now()} delayed _checkPendingNotification');
+        print(
+          'NOTIFICATION_DEBUG: ${DateTime.now()} delayed _checkPendingNotification',
+        );
         _checkPendingNotification();
       });
     }
@@ -607,7 +653,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     if (action == null) return;
 
     print('NOTIFICATION_DEBUG: Processing ${action.type}:${action.data}');
-    LogService().log('GeogramApp: Processing pending notification: ${action.type}:${action.data}');
+    LogService().log(
+      'GeogramApp: Processing pending notification: ${action.type}:${action.data}',
+    );
 
     switch (action.type) {
       case 'dm':
@@ -632,15 +680,16 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   /// Navigate to DM chat, waiting for navigator if needed (handles cold start timing)
   void _navigateToDMChat(String callsign) {
     print('NOTIFICATION_DEBUG: _navigateToDMChat called for $callsign');
-    print('NOTIFICATION_DEBUG: _navigatorKey.currentState = ${_navigatorKey.currentState}');
+    print(
+      'NOTIFICATION_DEBUG: _navigatorKey.currentState = ${_navigatorKey.currentState}',
+    );
     // If navigator is ready, navigate immediately
     if (_navigatorKey.currentState != null) {
       print('NOTIFICATION_DEBUG: Navigator ready, pushing DMChatPage');
       _navigatorKey.currentState!.push(
         MaterialPageRoute(
-          builder: (context) => DMChatPage(
-            otherCallsign: callsign.toUpperCase(),
-          ),
+          builder: (context) =>
+              DMChatPage(otherCallsign: callsign.toUpperCase()),
         ),
       );
       return;
@@ -745,7 +794,7 @@ class _HomePageState extends State<HomePage> {
     // Subscribe to station state changes to update the icon
     _stationStateSubscription = StationNodeService().stateStream.listen((_) {
       if (mounted) {
-        setState(() {});  // Rebuild to update station icon
+        setState(() {}); // Rebuild to update station icon
       }
     });
     // Force initial rebuild to show current station state (station may already be running)
@@ -812,7 +861,8 @@ class _HomePageState extends State<HomePage> {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => DMChatPage(otherCallsign: callsign.toUpperCase()),
+            builder: (context) =>
+                DMChatPage(otherCallsign: callsign.toUpperCase()),
           ),
         );
       }
@@ -879,30 +929,26 @@ class _HomePageState extends State<HomePage> {
     final firstLaunchComplete = config['firstLaunchComplete'] as bool? ?? false;
 
     if (!firstLaunchComplete) {
-      // Create default collections and show welcome/onboarding after first frame
+      // Show welcome/onboarding after first frame
+      // NOTE: Default collections are NOT created here - they are created when
+      // the user confirms their callsign in WelcomePage via finalizeProfileIdentity()
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (mounted) {
-          await _createDefaultCollections();
-          if (mounted) {
-            // Check if --skip-intro flag was passed (useful for automated testing)
-            if (AppArgs().skipIntro) {
-              // Mark first launch as complete and skip all intro screens
-              ConfigService().set('firstLaunchComplete', true);
-              LogService().log('Skipping intro screens (--skip-intro flag)');
-              return;
-            }
+          // Check if --skip-intro flag was passed (useful for automated testing)
+          if (AppArgs().skipIntro) {
+            // Mark first launch as complete, create collections, and skip all intro screens
+            ConfigService().set('firstLaunchComplete', true);
+            await _createDefaultCollections();
+            LogService().log('Skipping intro screens (--skip-intro flag)');
+            return;
+          }
 
-            // On Android, show full onboarding with permissions
-            // On other platforms, show simple welcome dialog
-            if (!kIsWeb && Platform.isAndroid) {
-              _showOnboarding();
-            } else {
-              // Mark first launch as complete for non-Android platforms
-              ConfigService().set('firstLaunchComplete', true);
-              // Pre-download offline maps in background
-              _preDownloadOfflineMaps();
-              _showWelcomeDialog();
-            }
+          // On Android, show full onboarding with permissions
+          // On other platforms, show simple welcome dialog
+          if (!kIsWeb && Platform.isAndroid) {
+            _showOnboarding();
+          } else {
+            _showWelcomeDialog();
           }
         }
       });
@@ -914,24 +960,59 @@ class _HomePageState extends State<HomePage> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => OnboardingPage(
-          onComplete: () {
-            // Mark first launch as complete
-            ConfigService().set('firstLaunchComplete', true);
+          onComplete: () async {
             Navigator.of(context).pop();
             // Pre-download offline maps in background
             _preDownloadOfflineMaps();
-            // Show the welcome dialog after onboarding
+            // Show the welcome page after onboarding
+            // NOTE: firstLaunchComplete is set in WelcomePage when user finalizes profile
             _showWelcomeDialog();
+
+            // Start ProximityDetectionService now that onboarding is complete
+            // (was skipped during deferred initialization)
+            _startProximityServiceAfterOnboarding();
           },
         ),
       ),
     );
   }
 
+  /// Start ProximityDetectionService after onboarding completes
+  Future<void> _startProximityServiceAfterOnboarding() async {
+    final proximityDisabled =
+        ConfigService().getNestedValue('tracker.proximityTrackingEnabled') == false;
+
+    if (proximityDisabled) {
+      LogService().log('[PROXIMITY] Tracking disabled by user setting');
+      return;
+    }
+
+    try {
+      var collectionPath = ConfigService().getNestedValue('tracker.proximityCollectionPath');
+
+      if (collectionPath is! String || collectionPath.isEmpty) {
+        final collections = await CollectionService().loadCollections();
+        final tracker = collections.where((c) => c.type == 'tracker').firstOrNull;
+        if (tracker?.storagePath != null) {
+          collectionPath = tracker!.storagePath;
+          ConfigService().setNestedValue('tracker.proximityCollectionPath', collectionPath);
+        }
+      }
+
+      if (collectionPath is String && collectionPath.isNotEmpty) {
+        final profileCallsign = ProfileService().getProfile().callsign;
+        await TrackerService().initializeCollection(collectionPath, callsign: profileCallsign);
+        await ProximityDetectionService().start(TrackerService());
+        LogService().log('[PROXIMITY] Started after onboarding - collection: $collectionPath');
+      }
+    } catch (e) {
+      LogService().log('[PROXIMITY] Failed to start after onboarding: $e');
+    }
+  }
+
   /// Create default collections for first launch
   Future<void> _createDefaultCollections() async {
     final collectionService = CollectionService();
-    // Hidden: transfer (not ready)
     final defaultTypes = [
       'chat',
       'blog',
@@ -939,6 +1020,7 @@ class _HomePageState extends State<HomePage> {
       'places',
       'inventory',
       'backup',
+      'transfer',
     ];
 
     LogService().log(
@@ -1008,86 +1090,15 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Show welcome dialog with generated callsign
+  /// Show welcome page with generated callsign (full-screen)
   void _showWelcomeDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => ValueListenableBuilder<int>(
-        valueListenable: _profileService.profileNotifier,
-        builder: (context, _, __) {
-          final profile = _profileService.getProfile();
-
-          return PopScope(
-            canPop: false,
-            child: AlertDialog(
-              title: Text(_i18n.t('welcome_to_geogram')),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_i18n.t('welcome_message')),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.badge,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _i18n.t('your_callsign'),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            Text(
-                              profile.callsign,
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _i18n.t('welcome_customize_hint'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    await _profileService.regenerateActiveProfileIdentity();
-                    // ValueListenableBuilder will auto-rebuild when profileNotifier changes
-                  },
-                  child: Text(_i18n.t('generate_new')),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
-                  child: Text(_i18n.t('onboarding_continue')),
-                ),
-              ],
-            ),
-          );
-        },
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => WelcomePage(
+          onComplete: () {
+            Navigator.of(context).pop();
+          },
+        ),
       ),
     );
   }
@@ -1222,7 +1233,9 @@ class _HomePageState extends State<HomePage> {
                     IconButton(
                       icon: Icon(
                         Icons.cell_tower,
-                        color: StationNodeService().isRunning ? Colors.green : null,
+                        color: StationNodeService().isRunning
+                            ? Colors.green
+                            : null,
                       ),
                       tooltip: _i18n.t('station_dashboard'),
                       onPressed: () {
@@ -1336,7 +1349,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const ProfilePage()),
+                      MaterialPageRoute(
+                        builder: (context) => const ProfilePage(),
+                      ),
                     );
                   },
                 ),
@@ -1349,7 +1364,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const LocationPage()),
+                      MaterialPageRoute(
+                        builder: (context) => const LocationPage(),
+                      ),
                     );
                   },
                 ),
@@ -1362,7 +1379,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const SecuritySettingsPage()),
+                      MaterialPageRoute(
+                        builder: (context) => const SecuritySettingsPage(),
+                      ),
                     );
                   },
                 ),
@@ -1375,7 +1394,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const StorageSettingsPage()),
+                      MaterialPageRoute(
+                        builder: (context) => const StorageSettingsPage(),
+                      ),
                     );
                   },
                 ),
@@ -1388,7 +1409,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const StationsPage()),
+                      MaterialPageRoute(
+                        builder: (context) => const StationsPage(),
+                      ),
                     );
                   },
                 ),
@@ -1402,7 +1425,9 @@ class _HomePageState extends State<HomePage> {
                       setState(() => _selectedIndex = 3);
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (context) => const StationDashboardPage()),
+                        MaterialPageRoute(
+                          builder: (context) => const StationDashboardPage(),
+                        ),
                       );
                     },
                   ),
@@ -1420,9 +1445,13 @@ class _HomePageState extends State<HomePage> {
                           title: Text(_i18n.t('select_language')),
                           content: Column(
                             mainAxisSize: MainAxisSize.min,
-                            children: _i18n.supportedLanguages.map((languageCode) {
+                            children: _i18n.supportedLanguages.map((
+                              languageCode,
+                            ) {
                               return RadioListTile<String>(
-                                title: Text(_i18n.getLanguageName(languageCode)),
+                                title: Text(
+                                  _i18n.getLanguageName(languageCode),
+                                ),
                                 value: languageCode,
                                 groupValue: _i18n.currentLanguage,
                                 onChanged: (String? value) {
@@ -1440,7 +1469,8 @@ class _HomePageState extends State<HomePage> {
                         );
                       },
                     );
-                    if (selectedLanguage != null && selectedLanguage != _i18n.currentLanguage) {
+                    if (selectedLanguage != null &&
+                        selectedLanguage != _i18n.currentLanguage) {
                       await _i18n.setLanguage(selectedLanguage);
                     }
                   },
@@ -1454,7 +1484,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const ThemeSettingsPage()),
+                      MaterialPageRoute(
+                        builder: (context) => const ThemeSettingsPage(),
+                      ),
                     );
                   },
                 ),
@@ -1467,7 +1499,9 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const UpdatePage()),
+                      MaterialPageRoute(
+                        builder: (context) => const UpdatePage(),
+                      ),
                     );
                   },
                 ),
@@ -2112,6 +2146,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                 collectionTitle:
                                                     collection.title,
                                               )
+                                            : collection.type == 'transfer'
+                                            ? const TransferPage()
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2396,7 +2432,8 @@ class _CollectionGridCard extends StatelessWidget {
   IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
 
   /// Get gradient colors for collection type icon
-  LinearGradient _getTypeGradient(bool isDark) => getAppTypeGradient(collection.type, isDark);
+  LinearGradient _getTypeGradient(bool isDark) =>
+      getAppTypeGradient(collection.type, isDark);
 
   void _showContextMenu(BuildContext context, Offset position) {
     final i18n = I18nService();
@@ -2613,7 +2650,8 @@ class _CollectionCard extends StatelessWidget {
   IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
 
   /// Get gradient colors for collection type icon
-  LinearGradient _getTypeGradient(bool isDark) => getAppTypeGradient(collection.type, isDark);
+  LinearGradient _getTypeGradient(bool isDark) =>
+      getAppTypeGradient(collection.type, isDark);
 
   @override
   Widget build(BuildContext context) {
