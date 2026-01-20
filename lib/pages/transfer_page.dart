@@ -53,7 +53,7 @@ class _TransferPageState extends State<TransferPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _initService();
   }
 
@@ -185,7 +185,7 @@ class _TransferPageState extends State<TransferPage>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Transfer Center'),
+        title: const Text('Transfers'),
         actions: [
           if (_selectionMode)
             IconButton(
@@ -223,26 +223,10 @@ class _TransferPageState extends State<TransferPage>
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
-          tabs: [
-            _buildTab(
-              'In Progress',
-              _activeTransfers.length + _queuedTransfers.length,
-              Icons.sync,
-              Colors.blue,
-            ),
-            _buildTab(
-              'Completed',
-              _completedTransfers.length,
-              Icons.check_circle,
-              Colors.green,
-            ),
-            _buildTab(
-              'Failed',
-              _failedTransfers.length,
-              Icons.error,
-              Colors.red,
-            ),
-            const Tab(icon: Icon(Icons.analytics), text: 'Stats'),
+          tabs: const [
+            Tab(icon: Icon(Icons.sync), text: 'In Progress'),
+            Tab(icon: Icon(Icons.history), text: 'Previous'),
+            Tab(icon: Icon(Icons.analytics), text: 'Stats'),
           ],
         ),
       ),
@@ -250,40 +234,8 @@ class _TransferPageState extends State<TransferPage>
         controller: _tabController,
         children: [
           _buildInProgressTab(),
-          _buildCompletedTab(),
-          _buildFailedTab(),
+          _buildPreviousTab(),
           _buildStatsTab(),
-        ],
-      ),
-    );
-  }
-
-  Tab _buildTab(String label, int count, IconData icon, Color color) {
-    return Tab(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 4),
-          Text(label),
-          if (count > 0) ...[
-            const SizedBox(width: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -387,37 +339,18 @@ class _TransferPageState extends State<TransferPage>
     );
   }
 
-  Widget _buildCompletedTab() {
-    if (_completedTransfers.isEmpty) {
-      return _buildEmptyState(
-        'No completed transfers',
-        'Successfully completed transfers will appear here',
-        Icons.check_circle,
-      );
-    }
+  Widget _buildPreviousTab() {
+    // Combine completed and failed transfers, sorted by timestamp (most recent first)
+    final allPrevious = [
+      ..._completedTransfers,
+      ..._failedTransfers,
+    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    return RefreshIndicator(
-      onRefresh: _refreshData,
-      child: ListView.builder(
-        padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _completedTransfers.length,
-        itemBuilder: (context, index) {
-          final transfer = _completedTransfers[index];
-          return TransferListItem(
-            transfer: transfer,
-            onTap: () => _showTransferDetails(transfer),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildFailedTab() {
-    if (_failedTransfers.isEmpty) {
+    if (allPrevious.isEmpty) {
       return _buildEmptyState(
-        'No failed transfers',
-        'Failed transfers will appear here',
-        Icons.error_outline,
+        'No previous transfers',
+        'Completed and failed transfers will appear here',
+        Icons.history,
       );
     }
 
@@ -425,7 +358,7 @@ class _TransferPageState extends State<TransferPage>
       onRefresh: _refreshData,
       child: Column(
         children: [
-          // Retry all button
+          // Retry all failed button (only show if there are failed transfers)
           if (_failedTransfers.isNotEmpty)
             Padding(
               padding: const EdgeInsets.all(8),
@@ -435,23 +368,24 @@ class _TransferPageState extends State<TransferPage>
                   _refreshData();
                 },
                 icon: const Icon(Icons.refresh),
-                label: const Text('Retry All'),
+                label: Text('Retry All Failed (${_failedTransfers.length})'),
               ),
             ),
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: 80),
-                itemCount: _failedTransfers.length,
-                itemBuilder: (context, index) {
-                  final transfer = _failedTransfers[index];
-                  return TransferListItem(
-                    transfer: transfer,
-                    onTap: () => _showTransferDetails(transfer),
-                    onRetry: transfer.canRetry
-                        ? () async {
-                            await _service.retry(transfer.id);
-                            _refreshData();
-                          }
+              padding: const EdgeInsets.only(top: 8, bottom: 80),
+              itemCount: allPrevious.length,
+              itemBuilder: (context, index) {
+                final transfer = allPrevious[index];
+                final isFailed = transfer.status == TransferStatus.failed;
+                return TransferListItem(
+                  transfer: transfer,
+                  onTap: () => _showTransferDetails(transfer),
+                  onRetry: isFailed && transfer.canRetry
+                      ? () async {
+                          await _service.retry(transfer.id);
+                          _refreshData();
+                        }
                       : null,
                 );
               },

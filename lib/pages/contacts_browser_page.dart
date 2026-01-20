@@ -3511,8 +3511,8 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
               ),
             )
           else
-            // Timeline display (oldest first)
-            ...contact.historyEntries.asMap().entries.map(
+            // Timeline display (most recent first)
+            ...contact.historyEntries.reversed.toList().asMap().entries.map(
               (mapEntry) => _buildHistoryEntryItem(context, mapEntry.value, mapEntry.key == contact.historyEntries.length - 1),
             ),
 

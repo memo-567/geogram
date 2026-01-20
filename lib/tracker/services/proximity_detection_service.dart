@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/tracker_proximity_track.dart';
 import 'tracker_service.dart';
@@ -8,6 +11,7 @@ import '../../services/log_service.dart';
 import '../../services/location_provider_service.dart';
 import '../../services/devices_service.dart';
 import '../../services/place_service.dart';
+import '../../services/ble_foreground_service.dart';
 
 /// Service for detecting nearby devices (via Bluetooth) and places (via GPS).
 /// Registers as a consumer of LocationProviderService to get GPS updates.
@@ -57,12 +61,18 @@ class ProximityDetectionService {
       // Run initial scan immediately
       _scanNearbyDevices();
 
-      // Then scan every 60 seconds using a simple timer
-      _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-        _scanNearbyDevices();
-      });
-
-      LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
+      // On Android, use native foreground service for reliable background operation
+      if (!kIsWeb && Platform.isAndroid) {
+        BLEForegroundService().onBleScanPing = _scanNearbyDevices;
+        await BLEForegroundService().enableBleScanKeepAlive();
+        LogService().log('ProximityDetectionService: Started with native Android handler and GPS consumer');
+      } else {
+        // Dart timer for other platforms (iOS, Linux, web)
+        _scanTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+          _scanNearbyDevices();
+        });
+        LogService().log('ProximityDetectionService: Started with 60-second timer and GPS consumer');
+      }
     } catch (e, stack) {
       LogService().log('ProximityDetectionService: Failed to start: $e');
       LogService().log('ProximityDetectionService: Stack: $stack');
@@ -74,6 +84,12 @@ class ProximityDetectionService {
   void stop() {
     if (!_isRunning) {
       return;
+    }
+
+    // Clean up native Android handler
+    if (!kIsWeb && Platform.isAndroid) {
+      BLEForegroundService().onBleScanPing = null;
+      BLEForegroundService().disableBleScanKeepAlive();
     }
 
     _locationConsumerDispose?.call();

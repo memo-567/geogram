@@ -46,6 +46,9 @@ public class BLEForegroundService extends Service {
     // BLE advertising refresh interval (30 seconds - matches the Dart timer interval)
     private static final long BLE_ADVERTISE_INTERVAL_MS = 30 * 1000;
 
+    // BLE scan interval (60 seconds - for proximity detection)
+    private static final long BLE_SCAN_INTERVAL_MS = 60 * 1000;
+
     // Restart delay after crash
     private static final long RESTART_DELAY_MS = 3000; // 3 seconds
 
@@ -60,6 +63,11 @@ public class BLEForegroundService extends Service {
     private Runnable bleAdvertiseRunnable;
     private boolean bleAdvertiseEnabled = false;
 
+    // BLE scan keep-alive (for proximity detection)
+    private Handler bleScanHandler;
+    private Runnable bleScanRunnable;
+    private boolean bleScanEnabled = false;
+
     // Track if dataSync type is available (Android 15+ has 6-hour limit)
     private boolean dataSyncExhausted = false;
 
@@ -73,6 +81,9 @@ public class BLEForegroundService extends Service {
 
     // Track if BLE keepalive was requested (survives service restart)
     private static boolean bleKeepAliveRequested = false;
+
+    // Track if BLE scan keepalive was requested (survives service restart)
+    private static boolean bleScanKeepAliveRequested = false;
 
     // Static reference to method channel for callbacks to Flutter
     private static MethodChannel methodChannel;
@@ -198,6 +209,35 @@ public class BLEForegroundService extends Service {
         Log.d(TAG, "BLE advertising keep-alive disable requested");
     }
 
+    /**
+     * Enable BLE scan keep-alive from the foreground service.
+     * This triggers periodic BLE scan pings for proximity detection even when the screen is off.
+     */
+    public static void enableBleScanKeepAlive(Context context) {
+        Intent intent = new Intent(context, BLEForegroundService.class);
+        intent.setAction("ENABLE_BLE_SCAN_KEEPALIVE");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        Log.d(TAG, "BLE scan keep-alive enable requested");
+    }
+
+    /**
+     * Disable BLE scan keep-alive.
+     */
+    public static void disableBleScanKeepAlive(Context context) {
+        Intent intent = new Intent(context, BLEForegroundService.class);
+        intent.setAction("DISABLE_BLE_SCAN_KEEPALIVE");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        Log.d(TAG, "BLE scan keep-alive disable requested");
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -231,6 +271,19 @@ public class BLEForegroundService extends Service {
                 }
             }
         };
+
+        // Initialize BLE scan handler (for proximity detection)
+        bleScanHandler = new Handler(Looper.getMainLooper());
+        bleScanRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (bleScanEnabled) {
+                    sendBleScanPing();
+                    // Schedule next ping
+                    bleScanHandler.postDelayed(this, BLE_SCAN_INTERVAL_MS);
+                }
+            }
+        };
     }
 
     @Override
@@ -259,6 +312,10 @@ public class BLEForegroundService extends Service {
             startBleAdvertise();
         } else if ("DISABLE_BLE_KEEPALIVE".equals(action)) {
             stopBleAdvertise();
+        } else if ("ENABLE_BLE_SCAN_KEEPALIVE".equals(action)) {
+            startBleScan();
+        } else if ("DISABLE_BLE_SCAN_KEEPALIVE".equals(action)) {
+            stopBleScan();
         } else if ("SCHEDULE_RESTART".equals(action)) {
             scheduleAppRestart();
             return START_STICKY;
@@ -281,6 +338,12 @@ public class BLEForegroundService extends Service {
             if (bleKeepAliveRequested) {
                 startBleAdvertise();
                 sendBleAdvertisePing();
+            }
+
+            // Re-enable BLE scan if it was previously enabled
+            if (bleScanKeepAliveRequested) {
+                startBleScan();
+                sendBleScanPing();
             }
         }
 
@@ -393,6 +456,7 @@ public class BLEForegroundService extends Service {
         isInForeground = false;
         stopKeepAlive();
         stopBleAdvertise();
+        stopBleScan();
         releaseWakeLock();
         super.onDestroy();
     }
@@ -415,8 +479,12 @@ public class BLEForegroundService extends Service {
         if (bleAdvertiseHandler != null) {
             bleAdvertiseHandler.removeCallbacksAndMessages(null);
         }
+        if (bleScanHandler != null) {
+            bleScanHandler.removeCallbacksAndMessages(null);
+        }
         keepAliveEnabled = false;
         bleAdvertiseEnabled = false;
+        bleScanEnabled = false;
 
         // CRITICAL: Stop foreground FIRST, then stopSelf
         // Android 15+ requires very fast response to onTimeout
@@ -497,6 +565,59 @@ public class BLEForegroundService extends Service {
             bleAdvertiseEnabled = false;
             bleAdvertiseHandler.removeCallbacks(bleAdvertiseRunnable);
             Log.d(TAG, "BLE advertising keep-alive stopped");
+        }
+    }
+
+    private void startBleScan() {
+        bleScanKeepAliveRequested = true;
+        if (!bleScanEnabled) {
+            bleScanEnabled = true;
+            Log.d(TAG, "BLE scan keep-alive started (interval=" + BLE_SCAN_INTERVAL_MS + "ms)");
+            // Send first ping immediately, then schedule periodic pings
+            sendBleScanPing();
+            bleScanHandler.postDelayed(bleScanRunnable, BLE_SCAN_INTERVAL_MS);
+        }
+    }
+
+    private void stopBleScan() {
+        bleScanKeepAliveRequested = false;
+        if (bleScanEnabled) {
+            bleScanEnabled = false;
+            bleScanHandler.removeCallbacks(bleScanRunnable);
+            Log.d(TAG, "BLE scan keep-alive stopped");
+        }
+    }
+
+    /**
+     * Send BLE scan ping by invoking the Dart callback via MethodChannel.
+     * This triggers the Dart side to perform proximity detection.
+     */
+    private void sendBleScanPing() {
+        if (methodChannel == null) {
+            Log.w(TAG, "MethodChannel not set, cannot send BLE scan ping");
+            return;
+        }
+
+        try {
+            Log.d(TAG, "Sending BLE scan ping via MethodChannel");
+            methodChannel.invokeMethod("onBleScanPing", null, new io.flutter.plugin.common.MethodChannel.Result() {
+                @Override
+                public void success(Object result) {
+                    Log.d(TAG, "BLE scan ping delivered to Flutter successfully");
+                }
+
+                @Override
+                public void error(String errorCode, String errorMessage, Object errorDetails) {
+                    Log.w(TAG, "BLE scan ping failed: " + errorCode + " - " + errorMessage);
+                }
+
+                @Override
+                public void notImplemented() {
+                    Log.w(TAG, "BLE scan ping not implemented by Flutter side");
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Exception sending BLE scan ping: " + e.getMessage());
         }
     }
 

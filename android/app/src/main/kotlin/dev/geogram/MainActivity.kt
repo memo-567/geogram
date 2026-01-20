@@ -69,6 +69,16 @@ class MainActivity : FlutterActivity() {
                     BLEForegroundService.disableBleKeepAlive(this)
                     result.success(true)
                 }
+                "enableBleScanKeepAlive" -> {
+                    // Enable BLE scan keep-alive in the foreground service (for proximity detection)
+                    BLEForegroundService.enableBleScanKeepAlive(this)
+                    result.success(true)
+                }
+                "disableBleScanKeepAlive" -> {
+                    // Disable BLE scan keep-alive in the foreground service
+                    BLEForegroundService.disableBleScanKeepAlive(this)
+                    result.success(true)
+                }
                 "verifyChannel" -> {
                     // Simple channel verification - if we get here, the channel is working
                     result.success(true)

@@ -38,7 +38,7 @@ enum TrackerTab {
 enum ProximityFilter { all, devices, places }
 
 /// Tabs that are hidden (not yet functional)
-const Set<TrackerTab> _hiddenTabs = {TrackerTab.plans, TrackerTab.proximity};
+const Set<TrackerTab> _hiddenTabs = {TrackerTab.plans, TrackerTab.sharing};
 
 /// Get the list of visible tabs (excluding hidden ones)
 List<TrackerTab> get _visibleTabValues =>
@@ -99,7 +99,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   final Set<String> _expandedProximityYearKeys = {};
   final Set<String> _expandedProximityWeekKeys = {};
   ProximityFilter _proximityFilter = ProximityFilter.all;
-  bool _proximityTrackingEnabled = false;
+  bool _proximityTrackingEnabled = true;
 
   List<GroupShare> _groupShares = [];
   List<TemporaryShare> _temporaryShares = [];
@@ -120,7 +120,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
   void _loadProximityTrackingEnabled() {
     final saved = _configService.getNestedValue('tracker.proximityTrackingEnabled');
-    _proximityTrackingEnabled = saved == true;
+    _proximityTrackingEnabled = saved != false; // Default true if not set
   }
 
   void _setProximityTrackingEnabled(bool enabled) {

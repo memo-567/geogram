@@ -22,6 +22,11 @@ typedef ServiceRestartedCallback = void Function();
 /// Android foreground service, which runs even when the display is off.
 typedef BleAdvertisePingCallback = void Function();
 
+/// Callback type for when the foreground service triggers a BLE scan ping.
+/// This allows the ProximityDetectionService to receive periodic ping triggers from the
+/// Android foreground service, which runs even when the display is off.
+typedef BleScanPingCallback = void Function();
+
 /// Service to manage the foreground service on Android.
 /// This keeps BLE and WebSocket connections active when app goes to background.
 ///
@@ -41,6 +46,7 @@ class BLEForegroundService {
   bool _isRunning = false;
   bool _keepAliveEnabled = false;
   bool _bleKeepAliveEnabled = false;
+  bool _bleScanKeepAliveEnabled = false;
 
   /// Callback to invoke when the foreground service triggers a keep-alive ping
   KeepAlivePingCallback? onKeepAlivePing;
@@ -51,6 +57,9 @@ class BLEForegroundService {
   /// Callback to invoke when the foreground service triggers a BLE advertising ping
   BleAdvertisePingCallback? onBleAdvertisePing;
 
+  /// Callback to invoke when the foreground service triggers a BLE scan ping
+  BleScanPingCallback? onBleScanPing;
+
   /// Whether the foreground service is currently running
   bool get isRunning => _isRunning;
 
@@ -59,6 +68,9 @@ class BLEForegroundService {
 
   /// Whether BLE advertising keep-alive is enabled in the foreground service
   bool get bleKeepAliveEnabled => _bleKeepAliveEnabled;
+
+  /// Whether BLE scan keep-alive is enabled in the foreground service
+  bool get bleScanKeepAliveEnabled => _bleScanKeepAliveEnabled;
 
   /// Handle method calls from Android native code
   Future<dynamic> _handleMethodCall(MethodCall call) async {
@@ -74,6 +86,10 @@ class BLEForegroundService {
       case 'onBleAdvertisePing':
         LogService().log('BLEForegroundService: BLE advertising ping received from Android');
         onBleAdvertisePing?.call();
+        break;
+      case 'onBleScanPing':
+        LogService().log('BLEForegroundService: BLE scan ping received from Android');
+        onBleScanPing?.call();
         break;
       default:
         LogService().log('BLEForegroundService: Unknown method ${call.method}');
@@ -247,6 +263,62 @@ class BLEForegroundService {
       return !_bleKeepAliveEnabled;
     } catch (e) {
       LogService().log('BLEForegroundService: Error disabling BLE keep-alive: $e');
+      return false;
+    }
+  }
+
+  /// Enable BLE scan keep-alive in the foreground service.
+  /// This should be called after proximity detection is started.
+  /// The foreground service will periodically trigger [onBleScanPing] even
+  /// when the display is off, allowing proximity detection to stay active.
+  Future<bool> enableBleScanKeepAlive() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      return false; // Only needed on Android
+    }
+
+    if (_bleScanKeepAliveEnabled) {
+      LogService().log('BLEForegroundService: BLE scan keep-alive already enabled');
+      return true;
+    }
+
+    // Start the service if not running
+    if (!_isRunning) {
+      await start();
+    }
+
+    try {
+      final result = await _channel.invokeMethod<bool>('enableBleScanKeepAlive');
+      _bleScanKeepAliveEnabled = result ?? false;
+      if (_bleScanKeepAliveEnabled) {
+        LogService().log('BLEForegroundService: BLE scan keep-alive enabled');
+      } else {
+        LogService().log('BLEForegroundService: Failed to enable BLE scan keep-alive');
+      }
+      return _bleScanKeepAliveEnabled;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error enabling BLE scan keep-alive: $e');
+      return false;
+    }
+  }
+
+  /// Disable BLE scan keep-alive in the foreground service.
+  /// This should be called when proximity detection is stopped.
+  Future<bool> disableBleScanKeepAlive() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      return false;
+    }
+
+    if (!_bleScanKeepAliveEnabled) {
+      return true;
+    }
+
+    try {
+      final result = await _channel.invokeMethod<bool>('disableBleScanKeepAlive');
+      _bleScanKeepAliveEnabled = !(result ?? true);
+      LogService().log('BLEForegroundService: BLE scan keep-alive disabled');
+      return !_bleScanKeepAliveEnabled;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Error disabling BLE scan keep-alive: $e');
       return false;
     }
   }
