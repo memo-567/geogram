@@ -67,6 +67,7 @@ public class BLEForegroundService extends Service {
     private boolean isInForeground = false;
 
     // Station info for notification display
+    private static String userCallsign = null;
     private static String stationName = null;
     private static String stationUrl = null;
 
@@ -76,8 +77,19 @@ public class BLEForegroundService extends Service {
     // Static reference to method channel for callbacks to Flutter
     private static MethodChannel methodChannel;
 
+    // Track consecutive MethodChannel failures (static to survive service restarts)
+    private static int consecutiveChannelFailures = 0;
+    private static final int MAX_CHANNEL_FAILURES = 3;
+
     public static void setMethodChannel(MethodChannel channel) {
+        Log.d(TAG, "setMethodChannel called - resetting failure counter");
         methodChannel = channel;
+        consecutiveChannelFailures = 0;  // CRITICAL: Reset on new channel
+    }
+
+    public static void clearMethodChannel() {
+        Log.d(TAG, "clearMethodChannel called");
+        methodChannel = null;
     }
 
     public static void start(Context context) {
@@ -116,11 +128,13 @@ public class BLEForegroundService extends Service {
      * Enable WebSocket keep-alive from the foreground service.
      * This should be called after WebSocket connects to the station.
      * @param context The application context
+     * @param callsign The user's callsign (e.g., "X1ABCD")
      * @param name The station name (optional, can be null)
      * @param url The station URL (e.g., "p2p.radio")
      */
-    public static void enableKeepAlive(Context context, String name, String url) {
-        // Store station info for notification
+    public static void enableKeepAlive(Context context, String callsign, String name, String url) {
+        // Store user and station info for notification
+        userCallsign = callsign;
         stationName = name;
         stationUrl = url;
 
@@ -131,14 +145,14 @@ public class BLEForegroundService extends Service {
         } else {
             context.startService(intent);
         }
-        Log.d(TAG, "WebSocket keep-alive enable requested for station: " + (name != null ? name : url));
+        Log.d(TAG, "WebSocket keep-alive enable requested for " + (callsign != null ? callsign : "user") + " at station: " + (name != null ? name : url));
     }
 
     /**
      * Enable WebSocket keep-alive (backwards compatible, no station info).
      */
     public static void enableKeepAlive(Context context) {
-        enableKeepAlive(context, null, null);
+        enableKeepAlive(context, null, null, null);
     }
 
     /**
@@ -572,9 +586,6 @@ public class BLEForegroundService extends Service {
         }
     }
 
-    // Track consecutive MethodChannel failures
-    private int consecutiveChannelFailures = 0;
-    private static final int MAX_CHANNEL_FAILURES = 3;
 
     /**
      * Send keep-alive ping by invoking the Dart callback via MethodChannel.
@@ -585,11 +596,10 @@ public class BLEForegroundService extends Service {
      * warnings to help diagnose connection issues.
      */
     private void sendKeepAlivePing() {
-            if (methodChannel == null) {
-                Log.w(TAG, "MethodChannel not set, cannot send keep-alive ping");
-                consecutiveChannelFailures++;
-                return;
-            }
+        if (methodChannel == null) {
+            Log.d(TAG, "MethodChannel not set, skipping ping (waiting for engine)");
+            return;  // Don't increment failures - transient state
+        }
 
         try {
             Log.d(TAG, "Sending WebSocket keep-alive ping via MethodChannel");
@@ -685,20 +695,21 @@ public class BLEForegroundService extends Service {
 
         String contentText;
         if (keepAliveEnabled) {
-            // Format: "Connected to Name (url)" or "Connected to url"
-            // Skip parenthetical if name equals url to avoid redundancy like "p2p.radio (p2p.radio)"
-            if (stationName != null && !stationName.isEmpty() && stationUrl != null && !stationUrl.isEmpty()) {
-                if (stationName.equalsIgnoreCase(stationUrl)) {
-                    contentText = "Connected to " + stationName;
-                } else {
-                    contentText = "Connected to " + stationName + " (" + stationUrl + ")";
-                }
-            } else if (stationUrl != null && !stationUrl.isEmpty()) {
-                contentText = "Connected to " + stationUrl;
+            // Build station display: prefer URL, then name
+            String stationDisplay;
+            if (stationUrl != null && !stationUrl.isEmpty()) {
+                stationDisplay = stationUrl;
             } else if (stationName != null && !stationName.isEmpty()) {
-                contentText = "Connected to " + stationName;
+                stationDisplay = stationName;
             } else {
-                contentText = "Connected to station";
+                stationDisplay = "station";
+            }
+
+            // Format: "CALLSIGN is connected to station" or "Connected to station"
+            if (userCallsign != null && !userCallsign.isEmpty()) {
+                contentText = userCallsign + " is connected to " + stationDisplay;
+            } else {
+                contentText = "Connected to " + stationDisplay;
             }
         } else {
             contentText = "BLE active";

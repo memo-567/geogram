@@ -136,9 +136,10 @@ class BLEForegroundService {
   /// The foreground service will periodically trigger [onKeepAlivePing] even
   /// when the display is off, allowing the WebSocket connection to stay alive.
   ///
+  /// [callsign] - The user's callsign (e.g., "X1ABCD")
   /// [stationName] - Optional friendly name for the station (e.g., "P2P Radio")
   /// [stationUrl] - The station URL/hostname (e.g., "p2p.radio")
-  Future<bool> enableKeepAlive({String? stationName, String? stationUrl}) async {
+  Future<bool> enableKeepAlive({String? callsign, String? stationName, String? stationUrl}) async {
     if (kIsWeb || !Platform.isAndroid) {
       return false; // Only needed on Android
     }
@@ -155,6 +156,7 @@ class BLEForegroundService {
 
     try {
       final result = await _channel.invokeMethod<bool>('enableKeepAlive', {
+        'callsign': callsign,
         'stationName': stationName,
         'stationUrl': stationUrl,
       });
@@ -245,6 +247,20 @@ class BLEForegroundService {
       return !_bleKeepAliveEnabled;
     } catch (e) {
       LogService().log('BLEForegroundService: Error disabling BLE keep-alive: $e');
+      return false;
+    }
+  }
+
+  /// Verify that the native channel is ready and responsive.
+  /// This can be used after app resume to ensure the Flutter-Native communication
+  /// is working correctly after the app was backgrounded.
+  Future<bool> verifyChannelReady() async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+    try {
+      final result = await _channel.invokeMethod<bool>('verifyChannel');
+      return result ?? false;
+    } catch (e) {
+      LogService().log('BLEForegroundService: Channel verification failed: $e');
       return false;
     }
   }

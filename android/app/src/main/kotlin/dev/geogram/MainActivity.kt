@@ -48,9 +48,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "enableKeepAlive" -> {
                     // Enable WebSocket keep-alive in the foreground service
+                    val callsign = call.argument<String>("callsign")
                     val stationName = call.argument<String>("stationName")
                     val stationUrl = call.argument<String>("stationUrl")
-                    BLEForegroundService.enableKeepAlive(this, stationName, stationUrl)
+                    BLEForegroundService.enableKeepAlive(this, callsign, stationName, stationUrl)
                     result.success(true)
                 }
                 "disableKeepAlive" -> {
@@ -66,6 +67,10 @@ class MainActivity : FlutterActivity() {
                 "disableBleKeepAlive" -> {
                     // Disable BLE advertising keep-alive in the foreground service
                     BLEForegroundService.disableBleKeepAlive(this)
+                    result.success(true)
+                }
+                "verifyChannel" -> {
+                    // Simple channel verification - if we get here, the channel is working
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -265,6 +270,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // Clear method channel to prevent stale reference when engine is destroyed
+        BLEForegroundService.clearMethodChannel()
         bluetoothClassicPlugin?.dispose()
         bluetoothClassicPlugin = null
         wifiDirectPlugin?.dispose()

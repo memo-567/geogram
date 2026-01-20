@@ -48,6 +48,7 @@ import 'connection/connection_manager.dart';
 import 'connection/transports/lan_transport.dart';
 import 'connection/transports/ble_transport.dart';
 import 'services/ble_identity_service.dart';
+import 'services/ble_foreground_service.dart';
 import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
@@ -59,7 +60,6 @@ import 'pages/profile_page.dart';
 import 'pages/about_page.dart';
 import 'pages/update_page.dart';
 import 'pages/stations_page.dart';
-import 'pages/location_page.dart';
 // import 'pages/notifications_page.dart'; // TODO: Not yet implemented
 import 'pages/chat_browser_page.dart';
 import 'pages/email_browser_page.dart';
@@ -635,6 +635,15 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       'NOTIFICATION_DEBUG: ${DateTime.now()} didChangeAppLifecycleState: $state',
     );
     if (state == AppLifecycleState.resumed) {
+      // Verify native channel is working (may be stale after Android killed the engine)
+      if (!kIsWeb && Platform.isAndroid) {
+        BLEForegroundService().verifyChannelReady().then((isReady) {
+          if (!isReady) {
+            LogService().log('WARNING: Native channel not ready on resume');
+          }
+        });
+      }
+
       // Verify WebSocket connection is still alive (Android background may have broken it)
       WebSocketService().onAppResumed();
 
@@ -1370,21 +1379,6 @@ class _HomePageState extends State<HomePage> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const ProfilePage(),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.location_on_outlined),
-                  title: Text(_i18n.t('location')),
-                  onTap: () {
-                    Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const LocationPage(),
                       ),
                     );
                   },
@@ -3085,18 +3079,6 @@ class _SettingsPageState extends State<SettingsPage> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const ProfilePage()),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.location_on_outlined),
-          title: Text(_i18n.t('location')),
-          subtitle: Text(_i18n.t('set_location_on_map')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const LocationPage()),
             );
           },
         ),
