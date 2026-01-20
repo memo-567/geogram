@@ -37,6 +37,13 @@ enum TrackerTab {
 /// Filter for proximity tab display
 enum ProximityFilter { all, devices, places }
 
+/// Tabs that are hidden (not yet functional)
+const Set<TrackerTab> _hiddenTabs = {TrackerTab.plans, TrackerTab.proximity};
+
+/// Get the list of visible tabs (excluding hidden ones)
+List<TrackerTab> get _visibleTabValues =>
+    TrackerTab.values.where((t) => !_hiddenTabs.contains(t)).toList();
+
 /// Main tracker browser page with tabbed layout
 class TrackerBrowserPage extends StatefulWidget {
   final String collectionPath;
@@ -67,7 +74,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   StreamSubscription? _changesSub;
 
   /// Tabs sorted by weighted usage score (frequency + recency with 30-day decay)
-  List<TrackerTab> _sortedTabs = TrackerTab.values.toList();
+  List<TrackerTab> _sortedTabs = _visibleTabValues;
   Map<String, List<int>> _tabUsageHistory = {}; // tab name -> list of usage timestamps
 
   /// User-selected trackables to show in each tab
@@ -105,7 +112,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
     super.initState();
     _loadTabUsage();
     _loadProximityTrackingEnabled();
-    _tabController = TabController(length: TrackerTab.values.length, vsync: this);
+    _tabController = TabController(length: _visibleTabValues.length, vsync: this);
     _tabController.addListener(_onTabChanged);
     _loadVisibleTrackables();
     _initializeService();
@@ -205,7 +212,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   void _sortTabs() {
-    _sortedTabs = TrackerTab.values.toList();
+    _sortedTabs = _visibleTabValues;
     _sortedTabs.sort((a, b) {
       final aScore = _calculateTabScore(_tabUsageHistory[a.name]);
       final bScore = _calculateTabScore(_tabUsageHistory[b.name]);
