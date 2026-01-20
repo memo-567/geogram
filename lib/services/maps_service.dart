@@ -24,6 +24,7 @@ import 'station_alert_service.dart';
 import 'station_place_service.dart';
 import 'contact_service.dart';
 import 'profile_service.dart';
+import 'user_location_service.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
 
@@ -793,13 +794,19 @@ class MapsService {
     return items;
   }
 
-  /// Get user's saved location from profile
-  /// Returns (latitude, longitude) or null if not set
+  /// Get user's saved location from profile or UserLocationService
+  /// Returns (latitude, longitude) or null if not available
   (double, double)? getUserLocation() {
     try {
       final profile = ProfileService().getProfile();
       if (profile.latitude != null && profile.longitude != null) {
         return (profile.latitude!, profile.longitude!);
+      }
+
+      // Fallback to UserLocationService (GPS/IP/browser detection)
+      final userLocation = UserLocationService().currentLocation;
+      if (userLocation != null && userLocation.isValid) {
+        return (userLocation.latitude, userLocation.longitude);
       }
     } catch (e) {
       LogService().log('MapsService: Error getting user location: $e');

@@ -8,6 +8,7 @@ import '../models/market_shop.dart';
 import '../models/market_item.dart';
 import '../services/market_service.dart';
 import '../services/profile_service.dart';
+import '../services/user_location_service.dart';
 import '../services/i18n_service.dart';
 import 'shop_settings_page.dart';
 
@@ -715,8 +716,22 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
       final now = DateTime.now().toIso8601String().replaceAll(':', '_');
       final itemId = DateTime.now().millisecondsSinceEpoch.toString();
 
-      // Get location from profile (default values for required fields)
+      // Get location from profile with UserLocationService fallback
       final profile = _profileService.getProfile();
+      double? latitude = profile.latitude;
+      double? longitude = profile.longitude;
+      String locationName = profile.locationName ?? 'Unknown';
+
+      if (latitude == null || longitude == null) {
+        final userLocation = UserLocationService().currentLocation;
+        if (userLocation != null && userLocation.isValid) {
+          latitude = userLocation.latitude;
+          longitude = userLocation.longitude;
+          if (userLocation.locationName != null) {
+            locationName = userLocation.locationName!;
+          }
+        }
+      }
 
       final item = MarketItem(
         itemId: itemId,
@@ -725,9 +740,9 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
         status: status,
         type: type,
         deliveryMethod: type == ItemType.digital ? DeliveryMethod.digital : DeliveryMethod.physical,
-        location: profile.locationName ?? 'Unknown',
-        latitude: profile.latitude ?? 0.0,
-        longitude: profile.longitude ?? 0.0,
+        location: locationName,
+        latitude: latitude ?? 0.0,
+        longitude: longitude ?? 0.0,
         radius: 50, // Default 50km radius
         titles: {'EN': title},
         price: price,

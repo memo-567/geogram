@@ -1561,7 +1561,7 @@ class StationServerService {
     final isStation = CallsignGenerator.isStationCallsign(profile.callsign);
 
     final uptime = _startTime != null
-        ? DateTime.now().difference(_startTime!).inSeconds
+        ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
 
     final status = {
@@ -2051,7 +2051,11 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
           </div>
           <div class="info-item">
             <span class="info-label">Connected</span>
-            <span class="info-value">${_clients.length} devices</span>
+            <span class="info-value" id="connected-count">${_clients.length} ${_clients.length == 1 ? 'device' : 'devices'}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Uptime</span>
+            <span class="info-value" id="uptime-value">${_formatUptimeFromMinutes(_startTime != null ? DateTime.now().difference(_startTime!).inMinutes : 0)}</span>
           </div>
           <div class="info-item">
             <span class="info-label">Status</span>
@@ -2101,13 +2105,48 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     // Dynamic updates every 10 seconds
     setInterval(async function() {
       try {
-        const response = await fetch('/api/clients');
-        const data = await response.json();
-        updateDeviceCards(data.clients || []);
+        // Fetch clients and status in parallel
+        const [clientsResponse, statusResponse] = await Promise.all([
+          fetch('/api/clients'),
+          fetch('/api/status')
+        ]);
+        const clientsData = await clientsResponse.json();
+        const statusData = await statusResponse.json();
+
+        updateDeviceCards(clientsData.clients || []);
+
+        // Update uptime display
+        const uptimeEl = document.getElementById('uptime-value');
+        if (uptimeEl && typeof statusData.uptime === 'number') {
+          uptimeEl.textContent = formatUptime(statusData.uptime);
+        }
+
+        // Update connected devices count
+        const connectedEl = document.getElementById('connected-count');
+        if (connectedEl && typeof statusData.connected_devices === 'number') {
+          const count = statusData.connected_devices;
+          connectedEl.textContent = count + (count === 1 ? ' device' : ' devices');
+        }
       } catch (e) {
-        console.error('Failed to refresh devices:', e);
+        console.error('Failed to refresh:', e);
       }
     }, 10000);
+
+    // Format uptime (minutes) to human readable string
+    function formatUptime(minutes) {
+      if (minutes < 1) return '0 minutes';
+
+      const days = Math.floor(minutes / 1440); // 1440 minutes per day
+      const hours = Math.floor((minutes % 1440) / 60);
+      const mins = minutes % 60;
+
+      const parts = [];
+      if (days > 0) parts.push(days + (days === 1 ? ' day' : ' days'));
+      if (hours > 0) parts.push(hours + (hours === 1 ? ' hour' : ' hours'));
+      if (mins > 0 && days === 0) parts.push(mins + (mins === 1 ? ' minute' : ' minutes'));
+
+      return parts.length === 0 ? '0 minutes' : parts.join(' ');
+    }
 
     function formatTimeAgo(isoString) {
       const then = new Date(isoString);
@@ -2243,6 +2282,38 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
     } else {
       return 'just now';
     }
+  }
+
+  /// Format uptime in seconds to human readable string (e.g., "2d 5h 30m")
+  String _formatUptimeLong(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+
+    final days = seconds ~/ 86400;
+    final hours = (seconds % 86400) ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+
+    final parts = <String>[];
+    if (days > 0) parts.add('${days}d');
+    if (hours > 0) parts.add('${hours}h');
+    if (minutes > 0 && days == 0) parts.add('${minutes}m');
+
+    return parts.isEmpty ? '0m' : parts.join(' ');
+  }
+
+  /// Format uptime from minutes to human readable string (e.g., "2 days 5 hours 30 minutes")
+  String _formatUptimeFromMinutes(int minutes) {
+    if (minutes < 1) return '0 minutes';
+
+    final days = minutes ~/ 1440; // 1440 minutes per day
+    final hours = (minutes % 1440) ~/ 60;
+    final mins = minutes % 60;
+
+    final parts = <String>[];
+    if (days > 0) parts.add('$days ${days == 1 ? 'day' : 'days'}');
+    if (hours > 0) parts.add('$hours ${hours == 1 ? 'hour' : 'hours'}');
+    if (mins > 0 && days == 0) parts.add('$mins ${mins == 1 ? 'minute' : 'minutes'}');
+
+    return parts.isEmpty ? '0 minutes' : parts.join(' ');
   }
 
   Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {
@@ -7021,7 +7092,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   Map<String, dynamic> getStatus() {
     final profile = ProfileService().getProfile();
     final uptime = _startTime != null
-        ? DateTime.now().difference(_startTime!).inSeconds
+        ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
 
     return {

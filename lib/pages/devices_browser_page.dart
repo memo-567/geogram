@@ -13,6 +13,7 @@ import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/user_location_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/callsign_generator.dart';
@@ -1405,7 +1406,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final isSelected = _selectedDevice?.callsign == device.callsign;
     final isChecked = _selectedCallsigns.contains(device.callsign);
     final profile = _profileService.getProfile();
-    final distanceKm = device.calculateDistance(profile.latitude, profile.longitude);
+
+    // Get user location with UserLocationService fallback
+    double? userLat = profile.latitude;
+    double? userLon = profile.longitude;
+    if (userLat == null || userLon == null) {
+      final userLocation = UserLocationService().currentLocation;
+      if (userLocation != null && userLocation.isValid) {
+        userLat = userLocation.latitude;
+        userLon = userLocation.longitude;
+      }
+    }
+
+    final distanceKm = device.calculateDistance(userLat, userLon);
     final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
 

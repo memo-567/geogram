@@ -20,6 +20,7 @@ import '../models/report.dart';
 import '../models/place.dart';
 import '../services/maps_service.dart';
 import '../services/profile_service.dart';
+import '../services/user_location_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -301,8 +302,18 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void _handleProfileLocationUpdate() {
     if (!_awaitingProfileLocation || _hasUserMoved) return;
     final profile = _profileService.getProfile();
-    final lat = profile.latitude;
-    final lon = profile.longitude;
+    double? lat = profile.latitude;
+    double? lon = profile.longitude;
+
+    // Fallback to UserLocationService if profile has no location
+    if (lat == null || lon == null) {
+      final userLocation = UserLocationService().currentLocation;
+      if (userLocation != null && userLocation.isValid) {
+        lat = userLocation.latitude;
+        lon = userLocation.longitude;
+      }
+    }
+
     if (lat == null || lon == null) return;
 
     _updateLocationAndReload(lat, lon, 'location_detected');

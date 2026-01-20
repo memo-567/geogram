@@ -424,12 +424,29 @@ class PureConsole {
       );
     }
 
-    // Sync location if available
-    if (profile.latitude != null && profile.longitude != null) {
+    // Sync location if available (profile or CliLocationService fallback)
+    double? latitude = profile.latitude;
+    double? longitude = profile.longitude;
+    String? locationName = profile.locationName;
+
+    if (latitude == null || longitude == null) {
+      // Try IP-based geolocation via parent station
+      final parentUrl = _station.settings.parentStationUrl;
+      if (parentUrl != null && parentUrl.isNotEmpty) {
+        final geoIpResult = await CliLocationService().detectLocationViaIP(stationUrl: parentUrl);
+        if (geoIpResult != null) {
+          latitude = geoIpResult.latitude;
+          longitude = geoIpResult.longitude;
+          locationName = geoIpResult.locationName;
+        }
+      }
+    }
+
+    if (latitude != null && longitude != null) {
       updatedSettings = updatedSettings.copyWith(
-        latitude: profile.latitude,
-        longitude: profile.longitude,
-        location: profile.locationName,
+        latitude: latitude,
+        longitude: longitude,
+        location: locationName,
       );
     }
 
@@ -458,13 +475,32 @@ class PureConsole {
 
       // Sync profile location to station settings (for /status endpoint)
       final profile = _profileService.activeProfile;
-      if (profile != null && profile.latitude != null && profile.longitude != null) {
-        final updatedSettings = _station.settings.copyWith(
-          latitude: profile.latitude,
-          longitude: profile.longitude,
-          location: profile.locationName,
-        );
-        await _station.updateSettings(updatedSettings);
+      if (profile != null) {
+        double? latitude = profile.latitude;
+        double? longitude = profile.longitude;
+        String? locationName = profile.locationName;
+
+        // Fallback to IP-based geolocation via parent station
+        if (latitude == null || longitude == null) {
+          final parentUrl = _station.settings.parentStationUrl;
+          if (parentUrl != null && parentUrl.isNotEmpty) {
+            final geoIpResult = await CliLocationService().detectLocationViaIP(stationUrl: parentUrl);
+            if (geoIpResult != null) {
+              latitude = geoIpResult.latitude;
+              longitude = geoIpResult.longitude;
+              locationName = geoIpResult.locationName;
+            }
+          }
+        }
+
+        if (latitude != null && longitude != null) {
+          final updatedSettings = _station.settings.copyWith(
+            latitude: latitude,
+            longitude: longitude,
+            location: locationName,
+          );
+          await _station.updateSettings(updatedSettings);
+        }
       }
 
       // Enable quiet mode by default (logs go to buffer, not stderr)

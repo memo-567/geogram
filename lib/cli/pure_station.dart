@@ -2542,6 +2542,23 @@ class PureStationServer {
               }
             }
 
+            // DEDUP: Close any existing zombie connections with same callsign+npub
+            // This handles cases where the server never received a proper disconnect
+            if (callsign != null && npub != null) {
+              final callsignUpper = callsign.toUpperCase();
+              final zombies = _clients.values.where((c) =>
+                c.id != client.id &&  // Not the current connection
+                c.callsign != null &&
+                c.callsign!.toUpperCase() == callsignUpper &&
+                c.npub == npub
+              ).toList();
+
+              for (final zombie in zombies) {
+                _log('INFO', 'Closing zombie connection for $callsign (id: ${zombie.id}, replacing with ${client.id})');
+                _removeClient(zombie.id, reason: 'replaced_by_new_connection');
+              }
+            }
+
             client.callsign = callsign;
             client.nickname = nickname;
             client.color = color;
@@ -5738,7 +5755,7 @@ class PureStationServer {
 
   Future<void> _handleStatus(HttpRequest request) async {
     final uptime = _startTime != null
-        ? DateTime.now().difference(_startTime!).inSeconds
+        ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
 
     final status = {
@@ -7540,11 +7557,11 @@ class PureStationServer {
   Future<void> _handleRoot(HttpRequest request) async {
     final stationName = _settings.name ?? 'geogram Station';
 
-    // Calculate uptime
+    // Calculate uptime in minutes
     final uptime = _startTime != null
-        ? DateTime.now().difference(_startTime!).inSeconds
+        ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
-    final uptimeStr = _formatUptimeLong(uptime);
+    final uptimeStr = _formatUptimeFromMinutes(uptime);
 
     // Generate menu items for station navigation
     final homeMenuItems = WebNavigation.generateStationMenuItems(
@@ -8189,11 +8206,11 @@ ${WebNavigation.getHeaderNavCss()}
             </div>
             <div class="info-item">
               <span class="info-label">Connected</span>
-              <span class="info-value">${_clients.length} ${_clients.length == 1 ? 'device' : 'devices'}</span>
+              <span class="info-value" id="connected-count">${_clients.length} ${_clients.length == 1 ? 'device' : 'devices'}</span>
             </div>
             <div class="info-item">
               <span class="info-label">Uptime</span>
-              <span class="info-value">$uptimeStr</span>
+              <span class="info-value" id="uptime-value">$uptimeStr</span>
             </div>
             <div class="info-item">
               <span class="info-label">Status</span>
@@ -8382,6 +8399,22 @@ ${WebNavigation.getHeaderNavCss()}
     let mainMarkers = null;
     let fullscreenMarkers = null;
 
+    // Format uptime (minutes) to human readable string like the server does
+    function formatUptime(minutes) {
+      if (minutes < 1) return '0 minutes';
+
+      const days = Math.floor(minutes / 1440); // 1440 minutes per day
+      const hours = Math.floor((minutes % 1440) / 60);
+      const mins = minutes % 60;
+
+      const parts = [];
+      if (days > 0) parts.push(days + (days === 1 ? ' day' : ' days'));
+      if (hours > 0) parts.push(hours + (hours === 1 ? ' hour' : ' hours'));
+      if (mins > 0 && days === 0) parts.push(mins + (mins === 1 ? ' minute' : ' minutes'));
+
+      return parts.length === 0 ? '0 minutes' : parts.join(' ');
+    }
+
     // Format time ago like the server does
     function formatTimeAgo(isoString) {
       const then = new Date(isoString);
@@ -8502,12 +8535,30 @@ ${WebNavigation.getHeaderNavCss()}
     // Dynamic updates every 10 seconds
     setInterval(async function() {
       try {
-        const response = await fetch('/api/clients');
-        const data = await response.json();
-        const clients = data.clients || [];
+        // Fetch clients and status in parallel
+        const [clientsResponse, statusResponse] = await Promise.all([
+          fetch('/api/clients'),
+          fetch('/api/status')
+        ]);
+        const clientsData = await clientsResponse.json();
+        const statusData = await statusResponse.json();
+        const clients = clientsData.clients || [];
 
         // Update device cards
         updateDeviceCards(clients);
+
+        // Update uptime display
+        const uptimeEl = document.getElementById('uptime-value');
+        if (uptimeEl && typeof statusData.uptime === 'number') {
+          uptimeEl.textContent = formatUptime(statusData.uptime);
+        }
+
+        // Update connected devices count
+        const connectedEl = document.getElementById('connected-count');
+        if (connectedEl && typeof statusData.connected_devices === 'number') {
+          const count = statusData.connected_devices;
+          connectedEl.textContent = count + (count === 1 ? ' device' : ' devices');
+        }
 
         // Update map markers
         mainMarkers = updateMapMarkers(clients, mainMap, mainMarkers);
@@ -8519,7 +8570,7 @@ ${WebNavigation.getHeaderNavCss()}
           mainMarkers = updateMapMarkers(clients, mainMap, null);
         }
       } catch (e) {
-        console.error('Failed to refresh devices:', e);
+        console.error('Failed to refresh:', e);
       }
     }, 10000);
   </script>
@@ -8548,6 +8599,22 @@ ${WebNavigation.getHeaderNavCss()}
     if (minutes > 0 && days == 0) parts.add('${minutes}m');
 
     return parts.isEmpty ? '0m' : parts.join(' ');
+  }
+
+  /// Format uptime from minutes to human readable string (e.g., "2 days 5 hours 30 minutes")
+  String _formatUptimeFromMinutes(int minutes) {
+    if (minutes < 1) return '0 minutes';
+
+    final days = minutes ~/ 1440; // 1440 minutes per day
+    final hours = (minutes % 1440) ~/ 60;
+    final mins = minutes % 60;
+
+    final parts = <String>[];
+    if (days > 0) parts.add('$days ${days == 1 ? 'day' : 'days'}');
+    if (hours > 0) parts.add('$hours ${hours == 1 ? 'hour' : 'hours'}');
+    if (mins > 0 && days == 0) parts.add('$mins ${mins == 1 ? 'minute' : 'minutes'}');
+
+    return parts.isEmpty ? '0 minutes' : parts.join(' ');
   }
 
   /// Handle /chat page - shows station's chat rooms
@@ -10072,7 +10139,7 @@ ${WebNavigation.getHeaderNavCss()}
 
   Map<String, dynamic> getStatus() {
     final uptime = _startTime != null
-        ? DateTime.now().difference(_startTime!).inSeconds
+        ? DateTime.now().difference(_startTime!).inMinutes
         : 0;
 
     return {

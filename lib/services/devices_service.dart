@@ -22,6 +22,7 @@ import 'ble_discovery_service.dart';
 import 'ble_foreground_service.dart';
 import 'ble_message_service.dart';
 import 'profile_service.dart';
+import 'user_location_service.dart';
 import 'signing_service.dart';
 import '../util/chat_api.dart';
 import 'debug_controller.dart';
@@ -639,10 +640,21 @@ class DevicesService {
       if (profile.nickname.isNotEmpty) ['nickname', profile.nickname],
     ];
 
-    // Add location if available
-    if (profile.latitude != null && profile.longitude != null) {
-      tags.add(['latitude', profile.latitude.toString()]);
-      tags.add(['longitude', profile.longitude.toString()]);
+    // Add location if available (profile or UserLocationService fallback)
+    double? latitude = profile.latitude;
+    double? longitude = profile.longitude;
+
+    if (latitude == null || longitude == null) {
+      final userLocation = UserLocationService().currentLocation;
+      if (userLocation != null && userLocation.isValid) {
+        latitude = userLocation.latitude;
+        longitude = userLocation.longitude;
+      }
+    }
+
+    if (latitude != null && longitude != null) {
+      tags.add(['latitude', latitude.toString()]);
+      tags.add(['longitude', longitude.toString()]);
     }
 
     // Create event
