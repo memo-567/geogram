@@ -780,9 +780,24 @@ class PureStationServer {
   final Map<String, DateTime> _banExpiry = {};
   Set<String> _permanentBlacklist = {};
   Set<String> _whitelist = {};
-  static const int _maxConnectionsPerIp = 10;
-  static const int _maxRequestsPerMinute = 100;
+  static const int _maxConnectionsPerIp = 100;
+  static const int _maxRequestsPerMinute = 1000;
   static const Duration _baseBanDuration = Duration(minutes: 5);
+
+  // Server health watchdog
+  Timer? _healthWatchdogTimer;
+  static const int _healthCheckIntervalSeconds = 60;  // Check every minute
+  static const int _healthCheckTimeoutSeconds = 10;   // Timeout for self-request
+  int _consecutiveFailures = 0;
+  static const int _maxConsecutiveFailures = 3;       // Restart after 3 failures
+
+  // Attack detection metrics
+  int _requestsThisMinute = 0;
+  int _errorsThisMinute = 0;
+  DateTime _lastMinuteReset = DateTime.now();
+  static const int _attackRequestThreshold = 10000;   // Requests/min to consider attack
+  static const int _attackErrorThreshold = 1000;      // 429/5xx errors/min to trigger
+  static const int _maxConnectionsThreshold = 500;    // Connection count trigger
 
   /// Get the shared alert API handlers (lazy initialization)
   /// Must only be called after init() has been called (when _dataDir is set)
@@ -1568,6 +1583,9 @@ class PureStationServer {
       // Start heartbeat timer for connection stability
       _startHeartbeat();
 
+      // Start health watchdog for auto-recovery
+      _startHealthWatchdog();
+
       // Download console VM files in background
       downloadAllConsoleVmFiles();
 
@@ -1735,6 +1753,9 @@ class PureStationServer {
     // Stop heartbeat timer
     _stopHeartbeat();
 
+    // Stop health watchdog
+    _stopHealthWatchdog();
+
     // Close all client connections
     for (final client in _clients.values) {
       try {
@@ -1877,6 +1898,152 @@ class PureStationServer {
     // Cleanup expired bans and stale rate limit entries
     _cleanupExpiredBans();
   }
+
+  // ============ Server Health Watchdog ============
+
+  /// Perform self-health check by making request to own /api/status endpoint
+  Future<bool> _performHealthCheck() async {
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = Duration(seconds: _healthCheckTimeoutSeconds);
+
+      final request = await client.getUrl(
+        Uri.parse('http://127.0.0.1:${_settings.httpPort}/api/status'),
+      );
+      final response = await request.close()
+          .timeout(Duration(seconds: _healthCheckTimeoutSeconds));
+
+      client.close();
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('WARN', 'Health check failed: $e');
+      return false;
+    }
+  }
+
+  /// Start the health watchdog timer
+  void _startHealthWatchdog() {
+    _healthWatchdogTimer?.cancel();
+    _healthWatchdogTimer = Timer.periodic(
+      Duration(seconds: _healthCheckIntervalSeconds),
+      (_) => _runHealthWatchdog(),
+    );
+    _log('INFO', 'Health watchdog started (interval: ${_healthCheckIntervalSeconds}s)');
+  }
+
+  /// Stop the health watchdog timer
+  void _stopHealthWatchdog() {
+    _healthWatchdogTimer?.cancel();
+    _healthWatchdogTimer = null;
+  }
+
+  /// Main watchdog check: verify server health and detect attacks
+  Future<void> _runHealthWatchdog() async {
+    if (!_running) return;
+
+    // Reset counters every minute
+    final now = DateTime.now();
+    if (now.difference(_lastMinuteReset).inSeconds >= 60) {
+      _requestsThisMinute = 0;
+      _errorsThisMinute = 0;
+      _lastMinuteReset = now;
+    }
+
+    // Check 1: Self-health check (is server responsive?)
+    final healthy = await _performHealthCheck();
+    if (!healthy) {
+      _consecutiveFailures++;
+      _log('WARN', 'Health check failed ($_consecutiveFailures/$_maxConsecutiveFailures)');
+
+      if (_consecutiveFailures >= _maxConsecutiveFailures) {
+        _log('ERROR', 'Server unresponsive - initiating auto-recovery');
+        _logCrash('AUTO-RECOVERY: Server unresponsive after $_consecutiveFailures failed health checks');
+        _consecutiveFailures = 0;
+        await _autoRecover();
+        return;
+      }
+    } else {
+      _consecutiveFailures = 0;
+    }
+
+    // Check 2: Attack detection (DDoS indicators)
+    final underAttack = _detectAttack();
+    if (underAttack) {
+      _log('ERROR', 'Attack detected - initiating defensive restart');
+      _logCrash('AUTO-RECOVERY: Attack detected (requests: $_requestsThisMinute, errors: $_errorsThisMinute, connections: ${_clients.length})');
+      await _autoRecover();
+    }
+  }
+
+  /// Detect potential DDoS or abuse patterns
+  bool _detectAttack() {
+    // High request rate
+    if (_requestsThisMinute > _attackRequestThreshold) {
+      _log('WARN', 'High request rate detected: $_requestsThisMinute/min');
+      return true;
+    }
+
+    // High error rate (lots of rate-limited or failed requests)
+    if (_errorsThisMinute > _attackErrorThreshold) {
+      _log('WARN', 'High error rate detected: $_errorsThisMinute/min');
+      return true;
+    }
+
+    // Connection exhaustion
+    if (_clients.length > _maxConnectionsThreshold) {
+      _log('WARN', 'Connection limit exceeded: ${_clients.length}');
+      return true;
+    }
+
+    return false;
+  }
+
+  /// Perform auto-recovery: restart HTTP/HTTPS servers
+  Future<void> _autoRecover() async {
+    try {
+      // Stop accepting new connections
+      _running = false;
+
+      // Close existing servers forcefully
+      await _httpServer?.close(force: true);
+      await _httpsServer?.close(force: true);
+      _httpServer = null;
+      _httpsServer = null;
+
+      // Brief pause to let connections drain
+      await Future.delayed(const Duration(seconds: 1));
+
+      // Restart HTTP server
+      _httpServer = await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        _settings.httpPort,
+        shared: true,
+      );
+      _httpServer!.listen(_handleRequest, onError: (error) {
+        _log('ERROR', 'HTTP server error: $error');
+      });
+      _log('INFO', 'HTTP server restarted on port ${_settings.httpPort}');
+
+      // Restart HTTPS server if enabled
+      if (_settings.enableSsl) {
+        await _startHttpsServer();
+      }
+
+      // Reset attack metrics
+      _requestsThisMinute = 0;
+      _errorsThisMinute = 0;
+      _lastMinuteReset = DateTime.now();
+
+      _running = true;
+      _log('INFO', 'Auto-recovery complete - server restarted');
+    } catch (e) {
+      _logCrash('AUTO-RECOVERY FAILED: $e');
+      // If recovery fails, exit to let systemd restart the whole process
+      exit(1);
+    }
+  }
+
+  // ============ End Server Health Watchdog ============
 
   /// Safely send data to a WebSocket client, handling errors gracefully
   bool _safeSocketSend(PureConnectedClient client, String data) {
@@ -2174,10 +2341,12 @@ class PureStationServer {
     final ip = request.connectionInfo?.remoteAddress.address ?? 'unknown';
     final stopwatch = Stopwatch()..start();
     _stats.totalApiRequests++;
+    _requestsThisMinute++;  // Track for health watchdog
 
     try {
       // Check if IP is banned
       if (_isIpBanned(ip)) {
+        _errorsThisMinute++;  // Track for attack detection
         request.response.statusCode = 429;
         request.response.write('Too Many Requests');
         await request.response.close();
@@ -2189,6 +2358,7 @@ class PureStationServer {
 
       // Check rate limits
       if (!_checkRateLimit(ip)) {
+        _errorsThisMinute++;  // Track for attack detection
         _banIp(ip);
         request.response.statusCode = 429;
         request.response.write('Rate limit exceeded');
@@ -2353,6 +2523,7 @@ class PureStationServer {
         request.response.write('Not Found');
       }
     } catch (e) {
+      _errorsThisMinute++;  // Track for attack detection
       _log('ERROR', 'Request error: $e');
       request.response.statusCode = 500;
       request.response.write('Internal Server Error');
@@ -3736,8 +3907,12 @@ class PureStationServer {
       final alerts = await _loadAllAlerts();
       final html = _buildAlertsHtml(alerts);
 
-      request.response.headers.contentType = ContentType.html;
-      request.response.write(html);
+      await _sendCompressedResponse(
+        request,
+        html,
+        ContentType.html,
+        cacheControl: 'public, max-age=60',
+      );
     } catch (e) {
       _log('ERROR', 'Error loading alerts: $e');
       request.response.statusCode = 500;
@@ -3838,8 +4013,12 @@ class PureStationServer {
         'alerts': alerts,
       };
 
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode(response));
+      await _sendCompressedResponse(
+        request,
+        jsonEncode(response),
+        ContentType.json,
+        cacheControl: 'no-cache',
+      );
     } catch (e) {
       _log('ERROR', 'Error in alerts API: $e');
       request.response.statusCode = 500;
@@ -5783,8 +5962,12 @@ class PureStationServer {
       'https_running': _httpsServer != null,
     };
 
-    request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode(status));
+    await _sendCompressedResponse(
+      request,
+      jsonEncode(status),
+      ContentType.json,
+      cacheControl: 'no-cache',
+    );
   }
 
   /// Handle /api/geoip endpoint - returns client's IP geolocation using local MMDB database
@@ -5862,18 +6045,21 @@ class PureStationServer {
       return json;
     }).toList();
 
-    request.response.headers.contentType = ContentType.json;
-
     // Return different format for /api/clients vs /api/devices
-    if (path == '/api/clients') {
-      request.response.write(jsonEncode({
-        'station': _settings.callsign,
-        'count': clients.length,
-        'clients': clients,
-      }));
-    } else {
-      request.response.write(jsonEncode({'devices': clients}));
-    }
+    final jsonData = path == '/api/clients'
+        ? jsonEncode({
+            'station': _settings.callsign,
+            'count': clients.length,
+            'clients': clients,
+          })
+        : jsonEncode({'devices': clients});
+
+    await _sendCompressedResponse(
+      request,
+      jsonData,
+      ContentType.json,
+      cacheControl: 'no-cache',
+    );
   }
 
   /// GET /station/status - List connected devices and stations
@@ -7632,8 +7818,7 @@ class PureStationServer {
       '{"callsign":"${d['callsign']}","nickname":"${_escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
     ).join(',');
 
-    request.response.headers.contentType = ContentType.html;
-    request.response.write('''
+    final html = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8576,7 +8761,14 @@ ${WebNavigation.getHeaderNavCss()}
   </script>
 </body>
 </html>
-''');
+''';
+
+    await _sendCompressedResponse(
+      request,
+      html,
+      ContentType.html,
+      cacheControl: 'public, max-age=30',
+    );
   }
 
   String _formatUptimeShort(int seconds) {
@@ -8815,8 +9007,39 @@ ${WebNavigation.getHeaderNavCss()}
 ''';
     }
 
-    request.response.headers.contentType = ContentType.html;
-    request.response.write(html);
+    await _sendCompressedResponse(
+      request,
+      html,
+      ContentType.html,
+      cacheControl: 'public, max-age=60',
+    );
+  }
+
+  /// Send a compressed response if client accepts gzip
+  Future<void> _sendCompressedResponse(
+    HttpRequest request,
+    String content,
+    ContentType contentType, {
+    String? cacheControl,
+  }) async {
+    final acceptEncoding = request.headers.value('accept-encoding') ?? '';
+    final supportsGzip = acceptEncoding.contains('gzip');
+
+    request.response.headers.contentType = contentType;
+    if (cacheControl != null) {
+      request.response.headers.set('Cache-Control', cacheControl);
+    }
+
+    if (supportsGzip && content.length > 1000) {
+      // Compress responses larger than 1KB
+      final bytes = utf8.encode(content);
+      final compressed = gzip.encode(bytes);
+      request.response.headers.set('Content-Encoding', 'gzip');
+      request.response.headers.set('Content-Length', compressed.length.toString());
+      request.response.add(compressed);
+    } else {
+      request.response.write(content);
+    }
   }
 
   Future<void> _handleChatRooms(HttpRequest request, String targetCallsign) async {
