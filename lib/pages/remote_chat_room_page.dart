@@ -15,7 +15,7 @@ import '../services/signing_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/storage_config.dart';
 import '../services/chat_file_download_manager.dart';
-import '../util/chat_api.dart';
+import '../api/endpoints/chat_api.dart' show ChatApi;
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -186,7 +186,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'GET',
-        path: '${ChatApi.chatMessagesPath(widget.room.id)}?limit=100',
+        path: '${ChatApi.messagesPath(widget.room.id)}?limit=100',
         headers: headers.isNotEmpty ? headers : null,
       );
 
@@ -328,7 +328,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: ChatApi.chatMessagesPath(widget.room.id),
+        path: ChatApi.messagesPath(widget.room.id),
         body: jsonEncode(payload),
         headers: {'Content-Type': 'application/json'},
       );
@@ -589,7 +589,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'DELETE',
-        path: '${ChatApi.chatMessagesPath(widget.room.id)}/${Uri.encodeComponent(message.timestamp)}',
+        path: '${ChatApi.messagesPath(widget.room.id)}/${Uri.encodeComponent(message.timestamp)}',
         headers: {
           'Authorization': 'Nostr $authEvent',
         },
@@ -647,7 +647,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: ChatApi.chatReactionsPath(widget.room.id, Uri.encodeComponent(message.timestamp)),
+        path: ChatApi.reactionsPath(widget.room.id, Uri.encodeComponent(message.timestamp)),
         headers: {
           'Authorization': 'Nostr $authEvent',
         },
@@ -774,7 +774,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
       final response = await _devicesService.makeDeviceApiRequest(
         callsign: widget.device.callsign,
         method: 'POST',
-        path: ChatApi.chatMessagesPath(widget.room.id),
+        path: ChatApi.messagesPath(widget.room.id),
         body: jsonEncode(payload),
         headers: {'Content-Type': 'application/json'},
       );

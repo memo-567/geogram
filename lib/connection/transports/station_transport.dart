@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
 import '../../services/websocket_service.dart';
-import '../../util/chat_api.dart';
+import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
@@ -287,7 +287,7 @@ class StationTransport extends Transport with TransportMixin {
     final targetCallsign = message.targetCallsign.toUpperCase();
 
     // Use station proxy for sync
-    final uri = Uri.parse('$httpUrl${ChatApi.remoteDmSyncPath(targetCallsign, message.targetCallsign)}');
+    final uri = Uri.parse('$httpUrl${DmApi.remoteSyncPath(targetCallsign, message.targetCallsign)}');
 
     LogService().log('StationTransport: Sync from $targetCallsign via station');
 

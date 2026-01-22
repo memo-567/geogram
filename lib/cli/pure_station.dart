@@ -28,7 +28,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
-import '../util/chat_api.dart';
+import '../api/endpoints/chat_api.dart';
 import '../util/chat_scripts.dart';
 import '../util/web_navigation.dart';
 import '../util/station_html_templates.dart';
@@ -2415,11 +2415,11 @@ class PureStationServer {
         await _handleDeviceProxy(request);
       } else if (path == '/search') {
         await _handleSearch(request);
-      } else if (ChatApi.isChatRoomsPath(path)) {
+      } else if (ChatApi.isRoomsPath(path)) {
         // /{callsign}/api/chat/rooms OR /api/chat/rooms
         final callsign = ChatApi.extractCallsign(path) ?? _settings.callsign;
         await _handleChatRooms(request, callsign);
-      } else if (ChatApi.isChatMessagesPath(path)) {
+      } else if (ChatApi.isMessagesPath(path)) {
         // Accepts both formats:
         // - /api/chat/{roomId}/messages (unified)
         // - /api/chat/rooms/{roomId}/messages (legacy)
@@ -7045,19 +7045,19 @@ class PureStationServer {
   /// Check if path is a chat files list request
   /// Accepts both: /api/chat/{roomId}/files and /api/chat/rooms/{roomId}/files
   bool _isChatFilesListPath(String path) {
-    return ChatApi.isChatFilesListPath(path);
+    return ChatApi.isFilesListPath(path);
   }
 
   /// Check if path is a chat file download request
   /// Accepts both: /api/chat/{roomId}/files/{filename} and /api/chat/rooms/{roomId}/files/{filename}
   bool _isChatFileDownloadPath(String path) {
-    return ChatApi.isChatFileDownloadPath(path);
+    return ChatApi.isFileDownloadPath(path);
   }
 
   /// Check if path is a chat reactions request
   /// Accepts both: /api/chat/{roomId}/messages/{ts}/reactions and /api/chat/rooms/{roomId}/messages/{ts}/reactions
   bool _isChatReactionPath(String path) {
-    return ChatApi.isChatReactionsPath(path);
+    return ChatApi.isReactionsPath(path);
   }
 
   /// Check if path is a chat file content request
@@ -9085,7 +9085,7 @@ ${WebNavigation.getHeaderNavCss()}
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatMessagesPath(roomId));
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.messagesPath(roomId));
       return;
     }
 
@@ -9465,7 +9465,7 @@ ${WebNavigation.getHeaderNavCss()}
   /// - /api/chat/{roomId}/... (unified)
   /// - /api/chat/rooms/{roomId}/... (legacy)
   String? _extractRoomId(String path) {
-    return ChatApi.extractRoomIdFromPath(path);
+    return ChatApi.extractRoomId(path);
   }
 
   /// Handle GET /api/chat/{roomId}/files - list chat files for caching
@@ -9473,7 +9473,7 @@ ${WebNavigation.getHeaderNavCss()}
   /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files
   Future<void> _handleChatFilesList(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final roomId = ChatApi.extractRoomIdFromPath(path);
+    final roomId = ChatApi.extractRoomId(path);
 
     if (roomId == null) {
       request.response.statusCode = 400;
@@ -9484,7 +9484,7 @@ ${WebNavigation.getHeaderNavCss()}
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFilesPath(roomId));
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
       return;
     }
 
@@ -9547,7 +9547,7 @@ ${WebNavigation.getHeaderNavCss()}
   /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files
   Future<void> _handleChatFileUpload(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final roomId = ChatApi.extractRoomIdFromPath(path);
+    final roomId = ChatApi.extractRoomId(path);
 
     if (roomId == null) {
       request.response.statusCode = 400;
@@ -9558,7 +9558,7 @@ ${WebNavigation.getHeaderNavCss()}
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFilesPath(roomId));
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.filesPath(roomId));
       return;
     }
 
@@ -9653,7 +9653,7 @@ ${WebNavigation.getHeaderNavCss()}
   /// Also supports callsign prefix: /{callsign}/api/chat/{roomId}/files/{filename}
   Future<void> _handleChatFileDownload(HttpRequest request, String targetCallsign) async {
     final path = request.uri.path;
-    final roomId = ChatApi.extractRoomIdFromPath(path);
+    final roomId = ChatApi.extractRoomId(path);
     final filename = ChatApi.extractFilename(path);
 
     if (roomId == null || filename == null) {
@@ -9673,7 +9673,7 @@ ${WebNavigation.getHeaderNavCss()}
 
     // If targeting a remote device, proxy the request
     if (targetCallsign.toUpperCase() != _settings.callsign.toUpperCase()) {
-      await _proxyRequestToDevice(request, targetCallsign, ChatApi.chatFileDownloadPath(roomId, filename));
+      await _proxyRequestToDevice(request, targetCallsign, ChatApi.fileDownloadPath(roomId, filename));
       return;
     }
 

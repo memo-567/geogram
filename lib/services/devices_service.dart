@@ -24,7 +24,7 @@ import 'ble_message_service.dart';
 import 'profile_service.dart';
 import 'user_location_service.dart';
 import 'signing_service.dart';
-import '../util/chat_api.dart';
+import '../api/endpoints/chat_api.dart';
 import 'debug_controller.dart';
 import 'config_service.dart';
 import 'app_args.dart';
@@ -2378,7 +2378,7 @@ class DevicesService {
         final chatResponse = await makeDeviceApiRequest(
           callsign: device.callsign,
           method: 'GET',
-          path: ChatApi.chatRoomsPath(),
+          path: ChatApi.roomsPath(),
         );
 
         if (chatResponse != null && chatResponse.statusCode == 200) {
@@ -2737,7 +2737,7 @@ class DevicesService {
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'POST',
-        path: ChatApi.chatFilesPath(roomId),
+        path: ChatApi.filesPath(roomId),
         headers: {
           'Content-Type': 'application/octet-stream',
           'X-Filename': filename,
@@ -2777,7 +2777,7 @@ class DevicesService {
       final response = await makeDeviceApiRequest(
         callsign: callsign,
         method: 'GET',
-        path: ChatApi.chatFileDownloadPath(
+        path: ChatApi.fileDownloadPath(
           roomId,
           Uri.encodeComponent(filename),
         ),

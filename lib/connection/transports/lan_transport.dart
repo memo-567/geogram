@@ -7,7 +7,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
-import '../../util/chat_api.dart';
+import '../../api/endpoints/chat_api.dart';
+import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
@@ -210,10 +211,10 @@ class LanTransport extends Transport with TransportMixin {
     String path;
     if (message.type == TransportMessageType.directMessage) {
       // POST to /api/dm/{callsign}/messages
-      path = ChatApi.dmMessagesPath(message.targetCallsign);
+      path = DmApi.messagesPath(message.targetCallsign);
     } else {
       // Chat messages use the room path
-      path = ChatApi.chatMessagesPath(message.path ?? 'general');
+      path = ChatApi.messagesPath(message.path ?? 'general');
     }
 
     // For LAN transport, send directly to device - no callsign prefix needed
