@@ -107,6 +107,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     'fountain',
     'fruit-tree',
     'gallery',
+    'geocaching',
     'grocery',
     'hospital',
     'hotel',

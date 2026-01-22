@@ -108,12 +108,12 @@ if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
     "$FLUTTER_BIN" pub get
 fi
 
-# Build the APK once
+# Build the APK once (debug build to enable run-as for android-sync.sh)
 echo ""
 echo "Building APK..."
-"$FLUTTER_BIN" build apk --release --no-pub
+"$FLUTTER_BIN" build apk --debug --no-pub
 
-APK_PATH="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-release.apk"
+APK_PATH="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-debug.apk"
 
 if [ ! -f "$APK_PATH" ]; then
     echo "APK not found at $APK_PATH"
@@ -134,6 +134,15 @@ for DEVICE_ID in "${DEVICE_IDS[@]}"; do
         echo "Failed to install on $DEVICE_ID"
         FAILED_DEVICES+=("$DEVICE_ID")
     fi
+done
+
+echo ""
+echo "Launching app on all devices..."
+
+# Launch app on each device
+for DEVICE_ID in "${DEVICE_IDS[@]}"; do
+    echo "Launching on $DEVICE_ID..."
+    "$ADB" -s "$DEVICE_ID" shell am start -n dev.geogram/.MainActivity
 done
 
 echo ""

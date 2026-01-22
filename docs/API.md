@@ -405,7 +405,7 @@ Returns detailed station status and configuration.
 | `platform` | string | Operating system: linux, macos, windows, android, ios |
 | `description` | string | Station description |
 | `connected_devices` | int | Number of connected clients (stations only) |
-| `uptime` | int | Uptime in seconds (stations only) |
+| `uptime` | int | Uptime in minutes (stations only) |
 | `station_mode` | bool | Whether running as station |
 | `location` | object | Location with privacy precision |
 | `location.latitude` | float | Latitude (rounded to privacy precision) |

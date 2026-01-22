@@ -479,9 +479,11 @@ class _WelcomePageState extends State<WelcomePage> {
                               ],
                             ),
                             const SizedBox(height: 16),
-                            // Buttons row: Generate new + Continue
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                            // Buttons: Generate new + Continue
+                            Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: 12,
+                              runSpacing: 8,
                               children: [
                                 OutlinedButton.icon(
                                   onPressed: _isGenerating || _isFinalizing ? null : _regeneratePreview,
@@ -497,7 +499,6 @@ class _WelcomePageState extends State<WelcomePage> {
                                       : const Icon(Icons.refresh, size: 18),
                                   label: Text(_i18n.t('generate_new')),
                                 ),
-                                const SizedBox(width: 12),
                                 FilledButton.icon(
                                   onPressed: _isFinalizing || _vanityRunning ? null : _finalizeProfile,
                                   icon: _isFinalizing

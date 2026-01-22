@@ -791,16 +791,15 @@ class ConsoleHandler {
     return normalized;
   }
 
-  String _formatUptime(int seconds) {
-    if (seconds < 60) return '${seconds}s';
-    if (seconds < 3600) return '${seconds ~/ 60}m ${seconds % 60}s';
-    if (seconds < 86400) {
-      final hours = seconds ~/ 3600;
-      final minutes = (seconds % 3600) ~/ 60;
-      return '${hours}h ${minutes}m';
+  String _formatUptime(int minutes) {
+    if (minutes < 60) return '${minutes}m';
+    if (minutes < 1440) {
+      final hours = minutes ~/ 60;
+      final mins = minutes % 60;
+      return '${hours}h ${mins}m';
     }
-    final days = seconds ~/ 86400;
-    final hours = (seconds % 86400) ~/ 3600;
+    final days = minutes ~/ 1440;
+    final hours = (minutes % 1440) ~/ 60;
     return '${days}d ${hours}h';
   }
 

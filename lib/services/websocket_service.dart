@@ -1592,9 +1592,10 @@ class WebSocketService {
       _checkConnection();
     };
 
-    // Extract station info for the notification
+    // Extract station info and callsign for the notification
     String? stationName;
     String? stationHost;
+    String? callsign;
     if (_stationUrl != null) {
       try {
         final uri = Uri.parse(_stationUrl!);
@@ -1611,8 +1612,19 @@ class WebSocketService {
       }
     }
 
-    // Enable keep-alive in the foreground service with station info
+    // Get the user's callsign from the current profile
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.callsign.isNotEmpty) {
+        callsign = profile.callsign;
+      }
+    } catch (_) {
+      // Ignore profile errors
+    }
+
+    // Enable keep-alive in the foreground service with station info and callsign
     foregroundService.enableKeepAlive(
+      callsign: callsign,
       stationName: stationName,
       stationUrl: stationHost,
     );

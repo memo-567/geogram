@@ -56,6 +56,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [DirectMessageService Message Cache](#directmessageservice-message-cache) - DM message caching for performance
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
+- [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
@@ -3735,3 +3736,151 @@ class ChatUpload {
 | ChatFileDownloadManager | services/ | Similar pattern for downloads |
 | MessageBubbleWidget | widgets/ | Shows upload progress UI |
 | DMChatPage | pages/ | Integrates upload tracking |
+
+---
+
+## GeogramApi
+
+**Location**: `lib/api/api.dart`
+
+Unified, transport-agnostic API facade for device-to-device communication. All operations require a target callsign and are routed through `ConnectionManager` to the best available transport (LAN, BLE, Station relay).
+
+### Basic Usage
+
+```dart
+final api = GeogramApi();
+
+// Get device status
+final status = await api.status.get('X3STATION');
+if (status.success) {
+  print('Device: ${status.data!.callsign}');
+}
+
+// List alerts with filtering
+final alerts = await api.alerts.list('X3STATION',
+  lat: 40.7128,
+  lon: -74.0060,
+  radius: 10, // km
+);
+
+// Send feedback
+await api.feedback.pointAlert('X3STATION', alertId, signedEvent);
+```
+
+### Available Endpoint Modules
+
+| Module | File | Purpose |
+|--------|------|---------|
+| `api.status` | endpoints/status_api.dart | Device status, GeoIP |
+| `api.chat` | endpoints/chat_api.dart | Chat rooms, messages, files |
+| `api.dm` | endpoints/dm_api.dart | Direct messages, sync |
+| `api.alerts` | endpoints/alerts_api.dart | Alerts listing, details |
+| `api.places` | endpoints/places_api.dart | Places listing, details |
+| `api.events` | endpoints/events_api.dart | Events, media uploads |
+| `api.blog` | endpoints/blog_api.dart | Blog posts, comments |
+| `api.videos` | endpoints/videos_api.dart | Videos, categories |
+| `api.feedback` | endpoints/feedback_api.dart | Points, likes, comments |
+| `api.backup` | endpoints/backup_api.dart | Backup providers, snapshots |
+| `api.updates` | endpoints/updates_api.dart | Version updates |
+
+### Response Handling
+
+All API calls return `ApiResponse<T>` with success/error handling:
+
+```dart
+final response = await api.alerts.list('X3STATION');
+
+if (response.success) {
+  final alerts = response.data!;
+  print('Found ${alerts.length} alerts');
+} else {
+  print('Error: ${response.error?.message}');
+}
+
+// Or use helper methods
+final alerts = response.dataOr([]);  // Default if null
+final alert = response.dataOrThrow;  // Throws if failed
+```
+
+### List Responses with Pagination
+
+```dart
+final response = await api.blog.list('X3STATION', limit: 10, offset: 0);
+
+print('Got ${response.count} posts');
+print('Total: ${response.total}');
+print('Has more: ${response.hasMore}');
+```
+
+### Path Utilities (from ChatApi)
+
+The ChatApi includes static path builders (merged from `lib/util/chat_api.dart`):
+
+```dart
+// Build paths
+final path = ChatApi.messagesPath('general');  // /api/chat/general/messages
+final url = ChatApi.remoteMessagesUrl(baseUrl, 'X3ABC', 'general');
+
+// Pattern matching
+if (ChatApi.isMessagesPath(request.path)) {
+  final roomId = ChatApi.extractRoomId(request.path);
+}
+```
+
+### Transport-Agnostic Design
+
+The API automatically routes through the best available transport:
+
+1. **LAN** (priority 10) - Direct HTTP on local network
+2. **BLE** (priority 20) - Bluetooth mesh for offline
+3. **Station** (priority 30) - WebSocket relay via station
+
+```dart
+// Check device reachability
+final reachable = await api.isReachable('X3DEVICE');
+final transports = await api.getAvailableTransports('X3DEVICE');
+// Returns: ['lan', 'station']
+```
+
+### Direct Messaging via ConnectionManager
+
+For NOSTR-signed messages that need proper transport routing:
+
+```dart
+// Send DM (queued if offline)
+await api.sendDirectMessage('X1TARGET', signedEvent,
+  queueIfOffline: true,
+  ttl: Duration(hours: 24),
+);
+
+// Send chat message
+await api.sendChatMessage('X3STATION', 'general', signedEvent);
+```
+
+### Error Handling
+
+```dart
+final response = await api.status.get('X3OFFLINE');
+
+if (!response.success) {
+  final error = response.error!;
+
+  if (error.isNetworkError) {
+    print('Device unreachable');
+  } else if (error.isNotFound) {
+    print('Resource not found');
+  } else if (error.isUnauthorized) {
+    print('Auth required');
+  }
+}
+```
+
+### Related Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| ConnectionManager | connection/connection_manager.dart | Transport routing |
+| Transport | connection/transport.dart | Transport interface |
+| TransportResult | connection/transport_message.dart | Result type |
+| ApiResponse | api/api_response.dart | Generic response wrapper |
+| ApiError | api/api_error.dart | Error types |
