@@ -48,7 +48,7 @@ jobs:
         dart pub get
 
     - name: Generate embedded games
-      run: dart run bin/generate_embedded_games.dart
+      run: dart bin/generate_embedded_games.dart
 
     - name: Compile CLI binary
       working-directory: geogram-cli
