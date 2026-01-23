@@ -28,7 +28,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
-import '../api/endpoints/chat_api.dart';
+import '../api/endpoints/chat_api_paths.dart';
 import '../util/chat_scripts.dart';
 import '../util/web_navigation.dart';
 import '../util/station_html_templates.dart';
