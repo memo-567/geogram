@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/device_definition.dart';
@@ -49,6 +51,10 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
   final Set<String> _expandedProjects = {};
   final Set<String> _expandedArchitectures = {};
   final Set<String> _expandedDevices = {};
+
+  // Track which items show inline details
+  String? _detailDevice; // "project/arch/model"
+  String? _detailVersion; // "project/arch/model/version"
 
   @override
   void initState() {
@@ -265,6 +271,7 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
     final model = device.effectiveModel;
     final key = '$project/$architecture/$model';
     final isExpanded = _expandedDevices.contains(key);
+    final showDetails = _detailDevice == key;
     final isDeviceSelected = widget.selectedDevice?.effectiveModel == model &&
         widget.selectedDevice?.effectiveProject == project &&
         widget.selectedDevice?.effectiveArchitecture == architecture;
@@ -277,25 +284,28 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
         // Device header
         InkWell(
           onTap: () {
-            if (hasVersions) {
-              setState(() {
-                if (isExpanded) {
-                  _expandedDevices.remove(key);
-                } else {
+            setState(() {
+              // Toggle details
+              if (showDetails) {
+                _detailDevice = null;
+              } else {
+                _detailDevice = key;
+                _detailVersion = null;
+                // Also expand versions when showing details
+                if (hasVersions && !isExpanded) {
                   _expandedDevices.add(key);
                 }
-              });
-            } else {
-              // Select device without version
-              widget.onSelected?.call(device, null);
-            }
+              }
+            });
           },
           child: Container(
             padding:
                 const EdgeInsets.only(left: 48, right: 8, top: 8, bottom: 8),
             color: isDeviceSelected && widget.selectedVersion == null
                 ? theme.colorScheme.primaryContainer.withOpacity(0.5)
-                : null,
+                : showDetails
+                    ? theme.colorScheme.surfaceContainerHighest
+                    : null,
             child: Row(
               children: [
                 Icon(
@@ -316,27 +326,54 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                               : FontWeight.normal,
                         ),
                       ),
-                      if (!hasVersions)
-                        Text(
-                          'Download latest',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.outline,
-                            fontSize: 11,
-                          ),
+                      Text(
+                        device.chip,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                          fontSize: 11,
                         ),
+                      ),
                     ],
                   ),
                 ),
-                if (hasVersions)
-                  Icon(
-                    isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: theme.colorScheme.outline,
+                // Info icon to indicate details available
+                Icon(
+                  showDetails ? Icons.info : Icons.info_outline,
+                  size: 16,
+                  color: showDetails
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.outline,
+                ),
+                if (hasVersions) ...[
+                  const SizedBox(width: 4),
+                  // Separate tap target for expand/collapse
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (isExpanded) {
+                          _expandedDevices.remove(key);
+                        } else {
+                          _expandedDevices.add(key);
+                        }
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        isExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18,
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
                   ),
+                ],
               ],
             ),
           ),
         ),
+
+        // Inline device details
+        if (showDetails) _buildDeviceDetails(context, device),
 
         // Versions
         if (isExpanded && hasVersions)
@@ -349,77 +386,393 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
     );
   }
 
+  Widget _buildDeviceDetails(BuildContext context, DeviceDefinition device) {
+    final theme = Theme.of(context);
+    final photoPath = device.photoPath;
+
+    return Container(
+      margin: const EdgeInsets.only(left: 48, right: 8, bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Photo and basic info row
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Device photo
+              if (photoPath != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.file(
+                    File(photoPath),
+                    width: 80,
+                    height: 80,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHigh,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        _getDeviceIcon(device),
+                        size: 32,
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    _getDeviceIcon(device),
+                    size: 32,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+              const SizedBox(width: 12),
+              // Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      device.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildInfoChip(context, Icons.memory, device.chip),
+                    const SizedBox(height: 4),
+                    _buildInfoChip(
+                      context,
+                      Icons.architecture,
+                      device.effectiveArchitecture,
+                    ),
+                    if (device.versions.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      _buildInfoChip(
+                        context,
+                        Icons.folder_zip,
+                        '${device.versions.length} version${device.versions.length > 1 ? 's' : ''}',
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          // Description
+          if (device.description.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              device.description,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+
+          // Flash button for devices without versions
+          if (device.versions.isEmpty) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => widget.onSelected?.call(device, null),
+                icon: const Icon(Icons.flash_on, size: 18),
+                label: const Text('Flash Latest'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoChip(BuildContext context, IconData icon, String text) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: theme.colorScheme.outline),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            text,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildVersionNode(
     BuildContext context,
     DeviceDefinition device,
     FirmwareVersion version,
   ) {
     final theme = Theme.of(context);
+    final versionKey =
+        '${device.effectiveProject}/${device.effectiveArchitecture}/${device.effectiveModel}/${version.version}';
+    final showDetails = _detailVersion == versionKey;
     final isLatest = device.latestVersion == version.version ||
         (device.latestVersion == null && device.versions.first == version);
     final isSelected = widget.selectedDevice?.effectiveModel ==
             device.effectiveModel &&
         widget.selectedVersion?.version == version.version;
 
-    return InkWell(
-      onTap: () {
-        widget.onSelected?.call(device, version);
-      },
-      onLongPress: () {
-        _showVersionDetails(context, version);
-      },
-      child: Container(
-        padding: const EdgeInsets.only(left: 72, right: 8, top: 6, bottom: 6),
-        color: isSelected
-            ? theme.colorScheme.primaryContainer.withOpacity(0.5)
-            : null,
-        child: Row(
-          children: [
-            Icon(
-              isSelected ? Icons.check_circle : Icons.circle_outlined,
-              size: 16,
-              color: isSelected
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.outline,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              'v${version.version}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontFamily: 'monospace',
-              ),
-            ),
-            if (isLatest) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () {
+            setState(() {
+              // Toggle version details
+              if (showDetails) {
+                _detailVersion = null;
+              } else {
+                _detailVersion = versionKey;
+              }
+            });
+          },
+          child: Container(
+            padding:
+                const EdgeInsets.only(left: 72, right: 8, top: 6, bottom: 6),
+            color: isSelected
+                ? theme.colorScheme.primaryContainer.withOpacity(0.5)
+                : showDetails
+                    ? theme.colorScheme.surfaceContainerHighest
+                    : null,
+            child: Row(
+              children: [
+                Icon(
+                  isSelected ? Icons.check_circle : Icons.circle_outlined,
+                  size: 16,
+                  color: isSelected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.outline,
                 ),
-                child: Text(
-                  'latest',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontSize: 10,
+                const SizedBox(width: 8),
+                Text(
+                  'v${version.version}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    fontFamily: 'monospace',
                   ),
                 ),
-              ),
-            ],
-            if (version.size != null) ...[
-              const Spacer(),
-              Text(
-                _formatSize(version.size!),
-                style: theme.textTheme.bodySmall?.copyWith(
+                if (isLatest) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'latest',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                if (version.size != null)
+                  Text(
+                    _formatSize(version.size!),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                      fontSize: 11,
+                    ),
+                  ),
+                const SizedBox(width: 4),
+                Icon(
+                  showDetails ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
                   color: theme.colorScheme.outline,
-                  fontSize: 11,
                 ),
-              ),
-            ],
-          ],
+              ],
+            ),
+          ),
+        ),
+
+        // Inline version details
+        if (showDetails) _buildVersionDetails(context, device, version),
+      ],
+    );
+  }
+
+  Widget _buildVersionDetails(
+    BuildContext context,
+    DeviceDefinition device,
+    FirmwareVersion version,
+  ) {
+    final theme = Theme.of(context);
+
+    return Container(
+      margin: const EdgeInsets.only(left: 72, right: 8, bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant,
         ),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Version info grid
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              if (version.size != null)
+                _buildVersionInfoItem(
+                  context,
+                  Icons.storage,
+                  'Size',
+                  _formatSize(version.size!),
+                ),
+              if (version.releaseDate != null)
+                _buildVersionInfoItem(
+                  context,
+                  Icons.calendar_today,
+                  'Released',
+                  version.releaseDate!,
+                ),
+              _buildVersionInfoItem(
+                context,
+                Icons.architecture,
+                'Architecture',
+                device.effectiveArchitecture,
+              ),
+              _buildVersionInfoItem(
+                context,
+                Icons.memory,
+                'Chip',
+                device.chip,
+              ),
+            ],
+          ),
+
+          // Checksum
+          if (version.checksum != null) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.fingerprint,
+                    size: 14, color: theme.colorScheme.outline),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'SHA256: ${version.checksum!.length > 16 ? '${version.checksum!.substring(0, 16)}...' : version.checksum}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+
+          // Release notes
+          if (version.releaseNotes != null &&
+              version.releaseNotes!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Text(
+              'Release Notes',
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              version.releaseNotes!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+
+          // Flash button
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () => widget.onSelected?.call(device, version),
+              icon: const Icon(Icons.flash_on, size: 18),
+              label: Text('Flash v${version.version}'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVersionInfoItem(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String value,
+  ) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: theme.colorScheme.outline),
+        const SizedBox(width: 4),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+                fontSize: 10,
+              ),
+            ),
+            Text(
+              value,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -443,99 +796,4 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
-  void _showVersionDetails(BuildContext context, FirmwareVersion version) {
-    final theme = Theme.of(context);
-
-    showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Version ${version.version}',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (version.releaseDate != null) ...[
-                _buildDetailRow(
-                  context,
-                  'Release Date',
-                  version.releaseDate!,
-                  Icons.calendar_today,
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (version.size != null) ...[
-                _buildDetailRow(
-                  context,
-                  'Size',
-                  _formatSize(version.size!),
-                  Icons.storage,
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (version.checksum != null) ...[
-                _buildDetailRow(
-                  context,
-                  'SHA256',
-                  version.checksum!.substring(0, 16) + '...',
-                  Icons.fingerprint,
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (version.releaseNotes != null) ...[
-                const Divider(),
-                const SizedBox(height: 8),
-                Text(
-                  'Release Notes',
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  version.releaseNotes!,
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
-              const SizedBox(height: 16),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDetailRow(
-    BuildContext context,
-    String label,
-    String value,
-    IconData icon,
-  ) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: theme.colorScheme.outline),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: theme.textTheme.bodySmall?.copyWith(
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: theme.textTheme.bodySmall,
-          ),
-        ),
-      ],
-    );
-  }
 }
