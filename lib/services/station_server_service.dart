@@ -21,9 +21,9 @@ import '../services/direct_message_service.dart';
 import '../services/chat_service.dart';
 import '../services/app_args.dart';
 import '../services/event_service.dart';
-import '../services/station_alert_api.dart';
-import '../services/station_place_api.dart';
-import '../services/station_feedback_api.dart';
+import '../api/handlers/alert_handler.dart';
+import '../api/handlers/place_handler.dart';
+import '../api/handlers/feedback_handler.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/web_theme_service.dart';
 import '../util/nostr_key_generator.dart';
@@ -440,9 +440,9 @@ class StationServerService {
   bool _isDownloadingUpdates = false;
 
   // Shared alert API handlers
-  StationAlertApi? _alertApi;
-  StationPlaceApi? _placeApi;
-  StationFeedbackApi? _feedbackApi;
+  AlertHandler? _alertApi;
+  PlaceHandler? _placeApi;
+  FeedbackHandler? _feedbackApi;
 
   // NOSTR relay + Blossom
   NostrRelayStorage? _nostrStorage;
@@ -450,43 +450,45 @@ class StationServerService {
   NostrBlossomService? _blossom;
 
   /// Get the shared alert API handlers (lazy initialization)
-  StationAlertApi get alertApi {
+  AlertHandler get alertApi {
     if (_alertApi == null) {
       final profile = ProfileService().getProfile();
-      _alertApi = StationAlertApi(
+      _alertApi = AlertHandler(
         dataDir: StorageConfig().baseDir,
         stationInfo: StationInfo(
           name: _settings.description ?? 'Geogram Station',
           callsign: profile.callsign,
           npub: profile.npub,
         ),
-        log: (level, message) => LogService().log('StationAlertApi: [$level] $message'),
+        log: (level, message) => LogService().log('AlertHandler: [$level] $message'),
       );
     }
     return _alertApi!;
   }
 
   /// Get the shared places API handlers (lazy initialization)
-  StationPlaceApi get placeApi {
+  PlaceHandler get placeApi {
     if (_placeApi == null) {
       final profile = ProfileService().getProfile();
-      _placeApi = StationPlaceApi(
+      _placeApi = PlaceHandler(
         dataDir: StorageConfig().baseDir,
-        stationName: _settings.description ?? 'Geogram Station',
-        stationCallsign: profile.callsign,
-        stationNpub: profile.npub,
-        log: (level, message) => LogService().log('StationPlaceApi: [$level] $message'),
+        stationInfo: StationInfo(
+          name: _settings.description ?? 'Geogram Station',
+          callsign: profile.callsign,
+          npub: profile.npub,
+        ),
+        log: (level, message) => LogService().log('PlaceHandler: [$level] $message'),
       );
     }
     return _placeApi!;
   }
 
   /// Get the shared feedback API handlers (lazy initialization)
-  StationFeedbackApi get feedbackApi {
+  FeedbackHandler get feedbackApi {
     if (_feedbackApi == null) {
-      _feedbackApi = StationFeedbackApi(
+      _feedbackApi = FeedbackHandler(
         dataDir: StorageConfig().baseDir,
-        log: (level, message) => LogService().log('StationFeedbackApi: [$level] $message'),
+        log: (level, message) => LogService().log('FeedbackHandler: [$level] $message'),
       );
     }
     return _feedbackApi!;

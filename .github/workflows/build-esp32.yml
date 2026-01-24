@@ -1,0 +1,61 @@
+name: Build ESP32
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Cache PlatformIO
+      uses: actions/cache@v4
+      with:
+        path: ~/.platformio
+        key: ${{ runner.os }}-pio-${{ hashFiles('esp32/platformio.ini') }}
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: pip install platformio
+
+    - name: Build ESP32-C3-mini firmware
+      working-directory: esp32
+      run: pio run -e esp32c3_mini
+
+    - name: Rename firmware for release
+      run: |
+        cp esp32/firmware/geogram-ESP32C3-mini.bin geogram-esp32-c3-mini.bin
+        ls -la geogram-esp32-c3-mini.bin
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: geogram-esp32-c3-mini
+        path: geogram-esp32-c3-mini.bin
+        retention-days: 30
+
+    - name: Upload to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: geogram-esp32-c3-mini.bin
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

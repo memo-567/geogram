@@ -41,8 +41,8 @@ import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
-import 'station_blog_api.dart';
-import 'station_video_api.dart';
+import '../api/handlers/blog_handler.dart';
+import '../api/handlers/video_handler.dart';
 import 'station_service.dart';
 import 'station_server_service.dart';
 import 'websocket_service.dart';
@@ -10439,10 +10439,10 @@ class LogApiService {
         LogService().log('Blog API: Serving blog for device $deviceCallsign (from proxy header)');
       }
 
-      final blogApi = StationBlogApi(
+      final blogApi = BlogHandler(
         dataDir: dataDir,
         callsign: callsign,
-        log: (level, message) => LogService().log('StationBlogApi [$level]: $message'),
+        log: (level, message) => LogService().log('BlogHandler [$level]: $message'),
       );
 
       // Remove 'api/blog' prefix for easier parsing
@@ -10566,7 +10566,7 @@ class LogApiService {
   /// GET /api/blog - List all published blog posts
   Future<shelf.Response> _handleBlogListPosts(
     shelf.Request request,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     final queryParams = request.url.queryParameters;
@@ -10601,7 +10601,7 @@ class LogApiService {
   /// GET /api/blog/{postId} - Get single post with comments
   Future<shelf.Response> _handleBlogGetPost(
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     final result = await blogApi.getPostDetails(postId);
@@ -10625,7 +10625,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogGetFile(
     String postId,
     String filename,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     final filePath = await blogApi.getFilePath(postId, filename);
@@ -10678,7 +10678,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogAddComment(
     shelf.Request request,
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10740,7 +10740,7 @@ class LogApiService {
     shelf.Request request,
     String postId,
     String commentId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10782,7 +10782,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogGetFeedback(
     String postId,
     String? npub,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     final result = await blogApi.getFeedback(postId, npub: npub);
@@ -10806,7 +10806,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogToggleLike(
     shelf.Request request,
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10849,7 +10849,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogTogglePoint(
     shelf.Request request,
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10892,7 +10892,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogToggleDislike(
     shelf.Request request,
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10935,7 +10935,7 @@ class LogApiService {
   Future<shelf.Response> _handleBlogToggleSubscribe(
     shelf.Request request,
     String postId,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -10979,7 +10979,7 @@ class LogApiService {
     shelf.Request request,
     String postId,
     String emoji,
-    StationBlogApi blogApi,
+    BlogHandler blogApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -11057,10 +11057,10 @@ class LogApiService {
         LogService().log('Video API: Serving videos for device $deviceCallsign (from proxy header)');
       }
 
-      final videoApi = StationVideoApi(
+      final videoApi = VideoHandler(
         dataDir: dataDir,
         callsign: callsign,
-        log: (level, message) => LogService().log('StationVideoApi [$level]: $message'),
+        log: (level, message) => LogService().log('VideoHandler [$level]: $message'),
       );
 
       // Remove 'api/videos' prefix for easier parsing
@@ -11221,7 +11221,7 @@ class LogApiService {
   /// GET /api/videos - List all videos
   Future<shelf.Response> _handleVideoList(
     shelf.Request request,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     final category = request.url.queryParameters['category'];
@@ -11245,7 +11245,7 @@ class LogApiService {
   Future<shelf.Response> _handleVideoGetDetails(
     String videoId,
     String? requesterNpub,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     final result = await videoApi.getVideoDetails(videoId, requesterNpub: requesterNpub);
@@ -11261,7 +11261,7 @@ class LogApiService {
   /// GET /api/videos/{videoId}/thumbnail - Get thumbnail image
   Future<shelf.Response> _handleVideoGetThumbnail(
     String videoId,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     final result = await videoApi.getThumbnail(videoId);
@@ -11298,7 +11298,7 @@ class LogApiService {
   Future<shelf.Response> _handleVideoAddComment(
     shelf.Request request,
     String videoId,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -11338,7 +11338,7 @@ class LogApiService {
     shelf.Request request,
     String videoId,
     String commentId,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -11368,7 +11368,7 @@ class LogApiService {
     shelf.Request request,
     String videoId,
     String feedbackType,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -11416,7 +11416,7 @@ class LogApiService {
   Future<shelf.Response> _handleVideoRecordView(
     shelf.Request request,
     String videoId,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     try {
@@ -11452,7 +11452,7 @@ class LogApiService {
     shelf.Request request,
     String videoId,
     String emoji,
-    StationVideoApi videoApi,
+    VideoHandler videoApi,
     Map<String, String> headers,
   ) async {
     try {

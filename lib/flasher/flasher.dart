@@ -22,11 +22,8 @@ export 'protocols/flash_protocol.dart';
 export 'protocols/esptool_protocol.dart';
 export 'protocols/protocol_registry.dart';
 
-// Serial
+// Serial (uses flutter_libserialport for cross-platform support)
 export 'serial/serial_port.dart';
-export 'serial/serial_port_native.dart';
-export 'serial/serial_port_desktop.dart';
-export 'serial/serial_port_android.dart';
 
 // Services
 export 'services/flasher_service.dart';
@@ -36,5 +33,8 @@ export 'services/flasher_storage_service.dart';
 export 'pages/flasher_page.dart';
 
 // Widgets
+export 'widgets/add_firmware_wizard.dart';
 export 'widgets/device_card.dart';
+export 'widgets/firmware_tree_widget.dart';
 export 'widgets/flash_progress_widget.dart';
+export 'widgets/selected_firmware_card.dart';

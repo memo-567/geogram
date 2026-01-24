@@ -13,6 +13,8 @@
  */
 
 import '../api.dart';
+import 'chat_api_paths.dart' as paths;
+export 'chat_api_paths.dart' show ChatApiPaths;
 
 /// Chat room info
 class ChatRoom {
@@ -433,136 +435,40 @@ class ChatApi {
   }
 
   // ============================================================
-  // Path Utilities (migrated from lib/util/chat_api.dart)
+  // Path Utilities - delegated to ChatApiPaths for CLI compatibility
   // ============================================================
 
-  /// Chat rooms list path: /api/chat/rooms
-  static String roomsPath() => '/api/chat/rooms';
-
-  /// Chat messages path: /api/chat/{roomId}/messages
-  static String messagesPath(String roomId) => '/api/chat/$roomId/messages';
-
-  /// Chat files path: /api/chat/{roomId}/files
-  static String filesPath(String roomId) => '/api/chat/$roomId/files';
-
-  /// Chat file download path: /api/chat/{roomId}/files/{filename}
+  static String roomsPath() => paths.ChatApiPaths.roomsPath();
+  static String messagesPath(String roomId) => paths.ChatApiPaths.messagesPath(roomId);
+  static String filesPath(String roomId) => paths.ChatApiPaths.filesPath(roomId);
   static String fileDownloadPath(String roomId, String filename) =>
-      '/api/chat/$roomId/files/$filename';
-
-  /// Chat reactions path: /api/chat/{roomId}/messages/{timestamp}/reactions
+      paths.ChatApiPaths.fileDownloadPath(roomId, filename);
   static String reactionsPath(String roomId, String timestamp) =>
-      '/api/chat/$roomId/messages/$timestamp/reactions';
-
-  /// Remote chat rooms path: /{callsign}/api/chat/rooms
-  static String remoteRoomsPath(String callsign) => '/$callsign/api/chat/rooms';
-
-  /// Remote chat messages path: /{callsign}/api/chat/{roomId}/messages
+      paths.ChatApiPaths.reactionsPath(roomId, timestamp);
+  static String remoteRoomsPath(String callsign) => paths.ChatApiPaths.remoteRoomsPath(callsign);
   static String remoteMessagesPath(String callsign, String roomId) =>
-      '/$callsign/api/chat/$roomId/messages';
-
-  /// Remote chat files path: /{callsign}/api/chat/{roomId}/files
+      paths.ChatApiPaths.remoteMessagesPath(callsign, roomId);
   static String remoteFilesPath(String callsign, String roomId) =>
-      '/$callsign/api/chat/$roomId/files';
-
-  /// Remote chat file download path: /{callsign}/api/chat/{roomId}/files/{filename}
+      paths.ChatApiPaths.remoteFilesPath(callsign, roomId);
   static String remoteFileDownloadPath(String callsign, String roomId, String filename) =>
-      '/$callsign/api/chat/$roomId/files/$filename';
+      paths.ChatApiPaths.remoteFileDownloadPath(callsign, roomId, filename);
 
-  // ============================================================
-  // URL Builders (with base URL)
-  // ============================================================
+  static String roomsUrl(String baseUrl) => paths.ChatApiPaths.roomsUrl(baseUrl);
+  static String messagesUrl(String baseUrl, String roomId, {int? limit}) =>
+      paths.ChatApiPaths.messagesUrl(baseUrl, roomId, limit: limit);
+  static String remoteRoomsUrl(String baseUrl, String callsign) =>
+      paths.ChatApiPaths.remoteRoomsUrl(baseUrl, callsign);
+  static String remoteMessagesUrl(String baseUrl, String callsign, String roomId, {int? limit}) =>
+      paths.ChatApiPaths.remoteMessagesUrl(baseUrl, callsign, roomId, limit: limit);
 
-  /// Build full URL for chat rooms endpoint
-  static String roomsUrl(String baseUrl) {
-    return '${_normalizeBaseUrl(baseUrl)}${roomsPath()}';
-  }
+  static bool isRoomsPath(String path) => paths.ChatApiPaths.isRoomsPath(path);
+  static bool isMessagesPath(String path) => paths.ChatApiPaths.isMessagesPath(path);
+  static bool isFilesListPath(String path) => paths.ChatApiPaths.isFilesListPath(path);
+  static bool isFileDownloadPath(String path) => paths.ChatApiPaths.isFileDownloadPath(path);
+  static bool isReactionsPath(String path) => paths.ChatApiPaths.isReactionsPath(path);
 
-  /// Build full URL for chat messages endpoint
-  static String messagesUrl(String baseUrl, String roomId, {int? limit}) {
-    final path = '${_normalizeBaseUrl(baseUrl)}${messagesPath(roomId)}';
-    return limit != null ? '$path?limit=$limit' : path;
-  }
-
-  /// Build full URL for remote chat rooms endpoint
-  static String remoteRoomsUrl(String baseUrl, String callsign) {
-    return '${_normalizeBaseUrl(baseUrl)}${remoteRoomsPath(callsign)}';
-  }
-
-  /// Build full URL for remote chat messages endpoint
-  static String remoteMessagesUrl(String baseUrl, String callsign, String roomId, {int? limit}) {
-    final path = '${_normalizeBaseUrl(baseUrl)}${remoteMessagesPath(callsign, roomId)}';
-    return limit != null ? '$path?limit=$limit' : path;
-  }
-
-  // ============================================================
-  // Pattern Matchers
-  // ============================================================
-
-  /// Check if path matches chat rooms list pattern
-  static bool isRoomsPath(String path) {
-    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/rooms/?$').hasMatch(path);
-  }
-
-  /// Check if path matches chat messages pattern
-  static bool isMessagesPath(String path) {
-    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/messages$').hasMatch(path);
-  }
-
-  /// Check if path matches chat files list pattern
-  static bool isFilesListPath(String path) {
-    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/files$').hasMatch(path);
-  }
-
-  /// Check if path matches chat file download pattern
-  static bool isFileDownloadPath(String path) {
-    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/files/.+$').hasMatch(path);
-  }
-
-  /// Check if path matches chat reactions pattern
-  static bool isReactionsPath(String path) {
-    return RegExp(r'^(/[A-Z0-9]+)?/api/chat/(rooms/)?[^/]+/messages/.+/reactions$').hasMatch(path);
-  }
-
-  // ============================================================
-  // Extractors
-  // ============================================================
-
-  /// Extract callsign from a chat API path with callsign prefix
-  static String? extractCallsign(String path) {
-    final match = RegExp(r'^/([A-Z0-9]+)/api/').firstMatch(path);
-    return match?.group(1);
-  }
-
-  /// Extract room ID from a chat messages or files path
-  static String? extractRoomId(String path) {
-    // Try format without 'rooms/': /api/chat/{roomId}/messages
-    var match = RegExp(r'/api/chat/([^/]+)/(?:messages|files)').firstMatch(path);
-    if (match != null) {
-      final roomId = match.group(1);
-      if (roomId != 'rooms') return roomId;
-    }
-    // Fallback to format with 'rooms/': /api/chat/rooms/{roomId}/messages
-    match = RegExp(r'/api/chat/rooms/([^/]+)/(?:messages|files)').firstMatch(path);
-    return match?.group(1);
-  }
-
-  /// Extract filename from a file download path
-  static String? extractFilename(String path) {
-    final match = RegExp(r'/files/(.+)$').firstMatch(path);
-    return match?.group(1);
-  }
-
-  /// Extract timestamp from a reactions path
-  static String? extractTimestamp(String path) {
-    final match = RegExp(r'/messages/([^/]+)/reactions$').firstMatch(path);
-    return match?.group(1);
-  }
-
-  // ============================================================
-  // Helpers
-  // ============================================================
-
-  static String _normalizeBaseUrl(String baseUrl) {
-    return baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
-  }
+  static String? extractCallsign(String path) => paths.ChatApiPaths.extractCallsign(path);
+  static String? extractRoomId(String path) => paths.ChatApiPaths.extractRoomId(path);
+  static String? extractFilename(String path) => paths.ChatApiPaths.extractFilename(path);
+  static String? extractTimestamp(String path) => paths.ChatApiPaths.extractTimestamp(path);
 }

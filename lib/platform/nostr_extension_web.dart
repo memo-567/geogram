@@ -10,6 +10,8 @@
 
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:js' as js;
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:js_util' show allowInterop;
 import 'dart:async';
 import 'dart:convert';
 
@@ -75,12 +77,12 @@ class NostrExtensionService {
 
       // Convert JS Promise to Dart Future
       js.context['Promise'].callMethod('resolve', [promise]).callMethod('then', [
-        js.allowInterop((result) {
+        allowInterop((result) {
           final pubkey = result?.toString();
           _cachedPubkey = pubkey;
           completer.complete(pubkey);
         }),
-        js.allowInterop((error) {
+        allowInterop((error) {
           print('NIP-07 getPublicKey error: $error');
           completer.complete(null);
         }),
@@ -118,7 +120,7 @@ class NostrExtensionService {
 
       // Convert JS Promise to Dart Future
       js.context['Promise'].callMethod('resolve', [promise]).callMethod('then', [
-        js.allowInterop((result) {
+        allowInterop((result) {
           if (result == null) {
             completer.complete(null);
             return;
@@ -134,7 +136,7 @@ class NostrExtensionService {
             completer.complete(null);
           }
         }),
-        js.allowInterop((error) {
+        allowInterop((error) {
           print('NIP-07 signEvent error: $error');
           completer.complete(null);
         }),
@@ -171,7 +173,7 @@ class NostrExtensionService {
       final promise = nostr.callMethod('getRelays', []);
 
       js.context['Promise'].callMethod('resolve', [promise]).callMethod('then', [
-        js.allowInterop((result) {
+        allowInterop((result) {
           if (result == null) {
             completer.complete(null);
             return;
@@ -185,7 +187,7 @@ class NostrExtensionService {
             completer.complete(null);
           }
         }),
-        js.allowInterop((error) {
+        allowInterop((error) {
           completer.complete(null);
         }),
       ]);
@@ -214,10 +216,10 @@ class NostrExtensionService {
       final promise = nip04.callMethod('encrypt', [pubkey, plaintext]);
 
       js.context['Promise'].callMethod('resolve', [promise]).callMethod('then', [
-        js.allowInterop((result) {
+        allowInterop((result) {
           completer.complete(result?.toString());
         }),
-        js.allowInterop((error) {
+        allowInterop((error) {
           completer.complete(null);
         }),
       ]);
@@ -246,10 +248,10 @@ class NostrExtensionService {
       final promise = nip04.callMethod('decrypt', [pubkey, ciphertext]);
 
       js.context['Promise'].callMethod('resolve', [promise]).callMethod('then', [
-        js.allowInterop((result) {
+        allowInterop((result) {
           completer.complete(result?.toString());
         }),
-        js.allowInterop((error) {
+        allowInterop((error) {
           completer.complete(null);
         }),
       ]);

@@ -3,6 +3,47 @@
 /// Represents a flashable device with its configuration, USB identifiers,
 /// and flashing parameters.
 
+/// Firmware version information
+class FirmwareVersion {
+  final String version;
+  final String? releaseNotes;
+  final String? releaseDate;
+  final String? checksum; // SHA256
+  final int? size; // Bytes
+
+  const FirmwareVersion({
+    required this.version,
+    this.releaseNotes,
+    this.releaseDate,
+    this.checksum,
+    this.size,
+  });
+
+  /// Path relative to device folder
+  String get firmwarePath => '$version/firmware.bin';
+
+  factory FirmwareVersion.fromJson(Map<String, dynamic> json) {
+    return FirmwareVersion(
+      version: json['version'] as String,
+      releaseNotes: json['release_notes'] as String?,
+      releaseDate: json['release_date'] as String?,
+      checksum: json['checksum'] as String?,
+      size: json['size'] as int?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'version': version,
+        if (releaseNotes != null) 'release_notes': releaseNotes,
+        if (releaseDate != null) 'release_date': releaseDate,
+        if (checksum != null) 'checksum': checksum,
+        if (size != null) 'size': size,
+      };
+
+  @override
+  String toString() => 'FirmwareVersion(version: $version)';
+}
+
 /// USB identification for a device
 class UsbIdentifier {
   final String vid;
@@ -196,8 +237,15 @@ class DeviceTranslations {
 
 /// Device definition for a flashable device
 class DeviceDefinition {
-  final String id;
-  final String family;
+  // New hierarchical identifiers (v2.0)
+  final String? project; // e.g., "geogram", "quansheng"
+  final String? architecture; // e.g., "esp32" (chip family)
+  final String? model; // e.g., "esp32-c3-mini" (board)
+
+  // Legacy identifiers (v1.0 - kept for backward compatibility)
+  final String id; // Legacy: same as model
+  final String family; // Legacy: same as architecture
+
   final String chip;
   final String title;
   final String description;
@@ -209,10 +257,18 @@ class DeviceDefinition {
   final String createdAt;
   final String modifiedAt;
 
+  // Version tracking (v2.0)
+  final List<FirmwareVersion> versions;
+  final String? latestVersion;
+  final FirmwareVersion? selectedVersion; // Runtime selection
+
   // Runtime properties (not serialized)
   String? _basePath;
 
   DeviceDefinition({
+    this.project,
+    this.architecture,
+    this.model,
     required this.id,
     required this.family,
     required this.chip,
@@ -225,12 +281,27 @@ class DeviceDefinition {
     this.usb,
     required this.createdAt,
     required this.modifiedAt,
+    this.versions = const [],
+    this.latestVersion,
+    this.selectedVersion,
   });
+
+  /// Get effective model ID (new or legacy)
+  String get effectiveModel => model ?? id;
+
+  /// Get effective architecture (new or legacy)
+  String get effectiveArchitecture => architecture ?? family;
+
+  /// Get effective project (defaults to "geogram")
+  String get effectiveProject => project ?? 'geogram';
 
   /// Set base path for resolving media paths
   void setBasePath(String path) {
     _basePath = path;
   }
+
+  /// Get base path
+  String? get basePath => _basePath;
 
   /// Get full path to photo
   String? get photoPath {
@@ -243,10 +314,56 @@ class DeviceDefinition {
     return translations?.getField(language, 'description') ?? description;
   }
 
-  factory DeviceDefinition.fromJson(Map<String, dynamic> json) {
+  /// Get the latest firmware version object
+  FirmwareVersion? get latestFirmwareVersion {
+    if (versions.isEmpty) return null;
+    if (latestVersion != null) {
+      return versions.cast<FirmwareVersion?>().firstWhere(
+            (v) => v?.version == latestVersion,
+            orElse: () => null,
+          );
+    }
+    return versions.first;
+  }
+
+  /// Create a copy with a selected version
+  DeviceDefinition withSelectedVersion(FirmwareVersion? version) {
     return DeviceDefinition(
-      id: json['id'] as String,
-      family: json['family'] as String,
+      project: project,
+      architecture: architecture,
+      model: model,
+      id: id,
+      family: family,
+      chip: chip,
+      title: title,
+      description: description,
+      translations: translations,
+      media: media,
+      links: links,
+      flash: flash,
+      usb: usb,
+      createdAt: createdAt,
+      modifiedAt: modifiedAt,
+      versions: versions,
+      latestVersion: latestVersion,
+      selectedVersion: version,
+    ).._basePath = _basePath;
+  }
+
+  factory DeviceDefinition.fromJson(Map<String, dynamic> json) {
+    // Support both v1.0 (family/id) and v2.0 (project/architecture/model)
+    final architecture = json['architecture'] as String?;
+    final family = json['family'] as String? ?? architecture ?? 'unknown';
+
+    final model = json['model'] as String?;
+    final id = json['id'] as String? ?? model ?? 'unknown';
+
+    return DeviceDefinition(
+      project: json['project'] as String?,
+      architecture: architecture,
+      model: model,
+      id: id,
+      family: family,
       chip: json['chip'] as String,
       title: json['title'] as String,
       description: json['description'] as String,
@@ -266,10 +383,18 @@ class DeviceDefinition {
           : null,
       createdAt: json['created_at'] as String,
       modifiedAt: json['modified_at'] as String,
+      versions: (json['versions'] as List<dynamic>?)
+              ?.map((e) => FirmwareVersion.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      latestVersion: json['latest_version'] as String?,
     );
   }
 
   Map<String, dynamic> toJson() => {
+        if (project != null) 'project': project,
+        if (architecture != null) 'architecture': architecture,
+        if (model != null) 'model': model,
         'id': id,
         'family': family,
         'chip': chip,
@@ -282,10 +407,13 @@ class DeviceDefinition {
         if (usb != null) 'usb': usb!.toJson(),
         'created_at': createdAt,
         'modified_at': modifiedAt,
+        if (versions.isNotEmpty)
+          'versions': versions.map((v) => v.toJson()).toList(),
+        if (latestVersion != null) 'latest_version': latestVersion,
       };
 }
 
-/// Device family metadata
+/// Device family metadata (v1.0 format)
 class DeviceFamily {
   final String id;
   final String name;
@@ -316,12 +444,47 @@ class DeviceFamily {
       };
 }
 
+/// Project metadata (v2.0 format)
+class FlasherProject {
+  final String id;
+  final String name;
+  final String? description;
+  final List<String> architectures;
+
+  const FlasherProject({
+    required this.id,
+    required this.name,
+    this.description,
+    required this.architectures,
+  });
+
+  factory FlasherProject.fromJson(Map<String, dynamic> json) {
+    return FlasherProject(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      description: json['description'] as String?,
+      architectures: (json['architectures'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        if (description != null) 'description': description,
+        'architectures': architectures,
+      };
+}
+
 /// Flasher collection metadata
 class FlasherMetadata {
   final String version;
   final String name;
   final String description;
-  final List<DeviceFamily> families;
+  final List<DeviceFamily> families; // v1.0 format
+  final List<FlasherProject> projects; // v2.0 format
   final String createdAt;
   final String modifiedAt;
 
@@ -329,21 +492,30 @@ class FlasherMetadata {
     required this.version,
     required this.name,
     required this.description,
-    required this.families,
+    this.families = const [],
+    this.projects = const [],
     required this.createdAt,
     required this.modifiedAt,
   });
 
+  /// Check if this is v2.0 format
+  bool get isV2 => version.startsWith('2');
+
   factory FlasherMetadata.fromJson(Map<String, dynamic> json) {
     return FlasherMetadata(
       version: json['version'] as String,
-      name: json['name'] as String,
-      description: json['description'] as String,
-      families: (json['families'] as List<dynamic>)
-          .map((e) => DeviceFamily.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      createdAt: json['created_at'] as String,
-      modifiedAt: json['modified_at'] as String,
+      name: json['name'] as String? ?? 'Flasher',
+      description: json['description'] as String? ?? '',
+      families: (json['families'] as List<dynamic>?)
+              ?.map((e) => DeviceFamily.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      projects: (json['projects'] as List<dynamic>?)
+              ?.map((e) => FlasherProject.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      createdAt: json['created_at'] as String? ?? '',
+      modifiedAt: json['modified_at'] as String? ?? '',
     );
   }
 
@@ -351,7 +523,10 @@ class FlasherMetadata {
         'version': version,
         'name': name,
         'description': description,
-        'families': families.map((e) => e.toJson()).toList(),
+        if (families.isNotEmpty)
+          'families': families.map((e) => e.toJson()).toList(),
+        if (projects.isNotEmpty)
+          'projects': projects.map((e) => e.toJson()).toList(),
         'created_at': createdAt,
         'modified_at': modifiedAt,
       };

@@ -66,7 +66,10 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Flasher Components
 - [FlasherService](#flasherservice) - Main service for flash operations
-- [FlasherStorageService](#flasherstorageservice) - Device definitions storage
+- [FlasherStorageService](#flasherstorageservice) - Device definitions storage (v1.0 and v2.0)
+- [FirmwareTreeWidget](#firmwaretreewidget) - Hierarchical firmware library tree view
+- [SelectedFirmwareCard](#selectedfirmwarecard) - Selected firmware display card
+- [FirmwareVersion](#firmwareversion) - Firmware version model with metadata
 - [ProtocolRegistry](#protocolregistry) - Protocol factory
 - [DeviceCard](#devicecard-widget) - Device selection card
 - [FlashProgressWidget](#flashprogresswidget) - Progress display
@@ -4600,24 +4603,102 @@ await service.flashDevice(
 
 **File:** `lib/flasher/services/flasher_storage_service.dart`
 
-Service for loading device definitions from the flasher/ directory.
+Service for loading device definitions from the flasher/ directory. Supports both v1.0 and v2.0 directory structures:
+- **v1.0:** `flasher/{family}/{device}.json`
+- **v2.0:** `flasher/{project}/{architecture}/{model}/device.json`
 
 **Usage:**
 ```dart
 final storage = FlasherStorageService('flasher');
 
-// Load all devices
+// Load all devices (both v1.0 and v2.0)
 final devices = await storage.loadAllDevices();
 
-// Load devices grouped by family
+// Load devices in hierarchical structure (v2.0)
+final hierarchy = await storage.loadDevicesByHierarchy();
+// Returns: Map<String, Map<String, List<DeviceDefinition>>>
+// Example: hierarchy['geogram']['esp32'] = [device1, device2]
+
+// Load devices grouped by family (v1.0 compatibility)
 final byFamily = await storage.loadDevicesByFamily();
+
+// v2.0 specific methods
+final projects = await storage.listProjects();
+final architectures = await storage.listArchitectures('geogram');
+final models = await storage.listModels('geogram', 'esp32');
+final versions = await storage.loadVersions('geogram', 'esp32', 'esp32-c3-mini');
+final device = await storage.loadDeviceV2('geogram', 'esp32', 'esp32-c3-mini');
 
 // Find device by USB VID/PID
 final device = await storage.findDeviceByUsb(0x303A, 0x1001);
 
-// Load specific device
+// Load specific device (v1.0)
 final esp32 = await storage.loadDevice('esp32', 'esp32-c3-mini');
 ```
+
+---
+
+### FirmwareTreeWidget
+
+**File:** `lib/flasher/widgets/firmware_tree_widget.dart`
+
+Hierarchical tree view for browsing the firmware library. Shows: Project -> Architecture -> Model -> Version.
+
+**Usage:**
+```dart
+FirmwareTreeWidget(
+  hierarchy: _hierarchy, // Map<String, Map<String, List<DeviceDefinition>>>
+  selectedDevice: _selectedDevice,
+  selectedVersion: _selectedVersion,
+  onSelected: (device, version) {
+    setState(() {
+      _selectedDevice = device;
+      _selectedVersion = version;
+    });
+  },
+  isLoading: _isLoading,
+)
+```
+
+**Features:**
+- Expand/collapse folders
+- Tap version to select for flashing
+- Long-press version to show details (release notes, size, date)
+- Auto-expand to current selection
+- Visual indicators for latest version
+
+---
+
+### SelectedFirmwareCard
+
+**File:** `lib/flasher/widgets/selected_firmware_card.dart`
+
+Card widget showing the selected firmware with device info, version path, and Change button.
+
+**Usage:**
+```dart
+SelectedFirmwareCard(
+  device: _selectedDevice,
+  version: _selectedVersion,
+  onChangeTap: () {
+    _tabController.animateTo(0); // Switch to Library tab
+  },
+)
+
+// Compact chip variant
+SelectedFirmwareChip(
+  device: device,
+  version: version,
+  onTap: () { ... },
+)
+```
+
+**Displays:**
+- Device photo (or placeholder icon)
+- Device title
+- Path: project / architecture / version
+- Flash info badges (size, protocol)
+- Change button to switch selection
 
 ---
 
@@ -4720,13 +4801,15 @@ if (progress.isError) { ... }
 
 **File:** `lib/flasher/models/device_definition.dart`
 
-Model for device definitions loaded from JSON files.
+Model for device definitions loaded from JSON files. Supports both v1.0 and v2.0 formats.
 
 **Key Classes:**
 - `DeviceDefinition` - Main device model
+- `FirmwareVersion` - Version with metadata (checksum, size, release notes)
 - `FlashConfig` - Flash configuration (protocol, baud rate, etc.)
 - `UsbIdentifier` - USB VID/PID
-- `DeviceFamily` - Family metadata
+- `DeviceFamily` - Family metadata (v1.0)
+- `FlasherProject` - Project metadata (v2.0)
 - `FlasherMetadata` - Collection metadata
 
 **Usage:**
@@ -4735,13 +4818,54 @@ Model for device definitions loaded from JSON files.
 final json = jsonDecode(content) as Map<String, dynamic>;
 final device = DeviceDefinition.fromJson(json);
 
-// Access properties
-print(device.title);           // "ESP32-C3-mini"
-print(device.flash.protocol);  // "esptool"
-print(device.usb?.vidInt);     // 0x303A
+// Access properties (both v1.0 and v2.0)
+print(device.title);                     // "ESP32-C3-mini"
+print(device.flash.protocol);            // "esptool"
+print(device.usb?.vidInt);               // 0x303A
+
+// v2.0 hierarchical properties
+print(device.effectiveProject);          // "geogram"
+print(device.effectiveArchitecture);     // "esp32"
+print(device.effectiveModel);            // "esp32-c3-mini"
+
+// Firmware versions
+for (final version in device.versions) {
+  print('v${version.version}: ${version.size} bytes');
+}
+print(device.latestFirmwareVersion?.version);
+
+// Create copy with selected version
+final withVersion = device.withSelectedVersion(version);
 
 // Get translated description
 final desc = device.getDescription('pt');
+```
+
+### FirmwareVersion
+
+**File:** `lib/flasher/models/device_definition.dart`
+
+Model for firmware version metadata.
+
+**Properties:**
+- `version` - Version string (e.g., "1.2.0")
+- `releaseNotes` - Optional release notes
+- `releaseDate` - Optional release date
+- `checksum` - Optional SHA256 checksum
+- `size` - Optional file size in bytes
+
+**Usage:**
+```dart
+final version = FirmwareVersion(
+  version: '1.2.0',
+  releaseNotes: 'Bug fixes and improvements',
+  releaseDate: '2026-01-24',
+  checksum: 'abc123...',
+  size: 524288,
+);
+
+// Get firmware path relative to device folder
+print(version.firmwarePath);  // "1.2.0/firmware.bin"
 ```
 
 ---
@@ -4754,5 +4878,5 @@ final desc = device.getDescription('pt');
 | DeviceCard | flasher/widgets/device_card.dart | Device selection card |
 | FlashProgressWidget | flasher/widgets/flash_progress_widget.dart | Progress display |
 | EspToolProtocol | flasher/protocols/esptool_protocol.dart | ESP32 flashing protocol |
-| DesktopSerialPort | flasher/serial/serial_port_desktop.dart | Desktop serial port |
-| AndroidSerialPort | flasher/serial/serial_port_android.dart | Android USB OTG |
+| SerialPort | flasher/serial/serial_port.dart | Cross-platform USB serial (flutter_libserialport) |
+| Esp32UsbIdentifiers | flasher/serial/serial_port.dart | ESP32 VID/PID matching utilities |

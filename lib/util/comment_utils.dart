@@ -79,7 +79,7 @@ class SignedComment {
     // Verify signature if present
     bool verified = false;
     if (npub != null && signature != null && author != null && content.isNotEmpty) {
-      verified = _verifyCommentSignature(
+      verified = CommentUtils._verifyCommentSignature(
         content: content,
         npub: npub,
         signature: signature,

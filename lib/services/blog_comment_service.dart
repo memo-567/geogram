@@ -7,6 +7,7 @@
  */
 
 import '../connection/connection_manager.dart';
+import '../models/profile.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';

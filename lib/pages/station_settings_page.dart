@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/station_node.dart';
 import '../services/station_node_service.dart';
 import '../services/log_service.dart';
-import '../cli/pure_station.dart';
+import '../station.dart';
 
 /// Settings page for station configuration
 class StationSettingsPage extends StatefulWidget {

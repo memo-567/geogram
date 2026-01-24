@@ -18,7 +18,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import '../lib/cli/pure_station.dart';
+import '../lib/station.dart';
 import '../lib/cli/pure_storage_config.dart';
 
 const int TEST_PORT = 45690;

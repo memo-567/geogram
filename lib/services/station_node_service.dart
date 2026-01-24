@@ -13,7 +13,7 @@ import '../models/station_node.dart';
 import '../models/station_network.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
-import '../cli/pure_station.dart';
+import '../station.dart';
 import '../cli/pure_storage_config.dart';
 import 'config_service.dart';
 import 'log_service.dart';

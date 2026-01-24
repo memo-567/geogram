@@ -6,6 +6,19 @@ This document describes the HTTP API endpoints available on Geogram radio statio
 
 - [Overview](#overview)
 - [Connection Manager](#connection-manager)
+- [GeogramApi Client](#geogramapi-client)
+  - [API Modules](#api-modules)
+  - [StatusApi](#statusapi)
+  - [ChatApi](#chatapi)
+  - [AlertsApi](#alertsapi)
+  - [PlacesApi](#placesapi)
+  - [EventsApi](#eventsapi)
+  - [BlogApi](#blogapi)
+  - [VideosApi](#videosapi)
+  - [FeedbackApi](#feedbackapi)
+  - [BackupApi](#backupapi)
+  - [DmApi](#dmapi)
+  - [UpdatesApi](#updatesapi)
 - [Base URL](#base-url)
 - [Endpoints](#endpoints)
   - [Status](#status)
@@ -342,6 +355,376 @@ for (final entry in metrics.entries) {
       'latency=${entry.value.averageLatencyMs.toStringAsFixed(1)}ms, '
       'success=${(entry.value.successRate * 100).toStringAsFixed(1)}%');
 }
+```
+
+---
+
+## GeogramApi Client
+
+The `GeogramApi` class (`lib/api/api.dart`) provides a unified Dart interface for all API operations. It wraps the ConnectionManager to provide transport-agnostic communication with type-safe responses.
+
+### Quick Start
+
+```dart
+import 'package:geogram/api/api.dart';
+
+final api = GeogramApi();
+
+// Get device status
+final status = await api.status.get('X3STATION');
+if (status.success) {
+  print('Station: ${status.data?.callsign}');
+  print('Version: ${status.data?.version}');
+}
+
+// List alerts near a location
+final alerts = await api.alerts.list('X3STATION',
+  lat: 38.72,
+  lon: -9.14,
+  radius: 10, // km
+);
+for (final alert in alerts.items) {
+  print('Alert: ${alert.title} at ${alert.latitude}, ${alert.longitude}');
+}
+```
+
+### API Modules
+
+The GeogramApi facade exposes the following endpoint modules:
+
+| Module | Class | Description |
+|--------|-------|-------------|
+| `api.status` | `StatusApi` | Device status, GeoIP, connected clients |
+| `api.chat` | `ChatApi` | Chat rooms, messages, files, moderation |
+| `api.alerts` | `AlertsApi` | Alert listing, details, photos |
+| `api.places` | `PlacesApi` | Place listing, details, photos |
+| `api.events` | `EventsApi` | Events, media contributors, files |
+| `api.blog` | `BlogApi` | Blog posts, comments, reactions |
+| `api.videos` | `VideosApi` | Video listing, categories, comments |
+| `api.feedback` | `FeedbackApi` | Points, likes, verifications, comments |
+| `api.backup` | `BackupApi` | Backup providers, clients, snapshots |
+| `api.dm` | `DmApi` | Direct messages, conversations, sync |
+| `api.updates` | `UpdatesApi` | Software update info, version checking |
+
+### StatusApi
+
+```dart
+// Get device status
+final status = await api.status.get('X3STATION');
+
+// Get GeoIP location for client
+final geoip = await api.status.geoip('X3STATION');
+print('Location: ${geoip.data?.city}, ${geoip.data?.country}');
+
+// List connected clients
+final clients = await api.status.clients('X3STATION');
+```
+
+### ChatApi
+
+```dart
+// List chat rooms
+final rooms = await api.chat.rooms('X3STATION');
+
+// Get messages from a room
+final messages = await api.chat.messages('X3STATION', 'general',
+  limit: 50,
+  since: lastTimestamp,
+);
+
+// Send a message (requires signed NOSTR event)
+await api.chat.sendMessage('X3STATION', 'general', signedEvent);
+
+// List files in a room
+final files = await api.chat.files('X3STATION', 'general');
+
+// Room moderation
+await api.chat.banUser('X3STATION', 'roomId', userNpub, signedEvent);
+await api.chat.promoteMember('X3STATION', 'roomId', signedEvent);
+```
+
+### AlertsApi
+
+```dart
+// List alerts with filters
+final alerts = await api.alerts.list('X3STATION',
+  status: 'active',
+  lat: 38.72,
+  lon: -9.14,
+  radius: 10,
+  type: 'infrastructure',
+  limit: 20,
+);
+
+// Get alert details
+final alert = await api.alerts.get('X3STATION', alertId);
+
+// Get alert photo
+final photo = await api.alerts.getFile('X3STATION', alertId, 'images/photo1.jpg');
+
+// Upload alert photo
+await api.alerts.uploadFile('X3STATION', alertId, 'photo.jpg', imageBytes,
+  contentType: 'image/jpeg',
+);
+```
+
+### PlacesApi
+
+```dart
+// List places near location
+final places = await api.places.list('X3STATION',
+  lat: 38.72,
+  lon: -9.14,
+  radius: 5,
+  type: 'restaurant',
+);
+
+// Get place details
+final place = await api.places.get('X3STATION', folderName);
+print('Address: ${place.data?.address}');
+print('Hours: ${place.data?.hours}');
+```
+
+### EventsApi
+
+```dart
+// List events (optionally filter by year)
+final events = await api.events.list('X3STATION', year: 2025);
+
+// Get event files
+final items = await api.events.items('X3STATION', eventId, path: 'photos/day1');
+
+// List media contributors
+final contributors = await api.events.mediaContributors('X3STATION', eventId);
+
+// Contributor moderation
+await api.events.approveContributor('X3STATION', eventId, contributorCallsign);
+await api.events.suspendContributor('X3STATION', eventId, contributorCallsign);
+```
+
+### BlogApi
+
+```dart
+// List blog posts
+final posts = await api.blog.list('X3STATION',
+  tag: 'tutorial',
+  limit: 10,
+);
+
+// Get post with comments
+final post = await api.blog.get('X3STATION', postId);
+for (final comment in post.data?.comments ?? []) {
+  print('${comment.author}: ${comment.content}');
+}
+
+// Add comment
+await api.blog.comment('X3STATION', postId,
+  author: 'Alice',
+  content: 'Great post!',
+  npub: myNpub,
+);
+
+// Reactions
+await api.blog.like('X3STATION', postId, signedEvent);
+await api.blog.point('X3STATION', postId, signedEvent);
+await api.blog.react('X3STATION', postId, '👍', signedEvent);
+```
+
+### VideosApi
+
+```dart
+// List videos with filters
+final videos = await api.videos.list('X3STATION',
+  category: 'tutorials',
+  tag: 'beginner',
+  limit: 20,
+);
+
+// Get video details
+final video = await api.videos.get('X3STATION', videoId);
+print('Duration: ${video.data?.durationFormatted}');
+print('Views: ${video.data?.viewCount}');
+
+// Record a view
+await api.videos.recordView('X3STATION', videoId);
+
+// Get categories and tags
+final categories = await api.videos.categories('X3STATION');
+final tags = await api.videos.tags('X3STATION');
+```
+
+### FeedbackApi
+
+Unified feedback system for all content types (alerts, places, events, blog, videos).
+
+```dart
+// Get feedback counts and user state
+final feedback = await api.feedback.get('X3STATION', 'alert', alertId, npub: myNpub);
+print('Points: ${feedback.data?.counts.points}');
+print('Has pointed: ${feedback.data?.userState.hasPointed}');
+
+// Generic feedback actions
+await api.feedback.point('X3STATION', 'alert', alertId, signedEvent);
+await api.feedback.like('X3STATION', 'blog', postId, signedEvent);
+await api.feedback.verify('X3STATION', 'alert', alertId, signedEvent);
+await api.feedback.subscribe('X3STATION', 'event', eventId, signedEvent);
+await api.feedback.react('X3STATION', 'video', videoId, '🔥', signedEvent);
+
+// Convenience methods
+await api.feedback.pointAlert('X3STATION', alertId, signedEvent);
+await api.feedback.verifyAlert('X3STATION', alertId, signedEvent);
+await api.feedback.likeBlogPost('X3STATION', postId, signedEvent);
+await api.feedback.likeVideo('X3STATION', videoId, signedEvent);
+```
+
+### BackupApi
+
+```dart
+// Provider settings
+final settings = await api.backup.getSettings('X3STATION');
+await api.backup.updateSettings('X3STATION', BackupSettings(
+  enabled: true,
+  maxStorageBytes: 1024 * 1024 * 1024, // 1GB
+  maxClients: 5,
+  autoAccept: false,
+));
+
+// Client operations
+final providers = await api.backup.providers('X3STATION');
+await api.backup.inviteProvider('X3STATION', providerCallsign);
+await api.backup.startBackup('X3STATION', providerCallsign);
+final status = await api.backup.status('X3STATION');
+print('Progress: ${status.data?.progressPercent}%');
+
+// Provider operations
+final clients = await api.backup.clients('X3STATION');
+await api.backup.acceptClient('X3STATION', clientCallsign);
+final snapshots = await api.backup.snapshots('X3STATION', clientCallsign);
+```
+
+### DmApi
+
+```dart
+// List DM conversations
+final conversations = await api.dm.conversations('X3STATION');
+for (final conv in conversations.items) {
+  print('${conv.callsign}: ${conv.unreadCount} unread');
+}
+
+// Get messages
+final messages = await api.dm.messages('X3STATION', otherCallsign,
+  limit: 50,
+  since: lastTimestamp,
+);
+
+// Send message (uses ConnectionManager for optimal transport)
+await api.dm.sendMessage(targetCallsign, signedEvent,
+  queueIfOffline: true,
+  ttl: Duration(hours: 24),
+);
+
+// Sync messages
+final syncResult = await api.dm.sync('X3STATION', otherCallsign, since: lastSync);
+```
+
+### UpdatesApi
+
+```dart
+// Get latest release info
+final release = await api.updates.latest('X3STATION', platform: 'android');
+if (release.success) {
+  print('Latest: ${release.data?.version}');
+  print('Download: ${release.data?.downloadUrl}');
+}
+
+// Check if update available
+final hasUpdate = await api.updates.checkForUpdate('X3STATION', '1.10.7');
+if (hasUpdate.data == true) {
+  print('Update available!');
+}
+```
+
+### Response Types
+
+All API methods return typed responses:
+
+```dart
+/// Single item response
+class ApiResponse<T> {
+  final bool success;
+  final String? error;
+  final T? data;
+  final int? statusCode;
+  final String? transportUsed;  // 'lan', 'ble', 'station'
+  final Duration? latency;
+  final bool wasQueued;
+}
+
+/// List response with pagination
+class ApiListResponse<T> {
+  final bool success;
+  final String? error;
+  final List<T> items;
+  final int? total;
+  final int? offset;
+  final int? limit;
+}
+```
+
+### Core Request Methods
+
+For custom endpoints not covered by modules:
+
+```dart
+// GET request
+final response = await api.get<MyType>(
+  'X3STATION',
+  '/api/custom/endpoint',
+  queryParams: {'key': 'value'},
+  fromJson: (json) => MyType.fromJson(json),
+);
+
+// POST request
+final response = await api.post<MyType>(
+  'X3STATION',
+  '/api/custom/endpoint',
+  body: {'data': 'value'},
+  fromJson: (json) => MyType.fromJson(json),
+  queueIfOffline: true,
+);
+
+// Other methods: put, delete, patch, list
+```
+
+### File Structure
+
+```
+lib/api/
+├── api.dart              # GeogramApi facade
+├── api_response.dart     # ApiResponse, ApiListResponse
+├── api_error.dart        # ApiError class
+├── endpoints/
+│   ├── status_api.dart   # StatusApi, DeviceStatus, GeoIpInfo
+│   ├── chat_api.dart     # ChatApi, ChatRoom, ChatMessage, ChatFile
+│   ├── alerts_api.dart   # AlertsApi, AlertSummary, AlertDetails
+│   ├── places_api.dart   # PlacesApi, PlaceSummary, PlaceDetails
+│   ├── events_api.dart   # EventsApi, EventSummary, MediaContributor
+│   ├── blog_api.dart     # BlogApi, BlogPostSummary, BlogPostDetails
+│   ├── videos_api.dart   # VideosApi, VideoSummary, VideoFolder
+│   ├── feedback_api.dart # FeedbackApi, FeedbackCounts, FeedbackComment
+│   ├── backup_api.dart   # BackupApi, BackupProvider, BackupSnapshot
+│   ├── dm_api.dart       # DmApi, DmConversation, DmMessage
+│   └── updates_api.dart  # UpdatesApi, ReleaseInfo
+├── handlers/             # Server-side request handlers
+│   ├── alert_handler.dart
+│   ├── place_handler.dart
+│   ├── video_handler.dart
+│   ├── blog_handler.dart
+│   └── feedback_handler.dart
+└── common/
+    ├── station_info.dart
+    ├── file_tree_builder.dart
+    └── geometry_utils.dart
 ```
 
 ---

@@ -14,7 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../lib/cli/pure_station.dart';
+import '../lib/station.dart';
 import '../lib/cli/pure_storage_config.dart';
 import '../lib/util/nostr_event.dart';
 import '../lib/util/nostr_crypto.dart';

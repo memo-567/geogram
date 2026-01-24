@@ -1,7 +1,21 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "name": "Geogram Flasher Devices",
   "description": "Device definitions for the Geogram Flasher app",
+  "projects": [
+    {
+      "id": "geogram",
+      "name": "Geogram Firmware",
+      "description": "Official Geogram firmware for ESP32 devices",
+      "architectures": ["esp32"]
+    },
+    {
+      "id": "quansheng",
+      "name": "Quansheng Radios",
+      "description": "Quansheng handheld radio firmware",
+      "architectures": ["uv-k5"]
+    }
+  ],
   "families": [
     {
       "id": "esp32",
@@ -17,5 +31,5 @@
     }
   ],
   "created_at": "2026-01-24T10:00:00Z",
-  "modified_at": "2026-01-24T10:00:00Z"
+  "modified_at": "2026-01-24T12:00:00Z"
 }

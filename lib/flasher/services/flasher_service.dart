@@ -9,7 +9,6 @@ import '../models/flash_progress.dart';
 import '../protocols/flash_protocol.dart';
 import '../protocols/protocol_registry.dart';
 import '../serial/serial_port.dart';
-import '../serial/serial_port_native.dart';
 import 'flasher_storage_service.dart';
 
 /// Main flasher service
@@ -42,9 +41,9 @@ class FlasherService {
 
   /// List available serial ports
   ///
-  /// Uses native OS facilities - no external libraries required.
+  /// Uses flutter_libserialport for cross-platform USB serial.
   Future<List<PortInfo>> listPorts() async {
-    return NativeSerialPortDetector.listPorts();
+    return SerialPort.listPorts();
   }
 
   /// Find ports matching a device definition
@@ -169,11 +168,14 @@ class FlasherService {
         throw FlashException('Unsupported protocol: ${device.flash.protocol}');
       }
 
-      // Create serial port
-      // Create serial port using native implementation
-      _currentPort = NativeSerialPort();
+      // Create and open serial port using flutter_libserialport
+      _currentPort = SerialPort();
+      final portOpened = await _currentPort!.open(portPath, device.flash.baudRate);
+      if (!portOpened) {
+        throw ConnectionException('Failed to open serial port: $portPath');
+      }
 
-      // Connect
+      // Connect protocol to the open port
       final connected = await _currentProtocol!.connect(
         _currentPort!,
         baudRate: device.flash.baudRate,

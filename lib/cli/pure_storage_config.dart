@@ -57,6 +57,12 @@ class PureStorageConfig {
     return path.join(devicesDir, sanitized);
   }
 
+  /// Get the chat directory for a specific callsign
+  String getChatDir(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, sanitized, 'chat');
+  }
+
   /// Initialize the storage configuration
   ///
   /// Priority order for base directory:

@@ -24,6 +24,31 @@ No monthly fees. No account required. No company can shut down your community's 
 
 ---
 
+## ESP32 Station
+
+For dedicated station hardware, Geogram provides firmware for ESP32 microcontrollers. These low-cost devices (~$10-20) run continuously on minimal power, serving as always-on infrastructure nodes for your community network.
+
+**Supported boards:**
+
+| Board | Features |
+|-------|----------|
+| ESP32-C3-mini | Compact WiFi bridge, minimal footprint |
+| ESP32-S3 ePaper 1.54" | E-paper display, temperature/humidity sensor, RTC |
+| ESP32 Generic | Basic WiFi relay |
+
+ESP32 stations provide:
+- **WiFi bridging** - Connect BLE mesh networks to WiFi/Internet
+- **Configuration portal** - Web-based setup at first boot
+- **FTP/Telnet access** - Remote file management and CLI
+- **Map tile caching** - Store offline maps on SD card
+- **OTA updates** - Automatic firmware updates from GitHub releases
+
+First boot creates a "Geogram-Setup" WiFi network. Connect and navigate to `192.168.4.1` to configure your network credentials. The station then joins your network and begins relaying traffic.
+
+Pre-built firmware binaries are available on the [releases page](https://github.com/geograms/geogram/releases). See [esp32/README.md](esp32/README.md) for build instructions and detailed documentation.
+
+---
+
 ## Offline Maps
 
 Geogram includes worldwide satellite imagery and street maps that work without internet. Pan and zoom anywhere on the planet using cached tiles stored locally on your device or synced from a nearby station.
@@ -138,12 +163,13 @@ Geogram runs on all major platforms from a single codebase:
 |----------|--------|
 | Android | Stable |
 | Linux | Stable |
+| ESP32 | Stable (C3-mini, S3 ePaper) |
 | Windows | Available but untested |
 | macOS | Available but untested |
 | iOS | Available but untested |
 | Web | Available but untested |
 
-The Android and Linux versions receive the most testing and are recommended for production use. All platforms share the same data formats and can sync with each other through any available transport.
+The Android, Linux, and ESP32 versions receive the most testing and are recommended for production use. All platforms share the same data formats and can sync with each other through any available transport.
 
 ---
 

@@ -97,6 +97,7 @@ import 'pages/welcome_page.dart';
 import 'pages/security_settings_page.dart';
 import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
+import 'pages/mirror_settings_page.dart';
 import 'widgets/profile_switcher.dart';
 import 'cli/console.dart';
 
@@ -762,11 +763,16 @@ class _HomePageState extends State<HomePage> {
   final ProfileService _profileService = ProfileService();
   final DebugController _debugController = DebugController();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
+  bool _isSearchFocused = false;
 
   // Hidden pages (not ready): BotPage
   List<Widget> get _pages => [
-    CollectionsPage(searchQuery: _searchQuery),
+    CollectionsPage(
+      searchQuery: _searchQuery,
+      onAppSelected: _clearSearchAndUnfocus,
+    ),
     const MapsBrowserPage(),
     const DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
@@ -824,16 +830,36 @@ class _HomePageState extends State<HomePage> {
 
     // Check for first launch and show profile setup
     _checkFirstLaunch();
+
+    // Listen to search focus changes
+    _searchFocusNode.addListener(_onSearchFocusChanged);
+  }
+
+  void _onSearchFocusChanged() {
+    if (mounted) {
+      setState(() => _isSearchFocused = _searchFocusNode.hasFocus);
+    }
+  }
+
+  void _clearSearchAndUnfocus() {
+    _searchController.clear();
+    _searchFocusNode.unfocus();
+    setState(() {
+      _searchQuery = '';
+      _isSearchFocused = false;
+    });
   }
 
   @override
   void dispose() {
+    _searchFocusNode.removeListener(_onSearchFocusChanged);
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.profileNotifier.removeListener(_onProfileChanged);
     UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
     _debugController.panelNotifier.removeListener(_onDebugNavigate);
     _debugController.toastNotifier.removeListener(_onDebugToast);
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _debugActionSubscription?.cancel();
     _navigateHomeSubscription?.cancel();
     _unreadSubscription?.cancel();
@@ -1259,16 +1285,26 @@ class _HomePageState extends State<HomePage> {
         appBar: _selectedIndex == 0
             ? AppBar(
                 automaticallyImplyLeading: false,
+                leading: _isSearchFocused
+                    ? IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: _clearSearchAndUnfocus,
+                      )
+                    : null,
                 title: Row(
                   children: [
-                    const ProfileSwitcher(),
-                    const SizedBox(width: 12),
+                    // Show ProfileSwitcher only when search is not focused
+                    if (!_isSearchFocused) ...[
+                      const ProfileSwitcher(),
+                      const SizedBox(width: 12),
+                    ],
                     // Search field
                     Expanded(
                       child: SizedBox(
                         height: 40,
                         child: TextField(
                           controller: _searchController,
+                          focusNode: _searchFocusNode,
                           decoration: InputDecoration(
                             hintText: _i18n.t('search_apps'),
                             hintStyle: TextStyle(
@@ -1641,8 +1677,9 @@ class _HomePageState extends State<HomePage> {
 // Collections Page
 class CollectionsPage extends StatefulWidget {
   final String searchQuery;
+  final VoidCallback? onAppSelected;
 
-  const CollectionsPage({super.key, this.searchQuery = ''});
+  const CollectionsPage({super.key, this.searchQuery = '', this.onAppSelected});
 
   @override
   State<CollectionsPage> createState() => _CollectionsPageState();
@@ -2121,6 +2158,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                     return _CollectionGridCard(
                                       collection: collection,
                                       onTap: () {
+                                        // Clear search when app is selected
+                                        widget.onAppSelected?.call();
                                         _recordAppUsage(collection.type);
                                         LogService().log(
                                           'Opened collection: ${collection.title}',
@@ -2343,6 +2382,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                     return _CollectionGridCard(
                                       collection: collection,
                                       onTap: () {
+                                        // Clear search when app is selected
+                                        widget.onAppSelected?.call();
                                         _recordAppUsage(collection.type);
                                         LogService().log(
                                           'Opened collection: ${collection.title}',
@@ -3243,6 +3284,20 @@ class _SettingsPageState extends State<SettingsPage> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const StationsPage()),
+            );
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.sync_alt),
+          title: const Text('Mirror'),
+          subtitle: const Text('Sync apps between your devices'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const MirrorSettingsPage(),
+              ),
             );
           },
         ),

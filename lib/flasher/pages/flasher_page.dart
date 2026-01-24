@@ -11,10 +11,11 @@ import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
 import '../serial/serial_port.dart';
 import '../services/flasher_service.dart';
-import '../widgets/device_card.dart';
+import '../widgets/add_firmware_wizard.dart';
+import '../widgets/firmware_tree_widget.dart';
 import '../widgets/flash_progress_widget.dart';
 
-/// Main flasher page for browsing devices and flashing firmware
+/// Main flasher page with Library and Flasher tabs
 class FlasherPage extends StatefulWidget {
   final String basePath;
 
@@ -27,15 +28,24 @@ class FlasherPage extends StatefulWidget {
   State<FlasherPage> createState() => _FlasherPageState();
 }
 
-class _FlasherPageState extends State<FlasherPage> {
+class _FlasherPageState extends State<FlasherPage>
+    with SingleTickerProviderStateMixin {
   late FlasherService _flasherService;
+  late TabController _tabController;
 
-  List<DeviceDefinition> _devices = [];
-  List<PortInfo> _ports = [];
+  // Device hierarchy for library view
+  Map<String, Map<String, List<DeviceDefinition>>> _hierarchy = {};
+
+  // Selection
   DeviceDefinition? _selectedDevice;
+  FirmwareVersion? _selectedVersion;
+
+  // Port selection
+  List<PortInfo> _ports = [];
   PortInfo? _selectedPort;
   String? _firmwarePath;
 
+  // State
   bool _isLoading = true;
   bool _isFlashing = false;
   FlashProgress? _flashProgress;
@@ -45,8 +55,15 @@ class _FlasherPageState extends State<FlasherPage> {
   void initState() {
     super.initState();
     _flasherService = FlasherService.withPath(widget.basePath);
+    _tabController = TabController(length: 2, vsync: this);
     _loadDevices();
     _refreshPorts();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadDevices() async {
@@ -56,9 +73,9 @@ class _FlasherPageState extends State<FlasherPage> {
     });
 
     try {
-      final devices = await _flasherService.storage.loadAllDevices();
+      final hierarchy = await _flasherService.storage.loadDevicesByHierarchy();
       setState(() {
-        _devices = devices;
+        _hierarchy = hierarchy;
         _isLoading = false;
       });
     } catch (e) {
@@ -75,12 +92,18 @@ class _FlasherPageState extends State<FlasherPage> {
       setState(() {
         _ports = ports;
 
-        // Auto-select matching port
+        // Auto-select matching port for selected device
         if (_selectedDevice != null && _selectedDevice!.usb != null) {
           final matching = _findMatchingPort(_selectedDevice!);
           if (matching != null) {
             _selectedPort = matching;
+            return;
           }
+        }
+
+        // If no port selected yet, auto-select the most likely ESP32 port
+        if (_selectedPort == null && ports.isNotEmpty) {
+          _selectedPort = _findBestEsp32Port(ports);
         }
       });
     } catch (e) {
@@ -89,6 +112,39 @@ class _FlasherPageState extends State<FlasherPage> {
         _ports = [];
       });
     }
+  }
+
+  /// Find the most likely ESP32 port from available ports
+  PortInfo? _findBestEsp32Port(List<PortInfo> ports) {
+    // Priority order for ESP32 detection:
+    // 1. Espressif native USB (ESP32-C3/S2/S3) - VID 0x303A
+    // 2. Known USB-UART bridges commonly used with ESP32
+
+    // First, look for Espressif native USB
+    for (final port in ports) {
+      if (port.vid == 0x303A) {
+        return port;
+      }
+    }
+
+    // Then check for common USB-UART chips
+    for (final port in ports) {
+      final match = Esp32UsbIdentifiers.matchEsp32(port);
+      if (match != null) {
+        return port;
+      }
+    }
+
+    // If no ESP32 found but we have ports, select the first USB serial port
+    // (skip built-in serial ports that typically have no VID/PID)
+    for (final port in ports) {
+      if (port.vid != null && port.pid != null) {
+        return port;
+      }
+    }
+
+    // Last resort: return first port
+    return ports.isNotEmpty ? ports.first : null;
   }
 
   PortInfo? _findMatchingPort(DeviceDefinition device) {
@@ -106,6 +162,23 @@ class _FlasherPageState extends State<FlasherPage> {
     return null;
   }
 
+  void _onFirmwareSelected(DeviceDefinition device, FirmwareVersion? version) {
+    setState(() {
+      _selectedDevice = device;
+      _selectedVersion = version;
+      _firmwarePath = null; // Reset custom firmware
+
+      // Auto-select matching port
+      final matching = _findMatchingPort(device);
+      if (matching != null) {
+        _selectedPort = matching;
+      }
+    });
+
+    // Switch to Flasher tab (index 0)
+    _tabController.animateTo(0);
+  }
+
   Future<void> _selectFirmware() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -121,7 +194,7 @@ class _FlasherPageState extends State<FlasherPage> {
 
   Future<void> _startFlash() async {
     if (_selectedDevice == null) {
-      _showError('Please select a device');
+      _showError('Please select a firmware from the Library');
       return;
     }
 
@@ -130,9 +203,11 @@ class _FlasherPageState extends State<FlasherPage> {
       return;
     }
 
-    // Need either firmware file or URL
-    if (_firmwarePath == null && _selectedDevice!.flash.firmwareUrl == null) {
-      _showError('Please select a firmware file');
+    // Need either firmware file, local version, or URL
+    final hasLocalVersion = _selectedVersion != null;
+    final hasFirmwareUrl = _selectedDevice!.flash.firmwareUrl != null;
+    if (_firmwarePath == null && !hasLocalVersion && !hasFirmwareUrl) {
+      _showError('No firmware available for this device');
       return;
     }
 
@@ -143,10 +218,20 @@ class _FlasherPageState extends State<FlasherPage> {
     });
 
     try {
+      // Determine firmware path
+      String? firmwarePath = _firmwarePath;
+      if (firmwarePath == null && _selectedVersion != null) {
+        // Use local version path
+        final basePath = _selectedDevice!.basePath;
+        if (basePath != null) {
+          firmwarePath = '$basePath/${_selectedVersion!.firmwarePath}';
+        }
+      }
+
       await _flasherService.flashDevice(
         device: _selectedDevice!,
         portPath: _selectedPort!.path,
-        firmwarePath: _firmwarePath,
+        firmwarePath: firmwarePath,
         onProgress: (progress) {
           if (mounted) {
             setState(() {
@@ -195,11 +280,16 @@ class _FlasherPageState extends State<FlasherPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Flasher'),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Flasher', icon: Icon(Icons.flash_on)),
+            Tab(text: 'Library', icon: Icon(Icons.folder)),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -211,11 +301,15 @@ class _FlasherPageState extends State<FlasherPage> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? _buildErrorView()
-              : _buildContent(theme),
+      body: _error != null
+          ? _buildErrorView()
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildFlasherTab(),
+                _buildLibraryTab(),
+              ],
+            ),
     );
   }
 
@@ -237,19 +331,60 @@ class _FlasherPageState extends State<FlasherPage> {
     );
   }
 
-  Widget _buildContent(ThemeData theme) {
+  Widget _buildLibraryTab() {
+    return Stack(
+      children: [
+        FirmwareTreeWidget(
+          hierarchy: _hierarchy,
+          selectedDevice: _selectedDevice,
+          selectedVersion: _selectedVersion,
+          onSelected: _onFirmwareSelected,
+          isLoading: _isLoading,
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton.extended(
+            heroTag: 'add_firmware',
+            onPressed: _openAddFirmwareWizard,
+            icon: const Icon(Icons.add),
+            label: const Text('Add'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openAddFirmwareWizard() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => AddFirmwareWizard(
+          basePath: widget.basePath,
+          hierarchy: _hierarchy,
+          onComplete: () {
+            _loadDevices();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFlasherTab() {
+    final theme = Theme.of(context);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Device selection
+          // Firmware selection
           Text(
-            'Select Device',
+            'Firmware',
             style: theme.textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          _buildDeviceGrid(),
+          _buildFirmwareSelection(theme),
 
           const SizedBox(height: 24),
 
@@ -260,16 +395,6 @@ class _FlasherPageState extends State<FlasherPage> {
           ),
           const SizedBox(height: 8),
           _buildPortSelector(),
-
-          const SizedBox(height: 24),
-
-          // Firmware selection
-          Text(
-            'Firmware',
-            style: theme.textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
-          _buildFirmwareSelector(),
 
           const SizedBox(height: 24),
 
@@ -289,7 +414,9 @@ class _FlasherPageState extends State<FlasherPage> {
           // Flash button
           Center(
             child: ElevatedButton.icon(
-              onPressed: _isFlashing ? null : _startFlash,
+              onPressed: _isFlashing || _selectedDevice == null
+                  ? null
+                  : _startFlash,
               icon: _isFlashing
                   ? const SizedBox(
                       width: 20,
@@ -308,41 +435,6 @@ class _FlasherPageState extends State<FlasherPage> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildDeviceGrid() {
-    if (_devices.isEmpty) {
-      return const Card(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Center(
-            child: Text('No devices found'),
-          ),
-        ),
-      );
-    }
-
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: _devices.map((device) {
-        final isSelected = _selectedDevice?.id == device.id;
-        return DeviceCard(
-          device: device,
-          isSelected: isSelected,
-          onTap: () {
-            setState(() {
-              _selectedDevice = device;
-              // Try to auto-select matching port
-              final matching = _findMatchingPort(device);
-              if (matching != null) {
-                _selectedPort = matching;
-              }
-            });
-          },
-        );
-      }).toList(),
     );
   }
 
@@ -370,16 +462,49 @@ class _FlasherPageState extends State<FlasherPage> {
                       port.vid == _selectedDevice!.usb!.vidInt &&
                       port.pid == _selectedDevice!.usb!.pidInt;
 
+                  final esp32Type = Esp32UsbIdentifiers.matchEsp32(port);
+                  final isEsp32 = esp32Type != null;
+
+                  // Build label with ESP32 indicator
+                  String label = port.path;
+                  if (isEsp32) {
+                    label = '${port.path} - $esp32Type';
+                  } else if (port.product != null) {
+                    label = '${port.path} (${port.product})';
+                  }
+
                   return DropdownMenuItem(
                     value: port,
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(port.displayName),
-                        if (isMatch) ...[
-                          const SizedBox(width: 8),
-                          const Icon(Icons.check_circle,
-                              size: 16, color: Colors.green),
-                        ],
+                        Text(label),
+                        if (isMatch)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 8),
+                            child: Icon(Icons.check_circle,
+                                size: 16, color: Colors.green),
+                          )
+                        else if (isEsp32)
+                          Container(
+                            margin: const EdgeInsets.only(left: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'ESP32',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue[800],
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   );
@@ -402,73 +527,220 @@ class _FlasherPageState extends State<FlasherPage> {
     );
   }
 
-  Widget _buildFirmwareSelector() {
-    final hasFirmwareUrl = _selectedDevice?.flash.firmwareUrl != null;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (hasFirmwareUrl) ...[
-              RadioListTile<bool>(
-                title: const Text('Download latest firmware'),
-                subtitle: Text(
-                  _selectedDevice?.flash.firmwareUrl ?? '',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                value: true,
-                groupValue: _firmwarePath == null,
-                onChanged: (value) {
-                  if (value == true) {
-                    setState(() {
-                      _firmwarePath = null;
-                    });
-                  }
-                },
-              ),
-              RadioListTile<bool>(
-                title: const Text('Use local file'),
-                subtitle: _firmwarePath != null
-                    ? Text(
-                        _firmwarePath!.split(Platform.pathSeparator).last,
-                        style: const TextStyle(fontSize: 12),
-                      )
-                    : const Text('No file selected'),
-                value: false,
-                groupValue: _firmwarePath == null,
-                onChanged: (value) async {
-                  if (value == false) {
-                    await _selectFirmware();
-                  }
-                },
-              ),
-            ] else ...[
-              if (_firmwarePath != null)
-                ListTile(
-                  leading: const Icon(Icons.file_present),
-                  title: Text(_firmwarePath!.split(Platform.pathSeparator).last),
-                  trailing: IconButton(
+  Widget _buildFirmwareSelection(ThemeData theme) {
+    // If a custom firmware file is selected
+    if (_firmwarePath != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.file_present, color: Colors.green, size: 32),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Custom Firmware',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                        Text(
+                          _firmwarePath!.split(Platform.pathSeparator).last,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
                     icon: const Icon(Icons.close),
                     onPressed: () {
                       setState(() {
                         _firmwarePath = null;
                       });
                     },
+                    tooltip: 'Clear',
                   ),
-                )
-              else
-                const Text('Select a firmware file to flash'),
-              const SizedBox(height: 8),
-              ElevatedButton.icon(
-                onPressed: _selectFirmware,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Browse...'),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _tabController.animateTo(1),
+                      icon: const Icon(Icons.folder),
+                      label: const Text('Library'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _selectFirmware,
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('Browse'),
+                    ),
+                  ),
+                ],
               ),
             ],
+          ),
+        ),
+      );
+    }
+
+    // If a device from library is selected
+    if (_selectedDevice != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Device image
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _buildDeviceImage(),
+                  ),
+                  const SizedBox(width: 16),
+
+                  // Device info
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _selectedDevice!.title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_selectedDevice!.effectiveProject} / ${_selectedDevice!.effectiveArchitecture}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        if (_selectedVersion != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'v${_selectedVersion!.version}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _tabController.animateTo(1),
+                      icon: const Icon(Icons.folder),
+                      label: const Text('Library'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _selectFirmware,
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('Browse'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // No firmware selected - show both options
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Icon(
+              Icons.memory,
+              size: 48,
+              color: theme.colorScheme.outline,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'No firmware selected',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _tabController.animateTo(1),
+                    icon: const Icon(Icons.folder),
+                    label: const Text('Library'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _selectFirmware,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Browse'),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDeviceImage() {
+    final photoPath = _selectedDevice?.photoPath;
+    if (photoPath != null) {
+      final file = File(photoPath);
+      if (file.existsSync()) {
+        return Image.file(
+          file,
+          width: 64,
+          height: 64,
+          fit: BoxFit.cover,
+        );
+      }
+    }
+    return Container(
+      width: 64,
+      height: 64,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        Icons.developer_board,
+        size: 32,
+        color: Theme.of(context).colorScheme.outline,
       ),
     );
   }
