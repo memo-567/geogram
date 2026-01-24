@@ -56,6 +56,10 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
   String? _detailDevice; // "project/arch/model"
   String? _detailVersion; // "project/arch/model/version"
 
+  // Search
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +67,12 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
     if (widget.selectedDevice != null) {
       _expandToSelection();
     }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -97,15 +107,230 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
       return _buildEmptyState(context);
     }
 
-    final projects = widget.hierarchy.keys.toList()..sort();
+    // Filter hierarchy based on search query
+    final filteredHierarchy = _filterHierarchy();
+    final projects = filteredHierarchy.keys.toList()..sort();
 
-    return ListView.builder(
-      itemCount: projects.length,
-      itemBuilder: (context, index) {
-        final project = projects[index];
-        return _buildProjectNode(context, project);
-      },
+    // Auto-select if only one result
+    _autoSelectSingleResult(filteredHierarchy);
+
+    return Column(
+      children: [
+        // Search bar
+        _buildSearchBar(context),
+
+        // Tree view
+        Expanded(
+          child: projects.isEmpty && _searchQuery.isNotEmpty
+              ? _buildNoResultsState(context)
+              : ListView.builder(
+                  itemCount: projects.length,
+                  itemBuilder: (context, index) {
+                    final project = projects[index];
+                    return _buildProjectNode(
+                      context,
+                      project,
+                      filteredHierarchy: filteredHierarchy,
+                    );
+                  },
+                ),
+        ),
+      ],
     );
+  }
+
+  Widget _buildSearchBar(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: 'Search firmware...',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {
+                      _searchQuery = '';
+                    });
+                  },
+                )
+              : null,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: theme.colorScheme.outline),
+          ),
+          filled: true,
+          fillColor: theme.colorScheme.surfaceContainerHighest,
+        ),
+        onChanged: (value) {
+          setState(() {
+            _searchQuery = value.toLowerCase().trim();
+            // Expand all when searching
+            if (_searchQuery.isNotEmpty) {
+              _expandAll();
+            }
+          });
+        },
+      ),
+    );
+  }
+
+  Widget _buildNoResultsState(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.search_off,
+            size: 64,
+            color: theme.colorScheme.outline,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No firmware found',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Try a different search term',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Filter hierarchy based on search query
+  Map<String, Map<String, List<DeviceDefinition>>> _filterHierarchy() {
+    if (_searchQuery.isEmpty) {
+      return widget.hierarchy;
+    }
+
+    final filtered = <String, Map<String, List<DeviceDefinition>>>{};
+
+    for (final projectEntry in widget.hierarchy.entries) {
+      final project = projectEntry.key;
+      final architectures = projectEntry.value;
+
+      final filteredArchitectures = <String, List<DeviceDefinition>>{};
+
+      for (final archEntry in architectures.entries) {
+        final arch = archEntry.key;
+        final devices = archEntry.value;
+
+        final filteredDevices = devices.where((device) {
+          return _deviceMatchesSearch(device, project, arch);
+        }).toList();
+
+        if (filteredDevices.isNotEmpty) {
+          filteredArchitectures[arch] = filteredDevices;
+        }
+      }
+
+      if (filteredArchitectures.isNotEmpty) {
+        filtered[project] = filteredArchitectures;
+      }
+    }
+
+    return filtered;
+  }
+
+  /// Check if a device matches the search query
+  bool _deviceMatchesSearch(DeviceDefinition device, String project, String arch) {
+    final searchFields = [
+      device.title,
+      device.description,
+      device.chip,
+      device.effectiveModel,
+      device.effectiveProject,
+      device.effectiveArchitecture,
+      project,
+      arch,
+      ...device.versions.map((v) => v.version),
+      ...device.versions.map((v) => v.releaseNotes ?? ''),
+    ];
+
+    return searchFields.any(
+      (field) => field.toLowerCase().contains(_searchQuery),
+    );
+  }
+
+  /// Expand all nodes when searching
+  void _expandAll() {
+    for (final project in widget.hierarchy.keys) {
+      _expandedProjects.add(project);
+      final architectures = widget.hierarchy[project] ?? {};
+      for (final arch in architectures.keys) {
+        _expandedArchitectures.add('$project/$arch');
+        final devices = architectures[arch] ?? [];
+        for (final device in devices) {
+          _expandedDevices.add('$project/$arch/${device.effectiveModel}');
+        }
+      }
+    }
+  }
+
+  /// Auto-select if only one device/version matches
+  void _autoSelectSingleResult(
+    Map<String, Map<String, List<DeviceDefinition>>> filteredHierarchy,
+  ) {
+    if (_searchQuery.isEmpty) return;
+
+    // Count total devices
+    var totalDevices = 0;
+    DeviceDefinition? singleDevice;
+    String? singleProject;
+    String? singleArch;
+
+    for (final projectEntry in filteredHierarchy.entries) {
+      for (final archEntry in projectEntry.value.entries) {
+        for (final device in archEntry.value) {
+          totalDevices++;
+          singleDevice = device;
+          singleProject = projectEntry.key;
+          singleArch = archEntry.key;
+        }
+      }
+    }
+
+    // If only one device, expand it and show details
+    if (totalDevices == 1 && singleDevice != null) {
+      final key = '$singleProject/$singleArch/${singleDevice.effectiveModel}';
+      _expandedProjects.add(singleProject!);
+      _expandedArchitectures.add('$singleProject/$singleArch');
+      _expandedDevices.add(key);
+      _detailDevice = key;
+
+      // If only one version, auto-select it
+      if (singleDevice.versions.length == 1) {
+        final version = singleDevice.versions.first;
+        // Notify parent to select this device/version
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (widget.selectedDevice != singleDevice ||
+              widget.selectedVersion != version) {
+            widget.onSelected?.call(singleDevice!, version);
+          }
+        });
+      } else if (singleDevice.versions.isEmpty) {
+        // No versions, select device itself
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (widget.selectedDevice != singleDevice) {
+            widget.onSelected?.call(singleDevice!, null);
+          }
+        });
+      }
+    }
   }
 
   Widget _buildEmptyState(BuildContext context) {
@@ -138,10 +363,14 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
     );
   }
 
-  Widget _buildProjectNode(BuildContext context, String project) {
+  Widget _buildProjectNode(
+    BuildContext context,
+    String project, {
+    required Map<String, Map<String, List<DeviceDefinition>>> filteredHierarchy,
+  }) {
     final theme = Theme.of(context);
     final isExpanded = _expandedProjects.contains(project);
-    final architectures = widget.hierarchy[project]?.keys.toList() ?? [];
+    final architectures = filteredHierarchy[project]?.keys.toList() ?? [];
     architectures.sort();
 
     return Column(
@@ -155,6 +384,20 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                 _expandedProjects.remove(project);
               } else {
                 _expandedProjects.add(project);
+                // Auto-expand if only one architecture
+                if (architectures.length == 1) {
+                  final arch = architectures.first;
+                  final archKey = '$project/$arch';
+                  _expandedArchitectures.add(archKey);
+                  // Auto-expand if only one device
+                  final devices = filteredHierarchy[project]?[arch] ?? [];
+                  if (devices.length == 1) {
+                    final device = devices.first;
+                    final deviceKey = '$project/$arch/${device.effectiveModel}';
+                    _expandedDevices.add(deviceKey);
+                    _detailDevice = deviceKey;
+                  }
+                }
               }
             });
           },
@@ -203,6 +446,7 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                 context,
                 project,
                 arch,
+                filteredHierarchy: filteredHierarchy,
               )),
       ],
     );
@@ -211,12 +455,13 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
   Widget _buildArchitectureNode(
     BuildContext context,
     String project,
-    String architecture,
-  ) {
+    String architecture, {
+    required Map<String, Map<String, List<DeviceDefinition>>> filteredHierarchy,
+  }) {
     final theme = Theme.of(context);
     final key = '$project/$architecture';
     final isExpanded = _expandedArchitectures.contains(key);
-    final devices = widget.hierarchy[project]?[architecture] ?? [];
+    final devices = filteredHierarchy[project]?[architecture] ?? [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -229,6 +474,13 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                 _expandedArchitectures.remove(key);
               } else {
                 _expandedArchitectures.add(key);
+                // Auto-expand if only one device
+                if (devices.length == 1) {
+                  final device = devices.first;
+                  final deviceKey = '$project/$architecture/${device.effectiveModel}';
+                  _expandedDevices.add(deviceKey);
+                  _detailDevice = deviceKey;
+                }
               }
             });
           },
