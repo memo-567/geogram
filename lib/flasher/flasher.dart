@@ -24,6 +24,7 @@ export 'protocols/protocol_registry.dart';
 
 // Serial
 export 'serial/serial_port.dart';
+export 'serial/serial_port_native.dart';
 export 'serial/serial_port_desktop.dart';
 export 'serial/serial_port_android.dart';
 

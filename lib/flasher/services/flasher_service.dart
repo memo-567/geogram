@@ -9,7 +9,7 @@ import '../models/flash_progress.dart';
 import '../protocols/flash_protocol.dart';
 import '../protocols/protocol_registry.dart';
 import '../serial/serial_port.dart';
-import '../serial/serial_port_desktop.dart';
+import '../serial/serial_port_native.dart';
 import 'flasher_storage_service.dart';
 
 /// Main flasher service
@@ -41,14 +41,10 @@ class FlasherService {
   Stream<FlashProgress>? get progressStream => _progressController?.stream;
 
   /// List available serial ports
+  ///
+  /// Uses native OS facilities - no external libraries required.
   Future<List<PortInfo>> listPorts() async {
-    if (Platform.isAndroid) {
-      // Use Android implementation
-      throw UnimplementedError('Android port listing not yet implemented');
-    } else {
-      // Desktop implementation
-      return DesktopSerialPort.listPorts();
-    }
+    return NativeSerialPortDetector.listPorts();
   }
 
   /// Find ports matching a device definition
@@ -174,11 +170,8 @@ class FlasherService {
       }
 
       // Create serial port
-      if (Platform.isAndroid) {
-        throw UnimplementedError('Android flashing not yet implemented');
-      } else {
-        _currentPort = DesktopSerialPort();
-      }
+      // Create serial port using native implementation
+      _currentPort = NativeSerialPort();
 
       // Connect
       final connected = await _currentProtocol!.connect(
