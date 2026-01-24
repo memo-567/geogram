@@ -1,10 +1,16 @@
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_libserialport/flutter_libserialport.dart' as libsp;
+import 'native_serial_linux.dart';
+
+// Android implementation uses Flutter's MethodChannel which requires dart:ui
+// Use conditional import: stub for pure Dart CLI, real impl for Flutter
+import 'native_serial_android_stub.dart'
+    if (dart.library.ui) 'native_serial_android.dart';
 
 /// Serial port information
 class PortInfo {
-  /// Device path (e.g., /dev/ttyUSB0, COM3)
+  /// Device path (e.g., /dev/ttyUSB0, COM3) or Android device name
   final String path;
 
   /// Human-readable description
@@ -83,86 +89,128 @@ class SerialTimeoutException extends SerialPortException {
       'SerialTimeoutException: $message (timeout: ${timeout.inMilliseconds}ms)';
 }
 
-/// Serial port wrapper using flutter_libserialport
+/// Cross-platform serial port implementation
 ///
-/// Provides cross-platform USB serial communication for:
-/// - Linux
-/// - macOS
-/// - Windows
-/// - Android (USB OTG)
-///
-/// The native library is bundled automatically by Flutter's build system.
+/// Uses native platform APIs without requiring third-party library installations:
+/// - **Android**: Android USB Host API (built into Android SDK)
+/// - **Linux**: libc termios (built into Linux kernel)
+/// - **macOS**: libc termios (built into macOS) [TODO]
+/// - **Windows**: kernel32 (built into Windows) [TODO]
 class SerialPort {
-  libsp.SerialPort? _port;
-  libsp.SerialPortReader? _reader;
+  // Platform-specific implementation
+  NativeSerialLinux? _linuxPort;
+  String? _androidDeviceName;
+
   String? _path;
   bool _dtr = false;
   bool _rts = false;
 
   /// List available serial ports with USB info
   static Future<List<PortInfo>> listPorts() async {
-    final ports = <PortInfo>[];
-
-    try {
-      final names = libsp.SerialPort.availablePorts;
-
-      for (final name in names) {
-        final port = libsp.SerialPort(name);
-        try {
-          ports.add(PortInfo(
-            path: name,
-            description: port.description,
-            vid: port.vendorId,
-            pid: port.productId,
-            manufacturer: port.manufacturer,
-            product: port.productName,
-            serialNumber: port.serialNumber,
-          ));
-        } finally {
-          port.dispose();
-        }
-      }
-    } catch (e) {
-      // Return empty list on error (e.g., library not available)
+    if (Platform.isAndroid) {
+      return _listPortsAndroid();
+    } else if (Platform.isLinux) {
+      return _listPortsLinux();
+    } else if (Platform.isMacOS) {
+      // TODO: Implement macOS support
+      return [];
+    } else if (Platform.isWindows) {
+      // TODO: Implement Windows support
+      return [];
     }
+    return [];
+  }
 
-    return ports;
+  static Future<List<PortInfo>> _listPortsAndroid() async {
+    try {
+      final devices = await NativeSerialAndroid.listDevices();
+      return devices.map((d) {
+        return PortInfo(
+          path: d['deviceName'] as String,
+          vid: d['vendorId'] as int?,
+          pid: d['productId'] as int?,
+          manufacturer: d['manufacturerName'] as String?,
+          product: d['productName'] as String?,
+          serialNumber: d['serialNumber'] as String?,
+          description: d['isEsp32'] == true ? 'ESP32 Device' : null,
+        );
+      }).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static Future<List<PortInfo>> _listPortsLinux() async {
+    try {
+      final linuxPorts = await NativeSerialLinux.listPorts();
+      return linuxPorts.map((p) {
+        return PortInfo(
+          path: p.path,
+          vid: p.vid,
+          pid: p.pid,
+          manufacturer: p.manufacturer,
+          product: p.product,
+          serialNumber: p.serialNumber,
+        );
+      }).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Request permission for a USB device (Android only)
+  ///
+  /// On other platforms, returns true immediately.
+  static Future<bool> requestPermission(String path) async {
+    if (Platform.isAndroid) {
+      return NativeSerialAndroid.requestPermission(path);
+    }
+    return true;
+  }
+
+  /// Check if we have permission for a USB device (Android only)
+  ///
+  /// On other platforms, returns true immediately.
+  static Future<bool> hasPermission(String path) async {
+    if (Platform.isAndroid) {
+      return NativeSerialAndroid.hasPermission(path);
+    }
+    return true;
   }
 
   /// Open the port with specified baud rate
   Future<bool> open(String path, int baudRate) async {
     try {
-      _port = libsp.SerialPort(path);
+      if (Platform.isAndroid) {
+        // Check/request permission first
+        if (!await NativeSerialAndroid.hasPermission(path)) {
+          final granted = await NativeSerialAndroid.requestPermission(path);
+          if (!granted) {
+            throw SerialPortException('Permission denied', path: path);
+          }
+        }
 
-      if (!_port!.openReadWrite()) {
-        final error = libsp.SerialPort.lastError;
-        throw SerialPortException(
-          'Failed to open port: ${error?.message ?? "unknown error"}',
-          path: path,
-        );
+        final success = await NativeSerialAndroid.open(path, baudRate: baudRate);
+        if (success) {
+          _androidDeviceName = path;
+          _path = path;
+          return true;
+        }
+        return false;
+      } else if (Platform.isLinux) {
+        _linuxPort = NativeSerialLinux();
+        final success = await _linuxPort!.open(path, baudRate);
+        if (success) {
+          _path = path;
+          return true;
+        }
+        _linuxPort = null;
+        return false;
+      } else {
+        throw SerialPortException('Platform not supported');
       }
-
-      _path = path;
-
-      // Configure port
-      final config = libsp.SerialPortConfig();
-      config.baudRate = baudRate;
-      config.bits = 8;
-      config.stopBits = 1;
-      config.parity = libsp.SerialPortParity.none;
-      config.setFlowControl(libsp.SerialPortFlowControl.none);
-      _port!.config = config;
-      config.dispose();
-
-      // Create reader for async reads
-      _reader = libsp.SerialPortReader(_port!);
-
-      return true;
     } catch (e) {
-      if (_port != null) {
-        _port!.dispose();
-        _port = null;
-      }
+      if (e is SerialPortException) rethrow;
       return false;
     }
   }
@@ -171,63 +219,70 @@ class SerialPort {
   ///
   /// Returns an empty list if no data is available within timeout.
   Future<Uint8List> read(int maxBytes, {Duration? timeout}) async {
-    if (_port == null || _reader == null) {
-      throw SerialPortException('Port not open');
-    }
+    final timeoutMs = timeout?.inMilliseconds ?? 1000;
 
-    final timeoutDuration = timeout ?? const Duration(seconds: 1);
-
-    try {
-      final stream = _reader!.stream.timeout(
-        timeoutDuration,
-        onTimeout: (sink) => sink.close(),
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      return NativeSerialAndroid.read(
+        _androidDeviceName!,
+        maxBytes: maxBytes,
+        timeoutMs: timeoutMs,
       );
-
-      final data = <int>[];
-      await for (final chunk in stream) {
-        data.addAll(chunk);
-        if (data.length >= maxBytes) break;
-      }
-
-      return Uint8List.fromList(data.take(maxBytes).toList());
-    } catch (e) {
-      return Uint8List(0);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      return _linuxPort!.read(maxBytes, timeoutMs: timeoutMs);
     }
+
+    throw SerialPortException('Port not open');
   }
 
   /// Read with blocking timeout (simpler API for protocols)
   Future<Uint8List> readBytes(int count, {int timeoutMs = 1000}) async {
-    if (_port == null) {
-      throw SerialPortException('Port not open');
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      // Accumulate data until we have enough or timeout
+      final data = <int>[];
+      final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+
+      while (data.length < count && DateTime.now().isBefore(deadline)) {
+        final remaining = deadline.difference(DateTime.now()).inMilliseconds;
+        if (remaining <= 0) break;
+
+        final chunk = await NativeSerialAndroid.read(
+          _androidDeviceName!,
+          maxBytes: count - data.length,
+          timeoutMs: remaining,
+        );
+        data.addAll(chunk);
+      }
+
+      return Uint8List.fromList(data);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      return _linuxPort!.readBytes(count, timeoutMs: timeoutMs);
     }
 
-    try {
-      final data = _port!.read(count, timeout: timeoutMs);
-      return data;
-    } catch (e) {
-      return Uint8List(0);
-    }
+    throw SerialPortException('Port not open');
   }
 
   /// Write data to the port
   ///
   /// Returns the number of bytes written.
   Future<int> write(Uint8List data) async {
-    if (_port == null) {
-      throw SerialPortException('Port not open');
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      return NativeSerialAndroid.write(_androidDeviceName!, data);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      return _linuxPort!.write(data);
     }
 
-    return _port!.write(data);
+    throw SerialPortException('Port not open');
   }
 
   /// Close the port
   Future<void> close() async {
-    _reader = null;
-
-    if (_port != null) {
-      _port!.close();
-      _port!.dispose();
-      _port = null;
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      await NativeSerialAndroid.close(_androidDeviceName!);
+      _androidDeviceName = null;
+      _path = null;
+    } else if (Platform.isLinux && _linuxPort != null) {
+      await _linuxPort!.close();
+      _linuxPort = null;
       _path = null;
     }
   }
@@ -235,20 +290,20 @@ class SerialPort {
   /// Set DTR (Data Terminal Ready) signal
   void setDTR(bool value) {
     _dtr = value;
-    if (_port != null) {
-      final config = _port!.config;
-      config.dtr = value ? libsp.SerialPortDtr.on : libsp.SerialPortDtr.off;
-      _port!.config = config;
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      NativeSerialAndroid.setDTR(_androidDeviceName!, value);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      _linuxPort!.setDTR(value);
     }
   }
 
   /// Set RTS (Request To Send) signal
   void setRTS(bool value) {
     _rts = value;
-    if (_port != null) {
-      final config = _port!.config;
-      config.rts = value ? libsp.SerialPortRts.on : libsp.SerialPortRts.off;
-      _port!.config = config;
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      NativeSerialAndroid.setRTS(_androidDeviceName!, value);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      _linuxPort!.setRTS(value);
     }
   }
 
@@ -259,37 +314,43 @@ class SerialPort {
   bool get rts => _rts;
 
   /// Check if port is open
-  bool get isOpen => _port != null && _port!.isOpen;
+  bool get isOpen {
+    if (Platform.isAndroid) {
+      return _androidDeviceName != null;
+    } else if (Platform.isLinux) {
+      return _linuxPort?.isOpen ?? false;
+    }
+    return false;
+  }
 
   /// Get the port path
   String? get path => _path;
 
   /// Flush input and output buffers
   Future<void> flush() async {
-    if (_port != null) {
-      _port!.flush();
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      await NativeSerialAndroid.flush(_androidDeviceName!);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      await _linuxPort!.flush();
     }
   }
 
   /// Set baud rate
   Future<void> setBaudRate(int baudRate) async {
-    if (_port != null) {
-      final config = _port!.config;
-      config.baudRate = baudRate;
-      _port!.config = config;
-      config.dispose();
+    if (Platform.isAndroid && _androidDeviceName != null) {
+      await NativeSerialAndroid.setBaudRate(_androidDeviceName!, baudRate);
+    } else if (Platform.isLinux && _linuxPort != null) {
+      await _linuxPort!.setBaudRate(baudRate);
     }
   }
 
   /// Drain output buffer (wait for all data to be sent)
   Future<void> drain() async {
-    if (_port != null) {
-      _port!.drain();
+    if (Platform.isLinux && _linuxPort != null) {
+      await _linuxPort!.drain();
     }
+    // Android USB doesn't have explicit drain, writes are synchronous to USB buffer
   }
-
-  /// Get underlying port handle (for advanced operations)
-  libsp.SerialPort? get handle => _port;
 }
 
 /// Known USB identifiers for ESP32 devices

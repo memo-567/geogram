@@ -173,6 +173,36 @@ class FlashProgress {
     return '${minutes}m ${secs}s';
   }
 
+  /// Get transfer speed in bytes per second
+  double get transferSpeed {
+    if (elapsed == null || elapsed!.inMilliseconds == 0 || bytesWritten == 0) {
+      return 0;
+    }
+    return bytesWritten / (elapsed!.inMilliseconds / 1000.0);
+  }
+
+  /// Get formatted transfer speed
+  String get formattedSpeed {
+    final speed = transferSpeed;
+    if (speed == 0) return '';
+    if (speed < 1024) return '${speed.toStringAsFixed(0)} B/s';
+    if (speed < 1024 * 1024) return '${(speed / 1024).toStringAsFixed(1)} KB/s';
+    return '${(speed / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+  }
+
+  /// Get estimated time remaining
+  String get formattedEta {
+    if (transferSpeed == 0 || totalBytes == 0 || bytesWritten >= totalBytes) {
+      return '';
+    }
+    final remainingBytes = totalBytes - bytesWritten;
+    final remainingSeconds = remainingBytes / transferSpeed;
+    if (remainingSeconds < 60) return '${remainingSeconds.toStringAsFixed(0)}s';
+    final minutes = (remainingSeconds / 60).floor();
+    final secs = (remainingSeconds % 60).floor();
+    return '${minutes}m ${secs}s';
+  }
+
   /// Check if operation is in progress
   bool get isInProgress =>
       status != FlashStatus.idle &&

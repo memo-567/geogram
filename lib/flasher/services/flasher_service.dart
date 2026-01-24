@@ -41,7 +41,7 @@ class FlasherService {
 
   /// List available serial ports
   ///
-  /// Uses flutter_libserialport for cross-platform USB serial.
+  /// Uses native platform APIs (Android USB Host API, Linux libc termios).
   Future<List<PortInfo>> listPorts() async {
     return SerialPort.listPorts();
   }
@@ -126,6 +126,7 @@ class FlasherService {
     FlashProgressCallback? onProgress,
   }) async {
     _progressController = StreamController<FlashProgress>.broadcast();
+    final startTime = DateTime.now();
 
     void reportProgress(FlashProgress progress) {
       onProgress?.call(progress);
@@ -168,7 +169,7 @@ class FlasherService {
         throw FlashException('Unsupported protocol: ${device.flash.protocol}');
       }
 
-      // Create and open serial port using flutter_libserialport
+      // Create and open serial port using native platform APIs
       _currentPort = SerialPort();
       final portOpened = await _currentPort!.open(portPath, device.flash.baudRate);
       if (!portOpened) {
@@ -205,7 +206,7 @@ class FlasherService {
 
       // Complete
       reportProgress(FlashProgress.completed(
-        DateTime.now().difference(DateTime.now()), // Will be replaced with actual elapsed
+        DateTime.now().difference(startTime),
       ));
 
       return true;

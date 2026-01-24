@@ -108,15 +108,36 @@ class EspToolProtocol implements FlashProtocol {
       }
     }
 
-    // Reset into bootloader
-    await _resetToBootloader();
-
     onProgress?.call(FlashProgress.syncing());
 
-    // Sync with bootloader
-    final synced = await _sync();
+    // Try multiple approaches to enter bootloader and sync:
+    // 1. Try sync first (device might already be in bootloader mode)
+    // 2. Try DTR/RTS reset sequence (works with USB-UART bridges)
+    // 3. Try sync after reset
+
+    var synced = false;
+
+    // First, try sync without reset (in case already in bootloader)
+    synced = await _sync();
+
     if (!synced) {
-      throw SyncException('Failed to sync with ESP32 bootloader');
+      // Try DTR/RTS reset sequence (works with USB-UART bridges like CP210x, CH340)
+      // Note: ESP32-C3/S3 with built-in USB JTAG don't support auto-reset
+      await _resetToBootloader();
+      synced = await _sync();
+    }
+
+    if (!synced) {
+      // Try alternate reset timing
+      await _resetToBootloaderAlternate();
+      synced = await _sync();
+    }
+
+    if (!synced) {
+      throw SyncException(
+        'Failed to sync with ESP32 bootloader. '
+        'For ESP32-C3/S3 with built-in USB: Hold BOOT, press RESET, release RESET, release BOOT, then retry.'
+      );
     }
 
     // Detect chip
@@ -165,12 +186,16 @@ class EspToolProtocol implements FlashProtocol {
       await _flashData(paddedBlock, i);
 
       final progress = (i + 1) / numBlocks;
-      onProgress?.call(FlashProgress.writing(
+      final elapsed = DateTime.now().difference(_startTime!);
+      onProgress?.call(FlashProgress(
+        status: FlashStatus.writing,
         progress: progress,
+        message: 'Writing firmware...',
         bytesWritten: offset + blockSize,
         totalBytes: totalSize,
         currentChunk: i + 1,
         totalChunks: numBlocks,
+        elapsed: elapsed,
       ));
     }
 
@@ -250,6 +275,37 @@ class EspToolProtocol implements FlashProtocol {
     await Future.delayed(const Duration(milliseconds: 100));
 
     // Flush any garbage
+    await _port!.flush();
+  }
+
+  /// Alternate reset sequence with different timing
+  /// Some boards need different timing or inverted signals
+  Future<void> _resetToBootloaderAlternate() async {
+    if (_port == null) return;
+
+    // Alternative sequence used by some boards
+    // This matches esptool's "classic" reset more closely
+
+    // IO0=HIGH, EN=LOW (reset asserted)
+    _port!.setRTS(false);
+    _port!.setDTR(true);
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // IO0=LOW, EN=LOW (still in reset, but GPIO0 low for bootloader)
+    _port!.setRTS(true);
+    _port!.setDTR(true);
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // IO0=LOW, EN=HIGH (release reset while GPIO0 is low = enter bootloader)
+    _port!.setRTS(true);
+    _port!.setDTR(false);
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    // IO0=HIGH, EN=HIGH (release GPIO0, chip should be in bootloader)
+    _port!.setRTS(false);
+    _port!.setDTR(false);
+    await Future.delayed(const Duration(milliseconds: 100));
+
     await _port!.flush();
   }
 
@@ -439,28 +495,38 @@ class EspToolProtocol implements FlashProtocol {
   }
 
   /// Parse response packet
+  ///
+  /// ESP32 ROM bootloader response format:
+  /// - byte 0: direction (1 = response)
+  /// - byte 1: opcode (same as request)
+  /// - bytes 2-3: size of data payload (little endian)
+  /// - bytes 4-7: value field (little endian) - contains return value for READ_REG
+  /// - bytes 8+: data payload (if size > 0)
+  ///
+  /// For commands like READ_REG, the result is in the value field (bytes 4-7).
+  /// For commands like SYNC, the data payload contains additional info.
   Uint8List? _parseResponse(Uint8List packet) {
     if (packet.length < 8) return null;
 
     final direction = packet[0];
-    final opcode = packet[1];
     final view = ByteData.view(packet.buffer);
     final size = view.getUint16(2, Endian.little);
     final value = view.getUint32(4, Endian.little);
 
     if (direction != directionResponse) return null;
 
-    // Check status (last byte indicates success/failure)
-    if (packet.length > 8 && packet[8] != 0) {
-      // Error
-      return null;
-    }
+    // For most commands, the status is in the first byte of data payload
+    // But we should not reject the response - let the caller handle errors
+    // based on the actual command semantics
 
-    if (size > 0 && packet.length > 8) {
-      return packet.sublist(8, 8 + size);
-    }
-
-    return Uint8List.fromList([value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF, (value >> 24) & 0xFF]);
+    // Return the value field as bytes - this is where READ_REG puts the result
+    // The caller can also check the data payload if needed
+    return Uint8List.fromList([
+      value & 0xFF,
+      (value >> 8) & 0xFF,
+      (value >> 16) & 0xFF,
+      (value >> 24) & 0xFF,
+    ]);
   }
 
   /// SLIP encode packet

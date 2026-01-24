@@ -22,7 +22,7 @@ export 'protocols/flash_protocol.dart';
 export 'protocols/esptool_protocol.dart';
 export 'protocols/protocol_registry.dart';
 
-// Serial (uses flutter_libserialport for cross-platform support)
+// Serial (uses native platform APIs - no external dependencies)
 export 'serial/serial_port.dart';
 
 // Services
