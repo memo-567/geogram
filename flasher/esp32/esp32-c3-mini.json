@@ -1,0 +1,34 @@
+{
+  "id": "esp32-c3-mini",
+  "family": "esp32",
+  "chip": "ESP32-C3",
+  "title": "ESP32-C3-mini",
+  "description": "Compact ESP32-C3 development board with WiFi and BLE support. Features USB-C connector and onboard antenna.",
+  "translations": {
+    "pt": {
+      "description": "Placa de desenvolvimento ESP32-C3 compacta com suporte WiFi e BLE. Possui conector USB-C e antena integrada."
+    }
+  },
+  "media": {
+    "photo": "esp32-c3-mini.jpg"
+  },
+  "links": {
+    "documentation": "https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/",
+    "datasheet": "https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf"
+  },
+  "flash": {
+    "protocol": "esptool",
+    "baud_rate": 460800,
+    "flash_mode": "dio",
+    "flash_freq": "80m",
+    "flash_size": "4MB",
+    "firmware_url": "https://github.com/geograms/geogram/releases/latest/download/geogram-esp32-c3.bin"
+  },
+  "usb": {
+    "vid": "0x303A",
+    "pid": "0x1001",
+    "description": "ESP32-C3 USB JTAG/serial debug unit"
+  },
+  "created_at": "2026-01-24T10:00:00Z",
+  "modified_at": "2026-01-24T10:00:00Z"
+}

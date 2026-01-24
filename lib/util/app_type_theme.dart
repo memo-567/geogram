@@ -61,6 +61,10 @@ IconData getAppTypeIcon(String type) {
       return Icons.video_library;
     case 'transfer':
       return Icons.swap_horiz;
+    case 'reader':
+      return Icons.menu_book;
+    case 'flasher':
+      return Icons.flash_on;
     default:
       return Icons.folder;
   }
@@ -244,6 +248,22 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF1565C0), const Color(0xFF00695C)]
             : [const Color(0xFF42A5F5), const Color(0xFF26A69A)],
+      );
+    case 'reader':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF795548), const Color(0xFF5D4037)]
+            : [const Color(0xFFA1887F), const Color(0xFF8D6E63)],
+      );
+    case 'flasher':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
+            : [const Color(0xFFFFB74D), const Color(0xFFFFA726)],
       );
     default:
       return LinearGradient(

@@ -58,6 +58,28 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 
+### Reader Services
+- [RssService](#rssservice) - RSS/Atom feed parsing and HTML-to-Markdown conversion
+- [MangaService](#mangaservice) - CBZ extraction and chapter creation
+- [SourceService](#sourceservice) - Source.js discovery and parsing
+- [ReaderService](#readerservice) - Main reader service orchestrating all content types
+
+### Flasher Components
+- [FlasherService](#flasherservice) - Main service for flash operations
+- [FlasherStorageService](#flasherstorageservice) - Device definitions storage
+- [ProtocolRegistry](#protocolregistry) - Protocol factory
+- [DeviceCard](#devicecard-widget) - Device selection card
+- [FlashProgressWidget](#flashprogresswidget) - Progress display
+
+### API Common Utilities
+- [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
+- [FileTreeBuilder](#filetreebuilder) - Recursive file tree for sync operations
+- [StationInfo](#stationinfo) - Station metadata for API responses
+
+### Server Chat Models
+- [ServerChatRoom](#serverchatroom) - Server-side chat room management
+- [ServerChatMessage](#serverchatmessage) - Server-side message with NOSTR signatures
+
 ### CLI/Console Abstractions
 - [ConsoleIO](#consoleio) - Platform-agnostic console I/O interface
 - [ConsoleHandler](#consolehandler) - Shared command logic for CLI/UI/Telegram
@@ -3884,3 +3906,853 @@ if (!response.success) {
 | TransportResult | connection/transport_message.dart | Result type |
 | ApiResponse | api/api_response.dart | Generic response wrapper |
 | ApiError | api/api_error.dart | Error types |
+
+---
+
+## API Common Utilities (`lib/api/common/`)
+
+Shared utilities for API handlers to avoid code duplication across alert, place, blog, and feedback handlers.
+
+### GeometryUtils
+
+**File:** `lib/api/common/geometry_utils.dart`
+
+Calculate distances between GPS coordinates using the Haversine formula.
+
+```dart
+import 'package:geogram/api/common/geometry_utils.dart';
+
+// Calculate distance in kilometers
+final distance = GeometryUtils.calculateDistanceKm(
+  40.7128, -74.0060,  // lat1, lon1 (New York)
+  34.0522, -118.2437, // lat2, lon2 (Los Angeles)
+);
+print('Distance: ${distance.toStringAsFixed(2)} km'); // 3935.75 km
+```
+
+### FileTreeBuilder
+
+**File:** `lib/api/common/file_tree_builder.dart`
+
+Build recursive file tree structures for sync operations. Used by alert and place APIs to return file metadata.
+
+```dart
+import 'package:geogram/api/common/file_tree_builder.dart';
+
+// Build file tree for a directory
+final tree = await FileTreeBuilder.build('/path/to/alert/folder');
+// Returns:
+// {
+//   'report.txt': {'size': 1024, 'mtime': 1706000000},
+//   'images/': {
+//     'photo1.jpg': {'size': 204800, 'mtime': 1706000100},
+//   }
+// }
+```
+
+### StationInfo
+
+**File:** `lib/api/common/station_info.dart`
+
+Station metadata for API responses. Identifies which station served the request.
+
+```dart
+import 'package:geogram/api/common/station_info.dart';
+
+final station = StationInfo(
+  name: 'My Station',
+  callsign: 'X3ABC',
+  npub: 'npub1...',
+);
+
+// Include in API response
+final response = {
+  'success': true,
+  'station': station.toJson(),
+  'data': [...],
+};
+```
+
+**Also exported from:** `lib/api/handlers/alert_handler.dart` for backward compatibility.
+
+### Usage in Handlers
+
+```dart
+// In AlertHandler
+final distance = GeometryUtils.calculateDistanceKm(lat, lon, alertLat, alertLon);
+final fileTree = await FileTreeBuilder.build(alertDir.path);
+
+// In PlaceHandler
+final distance = GeometryUtils.calculateDistanceKm(lat, lon, placeLat, placeLon);
+final fileTree = await FileTreeBuilder.build(placePath);
+```
+
+---
+
+## Server Chat Models (`lib/server/models/`)
+
+Server-side models for chat room management with WebSocket support. These are distinct from client-side models used for file parsing.
+
+### ServerChatRoom
+
+**File:** `lib/server/models/server_chat_room.dart`
+
+Server-side chat room model for managing chat rooms with WebSocket clients.
+
+```dart
+import 'package:geogram/server/models/server_chat_room.dart';
+
+// Create a new room
+final room = ServerChatRoom(
+  id: 'general',
+  name: 'General Chat',
+  description: 'Public discussion room',
+  creatorCallsign: 'X3ABC',
+  isPublic: true,
+);
+
+// Add messages
+room.messages.add(message);
+room.lastActivity = DateTime.now().toUtc();
+
+// Serialize
+final json = room.toJson();  // Without messages
+final fullJson = room.toJsonWithMessages();  // With messages
+```
+
+### ServerChatMessage
+
+**File:** `lib/server/models/server_chat_message.dart`
+
+Server-side chat message model with NOSTR signature verification support.
+
+```dart
+import 'package:geogram/server/models/server_chat_message.dart';
+
+// Create a signed message
+final message = ServerChatMessage(
+  id: eventId,  // NOSTR event ID
+  roomId: 'general',
+  senderCallsign: 'X3ABC',
+  senderNpub: 'npub1...',
+  signature: signatureHex,
+  content: 'Hello world!',
+  timestamp: DateTime.now().toUtc(),
+  verified: true,
+);
+
+// Parse from API response
+final msg = ServerChatMessage.fromJson(json, 'general');
+
+// Serialize
+final json = message.toJson();
+```
+
+### Model Comparison
+
+| Model | Location | Purpose |
+|-------|----------|---------|
+| `ServerChatRoom` | lib/server/models/ | Server-side room management |
+| `ServerChatMessage` | lib/server/models/ | Server-side message storage |
+| `ChatMessage` | lib/models/chat_message.dart | Client-side file parsing |
+| `ChatRoom`/`ChatMessage` | lib/api/endpoints/chat_api.dart | API response DTOs |
+
+### Usage in pure_station.dart
+
+```dart
+// Type aliases for backward compatibility
+typedef ChatRoom = ServerChatRoom;
+typedef ChatMessage = ServerChatMessage;
+
+// Room management
+final Map<String, ChatRoom> _chatRooms = {};
+_chatRooms['general'] = ChatRoom(
+  id: 'general',
+  name: 'General',
+  creatorCallsign: callsign,
+);
+```
+
+---
+
+## Station Server Base (`lib/server/`)
+
+A unified server architecture that both CLI (PureStationServer) and App (StationServerService) implementations extend. Provides feature parity across platforms through shared base class and mixins.
+
+### Consolidation Progress
+
+The codebase has two parallel station server implementations being consolidated:
+
+| Component | `PureStationServer` | `lib/server/` | Status |
+|-----------|---------------------|---------------|--------|
+| Alert/Place/Feedback APIs | Uses AlertHandler, PlaceHandler, FeedbackHandler | Uses AlertHandler, PlaceHandler, FeedbackHandler | **Shared** |
+| Chat models | Uses ServerChatRoom, ServerChatMessage | Uses ServerChatRoom, ServerChatMessage | **Shared** |
+| Rate limit class | Uses IpRateLimit from mixin | Defines IpRateLimit in mixin | **Shared** |
+| Geometry utils | Uses GeometryUtils | Uses GeometryUtils | **Shared** |
+| File tree builder | Uses FileTreeBuilder | Uses FileTreeBuilder | **Shared** |
+| Station info | Uses StationInfo | Uses StationInfo | **Shared** |
+| Rate limit logic | Private `_checkRateLimit()` | RateLimitMixin | Duplicate |
+| Health watchdog | Private `_runHealthWatchdog()` | HealthWatchdogMixin | Duplicate |
+| SSL/HTTPS | Private SSL methods | SslMixin | Duplicate |
+| Chat room management | 12+ methods | Not in base | PureStationServer only |
+
+**Migration path:** PureStationServer (12,000+ lines) will incrementally adopt mixins from `lib/server/mixins/` to reduce duplication. Current focus is on sharing data classes and utilities.
+
+**Full plan:** See [docs/consolidation-plan.md](consolidation-plan.md) for detailed phases 4-8 covering:
+- Phase 4: Adopt RateLimitMixin and HealthWatchdogMixin (~250 lines)
+- Phase 5: Extract HTTP handlers to shared modules (~450 lines)
+- Phase 6: Extract update/model mirroring services (~600 lines)
+- Phase 7: Consolidate SSL/certificate management (~500 lines)
+- Phase 8: WebSocket message routing (~200 lines)
+
+### Directory Structure
+
+```
+lib/server/
+├── station_settings.dart      # Unified settings class
+├── station_client.dart        # Connected client model
+├── station_tile_cache.dart    # LRU tile cache
+├── station_stats.dart         # Server statistics
+├── platform_adapter.dart      # Platform abstraction interface
+├── station_server_base.dart   # Abstract base class
+├── handlers/                  # HTTP handler modules
+│   ├── status_handler.dart    # /api/status endpoints
+│   ├── tile_handler.dart      # /tiles/* endpoints
+│   ├── update_handler.dart    # /updates/* endpoints
+│   └── blossom_handler.dart   # /blossom/* endpoints
+├── models/                    # Server-side data models
+│   ├── server_chat_room.dart  # Chat room model
+│   └── server_chat_message.dart # Chat message model
+└── mixins/                    # Feature mixins
+    ├── rate_limit_mixin.dart  # IP rate limiting + banning
+    ├── health_watchdog_mixin.dart  # Auto-recovery
+    ├── ssl_mixin.dart         # HTTPS + Let's Encrypt
+    ├── smtp_mixin.dart        # SMTP server
+    └── stun_mixin.dart        # WebRTC STUN server
+```
+
+### Usage - Extending Base Class
+
+```dart
+class MyStationServer extends StationServerBase
+    with SslMixin, RateLimitMixin, HealthWatchdogMixin {
+
+  @override
+  void log(String level, String message) {
+    print('[$level] $message');
+  }
+
+  @override
+  Future<void> saveSettingsToStorage() async {
+    // Save _settings to disk/prefs
+  }
+
+  @override
+  Future<bool> handlePlatformRoute(HttpRequest request, String path, String method) async {
+    // Handle platform-specific routes
+    if (path == '/my/special/route') {
+      // Handle it
+      return true; // Handled
+    }
+    return false; // Not handled, continue to base routing
+  }
+}
+```
+
+### Unified Settings
+
+```dart
+final settings = StationSettings(
+  httpPort: 8080,
+  httpsPort: 8443,
+  enableSsl: true,
+  sslDomain: 'mystation.example.com',
+  tileServerEnabled: true,
+  stunServerEnabled: true,
+  maxConnectedDevices: 100,
+);
+
+// Save/load via JSON
+final json = settings.toJson();
+final restored = StationSettings.fromJson(json);
+```
+
+### Rate Limiting Mixin
+
+```dart
+class MyServer extends StationServerBase with RateLimitMixin {
+  void handleRequest(HttpRequest request) {
+    final ip = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+
+    if (isIpBanned(ip)) {
+      // Return 429
+      return;
+    }
+
+    if (!checkRateLimit(ip)) {
+      banIp(ip); // Exponential backoff: 5min -> 15min -> 1hr -> 24hr
+      return;
+    }
+
+    // Process request...
+  }
+}
+```
+
+### Health Watchdog Mixin
+
+```dart
+class MyServer extends StationServerBase with HealthWatchdogMixin {
+  @override
+  int get httpPort => settings.httpPort;
+
+  @override
+  bool get isServerRunning => _running;
+
+  @override
+  int get connectedClientsCount => _clients.length;
+
+  @override
+  Future<void> autoRecover() async {
+    // Restart HTTP server
+    await stopServer();
+    await startServer();
+  }
+
+  @override
+  void logCrash(String reason) {
+    log('CRASH', reason);
+  }
+}
+
+// Watchdog monitors:
+// - Self health check (HTTP request to own /api/status)
+// - Attack detection (high request/error rates, connection exhaustion)
+```
+
+### Tile Handler
+
+```dart
+final tileHandler = TileHandler(
+  getSettings: () => settings,
+  tileCache: tileCache,
+  stats: stats,
+  tilesDirectory: '/data/tiles',
+  log: (level, msg) => print('[$level] $msg'),
+);
+
+// Handles:
+// - GET /tiles/{z}/{x}/{y}.png
+// - Memory cache + disk cache
+// - OSM fallback fetch
+// - Tile validation (PNG/JPEG headers)
+```
+
+### Related Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| StationSettings | server/station_settings.dart | Unified configuration |
+| StationClient | server/station_client.dart | WebSocket client model |
+| StationTileCache | server/station_tile_cache.dart | LRU tile cache |
+| RateLimitMixin | server/mixins/rate_limit_mixin.dart | IP rate limiting |
+| SslMixin | server/mixins/ssl_mixin.dart | HTTPS support |
+| HealthWatchdogMixin | server/mixins/health_watchdog_mixin.dart | Auto-recovery |
+
+---
+
+## Storage Path Helpers
+
+### getChatDir
+
+**Files:**
+- `lib/services/storage_config.dart` (App)
+- `lib/cli/pure_storage_config.dart` (CLI)
+
+Get the canonical chat directory path for a specific callsign. Ensures consistent paths across App and CLI servers.
+
+**Signature:**
+```dart
+String getChatDir(String callsign)
+```
+
+**Returns:** `{baseDir}/devices/{sanitizedCallsign}/chat`
+
+**Usage:**
+```dart
+// App mode
+final chatPath = StorageConfig().getChatDir('KB1ABC');
+// Result: /home/user/.local/share/geogram/devices/KB1ABC/chat
+
+// CLI mode
+final chatPath = PureStorageConfig().getChatDir('KB1ABC');
+// Result: /opt/geogram/devices/KB1ABC/chat
+```
+
+**Canonical Directory Structure:**
+```
+{baseDir}/
+├── config.json
+├── station_config.json
+├── devices/                    # Per-callsign data
+│   └── {CALLSIGN}/
+│       ├── alerts/
+│       ├── blog/
+│       ├── chat/              # Chat rooms stored here
+│       ├── events/
+│       ├── places/
+│       └── videos/
+├── tiles/
+├── ssl/
+├── logs/
+├── updates/
+└── nostr/
+```
+
+**Related Helpers:**
+| Helper | Returns |
+|--------|---------|
+| `getCallsignDir(callsign)` | `{baseDir}/devices/{callsign}` |
+| `devicesDir` | `{baseDir}/devices` |
+| `tilesDir` | `{baseDir}/tiles` |
+| `sslDir` | `{baseDir}/ssl` |
+| `logsDir` | `{baseDir}/logs` |
+
+---
+
+## Reader Services (`lib/reader/services/`)
+
+The Reader app provides an e-reader with source-based architecture supporting RSS feeds, Manga, and Books.
+
+### RssService
+
+**File:** `lib/reader/services/rss_service.dart`
+
+Parse RSS 2.0 and Atom feeds, convert HTML content to Markdown.
+
+**Usage:**
+```dart
+final rssService = RssService();
+
+// Parse feed from URL
+final items = await rssService.parseFeed('https://example.com/feed.xml');
+for (final item in items) {
+  print('${item.title} - ${item.publishedAt}');
+}
+
+// Convert HTML to Markdown
+final markdown = rssService.htmlToMarkdown('<p>Hello <b>world</b></p>');
+// Result: "Hello **world**"
+
+// Download and convert article content
+final content = await rssService.fetchArticleContent('https://example.com/article');
+```
+
+**RssFeedItem Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Unique identifier |
+| `title` | String | Article title |
+| `link` | String | Article URL |
+| `description` | String? | Summary/excerpt |
+| `content` | String? | Full content (if available) |
+| `author` | String? | Author name |
+| `publishedAt` | DateTime? | Publish date |
+| `categories` | List<String> | Categories/tags |
+| `imageUrl` | String? | Featured image |
+
+---
+
+### MangaService
+
+**File:** `lib/reader/services/manga_service.dart`
+
+Handle CBZ (Comic Book ZIP) files: extraction, page caching, chapter creation.
+
+**Usage:**
+```dart
+final mangaService = MangaService();
+
+// Extract pages from CBZ file
+final pages = await mangaService.extractPages('/path/to/chapter.cbz');
+for (final page in pages) {
+  // page.data is Uint8List of image bytes
+  // page.filename is the original filename
+  Image.memory(page.data);
+}
+
+// Get chapter files from manga folder
+final chapters = await mangaService.getChapterFiles('/path/to/manga/series');
+// Returns sorted list: ['chapter-001.cbz', 'chapter-002.cbz', ...]
+
+// Create CBZ from downloaded images
+await mangaService.createCbz(
+  outputPath: '/path/to/chapter-001.cbz',
+  images: imageBytesList,  // List<Uint8List>
+);
+
+// Clear page cache to free memory
+mangaService.clearCache();
+```
+
+**MangaPage Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `filename` | String | Original image filename |
+| `data` | Uint8List | Image bytes |
+| `width` | int? | Image width (if detected) |
+| `height` | int? | Image height (if detected) |
+
+**CBZ Format Notes:**
+- CBZ is a ZIP archive containing image files
+- Images sorted alphanumerically by filename
+- Supports: JPG, PNG, GIF, WEBP
+- Naming convention: `chapter-001.cbz`, `chapter-002.cbz`
+
+---
+
+### SourceService
+
+**File:** `lib/reader/services/source_service.dart`
+
+Discover and parse source.js configuration files for RSS and Manga sources.
+
+**Usage:**
+```dart
+final sourceService = SourceService();
+
+// Discover all sources in a category
+final rssSources = await sourceService.discoverSources('/path/to/reader/rss');
+final mangaSources = await sourceService.discoverSources('/path/to/reader/manga');
+
+for (final source in rssSources) {
+  print('${source.name} (${source.type}) - ${source.url}');
+}
+
+// Load source configuration
+final config = await sourceService.loadSourceConfig('/path/to/reader/rss/hackernews');
+print(config.name);       // "Hacker News"
+print(config.feedUrl);    // "https://news.ycombinator.com/rss"
+```
+
+**Source Configuration (source.js):**
+```javascript
+// reader/rss/hackernews/source.js
+module.exports = {
+  name: "Hacker News",
+  type: "rss",
+  url: "https://news.ycombinator.com/rss",
+  settings: {
+    maxPosts: 100,
+    fetchIntervalHours: 1,
+    downloadImages: true
+  }
+};
+```
+
+**Source Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Source folder name |
+| `name` | String | Display name |
+| `type` | SourceType | rss, manga, or local |
+| `url` | String? | Feed/API URL |
+| `isLocal` | bool | True for local-only sources |
+
+---
+
+### ReaderService
+
+**File:** `lib/reader/services/reader_service.dart`
+
+Main orchestrating service for the Reader app. Manages sources, content, and reading progress.
+
+**Usage:**
+```dart
+final readerService = ReaderService();
+
+// Initialize with collection path
+await readerService.initialize('/path/to/reader');
+
+// RSS Operations
+final rssSources = await readerService.getRssSources();
+final posts = await readerService.getPosts('hackernews');
+await readerService.markPostRead('hackernews', 'post-slug');
+await readerService.togglePostStarred('hackernews', 'post-slug');
+
+// Manga Operations
+final mangaSources = await readerService.getMangaSources();
+final series = await readerService.getMangaSeries('mangadex');
+final chapters = await readerService.getMangaChapters('mangadex', 'one-punch-man');
+readerService.markChapterRead('mangadex', 'one-punch-man', 'chapter-001.cbz');
+
+// Book Operations
+final folders = await readerService.getBookFolders(['fiction']);
+final books = await readerService.getBooks(['fiction', 'sci-fi']);
+
+// Progress Tracking
+final bookProgress = readerService.getBookProgress('/path/to/book.epub');
+readerService.updateBookProgress('/path/to/book.epub', page: 142, percent: 45.2);
+
+final mangaProgress = readerService.getMangaProgress('mangadex', 'one-punch-man');
+readerService.updateMangaProgress('mangadex', 'one-punch-man', 'chapter-003.cbz', page: 12);
+
+// Settings
+final settings = readerService.settings;
+settings.general.fontSize = 18;
+await readerService.saveSettings();
+```
+
+**ReaderSettings Fields:**
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `general.fontSize` | int | 16 | Reading font size |
+| `general.lineHeight` | double | 1.5 | Line spacing |
+| `general.theme` | String | 'system' | Theme preference |
+| `rss.autoRefresh` | bool | true | Auto-refresh feeds |
+| `rss.refreshIntervalMinutes` | int | 30 | Refresh interval |
+| `manga.readingDirection` | String | 'ltr' | Reading direction |
+| `manga.webtoonMode` | bool | false | Vertical scroll mode |
+| `books.rememberPosition` | bool | true | Save reading position |
+
+---
+
+### ReaderPathUtils
+
+**File:** `lib/reader/utils/reader_path_utils.dart`
+
+Path building utilities for Reader content.
+
+**Usage:**
+```dart
+// Slugify title for folder names
+final slug = ReaderPathUtils.slugify('My Manga Title!');
+// Result: 'my-manga-title'
+
+// Build paths
+final postPath = ReaderPathUtils.buildPostPath(collectionPath, sourceId, slug);
+// Result: '{collection}/rss/{sourceId}/posts/{date}_{slug}'
+
+final mangaPath = ReaderPathUtils.buildMangaPath(collectionPath, sourceId, slug);
+// Result: '{collection}/manga/{sourceId}/series/{slug}'
+
+final chapterPath = ReaderPathUtils.buildChapterPath(collectionPath, sourceId, mangaSlug, 'chapter-001.cbz');
+// Result: '{collection}/manga/{sourceId}/series/{mangaSlug}/chapter-001.cbz'
+
+// Format date for folder names
+final dateStr = ReaderPathUtils.formatDateForFolder(DateTime.now());
+// Result: '2026-01-24'
+```
+
+---
+
+### Related Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| ReaderHomePage | reader/pages/reader_home_page.dart | Main category selection |
+| RssSourcesPage | reader/pages/rss_sources_page.dart | RSS sources list |
+| RssPostsPage | reader/pages/rss_posts_page.dart | Posts from a source |
+| ArticleReaderPage | reader/pages/article_reader_page.dart | Markdown article reader |
+| MangaSourcesPage | reader/pages/manga_sources_page.dart | Manga sources list |
+| MangaSeriesPage | reader/pages/manga_series_page.dart | Manga series grid/list |
+| MangaReaderPage | reader/pages/manga_reader_page.dart | Full-screen chapter reader |
+| BookBrowserPage | reader/pages/book_browser_page.dart | Local book file browser |
+
+---
+
+## Flasher Components
+
+The Flasher module provides components for flashing firmware to ESP32 and other USB-connected devices.
+
+### FlasherService
+
+**File:** `lib/flasher/services/flasher_service.dart`
+
+Main service for orchestrating flash operations.
+
+**Usage:**
+```dart
+import 'package:geogram/flasher/flasher.dart';
+
+// Create service
+final service = FlasherService.withPath('flasher');
+
+// List serial ports
+final ports = await service.listPorts();
+
+// Auto-detect connected device
+final device = await service.autoDetectDevice();
+
+// Flash device
+await service.flashDevice(
+  device: device!,
+  portPath: ports.first.path,
+  onProgress: (progress) {
+    print('${progress.percentage}% - ${progress.message}');
+  },
+);
+```
+
+---
+
+### FlasherStorageService
+
+**File:** `lib/flasher/services/flasher_storage_service.dart`
+
+Service for loading device definitions from the flasher/ directory.
+
+**Usage:**
+```dart
+final storage = FlasherStorageService('flasher');
+
+// Load all devices
+final devices = await storage.loadAllDevices();
+
+// Load devices grouped by family
+final byFamily = await storage.loadDevicesByFamily();
+
+// Find device by USB VID/PID
+final device = await storage.findDeviceByUsb(0x303A, 0x1001);
+
+// Load specific device
+final esp32 = await storage.loadDevice('esp32', 'esp32-c3-mini');
+```
+
+---
+
+### ProtocolRegistry
+
+**File:** `lib/flasher/protocols/protocol_registry.dart`
+
+Factory for creating flash protocol instances.
+
+**Usage:**
+```dart
+import 'package:geogram/flasher/flasher.dart';
+
+// Create protocol by ID
+final protocol = ProtocolRegistry.create('esptool');
+
+// List available protocols
+final protocols = ProtocolRegistry.availableProtocols;
+// ['esptool', 'quansheng']
+
+// Check if protocol is available
+if (ProtocolRegistry.isAvailable('esptool')) {
+  // Use protocol
+}
+```
+
+---
+
+### DeviceCard Widget
+
+**File:** `lib/flasher/widgets/device_card.dart`
+
+Card widget for displaying a flashable device with photo and details.
+
+**Usage:**
+```dart
+DeviceCard(
+  device: deviceDefinition,
+  isSelected: _selectedDevice?.id == deviceDefinition.id,
+  onTap: () {
+    setState(() {
+      _selectedDevice = deviceDefinition;
+    });
+  },
+)
+```
+
+---
+
+### FlashProgressWidget
+
+**File:** `lib/flasher/widgets/flash_progress_widget.dart`
+
+Widget for displaying flash operation progress with status, progress bar, and details.
+
+**Usage:**
+```dart
+FlashProgressWidget(
+  progress: _flashProgress,
+  showDetails: true,
+)
+
+// Compact version for app bars
+CompactFlashProgress(
+  progress: _flashProgress,
+)
+```
+
+---
+
+### FlashProgress Model
+
+**File:** `lib/flasher/models/flash_progress.dart`
+
+Progress state model with factory constructors for each phase.
+
+**Usage:**
+```dart
+// Create progress states
+final connecting = FlashProgress.connecting();
+final writing = FlashProgress.writing(
+  progress: 0.5,
+  bytesWritten: 51200,
+  totalBytes: 102400,
+  currentChunk: 50,
+  totalChunks: 100,
+);
+final error = FlashProgress.error('Device disconnected');
+final completed = FlashProgress.completed(Duration(seconds: 30));
+
+// Check state
+if (progress.isInProgress) { ... }
+if (progress.isCompleted) { ... }
+if (progress.isError) { ... }
+```
+
+---
+
+### DeviceDefinition Model
+
+**File:** `lib/flasher/models/device_definition.dart`
+
+Model for device definitions loaded from JSON files.
+
+**Key Classes:**
+- `DeviceDefinition` - Main device model
+- `FlashConfig` - Flash configuration (protocol, baud rate, etc.)
+- `UsbIdentifier` - USB VID/PID
+- `DeviceFamily` - Family metadata
+- `FlasherMetadata` - Collection metadata
+
+**Usage:**
+```dart
+// Parse from JSON
+final json = jsonDecode(content) as Map<String, dynamic>;
+final device = DeviceDefinition.fromJson(json);
+
+// Access properties
+print(device.title);           // "ESP32-C3-mini"
+print(device.flash.protocol);  // "esptool"
+print(device.usb?.vidInt);     // 0x303A
+
+// Get translated description
+final desc = device.getDescription('pt');
+```
+
+---
+
+### Related Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| FlasherPage | flasher/pages/flasher_page.dart | Main UI for device flashing |
+| DeviceCard | flasher/widgets/device_card.dart | Device selection card |
+| FlashProgressWidget | flasher/widgets/flash_progress_widget.dart | Progress display |
+| EspToolProtocol | flasher/protocols/esptool_protocol.dart | ESP32 flashing protocol |
+| DesktopSerialPort | flasher/serial/serial_port_desktop.dart | Desktop serial port |
+| AndroidSerialPort | flasher/serial/serial_port_android.dart | Android USB OTG |

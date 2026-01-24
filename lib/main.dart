@@ -88,6 +88,8 @@ import 'pages/backup_browser_page.dart';
 import 'pages/video_browser_page.dart';
 import 'pages/transfer_page.dart';
 import 'pages/dm_chat_page.dart';
+import 'reader/pages/reader_home_page.dart';
+import 'flasher/pages/flasher_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -759,15 +761,17 @@ class _HomePageState extends State<HomePage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
   final DebugController _debugController = DebugController();
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   // Hidden pages (not ready): BotPage
-  static const List<Widget> _pages = [
-    CollectionsPage(),
-    MapsBrowserPage(),
-    DevicesBrowserPage(),
+  List<Widget> get _pages => [
+    CollectionsPage(searchQuery: _searchQuery),
+    const MapsBrowserPage(),
+    const DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
-    SettingsPage(),
-    LogBrowserPage(),
+    const SettingsPage(),
+    const LogBrowserPage(),
   ];
 
   @override
@@ -829,6 +833,7 @@ class _HomePageState extends State<HomePage> {
     UpdateService().updateAvailable.removeListener(_onUpdateAvailable);
     _debugController.panelNotifier.removeListener(_onDebugNavigate);
     _debugController.toastNotifier.removeListener(_onDebugToast);
+    _searchController.dispose();
     _debugActionSubscription?.cancel();
     _navigateHomeSubscription?.cancel();
     _unreadSubscription?.cancel();
@@ -1254,7 +1259,56 @@ class _HomePageState extends State<HomePage> {
         appBar: _selectedIndex == 0
             ? AppBar(
                 automaticallyImplyLeading: false,
-                title: const ProfileSwitcher(),
+                title: Row(
+                  children: [
+                    const ProfileSwitcher(),
+                    const SizedBox(width: 12),
+                    // Search field
+                    Expanded(
+                      child: SizedBox(
+                        height: 40,
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: _i18n.t('search_apps'),
+                            hintStyle: TextStyle(
+                              fontSize: 14,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            suffixIcon: _searchQuery.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 18),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() => _searchQuery = '');
+                                    },
+                                  )
+                                : null,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 0,
+                            ),
+                            isDense: true,
+                          ),
+                          style: const TextStyle(fontSize: 14),
+                          onChanged: (value) =>
+                              setState(() => _searchQuery = value),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 actions: [
                   // Show station indicator if current profile is a station
                   if (_profileService.getProfile().isRelay)
@@ -1586,7 +1640,9 @@ class _HomePageState extends State<HomePage> {
 
 // Collections Page
 class CollectionsPage extends StatefulWidget {
-  const CollectionsPage({super.key});
+  final String searchQuery;
+
+  const CollectionsPage({super.key, this.searchQuery = ''});
 
   @override
   State<CollectionsPage> createState() => _CollectionsPageState();
@@ -1611,6 +1667,29 @@ class _CollectionsPageState extends State<CollectionsPage> {
   List<Collection> _allCollections = [];
   bool _isLoading = true;
 
+  /// Get filtered collections based on search query from parent
+  List<Collection> get _filteredCollections {
+    if (widget.searchQuery.isEmpty) {
+      return _allCollections;
+    }
+    final query = widget.searchQuery.toLowerCase();
+    return _allCollections.where((collection) {
+      // Search by title
+      final title = collection.title.toLowerCase();
+      if (title.contains(query)) return true;
+      // Search by translated type name
+      final typeName = _i18n.t('collection_type_${collection.type}').toLowerCase();
+      if (typeName.contains(query)) return true;
+      // Search by type description
+      final descKey = 'collection_type_desc_${collection.type}';
+      final description = _i18n.t(descKey).toLowerCase();
+      if (description != descKey.toLowerCase() && description.contains(query)) {
+        return true;
+      }
+      return false;
+    }).toList();
+  }
+
   // Default single-instance app types that should always appear
   // These match the types in CreateCollectionPage
   static const List<_DefaultAppType> _defaultAppTypes = [
@@ -1627,6 +1706,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
     _DefaultAppType('backup', Icons.backup),
     _DefaultAppType('groups', Icons.groups),
     _DefaultAppType('console', Icons.terminal),
+    _DefaultAppType('reader', Icons.menu_book),
   ];
 
   @override
@@ -1934,48 +2014,65 @@ class _CollectionsPageState extends State<CollectionsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final filteredCollections = _filteredCollections;
+
     return Scaffold(
-      body: Column(
-        children: [
-          // Collections List
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _allCollections.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.folder_special_outlined,
-                          size: 64,
-                          color: Theme.of(context).colorScheme.secondary,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _allCollections.isEmpty
-                              ? _i18n.t('no_collections_yet')
-                              : _i18n.t('no_apps_found'),
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _allCollections.isEmpty
-                              ? _i18n.t('create_your_first_collection')
-                              : _i18n.t('try_a_different_search'),
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _allCollections.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.folder_special_outlined,
+                    size: 64,
+                    color: theme.colorScheme.secondary,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _i18n.t('no_collections_yet'),
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _i18n.t('create_your_first_collection'),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _loadCollections,
-                    child: LayoutBuilder(
+                  ),
+                ],
+              ),
+            )
+          : filteredCollections.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.search_off,
+                    size: 64,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _i18n.t('no_apps_found'),
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _i18n.t('try_different_search'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _loadCollections,
+              child: LayoutBuilder(
                       builder: (context, constraints) {
                         // Calculate number of columns based on screen width
                         final screenWidth = constraints.maxWidth;
@@ -1990,10 +2087,10 @@ class _CollectionsPageState extends State<CollectionsPage> {
                             : 8; // Extra large: 8 columns
 
                         // Separate app collections from file collections
-                        final appCollections = _allCollections
+                        final appCollections = filteredCollections
                             .where((c) => !_isFileCollectionType(c))
                             .toList();
-                        final fileCollections = _allCollections
+                        final fileCollections = filteredCollections
                             .where(_isFileCollectionType)
                             .toList();
 
@@ -2161,6 +2258,21 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                               )
                                             : collection.type == 'transfer'
                                             ? const TransferPage()
+                                            : collection.type == 'reader'
+                                            ? ReaderHomePage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'flasher'
+                                            ? FlasherPage(
+                                                basePath:
+                                                    collection.storagePath ??
+                                                    '',
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2360,6 +2472,21 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                 collectionTitle:
                                                     collection.title,
                                               )
+                                            : collection.type == 'reader'
+                                            ? ReaderHomePage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
+                                            : collection.type == 'flasher'
+                                            ? FlasherPage(
+                                                basePath:
+                                                    collection.storagePath ??
+                                                    '',
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2389,9 +2516,6 @@ class _CollectionsPageState extends State<CollectionsPage> {
                       },
                     ),
                   ),
-          ),
-        ],
-      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewCollection,
         icon: const Icon(Icons.add),

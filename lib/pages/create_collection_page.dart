@@ -27,12 +27,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   final I18nService _i18n = I18nService();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _searchController = TextEditingController();
 
   String? _selectedType;
   String _visibility = 'public';
   bool _useAutoFolder = true;
   String? _selectedFolderPath;
   bool _isCreating = false;
+  String _searchQuery = '';
   Set<String> _existingTypes = {};
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _itemKeys = {};
@@ -47,6 +49,19 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           .compareTo(_i18n.t('collection_type_${b.type}').toLowerCase()),
     );
     return types;
+  }
+
+  /// Get filtered app types based on search query
+  List<_CollectionTypeInfo> get _filteredTypes {
+    if (_searchQuery.isEmpty) {
+      return _sortedTypes;
+    }
+    final query = _searchQuery.toLowerCase();
+    return _sortedTypes.where((typeInfo) {
+      final title = _i18n.t('collection_type_${typeInfo.type}').toLowerCase();
+      final description = _getTypeDescription(typeInfo.type).toLowerCase();
+      return title.contains(query) || description.contains(query);
+    }).toList();
   }
 
   // Collection types with their icons (ordered by relevance)
@@ -74,6 +89,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('console', Icons.terminal),
     _CollectionTypeInfo('tracker', Icons.track_changes),
     _CollectionTypeInfo('videos', Icons.video_library),
+    _CollectionTypeInfo('reader', Icons.menu_book),
+    _CollectionTypeInfo('flasher', Icons.flash_on),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -118,6 +135,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -216,13 +234,77 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   }
 
   Widget _buildAppList() {
-    final sortedTypes = _sortedTypes;
+    final filteredTypes = _filteredTypes;
+    final theme = Theme.of(context);
 
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: sortedTypes.length,
-      itemBuilder: (context, index) => _buildAppListItem(sortedTypes[index]),
+    return Column(
+      children: [
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: _i18n.t('search_apps'),
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              filled: true,
+              fillColor: theme.colorScheme.surfaceContainerLow,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+            ),
+            onChanged: (value) => setState(() => _searchQuery = value),
+          ),
+        ),
+        // App list
+        Expanded(
+          child: filteredTypes.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.search_off,
+                        size: 64,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _i18n.t('no_apps_found'),
+                        style: theme.textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _i18n.t('try_different_search'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: filteredTypes.length,
+                  itemBuilder: (context, index) =>
+                      _buildAppListItem(filteredTypes[index]),
+                ),
+        ),
+      ],
     );
   }
 
@@ -745,6 +827,10 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Station configuration for network communication settings. Manage how your node connects to the network.';
       case 'console':
         return 'Run Alpine Linux virtual machines with TinyEMU emulator. Access a full Linux terminal, mount host folders, and connect to network services.';
+      case 'reader':
+        return 'Your personal reading hub for RSS feeds, manga, and e-books. Subscribe to news sources, follow manga series, and organize your digital library.';
+      case 'flasher':
+        return 'Flash firmware to ESP32 and other USB-connected devices. Supports multiple device families with auto-detection and progress tracking.';
       default:
         return '';
     }
@@ -860,6 +946,20 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Mount host folders',
           'Network access',
           'Save/restore state',
+        ];
+      case 'reader':
+        return [
+          'RSS feed subscriptions',
+          'Manga source integration',
+          'E-book library',
+          'Reading progress tracking',
+        ];
+      case 'flasher':
+        return [
+          'ESP32 and USB device flashing',
+          'USB auto-detection by VID/PID',
+          'Multiple protocol support',
+          'Progress tracking with verification',
         ];
       default:
         return [];

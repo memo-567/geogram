@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "name": "Geogram Flasher Devices",
+  "description": "Device definitions for the Geogram Flasher app",
+  "families": [
+    {
+      "id": "esp32",
+      "name": "ESP32",
+      "description": "Espressif ESP32 family of microcontrollers",
+      "protocol": "esptool"
+    },
+    {
+      "id": "quansheng",
+      "name": "Quansheng",
+      "description": "Quansheng handheld radios",
+      "protocol": "quansheng"
+    }
+  ],
+  "created_at": "2026-01-24T10:00:00Z",
+  "modified_at": "2026-01-24T10:00:00Z"
+}
