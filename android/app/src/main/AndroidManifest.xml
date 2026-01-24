@@ -45,6 +45,9 @@
     <!-- Boot completed permission for auto-starting on device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- USB Host feature for ESP32 flashing via USB OTG -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <application
         android:label="Geogram"
         android:name=".GeogramApplication"

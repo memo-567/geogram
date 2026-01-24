@@ -5,7 +5,6 @@
 ///
 /// Requirements:
 /// - ESP32-C3-mini connected via USB
-/// - libserialport installed on the system
 /// - User must be in dialout group (Linux)
 ///
 /// Run with: dart tests/flasher/flash_esp32_test.dart

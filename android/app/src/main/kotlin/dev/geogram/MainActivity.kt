@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
     private val CRASH_CHANNEL = "dev.geogram/crash"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
+    private var usbSerialPlugin: UsbSerialPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -28,6 +29,10 @@ class MainActivity : FlutterActivity() {
         // Initialize Wi-Fi Direct plugin for hotspot functionality
         wifiDirectPlugin = WifiDirectPlugin(this, flutterEngine)
         wifiDirectPlugin?.initialize()
+
+        // Initialize USB Serial plugin for ESP32 flashing
+        usbSerialPlugin = UsbSerialPlugin(this, flutterEngine)
+        usbSerialPlugin?.initialize()
 
         // BLE foreground service channel with bidirectional communication
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
@@ -286,6 +291,8 @@ class MainActivity : FlutterActivity() {
         bluetoothClassicPlugin = null
         wifiDirectPlugin?.dispose()
         wifiDirectPlugin = null
+        usbSerialPlugin?.dispose()
+        usbSerialPlugin = null
         super.onDestroy()
     }
 }

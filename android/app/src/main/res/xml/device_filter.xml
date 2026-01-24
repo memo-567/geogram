@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB device filter for ESP32 devices -->
+<resources>
+    <!-- Espressif native USB (ESP32-C3/S2/S3) -->
+    <usb-device vendor-id="12346" product-id="4097" />
+
+    <!-- Espressif USB Bridge -->
+    <usb-device vendor-id="12346" product-id="2" />
+
+    <!-- Silicon Labs CP210x USB-UART -->
+    <usb-device vendor-id="4292" product-id="60000" />
+
+    <!-- QinHeng Electronics CH340 USB-UART -->
+    <usb-device vendor-id="6790" product-id="29987" />
+
+    <!-- QinHeng Electronics CH9102 USB-UART -->
+    <usb-device vendor-id="6790" product-id="21972" />
+
+    <!-- FTDI FT232 -->
+    <usb-device vendor-id="1027" product-id="24577" />
+
+    <!-- FTDI FT231X -->
+    <usb-device vendor-id="1027" product-id="24597" />
+</resources>

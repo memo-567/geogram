@@ -4878,5 +4878,140 @@ print(version.firmwarePath);  // "1.2.0/firmware.bin"
 | DeviceCard | flasher/widgets/device_card.dart | Device selection card |
 | FlashProgressWidget | flasher/widgets/flash_progress_widget.dart | Progress display |
 | EspToolProtocol | flasher/protocols/esptool_protocol.dart | ESP32 flashing protocol |
-| SerialPort | flasher/serial/serial_port.dart | Cross-platform USB serial (flutter_libserialport) |
+| SerialPort | flasher/serial/serial_port.dart | Cross-platform USB serial (native APIs) |
 | Esp32UsbIdentifiers | flasher/serial/serial_port.dart | ESP32 VID/PID matching utilities |
+| NativeSerialAndroid | flasher/serial/native_serial_android.dart | Android USB Host API wrapper |
+| NativeSerialLinux | flasher/serial/native_serial_linux.dart | Linux libc termios wrapper |
+| UsbSerialPlugin | android/.../UsbSerialPlugin.kt | Android USB CDC-ACM plugin |
+
+---
+
+## Native Serial Port (Pure Platform APIs)
+
+### Overview
+
+Pure-Dart serial port implementation using native OS APIs - **no third-party dependencies**.
+
+| Platform | Backend | Library |
+|----------|---------|---------|
+| **Android** | USB Host API (`android.hardware.usb.*`) | Built into Android SDK |
+| **Linux** | libc termios | Built into Linux kernel |
+| **macOS** | libc termios | Built into macOS (TODO) |
+| **Windows** | kernel32 | Built into Windows (TODO) |
+
+### NativeSerialLinux
+
+**File:** `lib/flasher/serial/native_serial_linux.dart`
+
+Pure-Dart FFI implementation for Linux serial ports.
+
+**Key Features:**
+- Uses libc termios (always available on Linux)
+- Scans `/sys/class/tty/` for USB serial devices (ttyACM*, ttyUSB*)
+- Reads VID/PID from sysfs
+- Non-blocking I/O with poll()
+
+**Usage:**
+```dart
+// List ports
+final ports = await NativeSerialLinux.listPorts();
+for (final port in ports) {
+  print('${port.path}: VID=${port.vidHex}, PID=${port.pidHex}');
+}
+
+// Open and use
+final serial = NativeSerialLinux();
+if (await serial.open('/dev/ttyACM0', 115200)) {
+  serial.setDTR(false);
+  serial.setRTS(true);
+  await Future.delayed(Duration(milliseconds: 100));
+  serial.setDTR(true);
+
+  await serial.write(Uint8List.fromList([0x7F])); // Sync byte
+  final response = await serial.read(100, timeoutMs: 1000);
+  print('Received: ${response.length} bytes');
+
+  await serial.close();
+}
+```
+
+**FFI Bindings (libc.so.6):**
+```dart
+// File operations
+int open(const char* path, int flags);
+int close(int fd);
+ssize_t read(int fd, void* buf, size_t count);
+ssize_t write(int fd, const void* buf, size_t count);
+
+// Terminal control
+int tcgetattr(int fd, struct termios* t);
+int tcsetattr(int fd, int action, const struct termios* t);
+int cfsetispeed(struct termios* t, speed_t speed);
+int cfsetospeed(struct termios* t, speed_t speed);
+int tcflush(int fd, int queue);
+int tcdrain(int fd);
+
+// DTR/RTS control via ioctl
+int ioctl(int fd, TIOCMBIS/TIOCMBIC, &bits);
+```
+
+### NativeSerialAndroid
+
+**File:** `lib/flasher/serial/native_serial_android.dart`
+
+Dart wrapper for the Android USB Serial plugin (method channel).
+
+**Usage:**
+```dart
+// List devices
+final devices = await NativeSerialAndroid.listDevices();
+for (final d in devices) {
+  print('${d['deviceName']}: ${d['productName']} (ESP32: ${d['isEsp32']})');
+}
+
+// Request permission (shows system dialog)
+final deviceName = devices.first['deviceName'] as String;
+if (!await NativeSerialAndroid.hasPermission(deviceName)) {
+  await NativeSerialAndroid.requestPermission(deviceName);
+}
+
+// Open and use
+await NativeSerialAndroid.open(deviceName, baudRate: 115200);
+await NativeSerialAndroid.setDTR(deviceName, false);
+await NativeSerialAndroid.setRTS(deviceName, true);
+await Future.delayed(Duration(milliseconds: 100));
+await NativeSerialAndroid.setDTR(deviceName, true);
+
+await NativeSerialAndroid.write(deviceName, Uint8List.fromList([0x7F]));
+final data = await NativeSerialAndroid.read(deviceName, maxBytes: 100);
+await NativeSerialAndroid.close(deviceName);
+```
+
+### UsbSerialPlugin (Kotlin)
+
+**File:** `android/app/src/main/kotlin/dev/geogram/UsbSerialPlugin.kt`
+
+Android plugin implementing CDC-ACM USB serial via Android USB Host API.
+
+**CDC-ACM Control Requests:**
+```kotlin
+// Set baud rate, parity, stop bits
+val lineCoding = ByteArray(7)  // 7-byte structure
+connection.controlTransfer(0x21, SET_LINE_CODING, 0, 0, lineCoding, 7, 1000)
+
+// Set DTR/RTS signals
+val value = (if (dtr) 0x01 else 0x00) or (if (rts) 0x02 else 0x00)
+connection.controlTransfer(0x21, SET_CONTROL_LINE_STATE, value, 0, null, 0, 1000)
+```
+
+**Method Channel API:**
+- `listDevices` - List USB serial devices
+- `requestPermission` - Show Android permission dialog
+- `hasPermission` - Check permission status
+- `open` - Open device connection
+- `close` - Close device connection
+- `read` - Read via bulk transfer
+- `write` - Write via bulk transfer
+- `setDTR` / `setRTS` - Control line signals
+- `setBaudRate` - Change baud rate
+- `flush` - Clear buffers
