@@ -19,10 +19,8 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -83,5 +81,38 @@ android/build/
 geogram-cli/.dart_tool/
 geogram-cli/.packages
 geogram-cli/pubspec.lock
+geogram-cli/build/
 linux/fvp-cache/
 .task
+
+# Java heap dumps
+*.hprof
+
+# Local scripts
+android-sync.sh
+
+# Runtime data directories
+nostr/
+flasher/geogram/
+
+# Third-party example generated files
+third_party/*/example/android/local.properties
+third_party/*/example/ios/Flutter/Generated.xcconfig
+third_party/*/example/ios/Flutter/ephemeral/
+third_party/*/example/ios/Flutter/flutter_export_environment.sh
+third_party/*/example/ios/Runner/GeneratedPluginRegistrant.*
+third_party/*/example/macos/Flutter/ephemeral/
+third_party/*/example/windows/flutter/ephemeral/
+third_party/*/example/linux/flutter/ephemeral/
+third_party/*/example/pubspec.lock
+third_party/*/example/android/app/src/main/java/io/
+third_party/*/example/android/app/src/main/java/
+
+# Third-party build artifacts
+third_party/*/.cxx/
+third_party/*/android/.cxx/
+third_party/*/pubspec.lock
+**/.ninja_log
+
+# ESP32 managed components (auto-downloaded by ESP-IDF/PlatformIO)
+esp32/managed_components/

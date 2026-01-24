@@ -1,9 +1,0 @@
-# ninja log v5
-0	4686	1767816103576132146	CMakeFiles/whisper.dir/whisper.cpp/ggml.c.o	749ed7f2fd41f553
-3	4383	1767893488756744262	CMakeFiles/whisper_flutter.dir/main.cpp.o	3857adb0b5ffef2d
-1	15354	1767816114216202305	CMakeFiles/whisper.dir/whisper.cpp/whisper.cpp.o	ab0bb8a16ee2de43
-15472	24403	1767816123285262148	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/324pr5s6/obj/arm64-v8a/libwhisper.so	8d3c6c051af19155
-15354	15472	1767816114365203288	libwhisper.a	28650a900c2c2410
-2	5927	1767893553337022537	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/324pr5s6/obj/arm64-v8a/libwhisper.so	ad3c2b3eac6d9c6d
-16	7901	1768335314384681470	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/324pr5s6/obj/arm64-v8a/libwhisper.so	ad3c2b3eac6d9c6d
-9	13963	1768672024064315059	/home/brito/code/geograms/geogram/build/whisper_flutter_new/intermediates/cxx/Release/324pr5s6/obj/arm64-v8a/libwhisper.so	ad3c2b3eac6d9c6d
