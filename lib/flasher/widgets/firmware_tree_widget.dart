@@ -169,10 +169,22 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    project,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: project,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        TextSpan(
+                          text: ' (${architectures.length})',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -232,10 +244,22 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    architecture,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w500,
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: architecture,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        TextSpan(
+                          text: ' (${devices.length})',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
