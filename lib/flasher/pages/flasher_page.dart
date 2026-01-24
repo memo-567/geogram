@@ -288,6 +288,8 @@ class _FlasherPageState extends State<FlasherPage>
   }
 
   Future<void> _flashSingleDevice(PortInfo port, String? firmwarePath) async {
+    FlashStatus? previousStatus;
+
     try {
       await _flasherService.flashDevice(
         device: _selectedDevice!,
@@ -295,6 +297,15 @@ class _FlasherPageState extends State<FlasherPage>
         firmwarePath: firmwarePath,
         onProgress: (progress) {
           if (mounted) {
+            // Scroll to bottom when transitioning from sync to write/erase phase
+            final currentStatus = progress.status;
+            if (previousStatus == FlashStatus.syncing &&
+                (currentStatus == FlashStatus.erasing ||
+                    currentStatus == FlashStatus.writing)) {
+              _scrollToBottom();
+            }
+            previousStatus = currentStatus;
+
             setState(() {
               _flashProgress = progress;
             });
@@ -345,6 +356,8 @@ class _FlasherPageState extends State<FlasherPage>
     // Track results
     final results = <String, bool>{};
     final errors = <String, String>{};
+    final previousStatuses = <String, FlashStatus?>{};
+    bool hasScrolledAfterSync = false;
 
     try {
       // Flash all devices in parallel
@@ -356,6 +369,18 @@ class _FlasherPageState extends State<FlasherPage>
             firmwarePath: firmwarePath,
             onProgress: (progress) {
               if (mounted) {
+                // Scroll to bottom when first device transitions from sync to write/erase
+                final currentStatus = progress.status;
+                final prevStatus = previousStatuses[port.path];
+                if (!hasScrolledAfterSync &&
+                    prevStatus == FlashStatus.syncing &&
+                    (currentStatus == FlashStatus.erasing ||
+                        currentStatus == FlashStatus.writing)) {
+                  hasScrolledAfterSync = true;
+                  _scrollToBottom();
+                }
+                previousStatuses[port.path] = currentStatus;
+
                 setState(() {
                   _multiFlashProgress[port.path] = progress;
                 });
@@ -536,16 +561,6 @@ class _FlasherPageState extends State<FlasherPage>
             Tab(text: 'Monitor', icon: Icon(Icons.terminal)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              _loadDevices();
-              _refreshPorts();
-            },
-            tooltip: 'Refresh',
-          ),
-        ],
       ),
       body: _error != null
           ? _buildErrorView()
@@ -648,14 +663,9 @@ class _FlasherPageState extends State<FlasherPage>
           const SizedBox(height: 8),
           _buildFirmwareSelection(theme),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
 
           // Port selection
-          Text(
-            'Serial Port',
-            style: theme.textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
           _buildPortSelector(),
 
           const SizedBox(height: 24),
@@ -828,88 +838,95 @@ class _FlasherPageState extends State<FlasherPage>
                 ],
               ),
             ] else
-              DropdownButtonFormField<PortInfo>(
-                // Use value only if port is still in the list
-                value: _ports.contains(_selectedPort) ? _selectedPort : null,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Serial Port',
-                  border: OutlineInputBorder(),
-                ),
-                items: _ports.map((port) {
-                  final isMatch = _selectedDevice != null &&
-                      _selectedDevice!.usb != null &&
-                      port.vid == _selectedDevice!.usb!.vidInt &&
-                      port.pid == _selectedDevice!.usb!.pidInt;
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: _refreshPorts,
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Refresh Ports',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  Expanded(
+                    child: DropdownButtonFormField<PortInfo>(
+                      // Use value only if port is still in the list
+                      value: _ports.contains(_selectedPort) ? _selectedPort : null,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Select serial port',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
+                      items: _ports.map((port) {
+                        final isMatch = _selectedDevice != null &&
+                            _selectedDevice!.usb != null &&
+                            port.vid == _selectedDevice!.usb!.vidInt &&
+                            port.pid == _selectedDevice!.usb!.pidInt;
 
-                  final esp32Type = Esp32UsbIdentifiers.matchEsp32(port);
-                  final isEsp32 = esp32Type != null;
+                        final esp32Type = Esp32UsbIdentifiers.matchEsp32(port);
+                        final isEsp32 = esp32Type != null;
 
-                  // Build label with ESP32 indicator
-                  String label = port.path;
-                  if (isEsp32) {
-                    label = '${port.path} - $esp32Type';
-                  } else if (port.product != null) {
-                    label = '${port.path} (${port.product})';
-                  }
+                        // Build label with ESP32 indicator
+                        String label = port.path;
+                        if (isEsp32) {
+                          label = '${port.path} - $esp32Type';
+                        } else if (port.product != null) {
+                          label = '${port.path} (${port.product})';
+                        }
 
-                  return DropdownMenuItem(
-                    value: port,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            label,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (isMatch)
-                          const Padding(
-                            padding: EdgeInsets.only(left: 8),
-                            child: Icon(Icons.check_circle,
-                                size: 16, color: Colors.green),
-                          )
-                        else if (isEsp32)
-                          Container(
-                            margin: const EdgeInsets.only(left: 8),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.blue[100],
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              'ESP32',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.blue[800],
+                        return DropdownMenuItem(
+                          value: port,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  label,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
+                              if (isMatch)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8),
+                                  child: Icon(Icons.check_circle,
+                                      size: 16, color: Colors.green),
+                                )
+                              else if (isEsp32)
+                                Container(
+                                  margin: const EdgeInsets.only(left: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue[100],
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    'ESP32',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue[800],
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                      ],
+                        );
+                      }).toList(),
+                      onChanged: (port) {
+                        setState(() {
+                          _selectedPort = port;
+                          // Keep _selectedPorts in sync
+                          _selectedPorts.clear();
+                          if (port != null) {
+                            _selectedPorts.add(port);
+                          }
+                        });
+                      },
                     ),
-                  );
-                }).toList(),
-                onChanged: (port) {
-                  setState(() {
-                    _selectedPort = port;
-                    // Keep _selectedPorts in sync
-                    _selectedPorts.clear();
-                    if (port != null) {
-                      _selectedPorts.add(port);
-                    }
-                  });
-                },
+                  ),
+                ],
               ),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: _refreshPorts,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Refresh Ports'),
-            ),
             const Divider(height: 24),
             // Open monitor after flash option
             CheckboxListTile(

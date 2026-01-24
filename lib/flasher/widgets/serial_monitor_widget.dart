@@ -57,15 +57,23 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
   int _baudRate = 115200;
   bool _autoScroll = true;
   bool _showTimestamp = false;
-  bool _hexMode = false;
-  bool _wordWrap = true;
+  bool _wordWrap = false; // Default to no wrap
+  bool _isPaused = false;
   String _lineEnding = '\n';
 
   // Data
   final List<_MonitorLine> _lines = [];
+  final List<_MonitorLine> _pausedBuffer = []; // Buffer for paused messages
   final int _maxLines = 1000;
   int _rxBytes = 0;
   int _txBytes = 0;
+
+  // Search
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  final List<int> _searchMatches = [];
+  int _currentMatchIndex = -1;
+  bool _showSearch = false;
 
   // Controllers
   final _scrollController = ScrollController();
@@ -90,9 +98,9 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
   // Line ending options
   static const _lineEndings = {
     'None': '',
-    'LF (\\n)': '\n',
-    'CR (\\r)': '\r',
-    'CR+LF': '\r\n',
+    'LF': '\n',
+    'CR': '\r',
+    'CRLF': '\r\n',
   };
 
   @override
@@ -102,6 +110,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
     _horizontalScrollController.dispose();
     _inputController.dispose();
     _inputFocusNode.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -177,31 +186,25 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
   void _onDataReceived(Uint8List data) {
     _rxBytes += data.length;
 
-    if (_hexMode) {
-      // Hex mode - show raw bytes
-      final hexStr = data.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
-      _addLine(hexStr, isRx: true);
-    } else {
-      // Text mode - decode and handle line breaks
-      try {
-        final text = utf8.decode(data, allowMalformed: true);
+    // Text mode - decode and handle line breaks
+    try {
+      final text = utf8.decode(data, allowMalformed: true);
 
-        // Split by newlines but keep partial lines
-        final parts = text.split(RegExp(r'[\r\n]+'));
-        for (var i = 0; i < parts.length; i++) {
-          final part = parts[i];
-          if (part.isNotEmpty) {
-            _addLine(part, isRx: true);
-          }
+      // Split by newlines but keep partial lines
+      final parts = text.split(RegExp(r'[\r\n]+'));
+      for (var i = 0; i < parts.length; i++) {
+        final part = parts[i];
+        if (part.isNotEmpty) {
+          _addLine(part, isRx: true);
         }
-      } catch (e) {
-        // Fallback to hex on decode error
-        final hexStr = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-        _addLine('[hex] $hexStr', isRx: true);
       }
+    } catch (e) {
+      // Fallback to hex on decode error
+      final hexStr = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+      _addLine('[hex] $hexStr', isRx: true);
     }
 
-    if (_autoScroll && mounted) {
+    if (_autoScroll && !_isPaused && mounted) {
       _scrollToBottom();
     }
   }
@@ -219,7 +222,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
       _addLine(text, isRx: false);
       _inputController.clear();
 
-      if (_autoScroll) {
+      if (_autoScroll && !_isPaused) {
         _scrollToBottom();
       }
     } catch (e) {
@@ -228,19 +231,31 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
   }
 
   void _addLine(String text, {required bool isRx}) {
-    setState(() {
-      _lines.add(_MonitorLine(
-        text: text,
-        timestamp: DateTime.now(),
-        isRx: isRx,
-        isSystem: false,
-      ));
+    final line = _MonitorLine(
+      text: text,
+      timestamp: DateTime.now(),
+      isRx: isRx,
+      isSystem: false,
+    );
 
-      // Trim old lines
-      while (_lines.length > _maxLines) {
-        _lines.removeAt(0);
-      }
-    });
+    if (_isPaused) {
+      // Buffer the line when paused
+      _pausedBuffer.add(line);
+    } else {
+      setState(() {
+        _lines.add(line);
+
+        // Trim old lines
+        while (_lines.length > _maxLines) {
+          _lines.removeAt(0);
+        }
+
+        // Update search matches if searching
+        if (_searchQuery.isNotEmpty) {
+          _updateSearchMatches();
+        }
+      });
+    }
   }
 
   void _addSystemLine(String text) {
@@ -254,11 +269,39 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
     });
   }
 
+  void _togglePause() {
+    setState(() {
+      if (_isPaused) {
+        // Resume - add all buffered lines
+        _lines.addAll(_pausedBuffer);
+        _pausedBuffer.clear();
+
+        // Trim old lines
+        while (_lines.length > _maxLines) {
+          _lines.removeAt(0);
+        }
+
+        // Update search matches if searching
+        if (_searchQuery.isNotEmpty) {
+          _updateSearchMatches();
+        }
+
+        if (_autoScroll) {
+          _scrollToBottom();
+        }
+      }
+      _isPaused = !_isPaused;
+    });
+  }
+
   void _clear() {
     setState(() {
       _lines.clear();
+      _pausedBuffer.clear();
       _rxBytes = 0;
       _txBytes = 0;
+      _searchMatches.clear();
+      _currentMatchIndex = -1;
     });
   }
 
@@ -272,6 +315,20 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
         );
       }
     });
+  }
+
+  void _scrollToLine(int lineIndex) {
+    if (!_scrollController.hasClients) return;
+
+    // Estimate line height (approx 20 pixels per line with padding)
+    const lineHeight = 20.0;
+    final targetOffset = lineIndex * lineHeight;
+
+    _scrollController.animateTo(
+      targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
   }
 
   void _showError(String message) {
@@ -301,6 +358,65 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
     );
   }
 
+  // Search methods
+  void _toggleSearch() {
+    setState(() {
+      _showSearch = !_showSearch;
+      if (!_showSearch) {
+        _searchQuery = '';
+        _searchController.clear();
+        _searchMatches.clear();
+        _currentMatchIndex = -1;
+      }
+    });
+  }
+
+  void _updateSearchMatches() {
+    _searchMatches.clear();
+    _currentMatchIndex = -1;
+
+    if (_searchQuery.isEmpty) return;
+
+    final query = _searchQuery.toLowerCase();
+    for (var i = 0; i < _lines.length; i++) {
+      if (_lines[i].text.toLowerCase().contains(query)) {
+        _searchMatches.add(i);
+      }
+    }
+
+    if (_searchMatches.isNotEmpty) {
+      _currentMatchIndex = 0;
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    setState(() {
+      _searchQuery = query;
+      _updateSearchMatches();
+      if (_searchMatches.isNotEmpty) {
+        _scrollToLine(_searchMatches[_currentMatchIndex]);
+      }
+    });
+  }
+
+  void _goToNextMatch() {
+    if (_searchMatches.isEmpty) return;
+
+    setState(() {
+      _currentMatchIndex = (_currentMatchIndex + 1) % _searchMatches.length;
+      _scrollToLine(_searchMatches[_currentMatchIndex]);
+    });
+  }
+
+  void _goToPreviousMatch() {
+    if (_searchMatches.isEmpty) return;
+
+    setState(() {
+      _currentMatchIndex = (_currentMatchIndex - 1 + _searchMatches.length) % _searchMatches.length;
+      _scrollToLine(_searchMatches[_currentMatchIndex]);
+    });
+  }
+
   String _formatTime(DateTime time) {
     return '${time.hour.toString().padLeft(2, '0')}:'
         '${time.minute.toString().padLeft(2, '0')}:'
@@ -322,6 +438,9 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
       children: [
         // Toolbar
         _buildToolbar(theme),
+
+        // Search bar (conditional)
+        if (_showSearch) _buildSearchBar(theme),
 
         const Divider(height: 1),
 
@@ -428,6 +547,16 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
 
           const VerticalDivider(width: 16),
 
+          // Pause button
+          IconButton(
+            onPressed: _togglePause,
+            icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),
+            tooltip: _isPaused
+                ? 'Resume (${_pausedBuffer.length} buffered)'
+                : 'Pause',
+            color: _isPaused ? Colors.orange : null,
+          ),
+
           // Clear button
           IconButton(
             onPressed: _clear,
@@ -440,6 +569,14 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
             onPressed: _lines.isEmpty ? null : _copyToClipboard,
             icon: const Icon(Icons.copy),
             tooltip: 'Copy All',
+          ),
+
+          // Search button
+          IconButton(
+            onPressed: _toggleSearch,
+            icon: Icon(_showSearch ? Icons.search_off : Icons.search),
+            tooltip: 'Search',
+            color: _showSearch ? theme.colorScheme.primary : null,
           ),
 
           const VerticalDivider(width: 16),
@@ -458,18 +595,32 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
             onSelected: (v) => setState(() => _showTimestamp = v),
           ),
 
-          // Hex mode toggle
-          FilterChip(
-            label: const Text('Hex'),
-            selected: _hexMode,
-            onSelected: (v) => setState(() => _hexMode = v),
-          ),
-
           // Word wrap toggle
           FilterChip(
             label: const Text('Wrap'),
             selected: _wordWrap,
             onSelected: (v) => setState(() => _wordWrap = v),
+          ),
+
+          // Line ending selector
+          SizedBox(
+            width: 70,
+            child: DropdownButton<String>(
+              value: _lineEnding,
+              isExpanded: true,
+              isDense: true,
+              items: _lineEndings.entries.map((e) {
+                return DropdownMenuItem(
+                  value: e.value,
+                  child: Text(e.key, style: const TextStyle(fontSize: 12)),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _lineEnding = value);
+                }
+              },
+            ),
           ),
 
           // Stats
@@ -488,6 +639,73 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search...',
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                      )
+                    : null,
+              ),
+              onChanged: _onSearchChanged,
+              autofocus: true,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Match count
+          if (_searchQuery.isNotEmpty)
+            Text(
+              _searchMatches.isEmpty
+                  ? 'No matches'
+                  : '${_currentMatchIndex + 1}/${_searchMatches.length}',
+              style: theme.textTheme.bodySmall,
+            ),
+          const SizedBox(width: 8),
+          // Previous match
+          IconButton(
+            onPressed: _searchMatches.isEmpty ? null : _goToPreviousMatch,
+            icon: const Icon(Icons.keyboard_arrow_up),
+            tooltip: 'Previous match',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Next match
+          IconButton(
+            onPressed: _searchMatches.isEmpty ? null : _goToNextMatch,
+            icon: const Icon(Icons.keyboard_arrow_down),
+            tooltip: 'Next match',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Close search
+          IconButton(
+            onPressed: _toggleSearch,
+            icon: const Icon(Icons.close),
+            tooltip: 'Close',
+            visualDensity: VisualDensity.compact,
+          ),
         ],
       ),
     );
@@ -518,17 +736,25 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
       );
     }
 
-    final listView = ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(8),
-      itemCount: _lines.length,
-      itemBuilder: (context, index) {
-        final line = _lines[index];
-        return _buildLine(line, theme);
-      },
+    // Use SelectionArea to enable text selection across all lines
+    final listView = SelectionArea(
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.all(8),
+        itemCount: _lines.length,
+        itemBuilder: (context, index) {
+          final line = _lines[index];
+          final isCurrentMatch = _searchMatches.isNotEmpty &&
+              _currentMatchIndex >= 0 &&
+              _currentMatchIndex < _searchMatches.length &&
+              _searchMatches[_currentMatchIndex] == index;
+          final isMatch = _searchMatches.contains(index);
+          return _buildLine(line, theme, index, isMatch: isMatch, isCurrentMatch: isCurrentMatch);
+        },
+      ),
     );
 
-    return Container(
+    Widget content = Container(
       color: theme.brightness == Brightness.dark
           ? Colors.black
           : Colors.grey[100],
@@ -547,9 +773,52 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
               ),
             ),
     );
+
+    // Show pause indicator
+    if (_isPaused) {
+      content = Stack(
+        children: [
+          content,
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.pause, size: 16, color: Colors.white),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Paused (${_pausedBuffer.length} buffered)',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return content;
   }
 
-  Widget _buildLine(_MonitorLine line, ThemeData theme) {
+  Widget _buildLine(
+    _MonitorLine line,
+    ThemeData theme,
+    int index, {
+    bool isMatch = false,
+    bool isCurrentMatch = false,
+  }) {
     final isDark = theme.brightness == Brightness.dark;
 
     Color textColor;
@@ -569,13 +838,94 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
         ? '[SYS] '
         : (line.isRx ? '' : '[TX] ');
 
-    return SelectableText(
-      '$timestamp$prefix${line.text}',
-      style: TextStyle(
-        fontFamily: 'monospace',
-        fontSize: 13,
-        color: textColor,
-        height: 1.4,
+    final fullText = '$timestamp$prefix${line.text}';
+
+    // Highlight search matches
+    Widget textWidget;
+    if (_searchQuery.isNotEmpty && isMatch) {
+      textWidget = _buildHighlightedText(
+        fullText,
+        _searchQuery,
+        textColor,
+        isCurrentMatch,
+        theme,
+      );
+    } else {
+      textWidget = Text(
+        fullText,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: textColor,
+          height: 1.4,
+        ),
+        maxLines: _wordWrap ? null : 1,
+      );
+    }
+
+    // Background highlight for current match
+    if (isCurrentMatch) {
+      return Container(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+        child: textWidget,
+      );
+    }
+
+    return textWidget;
+  }
+
+  Widget _buildHighlightedText(
+    String text,
+    String query,
+    Color baseColor,
+    bool isCurrentMatch,
+    ThemeData theme,
+  ) {
+    final queryLower = query.toLowerCase();
+    final textLower = text.toLowerCase();
+
+    final spans = <TextSpan>[];
+    int start = 0;
+
+    while (true) {
+      final index = textLower.indexOf(queryLower, start);
+      if (index == -1) {
+        // Add remaining text
+        if (start < text.length) {
+          spans.add(TextSpan(text: text.substring(start)));
+        }
+        break;
+      }
+
+      // Add text before match
+      if (index > start) {
+        spans.add(TextSpan(text: text.substring(start, index)));
+      }
+
+      // Add highlighted match
+      spans.add(TextSpan(
+        text: text.substring(index, index + query.length),
+        style: TextStyle(
+          backgroundColor: isCurrentMatch
+              ? theme.colorScheme.primary
+              : Colors.yellow,
+          color: isCurrentMatch ? Colors.white : Colors.black,
+          fontWeight: FontWeight.bold,
+        ),
+      ));
+
+      start = index + query.length;
+    }
+
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: baseColor,
+          height: 1.4,
+        ),
+        children: spans,
       ),
       maxLines: _wordWrap ? null : 1,
     );
@@ -586,29 +936,6 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
       padding: const EdgeInsets.all(8),
       child: Row(
         children: [
-          // Line ending selector
-          SizedBox(
-            width: 90,
-            child: DropdownButton<String>(
-              value: _lineEnding,
-              isExpanded: true,
-              isDense: true,
-              items: _lineEndings.entries.map((e) {
-                return DropdownMenuItem(
-                  value: e.value,
-                  child: Text(e.key),
-                );
-              }).toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() => _lineEnding = value);
-                }
-              },
-            ),
-          ),
-
-          const SizedBox(width: 8),
-
           // Input field
           Expanded(
             child: TextField(

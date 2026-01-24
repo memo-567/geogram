@@ -215,46 +215,80 @@ class FlashProgressWidget extends StatelessWidget {
   }
 
   Widget _buildDetails(ThemeData theme) {
-    final details = <Widget>[];
+    // First row: Progress and Speed
+    final topRow = <Widget>[];
+    // Second row: ETA and Elapsed
+    final bottomRow = <Widget>[];
 
     if (progress.totalBytes > 0) {
-      details.add(
-        _buildDetailItem(
-          theme,
-          Icons.storage,
-          'Progress',
-          progress.formattedProgress,
+      topRow.add(
+        Expanded(
+          child: _buildDetailItem(
+            theme,
+            Icons.storage,
+            'Progress',
+            progress.formattedProgress,
+          ),
         ),
       );
     }
 
-    if (progress.totalChunks > 0) {
-      details.add(
-        _buildDetailItem(
-          theme,
-          Icons.view_module,
-          'Sectors',
-          '${progress.currentChunk} / ${progress.totalChunks}',
+    if (progress.formattedSpeed.isNotEmpty) {
+      topRow.add(
+        Expanded(
+          child: _buildDetailItem(
+            theme,
+            Icons.speed,
+            'Speed',
+            progress.formattedSpeed,
+          ),
+        ),
+      );
+    }
+
+    if (progress.formattedEta.isNotEmpty) {
+      bottomRow.add(
+        Expanded(
+          child: _buildDetailItem(
+            theme,
+            Icons.hourglass_bottom,
+            'ETA',
+            progress.formattedEta,
+          ),
         ),
       );
     }
 
     if (progress.elapsed != null) {
-      details.add(
-        _buildDetailItem(
-          theme,
-          Icons.timer,
-          'Elapsed',
-          progress.formattedElapsed,
+      bottomRow.add(
+        Expanded(
+          child: _buildDetailItem(
+            theme,
+            Icons.timer,
+            'Elapsed',
+            progress.formattedElapsed,
+          ),
         ),
       );
     }
 
-    if (details.isEmpty) return const SizedBox.shrink();
+    if (topRow.isEmpty && bottomRow.isEmpty) return const SizedBox.shrink();
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
-      children: details,
+    return Column(
+      children: [
+        if (topRow.isNotEmpty)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: topRow,
+          ),
+        if (topRow.isNotEmpty && bottomRow.isNotEmpty)
+          const SizedBox(height: 12),
+        if (bottomRow.isNotEmpty)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: bottomRow,
+          ),
+      ],
     );
   }
 
