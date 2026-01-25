@@ -6,12 +6,20 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/device_definition.dart';
+import '../models/flash_progress.dart';
 import '../protocols/protocol_registry.dart';
+import '../serial/serial_port.dart';
+import '../services/flasher_service.dart';
+
+/// Firmware source options
+enum FirmwareSource { file, url, esp32 }
 
 /// Wizard for adding new firmware to the library
 ///
@@ -60,8 +68,15 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
   final _releaseNotesController = TextEditingController();
   String? _firmwarePath;
   int? _firmwareSize;
-  bool _useUrl = false;
+  FirmwareSource _firmwareSource = FirmwareSource.file;
   final _firmwareUrlController = TextEditingController();
+
+  // ESP32 reading state
+  List<PortInfo> _availablePorts = [];
+  PortInfo? _selectedReadPort;
+  bool _isReading = false;
+  FlashProgress? _readProgress;
+  Uint8List? _readFirmware;
 
   // Focus nodes for Enter key navigation
   final _modelTitleFocus = FocusNode();
@@ -138,12 +153,16 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         return true;
       case 3: // Version
         if (_versionController.text.trim().isEmpty) return false;
-        if (_useUrl) {
-          final url = _firmwareUrlController.text.trim();
-          return url.isNotEmpty &&
-              (url.startsWith('http://') || url.startsWith('https://'));
+        switch (_firmwareSource) {
+          case FirmwareSource.file:
+            return _firmwarePath != null;
+          case FirmwareSource.url:
+            final url = _firmwareUrlController.text.trim();
+            return url.isNotEmpty &&
+                (url.startsWith('http://') || url.startsWith('https://'));
+          case FirmwareSource.esp32:
+            return _readFirmware != null;
         }
-        return _firmwarePath != null;
       default:
         return false;
     }
@@ -273,23 +292,35 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         );
       }
 
-      // Copy or download firmware file
+      // Copy, download, or use read firmware file
       int? firmwareSize = _firmwareSize;
       final destFile = File('${versionDir.path}/firmware.bin');
 
-      if (_useUrl && _firmwareUrlController.text.trim().isNotEmpty) {
-        // Download from URL
-        final url = _firmwareUrlController.text.trim();
-        final response = await http.get(Uri.parse(url));
-        if (response.statusCode != 200) {
-          throw Exception('Failed to download firmware: HTTP ${response.statusCode}');
-        }
-        await destFile.writeAsBytes(response.bodyBytes);
-        firmwareSize = response.bodyBytes.length;
-      } else if (_firmwarePath != null) {
-        // Copy local file
-        final sourceFile = File(_firmwarePath!);
-        await sourceFile.copy(destFile.path);
+      switch (_firmwareSource) {
+        case FirmwareSource.url:
+          // Download from URL
+          final url = _firmwareUrlController.text.trim();
+          final response = await http.get(Uri.parse(url));
+          if (response.statusCode != 200) {
+            throw Exception('Failed to download firmware: HTTP ${response.statusCode}');
+          }
+          await destFile.writeAsBytes(response.bodyBytes);
+          firmwareSize = response.bodyBytes.length;
+          break;
+        case FirmwareSource.file:
+          // Copy local file
+          if (_firmwarePath != null) {
+            final sourceFile = File(_firmwarePath!);
+            await sourceFile.copy(destFile.path);
+          }
+          break;
+        case FirmwareSource.esp32:
+          // Use firmware read from ESP32
+          if (_readFirmware != null) {
+            await destFile.writeAsBytes(_readFirmware!);
+            firmwareSize = _readFirmware!.length;
+          }
+          break;
       }
 
       // Create version.json
@@ -892,7 +923,7 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
           textInputAction: TextInputAction.next,
           onChanged: (_) => setState(() {}),
           onSubmitted: (_) {
-            if (_useUrl) {
+            if (_firmwareSource == FirmwareSource.url) {
               _firmwareUrlFocus.requestFocus();
             } else {
               _releaseNotesFocus.requestFocus();
@@ -907,24 +938,38 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
           style: theme.textTheme.labelLarge,
         ),
         const SizedBox(height: 8),
-        SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(
-              value: false,
-              icon: Icon(Icons.folder_open),
-              label: Text('Local File'),
-            ),
-            ButtonSegment(
-              value: true,
-              icon: Icon(Icons.link),
-              label: Text('URL'),
-            ),
-          ],
-          selected: {_useUrl},
-          onSelectionChanged: (selected) {
-            setState(() {
-              _useUrl = selected.first;
-            });
+        LayoutBuilder(
+          builder: (context, constraints) {
+            // Use compact labels on narrow screens
+            final useCompact = constraints.maxWidth < 400;
+            return SegmentedButton<FirmwareSource>(
+              segments: [
+                ButtonSegment(
+                  value: FirmwareSource.file,
+                  icon: const Icon(Icons.folder_open),
+                  label: Text(useCompact ? 'File' : 'Local File'),
+                ),
+                const ButtonSegment(
+                  value: FirmwareSource.url,
+                  icon: Icon(Icons.link),
+                  label: Text('URL'),
+                ),
+                ButtonSegment(
+                  value: FirmwareSource.esp32,
+                  icon: const Icon(Icons.memory),
+                  label: Text(useCompact ? 'ESP32' : 'Copy from ESP32'),
+                ),
+              ],
+              selected: {_firmwareSource},
+              onSelectionChanged: (selected) {
+                setState(() {
+                  _firmwareSource = selected.first;
+                  if (_firmwareSource == FirmwareSource.esp32) {
+                    _refreshPorts();
+                  }
+                });
+              },
+            );
           },
         ),
         const SizedBox(height: 12),
@@ -933,7 +978,7 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: _useUrl ? _buildUrlInput(theme) : _buildFileInput(theme),
+            child: _buildFirmwareSourceInput(theme),
           ),
         ),
         const SizedBox(height: 16),
@@ -1074,5 +1119,240 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         ),
       ],
     );
+  }
+
+  Widget _buildFirmwareSourceInput(ThemeData theme) {
+    switch (_firmwareSource) {
+      case FirmwareSource.file:
+        return _buildFileInput(theme);
+      case FirmwareSource.url:
+        return _buildUrlInput(theme);
+      case FirmwareSource.esp32:
+        return _buildEsp32Input(theme);
+    }
+  }
+
+  Future<void> _refreshPorts() async {
+    final ports = await SerialPort.listPorts();
+    if (mounted) {
+      setState(() {
+        _availablePorts = ports;
+        // Auto-select first ESP32-compatible port
+        if (_selectedReadPort == null && ports.isNotEmpty) {
+          for (final port in ports) {
+            final esp32Desc = Esp32UsbIdentifiers.matchEsp32(port);
+            if (esp32Desc != null) {
+              _selectedReadPort = port;
+              break;
+            }
+          }
+          _selectedReadPort ??= ports.first;
+        }
+      });
+    }
+  }
+
+  Widget _buildEsp32Input(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Port selector
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<PortInfo>(
+                value: _selectedReadPort,
+                decoration: const InputDecoration(
+                  labelText: 'Select ESP32 Port',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.usb),
+                ),
+                items: _availablePorts.map((port) {
+                  final esp32Desc = Esp32UsbIdentifiers.matchEsp32(port);
+                  return DropdownMenuItem(
+                    value: port,
+                    child: Text(
+                      esp32Desc != null
+                          ? '${port.path} ($esp32Desc)'
+                          : port.displayName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  );
+                }).toList(),
+                onChanged: _isReading
+                    ? null
+                    : (port) {
+                        setState(() {
+                          _selectedReadPort = port;
+                        });
+                      },
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _isReading ? null : _refreshPorts,
+              tooltip: 'Refresh ports',
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Read button or progress
+        if (_isReading) ...[
+          // Show progress
+          if (_readProgress != null) ...[
+            Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    value: _readProgress!.progress,
+                    strokeWidth: 2,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _readProgress!.message,
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      if (_readProgress!.totalBytes > 0)
+                        Text(
+                          '${_readProgress!.formattedProgress} (${_readProgress!.percentage}%)',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: _readProgress!.progress,
+            ),
+          ] else ...[
+            const Center(
+              child: CircularProgressIndicator(),
+            ),
+          ],
+        ] else if (_readFirmware != null) ...[
+          // Show success
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.green.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.green),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Firmware read successfully',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.green.shade700,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        'Size: ${_formatSize(_readFirmware!.length)}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () {
+                    setState(() {
+                      _readFirmware = null;
+                    });
+                  },
+                  tooltip: 'Clear and read again',
+                ),
+              ],
+            ),
+          ),
+        ] else ...[
+          // Show read button
+          Center(
+            child: Column(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _selectedReadPort != null
+                      ? _readFirmwareFromEsp32
+                      : null,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Read Firmware from ESP32'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Reading a 4MB flash takes several minutes.\nFor ESP32-C3/S3 with USB: Hold BOOT, press RESET, release both.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _readFirmwareFromEsp32() async {
+    if (_selectedReadPort == null) return;
+
+    setState(() {
+      _isReading = true;
+      _readProgress = null;
+      _readFirmware = null;
+      _error = null;
+    });
+
+    try {
+      final service = FlasherService.withPath(widget.basePath);
+
+      final firmware = await service.readFirmwareFromDevice(
+        portPath: _selectedReadPort!.path,
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _readProgress = progress;
+            });
+          }
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _readFirmware = firmware;
+          _firmwareSize = firmware.length;
+          _isReading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to read firmware: $e';
+          _isReading = false;
+        });
+      }
+    }
   }
 }

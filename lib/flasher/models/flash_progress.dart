@@ -22,6 +22,9 @@ enum FlashStatus {
   /// Verifying firmware
   verifying,
 
+  /// Reading flash memory
+  reading,
+
   /// Resetting device
   resetting,
 
@@ -123,6 +126,23 @@ class FlashProgress {
       status: FlashStatus.verifying,
       progress: progress,
       message: 'Verifying firmware...',
+    );
+  }
+
+  /// Create reading progress
+  factory FlashProgress.reading({
+    required double progress,
+    required int bytesRead,
+    required int totalBytes,
+    Duration? elapsed,
+  }) {
+    return FlashProgress(
+      status: FlashStatus.reading,
+      progress: progress,
+      message: 'Reading flash memory...',
+      bytesWritten: bytesRead,
+      totalBytes: totalBytes,
+      elapsed: elapsed,
     );
   }
 

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
+import '../protocols/esptool_protocol.dart';
 import '../protocols/flash_protocol.dart';
 import '../protocols/protocol_registry.dart';
 import '../serial/serial_port.dart';
@@ -222,6 +223,83 @@ class FlasherService {
   Future<void> cancel() async {
     await _cleanup();
     _progressController?.add(FlashProgress.error('Flash cancelled by user'));
+  }
+
+  /// Read firmware from connected ESP32 device
+  ///
+  /// [portPath] - Serial port path (e.g., /dev/ttyUSB0)
+  /// [flashSize] - Flash size in bytes (null = auto-detect)
+  /// [onProgress] - Progress callback
+  ///
+  /// Returns the firmware binary data read from the device.
+  Future<Uint8List> readFirmwareFromDevice({
+    required String portPath,
+    int? flashSize,
+    FlashProgressCallback? onProgress,
+  }) async {
+    _progressController = StreamController<FlashProgress>.broadcast();
+
+    void reportProgress(FlashProgress progress) {
+      onProgress?.call(progress);
+      _progressController?.add(progress);
+    }
+
+    try {
+      // Create EspToolProtocol directly (reading is ESP32-specific)
+      final protocol = EspToolProtocol();
+
+      // Create and open serial port
+      _currentPort = SerialPort();
+      final portOpened = await _currentPort!.open(portPath, 115200);
+      if (!portOpened) {
+        throw ConnectionException('Failed to open serial port: $portPath');
+      }
+
+      // Connect to bootloader
+      final connected = await protocol.connect(
+        _currentPort!,
+        baudRate: 115200,
+        onProgress: reportProgress,
+      );
+
+      if (!connected) {
+        throw ConnectionException('Failed to connect to device bootloader');
+      }
+
+      // Detect flash size if not provided
+      int size = flashSize ?? 0;
+      if (size == 0) {
+        reportProgress(const FlashProgress(
+          status: FlashStatus.syncing,
+          message: 'Detecting flash size...',
+        ));
+        size = await protocol.detectFlashSize();
+      }
+
+      // Read flash
+      final firmware = await protocol.readFlash(
+        offset: 0,
+        length: size,
+        onProgress: reportProgress,
+      );
+
+      // Disconnect
+      await protocol.disconnect();
+      await _currentPort!.close();
+      _currentPort = null;
+
+      return firmware;
+    } catch (e) {
+      reportProgress(FlashProgress.error(e.toString()));
+      rethrow;
+    } finally {
+      await _progressController?.close();
+      _progressController = null;
+      if (_currentPort != null) {
+        await _currentPort!.close();
+        _currentPort = null;
+      }
+    }
   }
 
   /// Clean up resources

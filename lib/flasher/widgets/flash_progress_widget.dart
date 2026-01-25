@@ -129,6 +129,11 @@ class FlashProgressWidget extends StatelessWidget {
         color = Colors.purple;
         spinning = true;
         break;
+      case FlashStatus.reading:
+        icon = Icons.download;
+        color = Colors.cyan;
+        spinning = true;
+        break;
       case FlashStatus.resetting:
         icon = Icons.restart_alt;
         color = Colors.teal;
@@ -184,6 +189,8 @@ class FlashProgressWidget extends StatelessWidget {
         return 'Writing';
       case FlashStatus.verifying:
         return 'Verifying';
+      case FlashStatus.reading:
+        return 'Reading';
       case FlashStatus.resetting:
         return 'Resetting';
       case FlashStatus.completed:

@@ -242,6 +242,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
       // Buffer the line when paused
       _pausedBuffer.add(line);
     } else {
+      if (!mounted) return;
       setState(() {
         _lines.add(line);
 
@@ -259,6 +260,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
   }
 
   void _addSystemLine(String text) {
+    if (!mounted) return;
     setState(() {
       _lines.add(_MonitorLine(
         text: text,
@@ -465,11 +467,11 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           // Port selector
           SizedBox(
             width: 180,
@@ -639,7 +641,9 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
               ),
             ),
           ],
-        ],
+        ].expand((widget) => [widget, const SizedBox(width: 8)]).toList()
+          ..removeLast(), // Remove trailing spacer
+        ),
       ),
     );
   }

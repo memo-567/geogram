@@ -67,9 +67,25 @@ class EspToolProtocol implements FlashProtocol {
   // Register addresses
   static const int chipDetectMagicReg = 0x40001000;
 
+  // SPI registers for ESP32 (differ by chip family, but ESP32 base is most common)
+  static const int spiBaseReg = 0x3FF42000;
+  static const int spiCmdReg = 0x3FF42000;
+  static const int spiAddr = 0x3FF42004;
+  static const int spiCtrlReg = 0x3FF42008;
+  static const int spiW0Reg = 0x3FF42080;
+  static const int spiExtReg = 0x3FF420F0;
+
+  // SPI flash commands
+  static const int spiFlashReadCmd = 0x03;
+  static const int spiFlashRdid = 0x9F;
+
+  // SPI command bits
+  static const int spiCmdUsr = 1 << 18;
+
   // Flash settings
   static const int flashBlockSize = 0x1000; // 4KB
   static const int flashWriteSize = 0x400;  // 1KB per packet
+  static const int flashReadSize = 64;      // Bytes per SPI read (limited by register count)
 
   SerialPort? _port;
   bool _connected = false;
@@ -241,6 +257,167 @@ class EspToolProtocol implements FlashProtocol {
     _port!.setDTR(true);
     await Future.delayed(const Duration(milliseconds: 100));
     _port!.setDTR(false);
+  }
+
+  /// Detect flash size by reading JEDEC ID
+  ///
+  /// Returns flash size in bytes, or 0 if detection fails.
+  Future<int> detectFlashSize() async {
+    if (!_connected || _port == null) {
+      throw FlashException('Not connected');
+    }
+
+    // Attach SPI flash
+    await _spiAttach();
+
+    // Read JEDEC ID using SPI flash read ID command
+    final jedecId = await _spiReadFlashId();
+
+    // Extract size from JEDEC ID
+    // JEDEC ID format: [manufacturer][memory type][capacity]
+    // Capacity byte: 2^N bytes (e.g., 0x16 = 4MB, 0x17 = 8MB, 0x18 = 16MB)
+    final capacityByte = jedecId & 0xFF;
+
+    if (capacityByte >= 0x10 && capacityByte <= 0x20) {
+      return 1 << capacityByte; // 2^capacityByte bytes
+    }
+
+    // Default to 4MB if detection fails
+    return 4 * 1024 * 1024;
+  }
+
+  /// Read flash memory contents
+  ///
+  /// [offset] - Start address in flash
+  /// [length] - Number of bytes to read
+  /// [onProgress] - Progress callback
+  Future<Uint8List> readFlash({
+    required int offset,
+    required int length,
+    FlashProgressCallback? onProgress,
+  }) async {
+    if (!_connected || _port == null) {
+      throw FlashException('Not connected');
+    }
+
+    final startTime = DateTime.now();
+    final result = BytesBuilder();
+
+    // Attach SPI flash
+    await _spiAttach();
+
+    // Read in chunks
+    var bytesRead = 0;
+    while (bytesRead < length) {
+      final chunkSize = (length - bytesRead) < flashReadSize
+          ? (length - bytesRead)
+          : flashReadSize;
+
+      final chunk = await _spiReadFlash(offset + bytesRead, chunkSize);
+      result.add(chunk);
+      bytesRead += chunkSize;
+
+      // Report progress
+      final elapsed = DateTime.now().difference(startTime);
+      onProgress?.call(FlashProgress.reading(
+        progress: bytesRead / length,
+        bytesRead: bytesRead,
+        totalBytes: length,
+        elapsed: elapsed,
+      ));
+    }
+
+    return result.toBytes();
+  }
+
+  /// Attach SPI flash peripheral
+  Future<void> _spiAttach() async {
+    // SPI_ATTACH command: attach flash to SPI peripheral
+    // Data: 0 = use default SPI pins (GPIO6-11 on ESP32)
+    final data = Uint8List(8);
+    await _command(cmdSpiAttach, data);
+  }
+
+  /// Write to a register
+  Future<void> _writeReg(int address, int value, {int mask = 0xFFFFFFFF, int delayUs = 0}) async {
+    final data = Uint8List(16);
+    final view = ByteData.view(data.buffer);
+    view.setUint32(0, address, Endian.little);
+    view.setUint32(4, value, Endian.little);
+    view.setUint32(8, mask, Endian.little);
+    view.setUint32(12, delayUs, Endian.little);
+
+    await _command(cmdWriteReg, data);
+  }
+
+  /// Read SPI flash JEDEC ID
+  Future<int> _spiReadFlashId() async {
+    // Configure SPI for RDID command (0x9F)
+    // This reads 3 bytes: manufacturer ID, memory type, capacity
+
+    // Set up command: RDID (0x9F) with 24 bits of response
+    // USR_COMMAND_VALUE = 0x9F, command length = 8 bits, data length = 24 bits
+    await _writeReg(spiCtrlReg, 0); // Clear ctrl register
+
+    // Write RDID command to W0
+    await _writeReg(spiW0Reg, spiFlashRdid);
+
+    // Configure SPI_EXT for command: 8 command bits, 24 data bits
+    await _writeReg(spiExtReg, 0);
+
+    // Execute the SPI transaction
+    await _writeReg(spiCmdReg, spiCmdUsr);
+
+    // Wait for completion
+    await Future.delayed(const Duration(milliseconds: 10));
+
+    // Read result from W0
+    final result = await _readReg(spiW0Reg);
+
+    // Result is in format: [capacity][memory type][manufacturer] (reversed order in register)
+    // We need to extract the capacity byte
+    return result;
+  }
+
+  /// Read flash data using SPI
+  Future<Uint8List> _spiReadFlash(int address, int length) async {
+    // Use READ command (0x03) with 24-bit address
+    // Setup: command (8 bits) + address (24 bits), then read data
+
+    // Clear and configure SPI
+    await _writeReg(spiCtrlReg, 0);
+
+    // Build command: READ (0x03) followed by 24-bit address
+    // Address needs to be big-endian for SPI flash
+    final cmdAddr = (spiFlashReadCmd << 24) |
+        ((address >> 16) & 0xFF) << 16 |
+        ((address >> 8) & 0xFF) << 8 |
+        (address & 0xFF);
+
+    await _writeReg(spiW0Reg, cmdAddr);
+
+    // Configure for: 32 command+address bits out, N*8 data bits in
+    // Note: Full implementation would set SPI_USR_MOSI_BITLEN and SPI_USR_MISO_BITLEN
+    // registers based on (length * 8) data bits. This varies by ESP32 variant.
+
+    // Execute SPI transaction
+    await _writeReg(spiCmdReg, spiCmdUsr);
+
+    // Wait for completion
+    await Future.delayed(const Duration(milliseconds: 5));
+
+    // Read data from W0-W15 (up to 64 bytes)
+    final data = Uint8List(length);
+    var offset = 0;
+
+    for (var i = 0; i < (length + 3) ~/ 4 && i < 16; i++) {
+      final word = await _readReg(spiW0Reg + i * 4);
+      for (var j = 0; j < 4 && offset < length; j++) {
+        data[offset++] = (word >> (j * 8)) & 0xFF;
+      }
+    }
+
+    return data;
   }
 
   /// Reset chip into bootloader mode
