@@ -465,13 +465,11 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
         ? widget.selectedPort
         : null;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    // Use orientation to decide layout: wrap in portrait, scroll in landscape
+    final orientation = MediaQuery.of(context).orientation;
+    final isLandscape = orientation == Orientation.landscape;
+
+    final toolbarItems = [
           // Port selector
           SizedBox(
             width: 180,
@@ -641,10 +639,29 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
               ),
             ),
           ],
-        ].expand((widget) => [widget, const SizedBox(width: 8)]).toList()
-          ..removeLast(), // Remove trailing spacer
-        ),
-      ),
+        ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: isLandscape
+          // Landscape: horizontal scroll to prevent vertical overflow
+          ? SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: toolbarItems
+                    .expand((widget) => [widget, const SizedBox(width: 8)])
+                    .toList()
+                  ..removeLast(),
+              ),
+            )
+          // Portrait: wrap to multiple lines
+          : Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: toolbarItems,
+            ),
     );
   }
 
