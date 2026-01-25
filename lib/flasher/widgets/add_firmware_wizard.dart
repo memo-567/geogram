@@ -985,35 +985,41 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         const SizedBox(height: 8),
         LayoutBuilder(
           builder: (context, constraints) {
-            // Use compact labels on narrow screens
-            final useCompact = constraints.maxWidth < 400;
-            return SegmentedButton<FirmwareSource>(
-              segments: [
-                ButtonSegment(
-                  value: FirmwareSource.file,
-                  icon: const Icon(Icons.folder_open),
-                  label: Text(useCompact ? 'File' : 'Local File'),
-                ),
-                const ButtonSegment(
-                  value: FirmwareSource.url,
-                  icon: Icon(Icons.link),
-                  label: Text('URL'),
-                ),
-                ButtonSegment(
-                  value: FirmwareSource.esp32,
-                  icon: const Icon(Icons.memory),
-                  label: Text(useCompact ? 'ESP32' : 'Copy from ESP32'),
-                ),
-              ],
-              selected: {_firmwareSource},
-              onSelectionChanged: (selected) {
-                setState(() {
-                  _firmwareSource = selected.first;
-                  if (_firmwareSource == FirmwareSource.esp32) {
-                    _refreshPorts();
-                  }
-                });
-              },
+            // Responsive labels based on available width
+            final width = constraints.maxWidth;
+            final useIconsOnly = width < 280;
+            final useCompact = width < 400;
+
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<FirmwareSource>(
+                segments: [
+                  ButtonSegment(
+                    value: FirmwareSource.file,
+                    icon: const Icon(Icons.folder_open),
+                    label: useIconsOnly ? null : Text(useCompact ? 'File' : 'Local File'),
+                  ),
+                  ButtonSegment(
+                    value: FirmwareSource.url,
+                    icon: const Icon(Icons.link),
+                    label: useIconsOnly ? null : const Text('URL'),
+                  ),
+                  ButtonSegment(
+                    value: FirmwareSource.esp32,
+                    icon: const Icon(Icons.memory),
+                    label: useIconsOnly ? null : Text(useCompact ? 'ESP32' : 'Copy from ESP32'),
+                  ),
+                ],
+                selected: {_firmwareSource},
+                onSelectionChanged: (selected) {
+                  setState(() {
+                    _firmwareSource = selected.first;
+                    if (_firmwareSource == FirmwareSource.esp32) {
+                      _refreshPorts();
+                    }
+                  });
+                },
+              ),
             );
           },
         ),
