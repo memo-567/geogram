@@ -8,9 +8,11 @@ import 'dart:io';
 
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
@@ -87,6 +89,17 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
 
   bool _isSaving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-select "Create new" when there's no previous data
+    if (widget.hierarchy.isEmpty) {
+      _isNewProject = true;
+      _isNewArchitecture = true;
+      _isNewModel = true;
+    }
+  }
 
   @override
   void dispose() {
@@ -228,6 +241,25 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
       }
     }
   }
+
+  Future<void> _takePhoto() async {
+    final picker = ImagePicker();
+    final photo = await picker.pickImage(
+      source: ImageSource.camera,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+
+    if (photo != null) {
+      setState(() {
+        _modelPhotoPath = photo.path;
+      });
+    }
+  }
+
+  bool get _isMobilePlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   Future<void> _save() async {
     setState(() {
@@ -855,10 +887,23 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
                     ),
                   ] else ...[
                     Center(
-                      child: OutlinedButton.icon(
-                        onPressed: _pickPhoto,
-                        icon: const Icon(Icons.add_photo_alternate),
-                        label: const Text('Select image'),
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _pickPhoto,
+                            icon: const Icon(Icons.add_photo_alternate),
+                            label: const Text('Select image'),
+                          ),
+                          if (_isMobilePlatform)
+                            OutlinedButton.icon(
+                              onPressed: _takePhoto,
+                              icon: const Icon(Icons.camera_alt),
+                              label: const Text('Take photo'),
+                            ),
+                        ],
                       ),
                     ),
                   ],
