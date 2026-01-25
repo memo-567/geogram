@@ -14,6 +14,7 @@ import 'services/log_service.dart';
 import 'services/log_api_service.dart';
 import 'version.dart';
 import 'services/debug_controller.dart';
+import 'services/usb_attachment_service.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
 import 'services/profile_service.dart';
@@ -305,6 +306,12 @@ void main() async {
     // Initialize chat notification service (needed for unread counts)
     ChatNotificationService().initialize();
     LogService().log('ChatNotificationService initialized');
+
+    // Initialize USB attachment service (Android only, for ESP32 auto-detection)
+    if (!kIsWeb && Platform.isAndroid) {
+      UsbAttachmentService().initialize();
+      LogService().log('UsbAttachmentService initialized');
+    }
 
     // Initialize DM notification service (for push notifications on mobile)
     // Skip permission request on first launch - onboarding will handle it
@@ -913,6 +920,63 @@ class _HomePageState extends State<HomePage> {
           ),
         );
       }
+    } else if (event.action == DebugAction.openFlasherMonitor) {
+      _handleOpenFlasherMonitor(event.params['device_path'] as String?);
+    }
+  }
+
+  /// Handle opening Flasher on Monitor tab with optional auto-connect
+  void _handleOpenFlasherMonitor(String? devicePath) async {
+    LogService().log('HomePage: Opening Flasher Monitor (devicePath: $devicePath)');
+
+    // Find flasher collection
+    var collections = await CollectionService().loadCollections();
+    var flasherCollection = collections.where((c) => c.type == 'flasher').firstOrNull;
+
+    // Auto-create flasher collection if it doesn't exist
+    if (flasherCollection == null) {
+      LogService().log('HomePage: No flasher collection found, creating one automatically');
+      try {
+        flasherCollection = await CollectionService().createCollection(
+          title: _i18n.t('collection_type_flasher'),
+          type: 'flasher',
+        );
+        LogService().log('HomePage: Created flasher collection: ${flasherCollection.storagePath}');
+      } catch (e) {
+        LogService().log('HomePage: Failed to create flasher collection: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to create Flasher: $e'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    if (flasherCollection.storagePath == null) {
+      LogService().log('HomePage: Flasher collection has no storage path');
+      return;
+    }
+
+    // Navigate to collections panel first
+    setState(() => _selectedIndex = 0);
+
+    // Navigate to FlasherPage with Monitor tab and auto-connect
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FlasherPage(
+            basePath: flasherCollection!.storagePath!,
+            initialTab: 2, // Monitor tab
+            autoConnectPort: devicePath,
+          ),
+        ),
+      );
+      LogService().log('HomePage: Navigated to FlasherPage Monitor tab');
     }
   }
 

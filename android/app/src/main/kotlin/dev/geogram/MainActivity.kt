@@ -1,6 +1,8 @@
 package dev.geogram
 
 import android.content.Intent
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -15,9 +17,22 @@ class MainActivity : FlutterActivity() {
     private val ARGS_CHANNEL = "dev.geogram/args"
     private val BLE_CHANNEL = "dev.geogram/ble_service"
     private val CRASH_CHANNEL = "dev.geogram/crash"
+    private val USB_CHANNEL = "dev.geogram/usb_attach"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
+    private var usbMethodChannel: MethodChannel? = null
+
+    // Known ESP32 USB identifiers (VID, PID pairs)
+    private val ESP32_IDENTIFIERS = listOf(
+        Pair(0x303A, 0x1001), // Espressif native USB (ESP32-C3/S2/S3)
+        Pair(0x303A, 0x0002), // Espressif USB Bridge
+        Pair(0x10C4, 0xEA60), // CP210x USB-UART
+        Pair(0x1A86, 0x7523), // CH340 USB-UART
+        Pair(0x1A86, 0x55D4), // CH9102 USB-UART
+        Pair(0x0403, 0x6001), // FTDI FT232
+        Pair(0x0403, 0x6015), // FTDI FT231X
+    )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -33,6 +48,12 @@ class MainActivity : FlutterActivity() {
         // Initialize USB Serial plugin for ESP32 flashing
         usbSerialPlugin = UsbSerialPlugin(this, flutterEngine)
         usbSerialPlugin?.initialize()
+
+        // Initialize USB attachment channel for auto-detection
+        usbMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, USB_CHANNEL)
+
+        // Check if launched with USB device attached (cold start)
+        handleUsbIntent(intent)
 
         // BLE foreground service channel with bidirectional communication
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
@@ -284,6 +305,45 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Handle USB attachment when app is already running (warm start)
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleUsbIntent(intent)
+    }
+
+    /**
+     * Check if intent contains USB device attachment and notify Dart
+     */
+    private fun handleUsbIntent(intent: Intent?) {
+        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+
+            if (device != null) {
+                val vid = device.vendorId
+                val pid = device.productId
+                val deviceName = device.deviceName
+                val isEsp32 = ESP32_IDENTIFIERS.any { it.first == vid && it.second == pid }
+
+                android.util.Log.d("GeogramUSB", "USB device attached: $deviceName (VID=$vid, PID=$pid, isEsp32=$isEsp32)")
+
+                // Notify Dart about the USB attachment
+                usbMethodChannel?.invokeMethod("onUsbDeviceAttached", mapOf(
+                    "deviceName" to deviceName,
+                    "vid" to vid,
+                    "pid" to pid,
+                    "isEsp32" to isEsp32,
+                ))
+            }
+        }
+    }
+
     override fun onDestroy() {
         // Clear method channel to prevent stale reference when engine is destroyed
         BLEForegroundService.clearMethodChannel()
@@ -293,6 +353,7 @@ class MainActivity : FlutterActivity() {
         wifiDirectPlugin = null
         usbSerialPlugin?.dispose()
         usbSerialPlugin = null
+        usbMethodChannel = null
         super.onDestroy()
     }
 }

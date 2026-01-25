@@ -56,6 +56,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [DirectMessageService Message Cache](#directmessageservice-message-cache) - DM message caching for performance
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
+- [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 
 ### Reader Services
@@ -3344,6 +3345,56 @@ final upload = await TransferService().requestUpload(
 
 ---
 
+### MirrorSyncService
+
+**File:** `lib/services/mirror_sync_service.dart`
+**Docs:** `docs/API_synch.md`
+
+Simple one-way folder synchronization between Geogram instances using NOSTR-signed authentication.
+
+**Usage (as source - serving sync requests):**
+```dart
+final mirrorService = MirrorSyncService.instance;
+
+// Add allowed peer
+mirrorService.addAllowedPeer(peerNpub, peerCallsign);
+
+// Verify incoming request
+final result = await mirrorService.verifyRequest(nostrEvent, folder);
+if (result.allowed) {
+  // Token returned for subsequent manifest/file requests
+  print('Token: ${result.token}');
+}
+
+// Generate folder manifest
+final manifest = await mirrorService.generateManifest('/path/to/folder');
+```
+
+**Usage (as destination - performing sync):**
+```dart
+// Sync folder from peer
+final result = await mirrorService.syncFolder(
+  'http://192.168.1.100:3456',
+  'collections/blog',
+);
+
+if (result.success) {
+  print('Added: ${result.filesAdded}');
+  print('Modified: ${result.filesModified}');
+  print('Transferred: ${result.bytesTransferred} bytes');
+}
+```
+
+**Key Features:**
+- NOSTR event signature verification for authentication
+- SHA1 file hashing for change detection
+- One-way sync (source overwrites destination)
+- Token-based session management (1 hour expiry)
+- Range header support for resumable downloads
+- Path traversal protection
+
+---
+
 ## CLI/Console Abstractions
 
 ### ConsoleIO
@@ -5015,3 +5066,51 @@ connection.controlTransfer(0x21, SET_CONTROL_LINE_STATE, value, 0, null, 0, 1000
 - `setDTR` / `setRTS` - Control line signals
 - `setBaudRate` - Change baud rate
 - `flush` - Clear buffers
+
+### UsbAttachmentService
+
+**File:** `lib/services/usb_attachment_service.dart`
+
+Dart service that handles USB device attachment events from Android. Listens to native MethodChannel and triggers navigation to Flasher Monitor tab when an ESP32 device is connected via USB OTG.
+
+**Architecture:**
+1. Android `AndroidManifest.xml` declares `USB_DEVICE_ATTACHED` intent filter with `device_filter.xml`
+2. `MainActivity.kt` receives the intent, extracts VID/PID, checks against known ESP32 identifiers
+3. Sends event to Dart via MethodChannel `dev.geogram/usb_attach`
+4. `UsbAttachmentService` receives the event and triggers `DebugController.openFlasherMonitor`
+5. HomePage listens for the action and navigates to FlasherPage with Monitor tab
+
+**Usage:**
+```dart
+// Initialize once in main.dart (Android only)
+if (Platform.isAndroid) {
+  UsbAttachmentService().initialize();
+}
+
+// The service automatically handles USB attachment events
+// No manual interaction required - it's event-driven
+```
+
+**Known ESP32 USB Identifiers (in device_filter.xml and MainActivity.kt):**
+| Description | VID | PID |
+|-------------|------|------|
+| Espressif native USB (ESP32-C3/S2/S3) | 0x303A | 0x1001 |
+| Espressif USB Bridge | 0x303A | 0x0002 |
+| CP210x USB-UART | 0x10C4 | 0xEA60 |
+| CH340 USB-UART | 0x1A86 | 0x7523 |
+| CH9102 USB-UART | 0x1A86 | 0x55D4 |
+| FTDI FT232 | 0x0403 | 0x6001 |
+| FTDI FT231X | 0x0403 | 0x6015 |
+
+**DebugController Integration:**
+```dart
+// Trigger flasher monitor navigation programmatically
+DebugController().triggerOpenFlasherMonitor(devicePath: '/dev/bus/usb/001/002');
+
+// Listen for the action in UI
+_debugController.actionStream.listen((event) {
+  if (event.action == DebugAction.openFlasherMonitor) {
+    // Navigate to FlasherPage with initialTab: 2 (Monitor)
+  }
+});
+```

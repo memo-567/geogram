@@ -120,6 +120,24 @@ enum DebugAction {
 
   /// Open Console collection and auto-launch first session (debug API)
   openConsole,
+
+  /// Enable or disable mirror sync mode
+  mirrorEnable,
+
+  /// Request sync from a peer (destination side)
+  mirrorRequestSync,
+
+  /// Get current mirror sync status
+  mirrorGetStatus,
+
+  /// Add an allowed peer for sync (source side)
+  mirrorAddAllowedPeer,
+
+  /// Remove an allowed peer
+  mirrorRemoveAllowedPeer,
+
+  /// Open Flasher on Monitor tab (triggered by USB attachment)
+  openFlasherMonitor,
 }
 
 /// Toast message to be displayed
@@ -402,6 +420,51 @@ class DebugController {
     triggerAction(DebugAction.openConsole, params: {'session_id': sessionId});
   }
 
+  /// Trigger mirror enable/disable
+  void triggerMirrorEnable({required bool enabled}) {
+    triggerAction(DebugAction.mirrorEnable, params: {'enabled': enabled});
+  }
+
+  /// Trigger mirror sync request from a peer
+  void triggerMirrorRequestSync({
+    required String peerUrl,
+    required String folder,
+  }) {
+    triggerAction(
+      DebugAction.mirrorRequestSync,
+      params: {'peer_url': peerUrl, 'folder': folder},
+    );
+  }
+
+  /// Trigger mirror status request
+  void triggerMirrorGetStatus() {
+    triggerAction(DebugAction.mirrorGetStatus);
+  }
+
+  /// Add an allowed peer for mirror sync
+  void triggerMirrorAddAllowedPeer({
+    required String npub,
+    required String callsign,
+  }) {
+    triggerAction(
+      DebugAction.mirrorAddAllowedPeer,
+      params: {'npub': npub, 'callsign': callsign},
+    );
+  }
+
+  /// Remove an allowed peer from mirror sync
+  void triggerMirrorRemoveAllowedPeer({required String npub}) {
+    triggerAction(DebugAction.mirrorRemoveAllowedPeer, params: {'npub': npub});
+  }
+
+  /// Trigger opening Flasher on Monitor tab with optional auto-connect
+  void triggerOpenFlasherMonitor({String? devicePath}) {
+    triggerAction(
+      DebugAction.openFlasherMonitor,
+      params: {'device_path': devicePath},
+    );
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -663,6 +726,48 @@ class DebugController {
         'description': 'Get Console terminal status and logs',
         'params': {},
       },
+      {
+        'action': 'mirror_enable',
+        'description': 'Enable or disable mirror sync mode',
+        'params': {
+          'enabled': 'true/false (required)',
+        },
+      },
+      {
+        'action': 'mirror_request_sync',
+        'description': 'Request simple mirror sync from a peer',
+        'params': {
+          'peer_url': 'Peer HTTP URL, e.g., http://192.168.1.100:3456 (required)',
+          'folder': 'Folder path to sync, e.g., collections/blog (required)',
+        },
+      },
+      {
+        'action': 'mirror_get_status',
+        'description': 'Get current mirror sync status',
+        'params': {},
+      },
+      {
+        'action': 'mirror_add_allowed_peer',
+        'description': 'Add a peer allowed to sync from this device',
+        'params': {
+          'npub': 'Peer NOSTR public key (required)',
+          'callsign': 'Peer callsign for logging (required)',
+        },
+      },
+      {
+        'action': 'mirror_remove_allowed_peer',
+        'description': 'Remove an allowed sync peer',
+        'params': {
+          'npub': 'Peer NOSTR public key to remove (required)',
+        },
+      },
+      {
+        'action': 'open_flasher_monitor',
+        'description': 'Open Flasher on Monitor tab with optional auto-connect',
+        'params': {
+          'device_path': '(optional) Serial port path to auto-connect',
+        },
+      },
     ];
   }
 
@@ -904,6 +1009,15 @@ class DebugController {
                 }
               : null,
           'log_tail': logTail,
+        };
+
+      case 'open_flasher_monitor':
+        final devicePath = params['device_path'] as String?;
+        triggerOpenFlasherMonitor(devicePath: devicePath);
+        return {
+          'success': true,
+          'message': 'Opening Flasher on Monitor tab',
+          'device_path': devicePath,
         };
 
       default:

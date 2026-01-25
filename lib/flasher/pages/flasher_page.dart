@@ -20,9 +20,17 @@ import '../widgets/serial_monitor_widget.dart';
 class FlasherPage extends StatefulWidget {
   final String basePath;
 
+  /// Initial tab index (0=Flasher, 1=Library, 2=Monitor)
+  final int initialTab;
+
+  /// Port path to auto-connect when opening Monitor tab
+  final String? autoConnectPort;
+
   const FlasherPage({
     super.key,
     required this.basePath,
+    this.initialTab = 0,
+    this.autoConnectPort,
   });
 
   @override
@@ -66,9 +74,45 @@ class _FlasherPageState extends State<FlasherPage>
   void initState() {
     super.initState();
     _flasherService = FlasherService.withPath(widget.basePath);
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: widget.initialTab.clamp(0, 2),
+    );
     _loadDevices();
-    _refreshPorts();
+    _refreshPorts().then((_) => _handleAutoConnect());
+  }
+
+  /// Handle auto-connect if port path was specified
+  void _handleAutoConnect() {
+    if (widget.autoConnectPort != null && widget.autoConnectPort!.isNotEmpty) {
+      // Find matching port
+      final matchingPort = _ports.firstWhere(
+        (p) => p.path == widget.autoConnectPort,
+        orElse: () => _ports.isNotEmpty ? _ports.first : PortInfo(path: ''),
+      );
+
+      if (matchingPort.path.isNotEmpty) {
+        setState(() {
+          _selectedPort = matchingPort;
+          if (!_selectedPorts.contains(matchingPort)) {
+            _selectedPorts.add(matchingPort);
+          }
+        });
+
+        // If on monitor tab, auto-connect after a short delay
+        if (widget.initialTab == 2) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _monitorKey.currentState?.connect();
+          });
+        }
+      }
+    } else if (widget.initialTab == 2 && _selectedPort != null) {
+      // On monitor tab with a port selected, auto-connect
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _monitorKey.currentState?.connect();
+      });
+    }
   }
 
   @override

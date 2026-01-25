@@ -385,6 +385,16 @@ class DevicesService {
       case DebugAction.openConsole:
         // Console automation is handled by CollectionsPage
         break;
+      case DebugAction.mirrorEnable:
+      case DebugAction.mirrorRequestSync:
+      case DebugAction.mirrorGetStatus:
+      case DebugAction.mirrorAddAllowedPeer:
+      case DebugAction.mirrorRemoveAllowedPeer:
+        // Mirror sync actions are handled directly by LogApiService
+        break;
+      case DebugAction.openFlasherMonitor:
+        // Flasher monitor navigation is handled by main.dart
+        break;
     }
   }
 
