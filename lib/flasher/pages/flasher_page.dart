@@ -668,7 +668,7 @@ class _FlasherPageState extends State<FlasherPage>
           // Port selection
           _buildPortSelector(),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
 
           // Flash progress
           if (_isFlashing || _flashProgress != null || _multiFlashProgress.isNotEmpty) ...[
@@ -683,10 +683,8 @@ class _FlasherPageState extends State<FlasherPage>
               FlashProgressWidget(
                 progress: _flashProgress ?? FlashProgress(),
               ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
           ],
-
-          const SizedBox(height: 16),
 
           // Flash button
           Center(
