@@ -768,6 +768,7 @@ class _HomePageState extends State<HomePage> {
   bool _isSearchFocused = false;
 
   // Hidden pages (not ready): BotPage
+  // Indices: 0=Apps, 1=Maps, 2=Devices, 3=Log
   List<Widget> get _pages => [
     CollectionsPage(
       searchQuery: _searchQuery,
@@ -776,7 +777,6 @@ class _HomePageState extends State<HomePage> {
     const MapsBrowserPage(),
     const DevicesBrowserPage(),
     // BotPage(),  // Hidden: not ready
-    const SettingsPage(),
     const LogBrowserPage(),
   ];
 
@@ -1228,19 +1228,11 @@ class _HomePageState extends State<HomePage> {
           FilledButton(
             onPressed: () {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-              // Navigate to Updates page and start download immediately
-              setState(() {
-                _selectedIndex = 3; // Settings tab
-              });
-              // After settings page loads, navigate to Updates with autoInstall
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const UpdatePage()),
-                  );
-                }
-              });
+              // Navigate directly to Updates page
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const UpdatePage()),
+              );
             },
             child: Text(_i18n.t('view_update')),
           ),
@@ -1432,11 +1424,6 @@ class _HomePageState extends State<HomePage> {
             // ),
             const Divider(),
             NavigationDrawerDestination(
-              icon: const Icon(Icons.settings_outlined),
-              selectedIcon: const Icon(Icons.settings),
-              label: Text(_i18n.t('settings')),
-            ),
-            NavigationDrawerDestination(
               icon: const Icon(Icons.article_outlined),
               selectedIcon: const Icon(Icons.article),
               label: Text(_i18n.t('log')),
@@ -1463,8 +1450,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('profile')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1478,8 +1463,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('security')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1493,8 +1476,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('storage')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1508,12 +1489,23 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('connections')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => const StationsPage(),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.sync_alt),
+                  title: Text(_i18n.tOrDefault('mirror', 'Mirror')),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const MirrorSettingsPage(),
                       ),
                     );
                   },
@@ -1524,8 +1516,6 @@ class _HomePageState extends State<HomePage> {
                     title: Text(_i18n.t('station_settings')),
                     onTap: () {
                       Navigator.pop(context);
-                      // Switch to Settings panel so back returns to Settings
-                      setState(() => _selectedIndex = 3);
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -1583,8 +1573,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('app_theme')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1598,8 +1586,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('software_updates')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1613,8 +1599,6 @@ class _HomePageState extends State<HomePage> {
                   title: Text(_i18n.t('about')),
                   onTap: () {
                     Navigator.pop(context);
-                    // Switch to Settings panel so back returns to Settings
-                    setState(() => _selectedIndex = 3);
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => AboutPage()),
@@ -3013,373 +2997,7 @@ class GeoChatPage extends StatelessWidget {
 
 // DevicesPage has been moved to pages/devices_browser_page.dart
 // LogPage has been moved to pages/log_browser_page.dart
-
-// Settings Page
-class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
-
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  final I18nService _i18n = I18nService();
-  final ProfileService _profileService = ProfileService();
-  final AppThemeService _themeService = AppThemeService();
-
-  @override
-  void initState() {
-    super.initState();
-    // Listen to language changes to rebuild the UI
-    _i18n.languageNotifier.addListener(_onLanguageChanged);
-    _profileService.profileNotifier.addListener(_onProfileChanged);
-    _themeService.addListener(_onThemeChanged);
-  }
-
-  @override
-  void dispose() {
-    _i18n.languageNotifier.removeListener(_onLanguageChanged);
-    _profileService.profileNotifier.removeListener(_onProfileChanged);
-    _themeService.removeListener(_onThemeChanged);
-    super.dispose();
-  }
-
-  void _onLanguageChanged() {
-    setState(() {});
-  }
-
-  void _onProfileChanged() {
-    setState(() {});
-  }
-
-  void _onThemeChanged() {
-    setState(() {});
-  }
-
-  Future<void> _showLanguageDialog() async {
-    final selectedLanguage = await showDialog<String>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(_i18n.t('select_language')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _i18n.supportedLanguages.map((languageCode) {
-              return RadioListTile<String>(
-                title: Text(_i18n.getLanguageName(languageCode)),
-                value: languageCode,
-                groupValue: _i18n.currentLanguage,
-                onChanged: (String? value) {
-                  Navigator.pop(context, value);
-                },
-              );
-            }).toList(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_i18n.t('cancel')),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (selectedLanguage != null && selectedLanguage != _i18n.currentLanguage) {
-      await _i18n.setLanguage(selectedLanguage);
-    }
-  }
-
-  Future<void> _showAppThemeDialog() async {
-    final themeService = AppThemeService();
-    final currentTheme = themeService.currentTheme;
-
-    if (!mounted) return;
-
-    final selectedTheme = await showDialog<AppThemeColor>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(_i18n.t('select_app_theme')),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: AppThemeService.availableThemes.map((config) {
-                return RadioListTile<AppThemeColor>(
-                  title: Text(_i18n.t('theme_${config.id.name}')),
-                  subtitle: Text(_i18n.t('theme_${config.id.name}_desc')),
-                  secondary: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: config.seedColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Theme.of(context).colorScheme.outline,
-                        width: 1,
-                      ),
-                    ),
-                  ),
-                  value: config.id,
-                  groupValue: currentTheme,
-                  onChanged: (AppThemeColor? value) {
-                    Navigator.pop(context, value);
-                  },
-                );
-              }).toList(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_i18n.t('cancel')),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (selectedTheme != null && selectedTheme != currentTheme) {
-      await themeService.setTheme(selectedTheme);
-      if (mounted) {
-        setState(() {});
-      }
-    }
-  }
-
-  Future<void> _showWebThemeDialog() async {
-    final themeService = WebThemeService();
-    final themes = await themeService.getAvailableThemes();
-    final currentTheme = themeService.getCurrentTheme();
-
-    if (!mounted) return;
-
-    final selectedTheme = await showDialog<String>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(_i18n.t('select_web_theme')),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: themes.map((themeName) {
-                return RadioListTile<String>(
-                  title: Text(
-                    themeName[0].toUpperCase() + themeName.substring(1),
-                  ),
-                  subtitle: Text(
-                    themeName == 'default'
-                        ? _i18n.t('web_theme_default_desc')
-                        : _i18n.t('web_theme_custom_desc'),
-                  ),
-                  value: themeName,
-                  groupValue: currentTheme,
-                  onChanged: (String? value) {
-                    Navigator.pop(context, value);
-                  },
-                );
-              }).toList(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                // Open themes folder
-                if (!kIsWeb) {
-                  final themesPath = themeService.themesDir;
-                  final uri = Uri.directory(themesPath);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri);
-                  }
-                }
-              },
-              child: Text(_i18n.t('open_themes_folder')),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_i18n.t('cancel')),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (selectedTheme != null && selectedTheme != currentTheme) {
-      themeService.setCurrentTheme(selectedTheme);
-      setState(() {});
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => EventBus().fire(NavigateToHomeEvent()),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _i18n.t('settings'),
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-        ListTile(
-          leading: const Icon(Icons.person_outline),
-          title: Text(_i18n.t('profile')),
-          subtitle: Text(_i18n.t('manage_your_profile')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const ProfilePage()),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.security_outlined),
-          title: Text(_i18n.t('security')),
-          subtitle: Text(_i18n.t('security_and_privacy')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const SecuritySettingsPage(),
-              ),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.storage_outlined),
-          title: Text(_i18n.t('storage')),
-          subtitle: Text(_i18n.t('manage_app_storage')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const StorageSettingsPage(),
-              ),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.settings_input_antenna),
-          title: Text(_i18n.t('connections')),
-          subtitle: Text(_i18n.t('manage_stations_and_network')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const StationsPage()),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.sync_alt),
-          title: const Text('Mirror'),
-          subtitle: const Text('Sync apps between your devices'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const MirrorSettingsPage(),
-              ),
-            );
-          },
-        ),
-        // Show station settings only for station profiles
-        if (_profileService.getProfile().isRelay)
-          ListTile(
-            leading: const Icon(Icons.cell_tower, color: Colors.orange),
-            title: Text(_i18n.t('station_settings')),
-            subtitle: Text(_i18n.t('configure_station_server')),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const StationDashboardPage(),
-                ),
-              );
-            },
-          ),
-        // TODO: Notifications settings - not yet implemented
-        // ListTile(
-        //   leading: const Icon(Icons.notifications_outlined),
-        //   title: Text(_i18n.t('notifications')),
-        //   subtitle: Text(_i18n.t('configure_notifications')),
-        //   trailing: const Icon(Icons.chevron_right),
-        //   onTap: () {
-        //     Navigator.push(
-        //       context,
-        //       MaterialPageRoute(builder: (context) => const NotificationsPage()),
-        //     );
-        //   },
-        // ),
-        // const Divider(),
-        ListTile(
-          leading: const Icon(Icons.language),
-          title: Text(_i18n.t('language')),
-          subtitle: Text(_i18n.getLanguageName(_i18n.currentLanguage)),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _showLanguageDialog,
-        ),
-        ListTile(
-          leading: const Icon(Icons.color_lens_outlined),
-          title: Text(_i18n.t('app_theme')),
-          subtitle: Text(_i18n.t('theme_${_themeService.currentTheme.name}')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ThemeSettingsPage(),
-              ),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.system_update),
-          title: Text(_i18n.t('software_updates')),
-          subtitle: Text(_i18n.t('software_updates_subtitle')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const UpdatePage()),
-            );
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.info_outlined),
-          title: Text(_i18n.t('about')),
-          subtitle: Text(_i18n.t('app_version_and_info')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => AboutPage()),
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
+// SettingsPage has been removed - settings are now in the EndDrawer
 
 // ============================================================================
 // COLLECTION BROWSER PAGE
