@@ -825,6 +825,26 @@ class UsbAoaLinux {
           if (androidConnected) {
             consecutiveHangups = 0;
           }
+          // On Linux, poll() may not work correctly with USB device fds
+          // Try a non-blocking bulk read anyway in case data is available
+          bulk.ref.ep = _epIn!;
+          bulk.ref.len = bufferSize;
+          bulk.ref.timeout = 50; // Short timeout for non-blocking check
+          bulk.ref.data = buffer.cast();
+
+          final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
+          if (bytesRead > 0) {
+            LogService().log('UsbAoaLinux: Received $bytesRead bytes from USB');
+            final data = Uint8List(bytesRead);
+            for (var i = 0; i < bytesRead; i++) {
+              data[i] = buffer[i];
+            }
+            _dataController.add(data);
+            if (!androidConnected) {
+              LogService().log('UsbAoaLinux: Android connected (data received)');
+              androidConnected = true;
+            }
+          }
           await Future.delayed(Duration(milliseconds: 10));
           continue;
         }
@@ -856,7 +876,7 @@ class UsbAoaLinux {
 
         // We got POLLIN - Android has opened its end
         if (!androidConnected) {
-          LogService().log('UsbAoaLinux: Android connected (POLLIN received)');
+          LogService().log('UsbAoaLinux: Android connected (POLLIN)');
           androidConnected = true;
           consecutiveHangups = 0;
         }
@@ -880,6 +900,7 @@ class UsbAoaLinux {
         }
 
         if (bytesRead > 0) {
+          LogService().log('UsbAoaLinux: Received $bytesRead bytes from USB');
           final data = Uint8List(bytesRead);
           for (var i = 0; i < bytesRead; i++) {
             data[i] = buffer[i];

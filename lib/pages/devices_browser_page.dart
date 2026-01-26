@@ -1967,6 +1967,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         return Colors.cyan;
       case 'lan':
         return Colors.blueGrey;
+      case 'usb':
+      case 'usb_aoa':
+        return Colors.orange;
       default:
         return Colors.grey;
     }

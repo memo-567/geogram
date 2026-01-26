@@ -36,6 +36,7 @@ import '../models/profile.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/lan_transport.dart';
 import '../tracker/services/proximity_detection_service.dart';
+import 'usb_aoa_service.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -54,6 +55,11 @@ class DevicesService {
   /// BLE messaging service for chat/data exchange
   BLEMessageService? _bleMessageService;
   StreamSubscription<BLEChatMessage>? _bleChatSubscription;
+
+  /// USB AOA service for device-to-device USB connections
+  final UsbAoaService _usbAoaService = UsbAoaService();
+  StreamSubscription<UsbAoaConnectionState>? _usbSubscription;
+  StreamSubscription<String?>? _usbCallsignSubscription;
 
   /// Debug controller subscription
   StreamSubscription<DebugActionEvent>? _debugSubscription;
@@ -114,6 +120,12 @@ class DevicesService {
     } else {
       LogService().log('DevicesService: BLE initialization skipped');
     }
+
+    // Initialize USB AOA (only on Android/Linux, skip in internet-only mode)
+    if (!internetOnly) {
+      _initializeUSB();
+    }
+
     _subscribeToDebugActions();
     _subscribeToStationConnection();
     _subscribeToProfileChanges();
@@ -586,6 +598,108 @@ class DevicesService {
         'DevicesService: Failed to initialize BLE: $e\n$stackTrace',
       );
       _bleService = null;
+    }
+  }
+
+  /// Initialize USB AOA subscription for device discovery
+  void _initializeUSB() {
+    if (kIsWeb) {
+      LogService().log('DevicesService: USB not available on web platform');
+      return;
+    }
+
+    // Subscribe to USB connection state changes
+    _usbSubscription = _usbAoaService.connectionStateStream.listen((state) {
+      _handleUSBConnection(state);
+    });
+
+    // Subscribe to remote callsign changes (when hello handshake completes)
+    _usbCallsignSubscription =
+        _usbAoaService.remoteCallsignStream.listen((callsign) {
+      if (callsign != null && callsign.isNotEmpty) {
+        LogService().log(
+            'DevicesService: USB remote callsign discovered: $callsign');
+        _addUsbDevice(callsign);
+      }
+    });
+
+    LogService().log('DevicesService: USB AOA subscription initialized');
+
+    // Check if already connected (in case connection happened before subscription)
+    final currentState = _usbAoaService.connectionState;
+    LogService().log('DevicesService: Current USB state: $currentState');
+    if (currentState == UsbAoaConnectionState.connected) {
+      _handleUSBConnection(currentState);
+    }
+  }
+
+  /// Handle USB connection state changes
+  void _handleUSBConnection(UsbAoaConnectionState state) {
+    LogService()
+        .log('DevicesService: USB connection state changed to $state');
+
+    if (state == UsbAoaConnectionState.connected) {
+      // USB connected - check if we already have a callsign from a previous handshake
+      final callsign = _usbAoaService.remoteCallsign;
+      if (callsign != null && callsign.isNotEmpty) {
+        _addUsbDevice(callsign);
+      }
+      // Otherwise, wait for remoteCallsignStream to notify when hello arrives
+    } else if (state == UsbAoaConnectionState.disconnected) {
+      // USB disconnected - remove 'usb' from all devices
+      _removeUsbFromAllDevices();
+    }
+  }
+
+  /// Add USB connection method to a device (or create new device)
+  void _addUsbDevice(String callsign) {
+    final normalizedCallsign = callsign.toUpperCase();
+    LogService().log('DevicesService: Adding USB device: $normalizedCallsign');
+
+    if (_devices.containsKey(normalizedCallsign)) {
+      // Update existing device
+      final device = _devices[normalizedCallsign]!;
+      if (!device.connectionMethods.contains('usb')) {
+        device.connectionMethods = [...device.connectionMethods, 'usb'];
+        LogService().log(
+          'DevicesService: Added USB to existing device $normalizedCallsign',
+        );
+      }
+      device.isOnline = true;
+      device.lastSeen = DateTime.now();
+    } else {
+      // Create new device discovered via USB
+      final newDevice = RemoteDevice(
+        callsign: normalizedCallsign,
+        name: normalizedCallsign, // Use callsign as name until we know more
+        isOnline: true,
+        hasCachedData: false,
+        collections: [],
+        connectionMethods: ['usb'],
+        lastSeen: DateTime.now(),
+      );
+      _devices[normalizedCallsign] = newDevice;
+      LogService()
+          .log('DevicesService: Added new USB device: $normalizedCallsign');
+    }
+
+    _devicesController.add(getAllDevices());
+  }
+
+  /// Remove USB connection method from all devices (when USB disconnects)
+  void _removeUsbFromAllDevices() {
+    var changed = false;
+    for (final device in _devices.values) {
+      if (device.connectionMethods.contains('usb')) {
+        device.connectionMethods =
+            device.connectionMethods.where((m) => m != 'usb').toList();
+        LogService()
+            .log('DevicesService: Removed USB from ${device.callsign}');
+        changed = true;
+      }
+    }
+    if (changed) {
+      _devicesController.add(getAllDevices());
     }
   }
 
@@ -2826,6 +2940,8 @@ class DevicesService {
     _cleanupTimer?.cancel();
     _bleSubscription?.cancel();
     _bleChatSubscription?.cancel();
+    _usbSubscription?.cancel();
+    _usbCallsignSubscription?.cancel();
     _debugSubscription?.cancel();
     _stationConnectionSubscription?.cancel();
     _profileChangedSubscription?.cancel();
@@ -2928,6 +3044,9 @@ class RemoteDevice {
         return 'Wi-Fi HaLow';
       case 'lan':
         return 'LAN';
+      case 'usb':
+      case 'usb_aoa':
+        return 'USB';
       default:
         return method;
     }

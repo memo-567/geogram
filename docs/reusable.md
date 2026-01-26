@@ -59,6 +59,11 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 
+### USB/Transport Services
+- [UsbAoaService](#usbaoapservice) - Cross-platform USB AOA service layer
+- [UsbAoaLinux](#usbaoaplinux) - Linux USB host FFI implementation
+- [UsbAoaTransport](#usbaoapransport) - USB transport for message delivery
+
 ### Reader Services
 - [RssService](#rssservice) - RSS/Atom feed parsing and HTML-to-Markdown conversion
 - [MangaService](#mangaservice) - CBZ extraction and chapter creation
@@ -5114,3 +5119,142 @@ _debugController.actionStream.listen((event) {
   }
 });
 ```
+
+### UsbAoaService
+
+**File:** `lib/services/usb_aoa_service.dart`
+
+Dart service for USB AOA (Android Open Accessory) device-to-device communication. Enables zero-config bidirectional communication between two Android phones connected via USB-C cable.
+
+**Key Features:**
+- Method channel bridge to native `UsbAoaPlugin.kt`
+- Connection state stream for tracking USB connection status
+- Data stream for receiving messages from connected device
+- Android-only (USB AOA is an Android protocol)
+
+**Usage:**
+```dart
+final usbService = UsbAoaService();
+await usbService.initialize();
+
+// Listen for connection changes
+usbService.connectionStateStream.listen((state) {
+  print('USB state: $state');
+});
+
+// Listen for incoming data
+usbService.dataStream.listen((data) {
+  final message = utf8.decode(data);
+  print('Received: $message');
+});
+
+// Write data to connected device
+await usbService.write(Uint8List.fromList(utf8.encode('Hello')));
+```
+
+### UsbAoaTransport
+
+**File:** `lib/connection/transports/usb_aoa_transport.dart`
+
+Transport implementation for USB AOA communication. Highest priority transport (5) - faster and more reliable than all other transports.
+
+**Transport Priority:** 5 (USB) > 10 (LAN) > 15 (WebRTC) > 30 (Station) > 35 (BT Classic) > 40 (BLE)
+
+**Message Format:**
+```json
+{
+  "channel": "_api|_api_response|_dm|_system|<room_id>",
+  "content": "<message JSON>",
+  "timestamp": 1706000000000
+}
+```
+
+Messages are length-prefixed (4 bytes big-endian) for reliable framing over the USB byte stream.
+
+**Platform Support:**
+- Android: Accessory mode (receives connection from Linux/Android host)
+- Linux: Host mode (initiates AOA handshake to Android device)
+- Other platforms: Not supported
+
+### UsbAoaLinux
+
+**File:** `lib/services/usb_aoa_linux.dart`
+
+Pure Dart FFI implementation for Linux USB AOA host mode. Uses libc and kernel usbdevfs ioctls - no external dependencies.
+
+**Key Features:**
+- Device enumeration via `/sys/bus/usb/devices/`
+- AOA handshake (GET_PROTOCOL, SEND_STRING, START)
+- Bulk transfer I/O via `USBDEVFS_BULK` ioctl
+- No libusb dependency - uses kernel APIs directly
+
+**FFI Pattern (reusable for other USB implementations):**
+```dart
+// Load libc
+final lib = DynamicLibrary.open('libc.so.6');
+
+// Get function pointers
+final open = lib.lookupFunction<OpenNative, OpenDart>('open');
+final ioctl = lib.lookupFunction<IoctlPtrNative, IoctlPtrDart>('ioctl');
+
+// USB control transfer structure
+final class UsbCtrlTransfer extends Struct {
+  @Uint8() external int bRequestType;
+  @Uint8() external int bRequest;
+  @Uint16() external int wValue;
+  @Uint16() external int wIndex;
+  @Uint16() external int wLength;
+  @Uint32() external int timeout;
+  external Pointer<Void> data;
+}
+
+// Perform control transfer
+final ctrl = calloc<UsbCtrlTransfer>();
+ctrl.ref.bRequestType = 0xC0; // IN, vendor, device
+ctrl.ref.bRequest = 51; // AOA_GET_PROTOCOL
+ctrl.ref.wLength = 2;
+ctrl.ref.timeout = 1000;
+ctrl.ref.data = buffer.cast();
+ioctl(fd, USBDEVFS_CONTROL, ctrl.cast());
+```
+
+**USB Constants (from linux/usbdevice_fs.h):**
+```dart
+const USBDEVFS_CONTROL = 0xC0185500;
+const USBDEVFS_BULK = 0xC0185502;
+const USBDEVFS_CLAIMINTERFACE = 0x8004550F;
+const USBDEVFS_RELEASEINTERFACE = 0x80045510;
+const USBDEVFS_CLEAR_HALT = 0x80045515;
+```
+
+**IMPORTANT: poll() doesn't work reliably with USB device file descriptors on Linux**
+
+When reading data from USB devices opened via `/dev/bus/usb/xxx/yyy`, the `poll()` system call may not properly signal data availability. The solution is to try a bulk read with a short timeout even when poll returns timeout:
+
+```dart
+// Read loop pattern for Linux USB
+while (isReading && isConnected) {
+  // Poll for incoming data (may not work reliably on USB)
+  final pollResult = poll(pollFd.cast(), 1, 100);
+
+  if (pollResult == 0) {
+    // Timeout - but poll() may miss USB data!
+    // Try a non-blocking bulk read anyway
+    bulk.ref.ep = epIn;
+    bulk.ref.len = bufferSize;
+    bulk.ref.timeout = 50; // Short timeout for non-blocking check
+    bulk.ref.data = buffer.cast();
+
+    final bytesRead = ioctl(fd, USBDEVFS_BULK, bulk.cast());
+    if (bytesRead > 0) {
+      // Data was available even though poll() didn't report it!
+      processData(buffer, bytesRead);
+    }
+    continue;
+  }
+
+  // Handle POLLIN, POLLERR, POLLHUP as normal
+}
+```
+
+This pattern is used in `UsbAoaLinux._readLoopAsync()` to reliably receive data from Android devices.

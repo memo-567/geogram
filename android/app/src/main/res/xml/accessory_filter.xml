@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB Accessory filter for AOA (Android Open Accessory) device communication -->
+<resources>
+    <usb-accessory
+        manufacturer="Geogram"
+        model="Geogram Device"
+        version="1.0" />
+</resources>

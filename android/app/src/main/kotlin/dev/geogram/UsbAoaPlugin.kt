@@ -734,6 +734,7 @@ class UsbAoaPlugin(
      * Notify Dart of received data
      */
     private fun notifyDataReceived(data: ByteArray) {
+        Log.d(TAG, "Received ${data.size} bytes, forwarding to Dart")
         methodChannel?.invokeMethod("onDataReceived", mapOf(
             "data" to data
         ))

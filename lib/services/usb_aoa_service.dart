@@ -87,6 +87,10 @@ class UsbAoaService {
   final _dataController = StreamController<Uint8List>.broadcast();
   Stream<Uint8List> get dataStream => _dataController.stream;
 
+  /// Stream controller for remote callsign changes
+  final _remoteCallsignController = StreamController<String?>.broadcast();
+  Stream<String?> get remoteCallsignStream => _remoteCallsignController.stream;
+
   /// Initialization state
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -145,6 +149,19 @@ class UsbAoaService {
         if (result == true) {
           _isInitialized = true;
           LogService().log('UsbAoa: Android accessory mode initialized');
+
+          // Check if already connected (accessory may have been opened before handler was set)
+          try {
+            final isConnected =
+                await _channel.invokeMethod<bool>('isConnected') ?? false;
+            if (isConnected) {
+              LogService().log('UsbAoa: Already connected to accessory');
+              _connectionState = UsbAoaConnectionState.connected;
+              _connectionStateController.add(_connectionState);
+            }
+          } catch (e) {
+            LogService().log('UsbAoa: Error checking connection state: $e');
+          }
         } else {
           LogService().log('UsbAoa: USB manager not available');
         }
@@ -246,9 +263,13 @@ class UsbAoaService {
         if (args != null) {
           final data = args['data'];
           if (data is Uint8List) {
+            LogService().log('UsbAoa: Received ${data.length} bytes');
             _dataController.add(data);
           } else if (data is List<int>) {
+            LogService().log('UsbAoa: Received ${data.length} bytes');
             _dataController.add(Uint8List.fromList(data));
+          } else {
+            LogService().log('UsbAoa: Unknown data type: ${data.runtimeType}');
           }
         }
         break;
@@ -437,6 +458,7 @@ class UsbAoaService {
   /// Set the remote device's callsign (discovered during protocol handshake)
   void setRemoteCallsign(String callsign) {
     _remoteCallsign = callsign;
+    _remoteCallsignController.add(callsign);
     LogService().log('UsbAoa: Remote callsign set to $callsign');
   }
 
@@ -454,6 +476,7 @@ class UsbAoaService {
 
     await _connectionStateController.close();
     await _dataController.close();
+    await _remoteCallsignController.close();
     _isInitialized = false;
   }
 }
