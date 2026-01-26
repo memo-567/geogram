@@ -48,6 +48,9 @@
     <!-- USB Host feature for ESP32 flashing via USB OTG -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
+    <!-- USB Accessory feature for AOA device-to-device communication -->
+    <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
+
     <application
         android:label="Geogram"
         android:name=".GeogramApplication"
@@ -56,7 +59,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -81,6 +84,13 @@
             <meta-data
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/device_filter" />
+            <!-- USB AOA accessory handler for device-to-device communication -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

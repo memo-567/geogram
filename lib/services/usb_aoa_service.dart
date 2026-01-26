@@ -91,6 +91,12 @@ class UsbAoaService {
   final _remoteCallsignController = StreamController<String?>.broadcast();
   Stream<String?> get remoteCallsignStream => _remoteCallsignController.stream;
 
+  /// Stream that fires when channel is ready (Android has opened accessory)
+  /// Only applies on Linux host mode. On Android accessory mode, the channel
+  /// is ready immediately upon connection.
+  Stream<void> get channelReadyStream =>
+      _linuxImpl?.channelReadyStream ?? const Stream.empty();
+
   /// Initialization state
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -100,6 +106,12 @@ class UsbAoaService {
   StreamSubscription<UsbAoaConnectionEvent>? _linuxConnectionSub;
   StreamSubscription<Uint8List>? _linuxDataSub;
   Timer? _linuxScanTimer;
+
+  /// Auto-reconnect state
+  Timer? _autoReconnectTimer;
+  int _autoReconnectAttempts = 0;
+  static const int _maxAutoReconnectAttempts = 3;
+  bool _userInitiatedDisconnect = false;
 
   /// Check if USB AOA is available on this platform
   static bool get isAvailable {
@@ -111,6 +123,12 @@ class UsbAoaService {
 
   /// Check if currently connected
   bool get isConnected => _connectionState == UsbAoaConnectionState.connected;
+
+  /// Whether the Linux read loop is active (Linux only)
+  bool get isReading => _linuxImpl?.isReading ?? false;
+
+  /// Poll timeout count for debugging (Linux only)
+  int get pollTimeoutCount => _linuxImpl?.pollTimeoutCount ?? 0;
 
   /// Initialize the USB AOA service
   Future<void> initialize() async {
@@ -150,6 +168,7 @@ class UsbAoaService {
         _channel.setMethodCallHandler(_handleMethodCall);
 
         final result = await _channel.invokeMethod<bool>('initialize');
+        LogService().log('UsbAoa: Android initialize result: $result');
         if (result == true) {
           _isInitialized = true;
           LogService().log('UsbAoa: Android accessory mode initialized');
@@ -189,20 +208,59 @@ class UsbAoaService {
       _connectionState = UsbAoaConnectionState.connected;
       _connectionStateController.add(_connectionState);
       LogService().log('UsbAoa: Linux connected to ${event.device}');
+      // Reset auto-reconnect state on successful connection
+      _cancelAutoReconnect();
+      _autoReconnectAttempts = 0;
     } else {
       _accessoryInfo = null;
       _remoteCallsign = null;
       _connectionState = UsbAoaConnectionState.disconnected;
       _connectionStateController.add(_connectionState);
       LogService().log('UsbAoa: Linux disconnected');
+      // Schedule auto-reconnect for unexpected disconnects
+      if (!_userInitiatedDisconnect) {
+        _scheduleAutoReconnect();
+      }
+      _userInitiatedDisconnect = false;
     }
+  }
+
+  /// Schedule auto-reconnect with exponential backoff
+  void _scheduleAutoReconnect() {
+    if (_autoReconnectAttempts >= _maxAutoReconnectAttempts) {
+      LogService().log('UsbAoa: Max auto-reconnect attempts reached ($_maxAutoReconnectAttempts)');
+      _autoReconnectAttempts = 0;
+      return;
+    }
+
+    _cancelAutoReconnect();
+    _autoReconnectAttempts++;
+    // Exponential backoff: 1s, 2s, 4s
+    final delay = Duration(seconds: 1 << (_autoReconnectAttempts - 1));
+    LogService().log('UsbAoa: Scheduling auto-reconnect attempt $_autoReconnectAttempts in ${delay.inSeconds}s');
+
+    _autoReconnectTimer = Timer(delay, () async {
+      if (_connectionState == UsbAoaConnectionState.disconnected) {
+        LogService().log('UsbAoa: Auto-reconnect attempt $_autoReconnectAttempts');
+        await _autoConnectLinux();
+      }
+    });
+  }
+
+  /// Cancel pending auto-reconnect
+  void _cancelAutoReconnect() {
+    _autoReconnectTimer?.cancel();
+    _autoReconnectTimer = null;
   }
 
   /// Auto-connect to Android devices on Linux
   Future<void> _autoConnectLinux() async {
-    if (!Platform.isLinux || _linuxImpl == null) return;
+    if (!Platform.isLinux || _linuxImpl == null) {
+      LogService().log('UsbAoa: _autoConnectLinux skipped (Linux=${Platform.isLinux}, impl=${_linuxImpl != null})');
+      return;
+    }
 
-    LogService().log('UsbAoa: Scanning for Android devices...');
+    LogService().log('UsbAoa: _autoConnectLinux() starting...');
 
     try {
       final devices = await _linuxImpl!.listDevices();
@@ -241,13 +299,20 @@ class UsbAoaService {
     }
   }
 
+  /// Counter for periodic scan logging (to avoid spam)
+  int _periodicScanCount = 0;
+
   /// Start periodic scanning for USB devices on Linux (hotplug detection)
   void _startLinuxPeriodicScan() {
     if (!Platform.isLinux || _linuxImpl == null) return;
     _stopLinuxPeriodicScan();
 
-    // Scan every 5 seconds when not connected
-    _linuxScanTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+    LogService().log('UsbAoa: Starting periodic USB scan (every 2s)');
+    _periodicScanCount = 0;
+
+    // Scan every 2 seconds when not connected for faster hotplug detection
+    _linuxScanTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      _periodicScanCount++;
       if (_connectionState == UsbAoaConnectionState.connected ||
           _connectionState == UsbAoaConnectionState.connecting) {
         return; // Already connected or connecting, skip scan
@@ -257,10 +322,16 @@ class UsbAoaService {
         final devices = await _linuxImpl!.listDevices();
         if (devices.isNotEmpty) {
           LogService().log('UsbAoa: Hotplug detected ${devices.length} device(s)');
+          for (final d in devices) {
+            LogService().log('UsbAoa:   - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}');
+          }
           await _autoConnectLinux();
+        } else if (_periodicScanCount % 30 == 0) {
+          // Log every ~60 seconds when no devices found
+          LogService().log('UsbAoa: Periodic scan #$_periodicScanCount - no devices');
         }
       } catch (e) {
-        // Ignore scan errors
+        LogService().log('UsbAoa: Periodic scan error: $e');
       }
     });
   }
@@ -403,6 +474,10 @@ class UsbAoaService {
   Future<void> close() async {
     if (!isAvailable || !_isInitialized) return;
 
+    // Mark as user-initiated to prevent auto-reconnect
+    _userInitiatedDisconnect = true;
+    _cancelAutoReconnect();
+
     try {
       _connectionState = UsbAoaConnectionState.disconnecting;
       _connectionStateController.add(_connectionState);
@@ -502,6 +577,7 @@ class UsbAoaService {
 
     // Clean up Linux subscriptions and timer
     _stopLinuxPeriodicScan();
+    _cancelAutoReconnect();
     await _linuxConnectionSub?.cancel();
     _linuxConnectionSub = null;
     await _linuxDataSub?.cancel();

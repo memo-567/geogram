@@ -6,10 +6,13 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/collection.dart';
+import '../connection/connection_manager.dart';
+import '../connection/transports/usb_aoa_transport.dart';
 import 'chat_service.dart';
 import 'collection_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
+import 'usb_aoa_service.dart';
 
 /// Debug action types that can be triggered via API
 enum DebugAction {
@@ -529,6 +532,16 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'usb_status',
+        'description': 'Get USB AOA transport diagnostic status',
+        'params': {},
+      },
+      {
+        'action': 'usb_restart_hello',
+        'description': 'Restart USB AOA hello handshake retry mechanism',
+        'params': {},
+      },
+      {
         'action': 'refresh_chat',
         'description': 'Refresh chat channels from channels.json',
         'params': {},
@@ -853,6 +866,96 @@ class DebugController {
       case 'local_scan':
         triggerLocalNetworkScan();
         return {'success': true, 'message': 'Local network scan triggered'};
+
+      case 'usb_status':
+        // Diagnose USB AOA transport status
+        final usbService = UsbAoaService();
+        final connManager = ConnectionManager();
+        final usbTransport = connManager.getTransport('usb_aoa');
+
+        final localCallsign = CollectionService().currentCallsign;
+        final status = {
+          'success': true,
+          'local_callsign': localCallsign,
+          'usb_service': {
+            'isInitialized': usbService.isInitialized,
+            'connectionState': usbService.connectionState.toString(),
+            'remoteCallsign': usbService.remoteCallsign,
+            'isConnected': usbService.isConnected,
+            'isAvailable': UsbAoaService.isAvailable,
+            'isReading': usbService.isReading,
+            'pollTimeoutCount': usbService.pollTimeoutCount,
+          },
+          'usb_transport': {
+            'registered': usbTransport != null,
+            'isAvailable': usbTransport?.isAvailable ?? false,
+            'isInitialized': usbTransport?.isInitialized ?? false,
+          },
+          'connection_manager': {
+            'isInitialized': connManager.isInitialized,
+            'transportCount': connManager.transports.length,
+            'transportIds': connManager.transports.map((t) => t.id).toList(),
+          },
+        };
+
+        LogService().log('USB Status Diagnostic: $status');
+        return status;
+
+      case 'usb_restart_hello':
+        // Restart USB AOA hello handshake
+        final cm = ConnectionManager();
+        final transport = cm.getTransport('usb_aoa');
+        if (transport == null) {
+          return {'success': false, 'error': 'USB transport not registered'};
+        }
+        // Import the specific type to access restartHelloRetry
+        if (transport is! UsbAoaTransport) {
+          return {'success': false, 'error': 'Transport is not UsbAoaTransport'};
+        }
+        transport.restartHelloRetry();
+        return {'success': true, 'message': 'USB hello retry restarted'};
+
+      case 'usb_scan':
+        // Manually scan for USB devices and attempt connection
+        final usbService = UsbAoaService();
+        if (!usbService.isInitialized) {
+          return {'success': false, 'error': 'USB service not initialized'};
+        }
+        try {
+          final devices = await usbService.listDevices();
+          final deviceList = devices.map((d) => {
+            'vid': d.vidHex,
+            'pid': d.pidHex,
+            'devPath': d.devPath,
+            'sysPath': d.sysPath,
+            'manufacturer': d.manufacturer,
+            'product': d.product,
+            'isAoaDevice': d.isAoaDevice,
+            'isAndroidDevice': d.isAndroidDevice,
+          }).toList();
+
+          LogService().log('USB Scan: Found ${devices.length} device(s)');
+          for (final d in devices) {
+            LogService().log('  - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}');
+          }
+
+          // If not connected and devices found, try to connect
+          if (!usbService.isConnected && devices.isNotEmpty) {
+            LogService().log('USB Scan: Attempting auto-connect...');
+            await usbService.open();
+          }
+
+          return {
+            'success': true,
+            'devices': deviceList,
+            'count': devices.length,
+            'isConnected': usbService.isConnected,
+            'connectionState': usbService.connectionState.toString(),
+          };
+        } catch (e) {
+          LogService().log('USB Scan error: $e');
+          return {'success': false, 'error': e.toString()};
+        }
 
       case 'refresh_chat':
         await triggerChatRefresh();
