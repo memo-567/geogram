@@ -69,6 +69,15 @@ class UsbAoaTransport extends Transport with TransportMixin {
   /// Stream subscription for connection state
   StreamSubscription<UsbAoaConnectionState>? _connectionSubscription;
 
+  /// Stream subscription for channel ready events (Linux only)
+  StreamSubscription<void>? _channelReadySubscription;
+
+  /// Timer for hello retry mechanism
+  Timer? _helloRetryTimer;
+
+  /// Count of hello retry attempts
+  int _helloRetryCount = 0;
+
   UsbAoaTransport({
     this.timeout = const Duration(seconds: 30),
   });
@@ -82,10 +91,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
     LogService().log('UsbAoaTransport: [INIT] Starting initialization...');
 
-    // Initialize the USB AOA service
-    await _usbService.initialize();
-
-    // Subscribe to incoming data
+    // IMPORTANT: Subscribe to streams BEFORE initializing the USB service.
+    // On Android, the native plugin may already be connected and sending data
+    // during initialization. Broadcast streams don't buffer, so we must listen first.
     _dataSubscription = _usbService.dataStream.listen(_handleIncomingData);
     LogService().log('UsbAoaTransport: [INIT] Subscribed to data stream');
 
@@ -93,12 +101,15 @@ class UsbAoaTransport extends Transport with TransportMixin {
     _connectionSubscription = _usbService.connectionStateStream.listen((state) {
       LogService().log('UsbAoaTransport: Connection state changed to $state');
       if (state == UsbAoaConnectionState.connected) {
-        // Send hello with our callsign after a delay
-        // Wait 7s to ensure:
-        // 1. Linux read loop has started (5s delay in usb_aoa_linux.dart)
-        // 2. Android has time to detect, get permission, and open accessory
-        Future.delayed(const Duration(seconds: 7), _sendHello);
+        // Don't send hello immediately on connect - wait for channel ready.
+        // On Linux, the USB channel isn't ready until Android opens the accessory.
+        // Sending hello before that causes the message to be lost, adding 2+ second delay.
+        // The channelReadyStream listener will send hello when Android is ready.
+        LogService().log('UsbAoaTransport: Connected, waiting for channel ready before hello');
+        _startHelloRetry(); // Start retry mechanism as backup
       } else if (state == UsbAoaConnectionState.disconnected) {
+        // Stop hello retry on disconnect
+        _stopHelloRetry();
         // Clear pending requests on disconnect
         for (final pending in _pendingRequests.values) {
           pending.stopwatch.stop();
@@ -113,10 +124,22 @@ class UsbAoaTransport extends Transport with TransportMixin {
     });
     LogService().log('UsbAoaTransport: [INIT] Subscribed to connection state');
 
-    // Check if already connected (connection may have happened before we subscribed)
+    // Subscribe to channel ready events (Linux only - fires when Android opens accessory)
+    _channelReadySubscription = _usbService.channelReadyStream.listen((_) {
+      LogService().log('UsbAoaTransport: Channel ready, sending hello');
+      _sendHello();
+    });
+    LogService().log('UsbAoaTransport: [INIT] Subscribed to channel ready stream');
+
+    // Now initialize the USB AOA service (after subscriptions are set up)
+    await _usbService.initialize();
+    LogService().log('UsbAoaTransport: [INIT] USB service initialized');
+
+    // Check if already connected (connection may have happened during/after initialization)
     if (_usbService.connectionState == UsbAoaConnectionState.connected) {
-      LogService().log('UsbAoaTransport: [INIT] Already connected, scheduling hello');
-      Future.delayed(const Duration(seconds: 2), _sendHello);
+      LogService().log('UsbAoaTransport: [INIT] Already connected, sending hello');
+      _sendHello();
+      _startHelloRetry();
     }
 
     markInitialized();
@@ -126,10 +149,13 @@ class UsbAoaTransport extends Transport with TransportMixin {
   @override
   Future<void> dispose() async {
     LogService().log('UsbAoaTransport: Disposing...');
+    _stopHelloRetry();
     await _dataSubscription?.cancel();
     _dataSubscription = null;
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    await _channelReadySubscription?.cancel();
+    _channelReadySubscription = null;
     await _usbService.dispose();
     await disposeMixin();
     LogService().log('UsbAoaTransport: Disposed');
@@ -137,13 +163,28 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
   @override
   Future<bool> canReach(String callsign) async {
-    if (!isInitialized) return false;
+    if (!isInitialized) {
+      LogService().log('UsbAoaTransport: canReach($callsign) = false (not initialized)');
+      return false;
+    }
 
-    // Can only reach the connected device
+    // If USB is connected but handshake is incomplete, allow routing anyway.
+    // Messages will be buffered/queued in USB and delivered once handshake completes.
+    // This prevents DMs from bypassing USB during the handshake window.
     final remoteCallsign = _usbService.remoteCallsign;
-    if (remoteCallsign == null) return false;
+    if (remoteCallsign == null) {
+      // Check if USB is physically connected even though handshake is incomplete
+      if (_usbService.isConnected) {
+        LogService().log('UsbAoaTransport: canReach($callsign) = true (USB connected, handshake pending)');
+        return true;
+      }
+      LogService().log('UsbAoaTransport: canReach($callsign) = false (not connected)');
+      return false;
+    }
 
-    return remoteCallsign.toUpperCase() == callsign.toUpperCase();
+    final matches = remoteCallsign.toUpperCase() == callsign.toUpperCase();
+    LogService().log('UsbAoaTransport: canReach($callsign) = $matches (remoteCallsign=$remoteCallsign)');
+    return matches;
   }
 
   @override
@@ -262,6 +303,50 @@ class UsbAoaTransport extends Transport with TransportMixin {
     } catch (e) {
       LogService().log('UsbAoaTransport: Error sending hello: $e');
     }
+  }
+
+  /// Start periodic hello retry mechanism
+  ///
+  /// Android may take 16+ seconds to open the USB accessory after Linux connects.
+  /// The initial hello is sent immediately but may be lost if Android isn't ready.
+  /// This retry mechanism sends hello every 2 seconds until Android responds.
+  void _startHelloRetry() {
+    _helloRetryCount = 0;
+    _helloRetryTimer?.cancel();
+    _helloRetryTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_usbService.remoteCallsign != null) {
+        // Handshake complete, stop retrying
+        _stopHelloRetry();
+        return;
+      }
+      _helloRetryCount++;
+      LogService().log('UsbAoaTransport: Hello retry #$_helloRetryCount (no response yet)');
+      _sendHello();
+
+      // Give up after 30 retries (60 seconds)
+      if (_helloRetryCount >= 30) {
+        LogService().log('UsbAoaTransport: Hello retry limit reached, giving up');
+        _stopHelloRetry();
+      }
+    });
+  }
+
+  /// Stop hello retry mechanism
+  void _stopHelloRetry() {
+    _helloRetryTimer?.cancel();
+    _helloRetryTimer = null;
+    if (_helloRetryCount > 0) {
+      LogService().log('UsbAoaTransport: Hello retry stopped after $_helloRetryCount attempts');
+    }
+    _helloRetryCount = 0;
+  }
+
+  /// Public method to restart hello retry mechanism (for debugging)
+  void restartHelloRetry() {
+    LogService().log('UsbAoaTransport: Restarting hello retry (manual trigger)');
+    _stopHelloRetry();
+    _sendHello();
+    _startHelloRetry();
   }
 
   /// Handle API request messages
@@ -524,15 +609,14 @@ class UsbAoaTransport extends Transport with TransportMixin {
         // Handle callsign exchange
         if (content is Map && content['callsign'] != null) {
           final remoteCallsign = content['callsign'].toString();
-          final alreadyKnown = _usbService.remoteCallsign != null;
           _usbService.setRemoteCallsign(remoteCallsign);
           LogService().log('UsbAoaTransport: Received hello from $remoteCallsign');
+          _stopHelloRetry(); // Stop retrying - handshake successful
 
-          // Send hello back if we haven't already (bidirectional handshake)
-          if (!alreadyKnown) {
-            LogService().log('UsbAoaTransport: Sending hello reply...');
-            _sendHello();
-          }
+          // Always send hello back to handle restart scenarios where one side
+          // already knows the callsign but the other side restarted
+          LogService().log('UsbAoaTransport: Sending hello reply...');
+          _sendHello();
         }
         return; // Don't emit hello messages
       default:
