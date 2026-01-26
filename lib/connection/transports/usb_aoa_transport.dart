@@ -113,6 +113,12 @@ class UsbAoaTransport extends Transport with TransportMixin {
     });
     LogService().log('UsbAoaTransport: [INIT] Subscribed to connection state');
 
+    // Check if already connected (connection may have happened before we subscribed)
+    if (_usbService.connectionState == UsbAoaConnectionState.connected) {
+      LogService().log('UsbAoaTransport: [INIT] Already connected, scheduling hello');
+      Future.delayed(const Duration(seconds: 2), _sendHello);
+    }
+
     markInitialized();
     LogService().log('UsbAoaTransport: [INIT] Complete');
   }
