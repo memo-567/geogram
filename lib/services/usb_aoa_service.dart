@@ -99,6 +99,7 @@ class UsbAoaService {
   UsbAoaLinux? _linuxImpl;
   StreamSubscription<UsbAoaConnectionEvent>? _linuxConnectionSub;
   StreamSubscription<Uint8List>? _linuxDataSub;
+  Timer? _linuxScanTimer;
 
   /// Check if USB AOA is available on this platform
   static bool get isAvailable {
@@ -141,6 +142,9 @@ class UsbAoaService {
         // Use Future.microtask to ensure this runs after current event completes
         // and doesn't block app startup
         Future.microtask(() => _autoConnectLinux());
+
+        // Start periodic scanning for USB hotplug detection
+        _startLinuxPeriodicScan();
       } else if (Platform.isAndroid) {
         // Use existing MethodChannel implementation for Android accessory mode
         _channel.setMethodCallHandler(_handleMethodCall);
@@ -235,6 +239,36 @@ class UsbAoaService {
       _connectionState = UsbAoaConnectionState.disconnected;
       _connectionStateController.add(_connectionState);
     }
+  }
+
+  /// Start periodic scanning for USB devices on Linux (hotplug detection)
+  void _startLinuxPeriodicScan() {
+    if (!Platform.isLinux || _linuxImpl == null) return;
+    _stopLinuxPeriodicScan();
+
+    // Scan every 5 seconds when not connected
+    _linuxScanTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (_connectionState == UsbAoaConnectionState.connected ||
+          _connectionState == UsbAoaConnectionState.connecting) {
+        return; // Already connected or connecting, skip scan
+      }
+
+      try {
+        final devices = await _linuxImpl!.listDevices();
+        if (devices.isNotEmpty) {
+          LogService().log('UsbAoa: Hotplug detected ${devices.length} device(s)');
+          await _autoConnectLinux();
+        }
+      } catch (e) {
+        // Ignore scan errors
+      }
+    });
+  }
+
+  /// Stop periodic scanning
+  void _stopLinuxPeriodicScan() {
+    _linuxScanTimer?.cancel();
+    _linuxScanTimer = null;
   }
 
   /// Handle method calls from native code
@@ -466,7 +500,8 @@ class UsbAoaService {
   Future<void> dispose() async {
     await close();
 
-    // Clean up Linux subscriptions
+    // Clean up Linux subscriptions and timer
+    _stopLinuxPeriodicScan();
     await _linuxConnectionSub?.cancel();
     _linuxConnectionSub = null;
     await _linuxDataSub?.cancel();
