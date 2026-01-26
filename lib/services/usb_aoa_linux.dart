@@ -967,16 +967,20 @@ class UsbAoaLinux {
             continue;
           }
 
-          if (!androidConnected && consecutiveHangups <= maxHangupsBeforeGiveUp) {
+          // Retry on POLLERR/POLLHUP - these can be transient on USB
+          if (consecutiveHangups <= maxHangupsBeforeGiveUp) {
+            final errorType = hasError ? 'POLLERR' : 'POLLHUP';
             if (consecutiveHangups == 1 || consecutiveHangups % 20 == 0) {
-              final errorType = hasError ? 'POLLERR' : 'POLLHUP';
-              LogService().log('UsbAoaLinux: Waiting for Android to open ($errorType, attempt $consecutiveHangups)');
+              final status = androidConnected ? 'connected' : 'waiting for Android';
+              LogService().log('UsbAoaLinux: $errorType ($status, attempt $consecutiveHangups)');
             }
-            await Future.delayed(Duration(milliseconds: 100));
+            // Longer delay when connected (likely transient), shorter when waiting
+            final delayMs = androidConnected ? 50 : 100;
+            await Future.delayed(Duration(milliseconds: delayMs));
             continue;
           }
           final errorType = hasError ? 'POLLERR' : 'POLLHUP';
-          LogService().log('UsbAoaLinux: Poll error/hangup after $consecutiveHangups attempts ($errorType)');
+          LogService().log('UsbAoaLinux: Poll error/hangup after $consecutiveHangups attempts ($errorType), giving up');
           break;
         }
 
