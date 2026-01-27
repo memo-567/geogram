@@ -6,11 +6,11 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path_provider/path_provider.dart';
 import '../models/station_chat_room.dart';
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
 import 'log_service.dart';
+import 'storage_config.dart';
 
 /// Service for caching device data locally
 /// Creates folders with device callsign for storing collections from each node
@@ -34,8 +34,8 @@ class RelayCacheService {
     }
 
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      _basePath = '${appDir.path}/geogram/devices';
+      // Use StorageConfig to get the correct devices directory (respects --data-dir flag)
+      _basePath = StorageConfig().devicesDir;
 
       final devicesDir = Directory(_basePath!);
       if (!await devicesDir.exists()) {
