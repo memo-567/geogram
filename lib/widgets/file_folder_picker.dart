@@ -1,0 +1,1605 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+
+import '../util/video_metadata_extractor.dart';
+
+/// Sort mode for file/folder listing
+enum FileSortMode {
+  name,
+  size,
+  modified,
+}
+
+/// A storage location (root directory, USB drive, etc.)
+class StorageLocation {
+  final String name;
+  final String path;
+  final IconData icon;
+  final bool isRemovable;
+
+  const StorageLocation({
+    required this.name,
+    required this.path,
+    required this.icon,
+    this.isRemovable = false,
+  });
+}
+
+/// Information about a file or folder
+class FileSystemItem {
+  final String path;
+  final String name;
+  final bool isDirectory;
+  final int size;
+  final DateTime modified;
+  final FileSystemEntityType type;
+
+  const FileSystemItem({
+    required this.path,
+    required this.name,
+    required this.isDirectory,
+    required this.size,
+    required this.modified,
+    required this.type,
+  });
+}
+
+/// A full-featured file and folder picker widget
+///
+/// Features:
+/// - Browse files and folders with rich icons
+/// - Show file sizes and folder total sizes
+/// - Sort by name, size, or modification date
+/// - Access storage media (USB, removable storage)
+/// - Multi-select support
+/// - Works on Linux and Android
+///
+/// Usage:
+/// ```dart
+/// final selected = await FileFolderPicker.show(
+///   context: context,
+///   title: 'Select files or folders',
+///   allowMultiSelect: true,
+/// );
+/// if (selected != null && selected.isNotEmpty) {
+///   // Use selected paths
+/// }
+/// ```
+class FileFolderPicker extends StatefulWidget {
+  final String? initialDirectory;
+  final String title;
+  final bool allowMultiSelect;
+  final bool showHiddenFiles;
+
+  const FileFolderPicker({
+    super.key,
+    this.initialDirectory,
+    this.title = 'Select files or folders',
+    this.allowMultiSelect = true,
+    this.showHiddenFiles = false,
+  });
+
+  /// Show the picker as a full-screen dialog
+  static Future<List<String>?> show(
+    BuildContext context, {
+    String? initialDirectory,
+    String title = 'Select files or folders',
+    bool allowMultiSelect = true,
+    bool showHiddenFiles = false,
+  }) {
+    return Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => FileFolderPicker(
+          initialDirectory: initialDirectory,
+          title: title,
+          allowMultiSelect: allowMultiSelect,
+          showHiddenFiles: showHiddenFiles,
+        ),
+      ),
+    );
+  }
+
+  @override
+  State<FileFolderPicker> createState() => _FileFolderPickerState();
+}
+
+class _FileFolderPickerState extends State<FileFolderPicker> {
+  late Directory _currentDirectory;
+  List<FileSystemItem> _items = [];
+  final Set<String> _selectedPaths = {};
+  bool _isLoading = true;
+  bool _showHidden = false;
+  FileSortMode _sortMode = FileSortMode.name;
+  bool _sortAscending = true;
+  List<StorageLocation> _storageLocations = [];
+  final Map<String, int> _folderSizeCache = {};
+  final Set<String> _calculatingFolders = {};
+  final Map<String, String?> _thumbnailCache = {};  // path -> thumbnail path
+  final Set<String> _loadingThumbnails = {};
+  String? _error;
+  bool _isGridView = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _showHidden = widget.showHiddenFiles;
+    _initializeDirectory();
+    _detectStorageLocations();
+  }
+
+  void _initializeDirectory() {
+    final initial = widget.initialDirectory ??
+        Platform.environment['HOME'] ??
+        (Platform.isAndroid ? '/storage/emulated/0' : '/');
+    _currentDirectory = Directory(initial);
+    _loadDirectory();
+  }
+
+  Future<void> _detectStorageLocations() async {
+    final locations = <StorageLocation>[];
+
+    // Home directory
+    final home = Platform.environment['HOME'];
+    if (home != null) {
+      locations.add(StorageLocation(
+        name: 'Home',
+        path: home,
+        icon: Icons.home_rounded,
+      ));
+
+      // Common directories
+      final downloads = Directory('$home/Downloads');
+      if (await downloads.exists()) {
+        locations.add(StorageLocation(
+          name: 'Downloads',
+          path: downloads.path,
+          icon: Icons.download_rounded,
+        ));
+      }
+
+      final documents = Directory('$home/Documents');
+      if (await documents.exists()) {
+        locations.add(StorageLocation(
+          name: 'Documents',
+          path: documents.path,
+          icon: Icons.folder_rounded,
+        ));
+      }
+
+      final pictures = Directory('$home/Pictures');
+      if (await pictures.exists()) {
+        locations.add(StorageLocation(
+          name: 'Pictures',
+          path: pictures.path,
+          icon: Icons.image_rounded,
+        ));
+      }
+    }
+
+    if (Platform.isLinux) {
+      // Root
+      locations.add(const StorageLocation(
+        name: 'Computer',
+        path: '/',
+        icon: Icons.computer_rounded,
+      ));
+
+      // Media mount points (USB drives, etc.)
+      await _addLinuxMountPoints(locations, '/media');
+      await _addLinuxMountPoints(locations, '/mnt');
+      await _addLinuxMountPoints(locations, '/run/media');
+    } else if (Platform.isAndroid) {
+      locations.add(const StorageLocation(
+        name: 'Internal',
+        path: '/storage/emulated/0',
+        icon: Icons.phone_android_rounded,
+      ));
+
+      // Check for SD card
+      final storageDir = Directory('/storage');
+      if (await storageDir.exists()) {
+        try {
+          await for (final entity in storageDir.list()) {
+            if (entity is Directory) {
+              final name = p.basename(entity.path);
+              if (name != 'emulated' && name != 'self') {
+                locations.add(StorageLocation(
+                  name: 'SD Card',
+                  path: entity.path,
+                  icon: Icons.sd_card_rounded,
+                  isRemovable: true,
+                ));
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (mounted) {
+      setState(() => _storageLocations = locations);
+    }
+  }
+
+  Future<void> _addLinuxMountPoints(
+    List<StorageLocation> locations,
+    String basePath,
+  ) async {
+    final baseDir = Directory(basePath);
+    if (!await baseDir.exists()) return;
+
+    try {
+      final user = Platform.environment['USER'] ?? '';
+      Directory searchDir = baseDir;
+
+      // Check for user-specific subdirectory
+      final userDir = Directory('$basePath/$user');
+      if (await userDir.exists()) {
+        searchDir = userDir;
+      }
+
+      await for (final entity in searchDir.list()) {
+        if (entity is Directory) {
+          final name = p.basename(entity.path);
+          // Skip if it looks like a system directory
+          if (name.startsWith('.')) continue;
+
+          locations.add(StorageLocation(
+            name: name,
+            path: entity.path,
+            icon: Icons.usb_rounded,
+            isRemovable: true,
+          ));
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadDirectory() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final items = <FileSystemItem>[];
+
+      await for (final entity in _currentDirectory.list()) {
+        final name = p.basename(entity.path);
+
+        // Skip hidden files if not showing them
+        if (!_showHidden && name.startsWith('.')) continue;
+
+        final stat = await entity.stat();
+        final isDir = entity is Directory;
+
+        int size = stat.size;
+        if (isDir) {
+          // Check cache first
+          size = _folderSizeCache[entity.path] ?? 0;
+          if (size == 0) {
+            // Calculate in background
+            _calculateFolderSize(entity.path);
+          }
+        }
+
+        items.add(FileSystemItem(
+          path: entity.path,
+          name: name,
+          isDirectory: isDir,
+          size: size,
+          modified: stat.modified,
+          type: stat.type,
+        ));
+      }
+
+      _sortItems(items);
+
+      if (mounted) {
+        setState(() {
+          _items = items;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _items = [];
+          _isLoading = false;
+          _error = 'Cannot access this folder';
+        });
+      }
+    }
+  }
+
+  Future<void> _calculateFolderSize(String folderPath) async {
+    _calculatingFolders.add(folderPath);
+    if (mounted) setState(() {});
+
+    int totalSize = 0;
+    try {
+      final dir = Directory(folderPath);
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          try {
+            totalSize += await entity.length();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    _folderSizeCache[folderPath] = totalSize;
+    _calculatingFolders.remove(folderPath);
+
+    // Update UI if still viewing this directory
+    if (mounted && _currentDirectory.path == p.dirname(folderPath)) {
+      setState(() {
+        final index = _items.indexWhere((item) => item.path == folderPath);
+        if (index >= 0) {
+          final oldItem = _items[index];
+          _items[index] = FileSystemItem(
+            path: oldItem.path,
+            name: oldItem.name,
+            isDirectory: oldItem.isDirectory,
+            size: totalSize,
+            modified: oldItem.modified,
+            type: oldItem.type,
+          );
+        }
+      });
+    }
+  }
+
+  void _sortItems(List<FileSystemItem> items) {
+    items.sort((a, b) {
+      // Directories always first
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+
+      int result;
+      switch (_sortMode) {
+        case FileSortMode.name:
+          result = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          break;
+        case FileSortMode.size:
+          result = a.size.compareTo(b.size);
+          break;
+        case FileSortMode.modified:
+          result = a.modified.compareTo(b.modified);
+          break;
+      }
+
+      return _sortAscending ? result : -result;
+    });
+  }
+
+  void _navigateTo(Directory dir) {
+    setState(() {
+      _currentDirectory = dir;
+      _selectedPaths.clear();
+    });
+    _loadDirectory();
+  }
+
+  void _navigateUp() {
+    final parent = _currentDirectory.parent;
+    if (parent.path != _currentDirectory.path) {
+      _navigateTo(parent);
+    }
+  }
+
+  void _toggleSelection(FileSystemItem item) {
+    setState(() {
+      if (_selectedPaths.contains(item.path)) {
+        _selectedPaths.remove(item.path);
+      } else {
+        if (!widget.allowMultiSelect) {
+          _selectedPaths.clear();
+        }
+        _selectedPaths.add(item.path);
+      }
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selectedPaths.addAll(_items.map((e) => e.path));
+    });
+  }
+
+  void _deselectAll() {
+    setState(() {
+      _selectedPaths.clear();
+    });
+  }
+
+  void _confirm() {
+    Navigator.of(context).pop(_selectedPaths.toList());
+  }
+
+  void _cancel() {
+    Navigator.of(context).pop(null);
+  }
+
+  void _changeSortMode(FileSortMode mode) {
+    setState(() {
+      if (_sortMode == mode) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortMode = mode;
+        _sortAscending = mode == FileSortMode.name;
+      }
+      _sortItems(_items);
+    });
+  }
+
+  bool _isImageFile(String name) {
+    final ext = name.split('.').last.toLowerCase();
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext);
+  }
+
+  bool _isVideoFile(String name) {
+    final ext = name.split('.').last.toLowerCase();
+    return ext == 'mp4';  // Only mp4 for now, as it's most reliable
+  }
+
+  Future<void> _loadThumbnail(FileSystemItem item) async {
+    if (_thumbnailCache.containsKey(item.path)) return;
+    if (_loadingThumbnails.contains(item.path)) return;
+
+    _loadingThumbnails.add(item.path);
+
+    if (_isImageFile(item.name)) {
+      // Images use the file directly as thumbnail
+      _thumbnailCache[item.path] = item.path;
+      if (mounted) setState(() {});
+    } else if (_isVideoFile(item.name)) {
+      // Generate video thumbnail
+      final tempDir = Directory.systemTemp;
+      final outputPath = '${tempDir.path}/thumb_${item.name.hashCode}.png';
+
+      final thumbPath = await VideoMetadataExtractor.generateThumbnail(
+        item.path,
+        outputPath,
+        atSeconds: 1,
+      );
+
+      _thumbnailCache[item.path] = thumbPath;
+      if (mounted) setState(() {});
+    }
+
+    _loadingThumbnails.remove(item.path);
+  }
+
+  Widget _buildItemThumbnail(FileSystemItem item, ThemeData theme, {double size = 44}) {
+    final iconColor = _getIconColor(item);
+    final iconData = _getItemIcon(item);
+
+    // Check if we have a thumbnail
+    if (_isImageFile(item.name) || _isVideoFile(item.name)) {
+      _loadThumbnail(item);  // Trigger load if needed
+
+      final thumbPath = _thumbnailCache[item.path];
+      if (thumbPath != null) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.file(
+            File(thumbPath),
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildIconBox(iconData, iconColor, size),
+          ),
+        );
+      }
+
+      // Loading state
+      if (_loadingThumbnails.contains(item.path)) {
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      }
+    }
+
+    return _buildIconBox(iconData, iconColor, size);
+  }
+
+  Widget _buildIconBox(IconData icon, Color color, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Center(child: Icon(icon, color: color, size: size * 0.55)),
+    );
+  }
+
+  Widget _buildSizeDisplay(ThemeData theme, FileSystemItem item) {
+    if (item.isDirectory && _calculatingFolders.contains(item.path)) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            'calculating...',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Text(
+      _formatBytes(item.size),
+      style: theme.textTheme.bodySmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      backgroundColor: colorScheme.surface,
+      appBar: AppBar(
+        elevation: 0,
+        scrolledUnderElevation: 1,
+        backgroundColor: colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: _cancel,
+          tooltip: 'Cancel',
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              _currentDirectory.path,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+        actions: [
+          // View toggle
+          IconButton(
+            icon: Icon(_isGridView ? Icons.view_list_rounded : Icons.grid_view_rounded),
+            tooltip: _isGridView ? 'List view' : 'Grid view',
+            onPressed: () => setState(() => _isGridView = !_isGridView),
+          ),
+          // Hidden files toggle
+          IconButton(
+            icon: Icon(
+              _showHidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+              color: _showHidden ? colorScheme.primary : null,
+            ),
+            tooltip: _showHidden ? 'Hide hidden files' : 'Show hidden files',
+            onPressed: () {
+              setState(() => _showHidden = !_showHidden);
+              _loadDirectory();
+            },
+          ),
+          // Sort menu
+          PopupMenuButton<FileSortMode>(
+            icon: const Icon(Icons.sort_rounded),
+            tooltip: 'Sort',
+            position: PopupMenuPosition.under,
+            onSelected: _changeSortMode,
+            itemBuilder: (context) => [
+              _buildSortMenuItem(FileSortMode.name, 'Name', Icons.sort_by_alpha_rounded),
+              _buildSortMenuItem(FileSortMode.size, 'Size', Icons.data_usage_rounded),
+              _buildSortMenuItem(FileSortMode.modified, 'Date modified', Icons.schedule_rounded),
+            ],
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Storage locations
+          if (_storageLocations.isNotEmpty) _buildStorageBar(theme),
+
+          // Navigation bar
+          _buildNavigationBar(theme),
+
+          // Divider
+          Divider(height: 1, color: colorScheme.outlineVariant),
+
+          // File list
+          Expanded(
+            child: _isLoading
+                ? _buildLoadingState(theme)
+                : _error != null
+                    ? _buildErrorState(theme)
+                    : _items.isEmpty
+                        ? _buildEmptyState(theme)
+                        : _isGridView
+                            ? _buildGridView(theme)
+                            : _buildListView(theme),
+          ),
+
+          // Selection bar
+          _buildSelectionBar(theme),
+        ],
+      ),
+    );
+  }
+
+  PopupMenuItem<FileSortMode> _buildSortMenuItem(
+    FileSortMode mode,
+    String label,
+    IconData icon,
+  ) {
+    final isSelected = _sortMode == mode;
+    final theme = Theme.of(context);
+
+    return PopupMenuItem(
+      value: mode,
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: isSelected ? theme.colorScheme.primary : null,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.w600 : null,
+                color: isSelected ? theme.colorScheme.primary : null,
+              ),
+            ),
+          ),
+          if (isSelected)
+            Icon(
+              _sortAscending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStorageBar(ThemeData theme) {
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _storageLocations.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final location = _storageLocations[index];
+          final isCurrentRoot =
+              _currentDirectory.path.startsWith(location.path);
+
+          return Material(
+            color: isCurrentRoot
+                ? theme.colorScheme.primaryContainer
+                : theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: () => _navigateTo(Directory(location.path)),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      location.icon,
+                      size: 20,
+                      color: location.isRemovable
+                          ? Colors.orange
+                          : isCurrentRoot
+                              ? theme.colorScheme.onPrimaryContainer
+                              : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      location.name,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: isCurrentRoot
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.onSurfaceVariant,
+                        fontWeight: isCurrentRoot ? FontWeight.w600 : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildNavigationBar(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        children: [
+          // Up button
+          Material(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: _navigateUp,
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Icon(Icons.arrow_upward_rounded, size: 20),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Breadcrumb path
+          Expanded(
+            child: _buildBreadcrumb(theme),
+          ),
+          // Refresh button
+          Material(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: _loadDirectory,
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Icon(Icons.refresh_rounded, size: 20),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBreadcrumb(ThemeData theme) {
+    final parts = _currentDirectory.path.split(Platform.pathSeparator);
+    if (parts.first.isEmpty) parts[0] = '/';
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      reverse: false,  // Left-align breadcrumb
+      child: Row(
+        children: [
+          for (int i = 0; i < parts.length; i++) ...[
+            if (i > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+              child: InkWell(
+                onTap: () {
+                  String path;
+                  if (i == 0 && parts[0] == '/') {
+                    path = '/';
+                  } else {
+                    final subParts = parts.sublist(0, i + 1);
+                    if (subParts.first == '/') {
+                      path = '/${subParts.skip(1).join(Platform.pathSeparator)}';
+                    } else {
+                      path = subParts.join(Platform.pathSeparator);
+                    }
+                  }
+                  _navigateTo(Directory(path));
+                },
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    parts[i],
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: i == parts.length - 1
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                      fontWeight: i == parts.length - 1 ? FontWeight.w600 : null,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoadingState(ThemeData theme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            'Loading...',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildListView(ThemeData theme) {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      itemCount: _items.length,
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        return _buildListItem(item, theme);
+      },
+    );
+  }
+
+  Widget _buildGridView(ThemeData theme) {
+    return GridView.builder(
+      padding: const EdgeInsets.all(8),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 120,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 0.85,
+      ),
+      itemCount: _items.length,
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        return _buildGridItem(item, theme);
+      },
+    );
+  }
+
+  Widget _buildListItem(FileSystemItem item, ThemeData theme) {
+    final isSelected = _selectedPaths.contains(item.path);
+
+    return Material(
+      color: isSelected
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.4)
+          : Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          if (item.isDirectory) {
+            _navigateTo(Directory(item.path));
+          } else {
+            _toggleSelection(item);
+          }
+        },
+        onLongPress: () => _toggleSelection(item),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              // Checkbox/Radio
+              if (widget.allowMultiSelect)
+                Checkbox(
+                  value: isSelected,
+                  onChanged: (_) => _toggleSelection(item),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                )
+              else
+                Radio<bool>(
+                  value: true,
+                  groupValue: isSelected,
+                  onChanged: (_) => _toggleSelection(item),
+                ),
+              const SizedBox(width: 8),
+              // Icon - use thumbnail method
+              _buildItemThumbnail(item, theme, size: 44),
+              const SizedBox(width: 12),
+              // Name and details
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        _buildSizeDisplay(theme, item),
+                        const SizedBox(width: 8),
+                        _buildDetailChip(
+                          theme,
+                          _formatDate(item.modified),
+                          true,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Navigate into folder
+              if (item.isDirectory)
+                IconButton(
+                  icon: Icon(
+                    Icons.chevron_right_rounded,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  onPressed: () => _navigateTo(Directory(item.path)),
+                  tooltip: 'Open folder',
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailChip(ThemeData theme, String text, bool show) {
+    if (!show) return const SizedBox();
+    return Text(
+      text,
+      style: theme.textTheme.bodySmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+
+  Widget _buildGridItem(FileSystemItem item, ThemeData theme) {
+    final isSelected = _selectedPaths.contains(item.path);
+    final hasThumbnail = _isImageFile(item.name) || _isVideoFile(item.name);
+
+    // For images/videos: full-bleed thumbnail with overlay filename
+    if (hasThumbnail) {
+      _loadThumbnail(item);  // Trigger load if needed
+      final thumbPath = _thumbnailCache[item.path];
+
+      return Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _toggleSelection(item),
+          onLongPress: () => _toggleSelection(item),
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Full-bleed thumbnail
+              if (thumbPath != null)
+                Image.file(
+                  File(thumbPath),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => _buildGridIconFallback(item, theme),
+                )
+              else if (_loadingThumbnails.contains(item.path))
+                Container(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  child: const Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else
+                _buildGridIconFallback(item, theme),
+
+              // Selection overlay
+              if (isSelected)
+                Container(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                ),
+
+              // Filename overlay at bottom
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.7),
+                      ],
+                    ),
+                  ),
+                  child: Text(
+                    item.name,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w500,
+                      shadows: [
+                        const Shadow(
+                          color: Colors.black54,
+                          blurRadius: 2,
+                        ),
+                      ],
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+
+              // Selection indicator
+              if (isSelected)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.check_rounded,
+                      size: 14,
+                      color: theme.colorScheme.onPrimary,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // For folders and other files: keep the centered icon layout
+    return Material(
+      color: isSelected
+          ? theme.colorScheme.primaryContainer
+          : theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: () {
+          if (item.isDirectory) {
+            _navigateTo(Directory(item.path));
+          } else {
+            _toggleSelection(item);
+          }
+        },
+        onLongPress: () => _toggleSelection(item),
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          children: [
+            // Content centered
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Icon
+                    _buildIconBox(_getItemIcon(item), _getIconColor(item), 48),
+                    const SizedBox(height: 6),
+                    // Name
+                    Text(
+                      item.name,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Selection indicator
+            if (isSelected)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.check_rounded,
+                    size: 14,
+                    color: theme.colorScheme.onPrimary,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGridIconFallback(FileSystemItem item, ThemeData theme) {
+    return Container(
+      color: _getIconColor(item).withValues(alpha: 0.15),
+      child: Center(
+        child: Icon(
+          _getItemIcon(item),
+          color: _getIconColor(item),
+          size: 40,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(ThemeData theme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(
+              Icons.folder_open_rounded,
+              size: 40,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'This folder is empty',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Icon(
+                Icons.lock_rounded,
+                size: 40,
+                color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _error ?? 'Unknown error',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _navigateUp,
+              icon: const Icon(Icons.arrow_upward_rounded),
+              label: const Text('Go back'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectionBar(ThemeData theme) {
+    final hasSelection = _selectedPaths.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        child: Row(
+          children: [
+            // Selection count and actions
+            Expanded(
+              child: Row(
+                children: [
+                  if (hasSelection) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${_selectedPaths.length} selected',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: _deselectAll,
+                      child: const Text('Clear'),
+                    ),
+                  ] else ...[
+                    if (widget.allowMultiSelect && _items.isNotEmpty)
+                      TextButton(
+                        onPressed: _selectAll,
+                        child: const Text('Select all'),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            // Cancel button
+            OutlinedButton(
+              onPressed: _cancel,
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 12),
+            // Confirm button
+            FilledButton.icon(
+              onPressed: hasSelection ? _confirm : null,
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _getItemIcon(FileSystemItem item) {
+    if (item.isDirectory) return Icons.folder_rounded;
+
+    final ext = item.name.split('.').last.toLowerCase();
+    switch (ext) {
+      // Images
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+      case 'bmp':
+      case 'svg':
+      case 'ico':
+      case 'heic':
+      case 'heif':
+        return Icons.image_rounded;
+
+      // Videos
+      case 'mp4':
+      case 'avi':
+      case 'mov':
+      case 'mkv':
+      case 'webm':
+      case 'flv':
+      case 'wmv':
+      case 'm4v':
+      case '3gp':
+        return Icons.movie_rounded;
+
+      // Audio/Music
+      case 'mp3':
+      case 'wav':
+      case 'flac':
+      case 'ogg':
+      case 'aac':
+      case 'm4a':
+      case 'wma':
+      case 'opus':
+      case 'mid':
+      case 'midi':
+        return Icons.music_note_rounded;
+
+      // Documents
+      case 'pdf':
+        return Icons.picture_as_pdf_rounded;
+      case 'doc':
+      case 'docx':
+      case 'odt':
+      case 'rtf':
+        return Icons.description_rounded;
+      case 'xls':
+      case 'xlsx':
+      case 'ods':
+      case 'csv':
+        return Icons.table_chart_rounded;
+      case 'ppt':
+      case 'pptx':
+      case 'odp':
+        return Icons.slideshow_rounded;
+      case 'txt':
+      case 'md':
+      case 'log':
+        return Icons.article_rounded;
+
+      // Data files
+      case 'json':
+      case 'xml':
+      case 'yaml':
+      case 'yml':
+      case 'toml':
+      case 'ini':
+      case 'cfg':
+      case 'conf':
+        return Icons.data_object_rounded;
+
+      // Code
+      case 'dart':
+      case 'py':
+      case 'js':
+      case 'ts':
+      case 'java':
+      case 'kt':
+      case 'swift':
+      case 'c':
+      case 'cpp':
+      case 'h':
+      case 'cs':
+      case 'go':
+      case 'rs':
+      case 'rb':
+      case 'php':
+      case 'html':
+      case 'css':
+      case 'scss':
+      case 'sql':
+      case 'vue':
+      case 'jsx':
+      case 'tsx':
+        return Icons.code_rounded;
+
+      // Executables
+      case 'exe':
+      case 'msi':
+      case 'app':
+      case 'dmg':
+      case 'deb':
+      case 'rpm':
+      case 'appimage':
+      case 'flatpak':
+      case 'snap':
+        return Icons.apps_rounded;
+
+      // Scripts
+      case 'sh':
+      case 'bash':
+      case 'zsh':
+      case 'bat':
+      case 'cmd':
+      case 'ps1':
+        return Icons.terminal_rounded;
+
+      // Archives
+      case 'zip':
+      case 'rar':
+      case 'tar':
+      case 'gz':
+      case '7z':
+      case 'bz2':
+      case 'xz':
+      case 'zst':
+        return Icons.folder_zip_rounded;
+
+      // Disk images
+      case 'iso':
+      case 'img':
+      case 'dmg':
+        return Icons.album_rounded;
+
+      // Fonts
+      case 'ttf':
+      case 'otf':
+      case 'woff':
+      case 'woff2':
+        return Icons.font_download_rounded;
+
+      // Android
+      case 'apk':
+      case 'aab':
+        return Icons.android_rounded;
+
+      default:
+        return Icons.insert_drive_file_rounded;
+    }
+  }
+
+  Color _getIconColor(FileSystemItem item) {
+    if (item.isDirectory) return Colors.amber.shade700;
+
+    final ext = item.name.split('.').last.toLowerCase();
+    switch (ext) {
+      // Images - Green
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+      case 'bmp':
+      case 'svg':
+      case 'heic':
+        return Colors.green.shade600;
+
+      // Videos - Red
+      case 'mp4':
+      case 'avi':
+      case 'mov':
+      case 'mkv':
+      case 'webm':
+        return Colors.red.shade600;
+
+      // Audio - Purple
+      case 'mp3':
+      case 'wav':
+      case 'flac':
+      case 'ogg':
+      case 'aac':
+      case 'm4a':
+        return Colors.purple.shade600;
+
+      // PDF - Red
+      case 'pdf':
+        return Colors.red.shade700;
+
+      // Word docs - Blue
+      case 'doc':
+      case 'docx':
+      case 'odt':
+        return Colors.blue.shade700;
+
+      // Spreadsheets - Green
+      case 'xls':
+      case 'xlsx':
+      case 'ods':
+      case 'csv':
+        return Colors.green.shade700;
+
+      // Presentations - Orange
+      case 'ppt':
+      case 'pptx':
+      case 'odp':
+        return Colors.orange.shade700;
+
+      // Code - Teal
+      case 'dart':
+      case 'py':
+      case 'js':
+      case 'ts':
+      case 'java':
+      case 'kt':
+      case 'swift':
+      case 'html':
+      case 'css':
+        return Colors.teal.shade600;
+
+      // Executables/Scripts - Deep Orange
+      case 'exe':
+      case 'sh':
+      case 'bin':
+      case 'appimage':
+      case 'deb':
+      case 'rpm':
+        return Colors.deepOrange.shade600;
+
+      // Archives - Brown
+      case 'zip':
+      case 'rar':
+      case 'tar':
+      case 'gz':
+      case '7z':
+        return Colors.brown.shade600;
+
+      // Android - Green
+      case 'apk':
+      case 'aab':
+        return Colors.green.shade600;
+
+      default:
+        return Colors.blueGrey.shade600;
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '—';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  String _formatDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+
+    if (diff.inDays == 0) {
+      if (diff.inHours == 0) {
+        if (diff.inMinutes < 1) return 'Just now';
+        return '${diff.inMinutes}m ago';
+      }
+      return '${diff.inHours}h ago';
+    }
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    if (diff.inDays < 30) return '${(diff.inDays / 7).floor()}w ago';
+
+    return '${date.day}/${date.month}/${date.year}';
+  }
+}
