@@ -8,10 +8,10 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 
 import '../../connection/connection_manager.dart';
+import '../../connection/transport_message.dart';
+import '../../services/devices_service.dart';
 import '../../services/log_service.dart';
-import '../../services/log_api_service.dart';
 import '../../services/profile_service.dart';
-import '../../services/signing_service.dart';
 import '../../util/event_bus.dart';
 import '../../util/nostr_event.dart';
 import '../models/transfer_offer.dart';
@@ -65,6 +65,16 @@ class P2PTransferService {
     final profile = ProfileService().getProfile();
     if (profile.callsign.isEmpty) {
       LogService().log('P2PTransfer: No active profile');
+      return null;
+    }
+
+    // Check/refresh device reachability before sending
+    final isReachable =
+        await DevicesService().checkReachability(recipientCallsign);
+    if (!isReachable) {
+      LogService().log(
+        'P2PTransfer: Device $recipientCallsign is not reachable',
+      );
       return null;
     }
 
@@ -141,26 +151,37 @@ class P2PTransferService {
       createdAt: now.millisecondsSinceEpoch ~/ 1000,
     );
 
-    // Sign the event
-    final signedEvent = await SigningService().signEvent(event, profile);
-    if (signedEvent == null) {
-      LogService().log('P2PTransfer: Failed to sign offer event');
-      _outgoingOffers.remove(offerId);
-      _serveTokens.remove(serveToken);
-      return null;
+    // Send offer with retry logic
+    const maxRetries = 5;
+    const baseDelay = Duration(seconds: 2);
+    int retryCount = 0;
+    TransportResult? result;
+
+    while (retryCount <= maxRetries) {
+      result = await ConnectionManager().apiRequest(
+        callsign: recipientCallsign,
+        method: 'POST',
+        path: '/api/p2p/offer',
+        body: offer.toOfferMessage(),
+      );
+
+      if (result.success) {
+        LogService().log('P2PTransfer: Offer $offerId delivered to $recipientCallsign');
+        break;
+      }
+
+      retryCount++;
+      if (retryCount <= maxRetries) {
+        final delay = baseDelay * retryCount; // Linear backoff
+        LogService().log('P2PTransfer: Offer delivery failed, retry $retryCount/$maxRetries in ${delay.inSeconds}s');
+        await Future.delayed(delay);
+      }
     }
 
-    // Send via ConnectionManager
-    final result = await ConnectionManager().sendDM(
-      callsign: recipientCallsign,
-      signedEvent: signedEvent.toJson(),
-      ttl: _offerExpiry,
-    );
-
-    if (!result.success && !result.wasQueued) {
-      LogService().log('P2PTransfer: Failed to send offer: ${result.error}');
+    if (result == null || !result.success) {
+      LogService().log('P2PTransfer: Failed to send offer after $maxRetries retries: ${result?.error}');
       offer.status = TransferOfferStatus.failed;
-      offer.error = result.error;
+      offer.error = result?.error ?? 'Delivery failed after $maxRetries retries';
     } else {
       LogService().log('P2PTransfer: Offer $offerId sent to $recipientCallsign');
     }
@@ -213,6 +234,7 @@ class P2PTransferService {
     if (accepted) {
       offer.status = TransferOfferStatus.accepted;
       offer.receiverCallsign = receiverCallsign;
+      offer.startedAt = DateTime.now();
       LogService().log('P2PTransfer: Offer $offerId accepted by $receiverCallsign');
     } else {
       offer.status = TransferOfferStatus.rejected;
@@ -302,6 +324,26 @@ class P2PTransferService {
     ));
   }
 
+  /// Update upload progress (called from LogApiService during file streaming)
+  void updateUploadProgress(String offerId, int bytesSent) {
+    final offer = _outgoingOffers[offerId];
+    if (offer == null) return;
+
+    offer.status = TransferOfferStatus.transferring;
+    offer.bytesTransferred += bytesSent;
+
+    // Fire event every 256KB
+    if (offer.bytesTransferred % 262144 < bytesSent) {
+      _eventBus.fire(P2PUploadProgressEvent(
+        offerId: offerId,
+        bytesTransferred: offer.bytesTransferred,
+        totalBytes: offer.totalBytes,
+        filesCompleted: offer.filesCompleted,
+        totalFiles: offer.totalFiles,
+      ));
+    }
+  }
+
   // ============================================================
   // Receiver Side
   // ============================================================
@@ -362,6 +404,7 @@ class P2PTransferService {
 
     offer.status = TransferOfferStatus.accepted;
     offer.destinationPath = destinationPath;
+    offer.startedAt = DateTime.now();
 
     // Send acceptance response
     await _sendResponse(offer, true);
@@ -372,8 +415,8 @@ class P2PTransferService {
       status: 'accepted',
     ));
 
-    // Start download
-    await _startDownload(offer);
+    // Start download in background (don't await - let UI navigate first)
+    _startDownload(offer);
   }
 
   /// Reject an incoming offer
@@ -395,35 +438,41 @@ class P2PTransferService {
     LogService().log('P2PTransfer: Rejected offer $offerId');
   }
 
-  /// Send accept/reject response to sender
+  /// Send accept/reject response to sender via direct API call
   Future<void> _sendResponse(TransferOffer offer, bool accepted) async {
     final profile = ProfileService().getProfile();
-    if (profile.callsign.isEmpty) return;
+    final endpoint = accepted
+        ? '/api/p2p/offer/${offer.offerId}/accept'
+        : '/api/p2p/offer/${offer.offerId}/reject';
 
-    final responseData = TransferOffer.createResponse(
-      offerId: offer.offerId,
-      accepted: accepted,
-      receiverCallsign: profile.callsign,
-    );
+    // Send response with retry
+    const maxRetries = 3;
+    int retryCount = 0;
+    TransportResult? result;
 
-    final event = NostrEvent(
-      pubkey: profile.npub,
-      kind: 4,
-      content: jsonEncode(responseData),
-      tags: [
-        ['p', offer.senderCallsign],
-        ['t', 'transfer_response'],
-      ],
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    );
+    while (retryCount <= maxRetries) {
+      result = await ConnectionManager().apiRequest(
+        callsign: offer.senderCallsign,
+        method: 'POST',
+        path: endpoint,
+        body: {
+          'receiverCallsign': profile.callsign,
+        },
+      );
 
-    final signedEvent = await SigningService().signEvent(event, profile);
-    if (signedEvent == null) return;
+      if (result.success) break;
 
-    await ConnectionManager().sendDM(
-      callsign: offer.senderCallsign,
-      signedEvent: signedEvent.toJson(),
-    );
+      retryCount++;
+      if (retryCount <= maxRetries) {
+        await Future.delayed(Duration(seconds: retryCount));
+      }
+    }
+
+    if (result == null || !result.success) {
+      LogService().log('P2PTransfer: Failed to send response after $maxRetries retries: ${result?.error}');
+    } else {
+      LogService().log('P2PTransfer: Response sent to ${offer.senderCallsign}');
+    }
   }
 
   /// Start downloading files from sender
@@ -468,9 +517,6 @@ class P2PTransferService {
       for (final file in offer.files) {
         offer.currentFile = file.path;
 
-        // Send progress update
-        await _sendProgressUpdate(offer, totalBytesReceived, filesCompleted);
-
         // Download file
         final fileUrl = Uri.parse(
           '$senderUrl/api/p2p/offer/${offer.offerId}/file'
@@ -499,7 +545,6 @@ class P2PTransferService {
         while (retries < maxRetries && !sha1Verified) {
           // Write to file
           final sink = destFile.openWrite();
-          int bytesReceived = 0;
 
           // Need to re-request for retries
           final retryRequest = http.Request('GET', fileUrl);
@@ -518,12 +563,18 @@ class P2PTransferService {
 
           await for (final chunk in retryResponse.stream) {
             sink.add(chunk);
-            bytesReceived += chunk.length;
             totalBytesReceived += chunk.length;
 
-            // Send progress update periodically (every 64KB)
-            if (bytesReceived % 65536 < chunk.length) {
-              await _sendProgressUpdate(offer, totalBytesReceived, filesCompleted);
+            // Update offer progress locally during streaming
+            offer.bytesTransferred = totalBytesReceived;
+
+            // Fire local progress event every 256KB
+            if (totalBytesReceived % 262144 < chunk.length) {
+              _eventBus.fire(P2PDownloadProgressEvent(
+                offerId: offer.offerId,
+                bytesTransferred: totalBytesReceived,
+                totalBytes: offer.totalBytes,
+              ));
             }
           }
 
@@ -560,6 +611,14 @@ class P2PTransferService {
       // Send completion notification
       await _sendCompletion(offer, true, totalBytesReceived, filesCompleted);
 
+      // Fire completion event for receiver UI
+      _eventBus.fire(P2PTransferCompleteEvent(
+        offerId: offer.offerId,
+        success: true,
+        bytesReceived: totalBytesReceived,
+        filesReceived: filesCompleted,
+      ));
+
       _eventBus.fire(TransferOfferStatusChangedEvent(
         offerId: offer.offerId,
         status: 'completed',
@@ -580,6 +639,15 @@ class P2PTransferService {
         error: e.toString(),
       );
 
+      // Fire completion event for receiver UI
+      _eventBus.fire(P2PTransferCompleteEvent(
+        offerId: offer.offerId,
+        success: false,
+        bytesReceived: totalBytesReceived,
+        filesReceived: filesCompleted,
+        error: e.toString(),
+      ));
+
       _eventBus.fire(TransferOfferStatusChangedEvent(
         offerId: offer.offerId,
         status: 'failed',
@@ -590,51 +658,15 @@ class P2PTransferService {
 
   /// Get the API URL for a sender
   Future<String?> _getSenderApiUrl(String callsign) async {
-    // Try to get URL from devices service or connection manager
-    // For now, use the local port as fallback for testing
-    final localPort = LogApiService().port;
-    return 'http://localhost:$localPort';
+    final device = DevicesService().getDevice(callsign);
+    if (device?.url != null) {
+      return device!.url;
+    }
+    LogService().log('P2PTransfer: No URL found for sender $callsign');
+    return null;
   }
 
-  /// Send progress update to sender
-  Future<void> _sendProgressUpdate(
-    TransferOffer offer,
-    int bytesReceived,
-    int filesCompleted,
-  ) async {
-    final profile = ProfileService().getProfile();
-    if (profile.callsign.isEmpty) return;
-
-    final progressData = TransferOffer.createProgressMessage(
-      offerId: offer.offerId,
-      bytesReceived: bytesReceived,
-      totalBytes: offer.totalBytes,
-      filesCompleted: filesCompleted,
-      currentFile: offer.currentFile,
-    );
-
-    final event = NostrEvent(
-      pubkey: profile.npub,
-      kind: 4,
-      content: jsonEncode(progressData),
-      tags: [
-        ['p', offer.senderCallsign],
-        ['t', 'transfer_progress'],
-      ],
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    );
-
-    final signedEvent = await SigningService().signEvent(event, profile);
-    if (signedEvent == null) return;
-
-    // Send asynchronously, don't wait
-    ConnectionManager().sendDM(
-      callsign: offer.senderCallsign,
-      signedEvent: signedEvent.toJson(),
-    );
-  }
-
-  /// Send completion notification to sender
+  /// Send completion notification to sender via direct API call
   Future<void> _sendCompletion(
     TransferOffer offer,
     bool success,
@@ -642,35 +674,39 @@ class P2PTransferService {
     int filesReceived, {
     String? error,
   }) async {
-    final profile = ProfileService().getProfile();
-    if (profile.callsign.isEmpty) return;
+    final endpoint = '/api/p2p/offer/${offer.offerId}/complete';
 
-    final completeData = TransferOffer.createCompleteMessage(
-      offerId: offer.offerId,
-      success: success,
-      bytesReceived: bytesReceived,
-      filesReceived: filesReceived,
-      error: error,
-    );
+    // Send completion with retry
+    const maxRetries = 3;
+    int retryCount = 0;
+    TransportResult? result;
 
-    final event = NostrEvent(
-      pubkey: profile.npub,
-      kind: 4,
-      content: jsonEncode(completeData),
-      tags: [
-        ['p', offer.senderCallsign],
-        ['t', 'transfer_complete'],
-      ],
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    );
+    while (retryCount <= maxRetries) {
+      result = await ConnectionManager().apiRequest(
+        callsign: offer.senderCallsign,
+        method: 'POST',
+        path: endpoint,
+        body: {
+          'success': success,
+          'bytesReceived': bytesReceived,
+          'filesReceived': filesReceived,
+          if (error != null) 'error': error,
+        },
+      );
 
-    final signedEvent = await SigningService().signEvent(event, profile);
-    if (signedEvent == null) return;
+      if (result.success) break;
 
-    await ConnectionManager().sendDM(
-      callsign: offer.senderCallsign,
-      signedEvent: signedEvent.toJson(),
-    );
+      retryCount++;
+      if (retryCount <= maxRetries) {
+        await Future.delayed(Duration(seconds: retryCount));
+      }
+    }
+
+    if (result == null || !result.success) {
+      LogService().log('P2PTransfer: Failed to send completion after $maxRetries retries: ${result?.error}');
+    } else {
+      LogService().log('P2PTransfer: Completion sent to ${offer.senderCallsign}');
+    }
   }
 
   // ============================================================

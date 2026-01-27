@@ -831,3 +831,24 @@ class TransferOfferStatusChangedEvent extends AppEvent {
   String toString() =>
       'TransferOfferStatusChangedEvent(id: $offerId, status: $status)';
 }
+
+/// P2P download progress event (receiver tracks locally)
+/// Fired as the receiver downloads files from sender
+class P2PDownloadProgressEvent extends AppEvent {
+  final String offerId;
+  final int bytesTransferred;
+  final int totalBytes;
+
+  P2PDownloadProgressEvent({
+    required this.offerId,
+    required this.bytesTransferred,
+    required this.totalBytes,
+  });
+
+  double get progressPercent =>
+      totalBytes > 0 ? (bytesTransferred / totalBytes * 100) : 0;
+
+  @override
+  String toString() =>
+      'P2PDownloadProgressEvent(id: $offerId, progress: ${progressPercent.toStringAsFixed(1)}%)';
+}

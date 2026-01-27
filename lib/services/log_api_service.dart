@@ -13455,6 +13455,35 @@ ul, ol { margin-left: 30px; padding: 0; }
     String urlPath,
     Map<String, String> headers,
   ) async {
+    // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
+    if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
+      return await _handleP2PReceiveOffer(request, headers);
+    }
+
+    // POST /api/p2p/offer/{offerId}/accept - Receiver accepted (called by remote instance)
+    final acceptMatch = RegExp(r'^api/p2p/offer/([^/]+)/accept$').firstMatch(urlPath);
+    if (acceptMatch != null && request.method == 'POST') {
+      return await _handleP2POfferAccepted(request, acceptMatch.group(1)!, headers);
+    }
+
+    // POST /api/p2p/offer/{offerId}/reject - Receiver rejected (called by remote instance)
+    final rejectMatch = RegExp(r'^api/p2p/offer/([^/]+)/reject$').firstMatch(urlPath);
+    if (rejectMatch != null && request.method == 'POST') {
+      return await _handleP2POfferRejected(request, rejectMatch.group(1)!, headers);
+    }
+
+    // POST /api/p2p/offer/{offerId}/progress - Transfer progress (called by remote instance)
+    final progressMatch = RegExp(r'^api/p2p/offer/([^/]+)/progress$').firstMatch(urlPath);
+    if (progressMatch != null && request.method == 'POST') {
+      return await _handleP2POfferProgress(request, progressMatch.group(1)!, headers);
+    }
+
+    // POST /api/p2p/offer/{offerId}/complete - Transfer completed (called by remote instance)
+    final completeMatch = RegExp(r'^api/p2p/offer/([^/]+)/complete$').firstMatch(urlPath);
+    if (completeMatch != null && request.method == 'POST') {
+      return await _handleP2POfferComplete(request, completeMatch.group(1)!, headers);
+    }
+
     // GET /api/p2p/offer/{offerId}/manifest - Get offer manifest
     final manifestMatch = RegExp(r'^api/p2p/offer/([^/]+)/manifest$').firstMatch(urlPath);
     if (manifestMatch != null && request.method == 'GET') {
@@ -13474,6 +13503,247 @@ ul, ol { margin-left: 30px; padding: 0; }
       }),
       headers: headers,
     );
+  }
+
+  /// Handle POST /api/p2p/offer - Receive offer from remote sender
+  Future<shelf.Response> _handleP2PReceiveOffer(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final bodyStr = await request.readAsString();
+      final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+      LogService().log('P2P API: Received offer from ${body['senderCallsign']}');
+
+      // Pass to P2P service to handle
+      final p2pService = P2PTransferService();
+      p2pService.handleIncomingOffer(body);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Offer received',
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('P2P API: Error receiving offer: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/p2p/offer/{offerId}/accept - Receiver accepted
+  Future<shelf.Response> _handleP2POfferAccepted(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Parse request body to get receiver callsign
+      String? receiverCallsign;
+      try {
+        final bodyStr = await request.readAsString();
+        if (bodyStr.isNotEmpty) {
+          final bodyJson = jsonDecode(bodyStr) as Map<String, dynamic>;
+          receiverCallsign = bodyJson['receiverCallsign'] as String?;
+        }
+      } catch (_) {
+        // Body parsing failed, continue without callsign
+      }
+
+      LogService().log('P2P API: Offer $offerId was accepted by receiver${receiverCallsign != null ? " ($receiverCallsign)" : ""}');
+
+      final p2pService = P2PTransferService();
+      final offer = p2pService.getOffer(offerId);
+
+      if (offer == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Offer not found'}),
+          headers: headers,
+        );
+      }
+
+      // Update offer status - receiver has accepted
+      p2pService.handleTransferResponse({
+        'type': 'transfer_response',
+        'offerId': offerId,
+        'accepted': true,
+        if (receiverCallsign != null) 'receiverCallsign': receiverCallsign,
+      });
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Acceptance acknowledged',
+          'offerId': offerId,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('P2P API: Error handling accept: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/p2p/offer/{offerId}/reject - Receiver rejected
+  Future<shelf.Response> _handleP2POfferRejected(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      LogService().log('P2P API: Offer $offerId was rejected by receiver');
+
+      final p2pService = P2PTransferService();
+      final offer = p2pService.getOffer(offerId);
+
+      if (offer == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Offer not found'}),
+          headers: headers,
+        );
+      }
+
+      // Update offer status - receiver rejected
+      p2pService.handleTransferResponse({
+        'type': 'transfer_response',
+        'offerId': offerId,
+        'accepted': false,
+      });
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Rejection acknowledged',
+          'offerId': offerId,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('P2P API: Error handling reject: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/p2p/offer/{offerId}/progress - Transfer progress
+  Future<shelf.Response> _handleP2POfferProgress(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Parse request body
+      final bodyStr = await request.readAsString();
+      Map<String, dynamic> body = {};
+      if (bodyStr.isNotEmpty) {
+        try {
+          body = jsonDecode(bodyStr) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+
+      final bytesReceived = body['bytesReceived'] as int? ?? 0;
+      final filesCompleted = body['filesCompleted'] as int? ?? 0;
+      final currentFile = body['currentFile'] as String?;
+
+      final p2pService = P2PTransferService();
+      final offer = p2pService.getOffer(offerId);
+
+      if (offer == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Offer not found'}),
+          headers: headers,
+        );
+      }
+
+      // Update offer with progress
+      p2pService.handleProgressUpdate({
+        'type': 'transfer_progress',
+        'offerId': offerId,
+        'bytesReceived': bytesReceived,
+        'filesCompleted': filesCompleted,
+        if (currentFile != null) 'currentFile': currentFile,
+      });
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true}),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/p2p/offer/{offerId}/complete - Transfer completed
+  Future<shelf.Response> _handleP2POfferComplete(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      // Parse request body
+      final bodyStr = await request.readAsString();
+      Map<String, dynamic> body = {};
+      if (bodyStr.isNotEmpty) {
+        try {
+          body = jsonDecode(bodyStr) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+
+      final success = body['success'] as bool? ?? false;
+      final bytesReceived = body['bytesReceived'] as int? ?? 0;
+      final filesReceived = body['filesReceived'] as int? ?? 0;
+      final error = body['error'] as String?;
+
+      LogService().log('P2P API: Offer $offerId completed - success: $success, files: $filesReceived, bytes: $bytesReceived');
+
+      final p2pService = P2PTransferService();
+      final offer = p2pService.getOffer(offerId);
+
+      if (offer == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Offer not found'}),
+          headers: headers,
+        );
+      }
+
+      // Update offer with completion status
+      p2pService.handleTransferComplete({
+        'type': 'transfer_complete',
+        'offerId': offerId,
+        'success': success,
+        'bytesReceived': bytesReceived,
+        'filesReceived': filesReceived,
+        if (error != null) 'error': error,
+      });
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'message': 'Completion acknowledged',
+          'offerId': offerId,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('P2P API: Error handling complete: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 
   /// Handle GET /api/p2p/offer/{offerId}/manifest - Get offer manifest
@@ -13586,9 +13856,12 @@ ul, ol { margin-left: 30px; padding: 0; }
         );
       }
 
-      // Read file and compute SHA1
-      final bytes = await file.readAsBytes();
-      final sha1Hash = sha1.convert(bytes).toString();
+      // Get file length and compute SHA1
+      final fileLength = await file.length();
+
+      // For SHA1, we need to read the file - but do it efficiently
+      final sha1Digest = await sha1.bind(file.openRead()).first;
+      final sha1Hash = sha1Digest.toString();
 
       // Determine content type
       final ext = path.extension(actualPath).toLowerCase();
@@ -13601,10 +13874,10 @@ ul, ol { margin-left: 30px; padding: 0; }
         final parts = rangeSpec.split('-');
         final start = int.tryParse(parts[0]) ?? 0;
         final end = parts.length > 1 && parts[1].isNotEmpty
-            ? int.tryParse(parts[1]) ?? bytes.length - 1
-            : bytes.length - 1;
+            ? int.tryParse(parts[1]) ?? fileLength - 1
+            : fileLength - 1;
 
-        if (start >= bytes.length || start > end) {
+        if (start >= fileLength || start > end) {
           return shelf.Response(
             416,
             body: jsonEncode({
@@ -13612,29 +13885,49 @@ ul, ol { margin-left: 30px; padding: 0; }
               'error': 'Range not satisfiable',
               'code': 'RANGE_NOT_SATISFIABLE',
             }),
-            headers: {...headers, 'Content-Range': 'bytes */${bytes.length}'},
+            headers: {...headers, 'Content-Range': 'bytes */$fileLength'},
           );
         }
 
-        final rangeBytes = bytes.sublist(start, end + 1);
+        // Stream the range with progress tracking
+        final rangeLength = end - start + 1;
+        final rangeStream = file.openRead(start, end + 1).transform(
+          StreamTransformer<List<int>, List<int>>.fromHandlers(
+            handleData: (chunk, sink) {
+              sink.add(chunk);
+              p2pService.updateUploadProgress(offerId, chunk.length);
+            },
+          ),
+        );
+
         return shelf.Response(
           206,
-          body: rangeBytes,
+          body: rangeStream,
           headers: {
             'Content-Type': contentType,
-            'Content-Length': rangeBytes.length.toString(),
-            'Content-Range': 'bytes $start-$end/${bytes.length}',
+            'Content-Length': rangeLength.toString(),
+            'Content-Range': 'bytes $start-$end/$fileLength',
             'X-SHA1': sha1Hash,
             'Access-Control-Allow-Origin': '*',
           },
         );
       }
 
+      // Stream file with progress tracking
+      final stream = file.openRead().transform(
+        StreamTransformer<List<int>, List<int>>.fromHandlers(
+          handleData: (chunk, sink) {
+            sink.add(chunk);
+            p2pService.updateUploadProgress(offerId, chunk.length);
+          },
+        ),
+      );
+
       return shelf.Response.ok(
-        bytes,
+        stream,
         headers: {
           'Content-Type': contentType,
-          'Content-Length': bytes.length.toString(),
+          'Content-Length': fileLength.toString(),
           'X-SHA1': sha1Hash,
           'Access-Control-Allow-Origin': '*',
         },

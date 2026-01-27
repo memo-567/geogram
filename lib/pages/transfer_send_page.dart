@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/devices_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
+import '../widgets/file_folder_picker.dart';
 import 'transfer_page.dart';
 import 'transfer_send_scan_page.dart';
 
@@ -102,6 +102,9 @@ class SendItem {
 class TransferSendPage extends StatefulWidget {
   const TransferSendPage({super.key});
 
+  /// Remember last used recipient (in RAM only, not persisted)
+  static String? _lastRecipientCallsign;
+
   @override
   State<TransferSendPage> createState() => _TransferSendPageState();
 }
@@ -135,6 +138,9 @@ class _TransferSendPageState extends State<TransferSendPage> {
         .toList();
     if (mounted) setState(() {});
 
+    // Restore last used recipient if available
+    _restoreLastRecipient();
+
     // Trigger device discovery (same as Devices UI does)
     _devicesService.refreshAllDevices();
 
@@ -147,8 +153,35 @@ class _TransferSendPageState extends State<TransferSendPage> {
               .where((d) => d.isOnline && d.connectionMethods.isNotEmpty)
               .toList();
         });
+        // Re-check last recipient in case device info became available
+        if (_recipient == null && TransferSendPage._lastRecipientCallsign != null) {
+          _restoreLastRecipient();
+        }
       }
     });
+  }
+
+  /// Restore last used recipient from static cache
+  void _restoreLastRecipient() {
+    final lastCallsign = TransferSendPage._lastRecipientCallsign;
+    if (lastCallsign == null || lastCallsign.isEmpty) return;
+
+    // Try to find matching device for richer recipient info
+    final matchingDevice = _reachableDevices.firstWhere(
+      (d) => d.callsign.toUpperCase() == lastCallsign.toUpperCase(),
+      orElse: () => RemoteDevice(callsign: '', name: '', collections: []),
+    );
+
+    if (matchingDevice.callsign.isNotEmpty) {
+      _recipient = Recipient.fromRemoteDevice(matchingDevice);
+      _callsignController.text = _recipient!.displayLabel;
+    } else {
+      // Use plain callsign if device not found
+      _recipient = Recipient.fromCallsign(lastCallsign);
+      _callsignController.text = lastCallsign;
+    }
+
+    if (mounted) setState(() {});
   }
 
   @override
@@ -227,80 +260,60 @@ class _TransferSendPageState extends State<TransferSendPage> {
     }
   }
 
-  Future<void> _addFiles() async {
+  Future<void> _addItems() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.any,
+      final paths = await FileFolderPicker.show(
+        context,
+        title: 'Select files or folders',
+        allowMultiSelect: true,
       );
 
-      if (result == null || result.files.isEmpty) return;
-
-      final newItems = <SendItem>[];
-      for (final file in result.files) {
-        if (file.path == null) continue;
-
-        // Check if already added
-        if (_items.any((item) => item.path == file.path)) continue;
-
-        newItems.add(SendItem(
-          path: file.path!,
-          name: file.name,
-          isDirectory: false,
-          sizeBytes: file.size,
-        ));
-      }
-
-      if (newItems.isNotEmpty) {
-        setState(() => _items.addAll(newItems));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error selecting files: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _addFolder() async {
-    try {
-      final result = await FilePicker.platform.getDirectoryPath();
-
-      if (result == null) return;
-
-      // Check if already added
-      if (_items.any((item) => item.path == result)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Folder already added')),
-          );
-        }
-        return;
-      }
+      if (paths == null || paths.isEmpty) return;
 
       setState(() => _isCalculatingSize = true);
 
-      // Calculate folder size
-      final size = await _calculateDirectorySize(result);
-      final name = result.split(Platform.pathSeparator).last;
+      for (final itemPath in paths) {
+        // Check if already added
+        if (_items.any((item) => item.path == itemPath)) continue;
 
-      if (mounted) {
-        setState(() {
-          _items.add(SendItem(
-            path: result,
+        // Check if it's a directory
+        final isDir = await FileSystemEntity.isDirectory(itemPath);
+        final name = itemPath.split(Platform.pathSeparator).last;
+
+        SendItem newItem;
+        if (isDir) {
+          // Calculate folder size
+          final size = await _calculateDirectorySize(itemPath);
+          newItem = SendItem(
+            path: itemPath,
             name: name,
             isDirectory: true,
             sizeBytes: size,
-          ));
-          _isCalculatingSize = false;
-        });
+          );
+        } else {
+          final file = File(itemPath);
+          final size = await file.length();
+          newItem = SendItem(
+            path: itemPath,
+            name: name,
+            isDirectory: false,
+            sizeBytes: size,
+          );
+        }
+
+        if (mounted) {
+          setState(() => _items.add(newItem));
+        }
+      }
+
+      if (mounted) {
+        setState(() => _isCalculatingSize = false);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isCalculatingSize = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error selecting folder: $e')),
+          SnackBar(content: Text('Error selecting items: $e')),
         );
       }
     }
@@ -347,6 +360,9 @@ class _TransferSendPageState extends State<TransferSendPage> {
       );
 
       if (offer != null && mounted) {
+        // Remember recipient for next send operation
+        TransferSendPage._lastRecipientCallsign = _recipient!.callsign;
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -400,33 +416,22 @@ class _TransferSendPageState extends State<TransferSendPage> {
           // Recipient section
           _buildRecipientSection(theme),
 
-          // Add buttons
+          // Add button
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _addFiles,
-                    icon: const Icon(Icons.insert_drive_file),
-                    label: const Text('Add Files'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _isCalculatingSize ? null : _addFolder,
-                    icon: _isCalculatingSize
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.folder),
-                    label: const Text('Add Folder'),
-                  ),
-                ),
-              ],
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isCalculatingSize ? null : _addItems,
+                icon: _isCalculatingSize
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.add),
+                label: const Text('Add'),
+              ),
             ),
           ),
           const SizedBox(height: 8),
