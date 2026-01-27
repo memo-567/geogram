@@ -2394,6 +2394,8 @@ Triggers a debug action.
 | `p2p_accept` | Accept an incoming transfer offer | `offer_id`: Offer ID to accept (required), `destination`: Absolute path to destination folder (required) |
 | `p2p_reject` | Reject an incoming transfer offer | `offer_id`: Offer ID to reject (required) |
 | `p2p_status` | Get status of a transfer offer | `offer_id`: Offer ID to check (required) |
+| `list_devices` | List all known devices with online status | None |
+| `add_device` | Add a device by callsign and URL | `callsign` (required): Device callsign, `url` (required): Device HTTP API URL. Fetches device nickname from its status API |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
@@ -2558,6 +2560,28 @@ Sample `p2p_status` response:
   "current_file": "docs/readme.txt"
 }
 ```
+
+**Device management examples:**
+
+- Add a device by callsign and URL (fetches nickname automatically):
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"add_device","callsign":"X1BOB","url":"http://192.168.1.50:3456"}'
+```
+
+Sample `add_device` response:
+```json
+{
+  "success": true,
+  "message": "Device added: X1BOB at http://192.168.1.50:3456",
+  "callsign": "X1BOB",
+  "url": "http://192.168.1.50:3456",
+  "nickname": "Bob's Device"
+}
+```
+
+The `add_device` action fetches the device's `/api/status` endpoint to retrieve its nickname, making the device identifiable in the UI dropdown. If the device is unreachable, `nickname` will be `null`.
 
 **Response - Success (200 OK):**
 ```json

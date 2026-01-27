@@ -4,7 +4,9 @@
  */
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import '../models/collection.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/usb_aoa_transport.dart';
@@ -162,6 +164,9 @@ enum DebugAction {
 
   /// P2P Transfer: Get transfer status
   p2pStatus,
+
+  /// List all known devices with online status
+  listDevices,
 }
 
 /// Toast message to be displayed
@@ -888,6 +893,11 @@ class DebugController {
           'offer_id': 'Offer ID to check (required)',
         },
       },
+      {
+        'action': 'list_devices',
+        'description': 'List all known devices with online status',
+        'params': {},
+      },
     ];
   }
 
@@ -1113,14 +1123,45 @@ class DebugController {
         if (url == null || url.isEmpty) {
           return {'success': false, 'error': 'Missing url parameter'};
         }
-        // Call DevicesService directly to add the device
-        DevicesService().addDevice(callsign, url: url);
+        // Try to fetch device's nickname from its status API
+        String? nickname;
+        try {
+          final statusUrl = '$url/api/status';
+          final response = await http.get(Uri.parse(statusUrl)).timeout(
+            const Duration(seconds: 2),
+          );
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            nickname = data['nickname'] as String?;
+          }
+        } catch (_) {
+          // Ignore errors fetching status
+        }
+        // Call DevicesService directly to add the device as online
+        final devicesService = DevicesService();
+        await devicesService.addDevice(callsign, url: url, name: nickname, isOnline: true);
+        // Also add the appropriate connection method based on URL
+        final device = devicesService.getDevice(callsign);
+        if (device != null) {
+          // Determine connection method from URL
+          final connectionMethod = url.contains('localhost') ||
+                  url.contains('127.0.0.1')
+              ? 'wifi_local'
+              : 'lan';
+          if (!device.connectionMethods.contains(connectionMethod)) {
+            device.connectionMethods = [
+              ...device.connectionMethods,
+              connectionMethod,
+            ];
+          }
+        }
         triggerAddDevice(callsign: callsign, url: url);
         return {
           'success': true,
           'message': 'Device added: $callsign at $url',
           'callsign': callsign,
           'url': url,
+          'nickname': nickname,
         };
 
       case 'open_station_chat':
@@ -1228,6 +1269,23 @@ class DebugController {
           'success': true,
           'message': 'Opening Flasher on Monitor tab',
           'device_path': devicePath,
+        };
+
+      case 'list_devices':
+        final devicesService = DevicesService();
+        final devices = devicesService.getAllDevices();
+        final deviceList = devices.map((d) => <String, dynamic>{
+          'callsign': d.callsign,
+          'nickname': d.nickname,
+          'isOnline': d.isOnline,
+          'connectionMethods': d.connectionMethods,
+          'url': d.url,
+          'npub': d.npub,
+        }).toList();
+        return {
+          'success': true,
+          'count': deviceList.length,
+          'devices': deviceList,
         };
 
       default:

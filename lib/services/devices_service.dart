@@ -416,6 +416,9 @@ class DevicesService {
       case DebugAction.p2pStatus:
         // P2P transfer actions are handled directly by LogApiService
         break;
+      case DebugAction.listDevices:
+        // Handled directly by DebugController.executeAction()
+        break;
     }
   }
 
@@ -590,6 +593,9 @@ class DevicesService {
       // Initialize BLE service (starts monitoring Bluetooth adapter state)
       await _bleService!.initialize();
 
+      // Clear stale BLE discoveries from previous session
+      _bleService!.removeStaleDevices(maxAge: Duration.zero);
+
       // Subscribe to BLE device discoveries
       _bleSubscription = _bleService!.devicesStream.listen((bleDevices) {
         _handleBLEDevices(bleDevices);
@@ -704,6 +710,15 @@ class DevicesService {
             device.connectionMethods.where((m) => m != 'usb').toList();
         LogService()
             .log('DevicesService: Removed USB from ${device.callsign}');
+
+        // Set offline if no other viable connection methods remain
+        if (device.connectionMethods.isEmpty) {
+          device.isOnline = false;
+          LogService().log(
+            'DevicesService: ${device.callsign} now offline (no connections)',
+          );
+        }
+
         changed = true;
       }
     }
@@ -1008,15 +1023,18 @@ class DevicesService {
               statusCache?['longitude'] as double? ?? matchingRelay?.longitude,
           preferredColor: statusCache?['color'] as String?,
           platform: statusCache?['platform'] as String?,
-          // When loading from cache, device is offline - exclude 'internet' and BLE tags
-          // BLE tags are session-based and should only come from active discovery
+          // When loading from cache, device is offline - exclude session-based tags
+          // internet, BLE, LAN, and USB tags are session-based and should only come from active discovery
           connectionMethods: statusCache?['connectionMethods'] != null
               ? List<String>.from(statusCache!['connectionMethods'] as List)
                     .where(
                       (m) =>
                           m != 'internet' &&
                           m != 'bluetooth' &&
-                          m != 'bluetooth_plus',
+                          m != 'bluetooth_plus' &&
+                          m != 'usb' &&
+                          m != 'wifi_local' &&
+                          m != 'lan',
                     )
                     .toList()
               : [],
@@ -1911,7 +1929,10 @@ class DevicesService {
     device.connectionMethods = device.connectionMethods
         .where((m) => m != 'wifi_local' && m != 'lan')
         .toList();
-    // Don't set isOnline = false here - let the caller try other methods
+    // If device has no remaining connection methods, mark offline
+    if (device.connectionMethods.isEmpty) {
+      device.isOnline = false;
+    }
     device.lastChecked = DateTime.now();
     _notifyListeners();
     return false;
@@ -2238,6 +2259,10 @@ class DevicesService {
         device.url = localUrl;
         device.isOnline = true;
         device.lastSeen = DateTime.now();
+        // Update nickname if available from discovery
+        if (result.name != null && result.name!.isNotEmpty) {
+          device.nickname = result.name;
+        }
 
         LogService().log(
           'DevicesService: Updated ${result.type} $normalizedCallsign with local network ($localUrl)',
@@ -2680,6 +2705,7 @@ class DevicesService {
       _devices[normalizedCallsign] = RemoteDevice(
         callsign: normalizedCallsign,
         name: name ?? normalizedCallsign,
+        nickname: name,
         url: url,
         isOnline: isOnline,
         hasCachedData: false,
@@ -2690,7 +2716,10 @@ class DevicesService {
       // Device exists, update it
       final device = _devices[normalizedCallsign]!;
       if (url != null) device.url = url;
-      if (name != null) device.name = name;
+      if (name != null) {
+        device.name = name;
+        device.nickname = name;
+      }
       if (isOnline) {
         device.isOnline = true;
         device.lastSeen = DateTime.now();

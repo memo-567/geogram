@@ -127,18 +127,25 @@ class _TransferSendPageState extends State<TransferSendPage> {
   }
 
   Future<void> _initDevicesService() async {
-    // Load initial devices
+    // Load initial devices from cache
+    // Filter to only devices with actual connection methods (excludes ghost devices)
     _reachableDevices = _devicesService
         .getAllDevices()
-        .where((d) => d.isOnline)
+        .where((d) => d.isOnline && d.connectionMethods.isNotEmpty)
         .toList();
     if (mounted) setState(() {});
 
+    // Trigger device discovery (same as Devices UI does)
+    _devicesService.refreshAllDevices();
+
     // Subscribe to device updates
+    // Filter to only devices with actual connection methods (excludes ghost devices)
     _devicesSubscription = _devicesService.devicesStream.listen((devices) {
       if (mounted) {
         setState(() {
-          _reachableDevices = devices.where((d) => d.isOnline).toList();
+          _reachableDevices = devices
+              .where((d) => d.isOnline && d.connectionMethods.isNotEmpty)
+              .toList();
         });
       }
     });

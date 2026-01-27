@@ -126,17 +126,34 @@ fi
 
 # Build the app with latest code
 BINARY_PATH="$PROJECT_DIR/build/linux/x64/release/bundle/geogram"
+LIBAPP_PATH="$PROJECT_DIR/build/linux/x64/release/bundle/lib/libapp.so"
+
+# Check if rebuild is needed by comparing source files to binary
+needs_rebuild() {
+    # Always rebuild if binary doesn't exist
+    if [ ! -f "$BINARY_PATH" ] || [ ! -f "$LIBAPP_PATH" ]; then
+        return 0
+    fi
+
+    # Check if any Dart source file is newer than libapp.so (the compiled Dart code)
+    NEWEST_SOURCE=$(find "$PROJECT_DIR/lib" -name "*.dart" -newer "$LIBAPP_PATH" 2>/dev/null | head -1)
+    if [ -n "$NEWEST_SOURCE" ]; then
+        return 0
+    fi
+
+    return 1
+}
 
 if [ "$SKIP_BUILD" = true ]; then
-    echo -e "${YELLOW}Skipping build (using existing binary)...${NC}"
+    echo -e "${YELLOW}Skipping build (--skip-build specified)...${NC}"
     if [ ! -f "$BINARY_PATH" ]; then
         echo -e "${RED}✗ Error: Binary not found at $BINARY_PATH${NC}"
         echo -e "${YELLOW}Run without --skip-build to build the app${NC}"
         exit 1
     fi
     echo -e "${GREEN}✓ Using existing binary${NC}"
-else
-    echo -e "${YELLOW}Building Geogram with latest code...${NC}"
+elif needs_rebuild; then
+    echo -e "${YELLOW}Source files changed - rebuilding Geogram...${NC}"
     cd "$PROJECT_DIR"
     $FLUTTER_CMD build linux --release
     if [ $? -eq 0 ]; then
@@ -145,6 +162,8 @@ else
         echo -e "${RED}✗ Build failed${NC}"
         exit 1
     fi
+else
+    echo -e "${GREEN}✓ Binary is up-to-date, skipping build${NC}"
 fi
 echo ""
 
@@ -210,16 +229,63 @@ echo "  PID: $PID_B"
 echo ""
 echo -e "${GREEN}Both instances started!${NC}"
 echo ""
+
+# Wait for APIs to be ready and register devices with each other
+echo -e "${YELLOW}Waiting for APIs to be ready...${NC}"
+for i in {1..30}; do
+    STATUS_A=$(curl -s "http://localhost:$PORT_A/api/status" 2>/dev/null || echo "{}")
+    STATUS_B=$(curl -s "http://localhost:$PORT_B/api/status" 2>/dev/null || echo "{}")
+
+    if echo "$STATUS_A" | grep -q "callsign" && echo "$STATUS_B" | grep -q "callsign"; then
+        break
+    fi
+    sleep 1
+done
+
+CALLSIGN_A=$(echo "$STATUS_A" | grep -o '"callsign":"[^"]*"' | cut -d'"' -f4)
+CALLSIGN_B=$(echo "$STATUS_B" | grep -o '"callsign":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$CALLSIGN_A" ] && [ -n "$CALLSIGN_B" ]; then
+    echo -e "${GREEN}✓ Instance A callsign: $CALLSIGN_A${NC}"
+    echo -e "${GREEN}✓ Instance B callsign: $CALLSIGN_B${NC}"
+
+    # Trigger local network scans
+    echo -e "${YELLOW}Triggering device discovery...${NC}"
+    curl -s -X POST "http://localhost:$PORT_A/api/debug" \
+        -H "Content-Type: application/json" \
+        -d '{"action":"local_scan"}' > /dev/null 2>&1
+    curl -s -X POST "http://localhost:$PORT_B/api/debug" \
+        -H "Content-Type: application/json" \
+        -d '{"action":"local_scan"}' > /dev/null 2>&1
+
+    # Manually register devices with each other
+    echo -e "${YELLOW}Registering devices with each other...${NC}"
+    curl -s -X POST "http://localhost:$PORT_A/api/debug" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"add_device\",\"callsign\":\"$CALLSIGN_B\",\"url\":\"http://localhost:$PORT_B\"}" > /dev/null 2>&1
+    curl -s -X POST "http://localhost:$PORT_B/api/debug" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"add_device\",\"callsign\":\"$CALLSIGN_A\",\"url\":\"http://localhost:$PORT_A\"}" > /dev/null 2>&1
+
+    sleep 1
+    echo -e "${GREEN}✓ Devices registered - they should now see each other${NC}"
+else
+    echo -e "${RED}Warning: Could not get callsigns - manual discovery may be needed${NC}"
+fi
+
+echo ""
 echo "=============================================="
 echo "Instance Information"
 echo "=============================================="
 echo ""
 echo -e "${CYAN}Instance A ($NICKNAME_A):${NC}"
+echo "  Callsign: $CALLSIGN_A"
 echo "  API: http://localhost:$PORT_A/api/status"
 echo "  Data: $TEMP_DIR_A"
 echo "  PID: $PID_A"
 echo ""
 echo -e "${CYAN}Instance B ($NICKNAME_B):${NC}"
+echo "  Callsign: $CALLSIGN_B"
 echo "  API: http://localhost:$PORT_B/api/status"
 echo "  Data: $TEMP_DIR_B"
 echo "  PID: $PID_B"
