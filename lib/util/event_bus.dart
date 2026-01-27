@@ -716,3 +716,118 @@ class PositionUpdatedEvent extends AppEvent {
   String toString() =>
       'PositionUpdatedEvent(lat: $latitude, lon: $longitude, accuracy: ${accuracy.toStringAsFixed(1)}m, source: $source)';
 }
+
+// ============================================================
+// P2P Transfer Events
+// ============================================================
+
+/// P2P transfer offer received from another device
+/// Fired when an incoming transfer offer arrives
+class TransferOfferReceivedEvent extends AppEvent {
+  final String offerId;
+  final String senderCallsign;
+  final String? senderNpub;
+  final int totalFiles;
+  final int totalBytes;
+  final DateTime expiresAt;
+  final List<Map<String, dynamic>> files;
+
+  TransferOfferReceivedEvent({
+    required this.offerId,
+    required this.senderCallsign,
+    this.senderNpub,
+    required this.totalFiles,
+    required this.totalBytes,
+    required this.expiresAt,
+    required this.files,
+  });
+
+  @override
+  String toString() =>
+      'TransferOfferReceivedEvent(id: $offerId, from: $senderCallsign, files: $totalFiles)';
+}
+
+/// P2P transfer offer response received (sender receives this)
+/// Fired when the receiver accepts or rejects an offer
+class TransferOfferResponseEvent extends AppEvent {
+  final String offerId;
+  final bool accepted;
+  final String receiverCallsign;
+
+  TransferOfferResponseEvent({
+    required this.offerId,
+    required this.accepted,
+    required this.receiverCallsign,
+  });
+
+  @override
+  String toString() =>
+      'TransferOfferResponseEvent(id: $offerId, accepted: $accepted, by: $receiverCallsign)';
+}
+
+/// P2P upload progress event (sender receives this from receiver)
+/// Fired as the receiver downloads files
+class P2PUploadProgressEvent extends AppEvent {
+  final String offerId;
+  final int bytesTransferred;
+  final int totalBytes;
+  final int filesCompleted;
+  final int totalFiles;
+  final String? currentFile;
+
+  P2PUploadProgressEvent({
+    required this.offerId,
+    required this.bytesTransferred,
+    required this.totalBytes,
+    required this.filesCompleted,
+    required this.totalFiles,
+    this.currentFile,
+  });
+
+  double get progressPercent =>
+      totalBytes > 0 ? (bytesTransferred / totalBytes * 100) : 0;
+
+  @override
+  String toString() =>
+      'P2PUploadProgressEvent(id: $offerId, progress: ${progressPercent.toStringAsFixed(1)}%)';
+}
+
+/// P2P transfer complete event (sender receives this from receiver)
+/// Fired when the receiver finishes downloading all files
+class P2PTransferCompleteEvent extends AppEvent {
+  final String offerId;
+  final bool success;
+  final int bytesReceived;
+  final int filesReceived;
+  final String? error;
+
+  P2PTransferCompleteEvent({
+    required this.offerId,
+    required this.success,
+    required this.bytesReceived,
+    required this.filesReceived,
+    this.error,
+  });
+
+  @override
+  String toString() =>
+      'P2PTransferCompleteEvent(id: $offerId, success: $success, files: $filesReceived)';
+}
+
+/// P2P offer status changed event
+/// Fired when an offer's status changes (pending -> accepted, etc.)
+class TransferOfferStatusChangedEvent extends AppEvent {
+  final String offerId;
+  final String status;
+  final String? error;
+
+  TransferOfferStatusChangedEvent({
+    required this.offerId,
+    required this.status,
+    this.error,
+  });
+
+  @override
+  String toString() =>
+      'TransferOfferStatusChangedEvent(id: $offerId, status: $status)';
+}

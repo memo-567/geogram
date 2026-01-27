@@ -1,15 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
+import '../transfer/models/callsign_transfer_group.dart';
 import '../transfer/models/transfer_metrics.dart';
 import '../transfer/models/transfer_models.dart';
+import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_metrics_service.dart';
 import '../transfer/services/transfer_service.dart';
+import '../transfer/services/p2p_transfer_service.dart';
 import '../util/event_bus.dart';
 import '../widgets/transfer/transfer_activity_chart.dart';
-import '../widgets/transfer/transfer_list_item.dart';
+import '../widgets/transfer/transfer_callsign_group_tile.dart';
 import '../widgets/transfer/transfer_metrics_card.dart';
+import '../widgets/transfer/incoming_transfer_dialog.dart';
+import 'transfer_receive_page.dart';
+import 'transfer_send_page.dart';
 
 /// Main Transfer Center page
 ///
@@ -50,6 +57,14 @@ class _TransferPageState extends State<TransferPage>
   EventSubscription<TransferCompletedEvent>? _completedSubscription;
   EventSubscription<TransferFailedEvent>? _failedSubscription;
 
+  // P2P transfer state
+  final P2PTransferService _p2pService = P2PTransferService();
+  List<TransferOffer> _outgoingOffers = [];
+  List<TransferOffer> _incomingOffers = [];
+  EventSubscription<TransferOfferReceivedEvent>? _offerReceivedSubscription;
+  EventSubscription<TransferOfferStatusChangedEvent>? _offerStatusSubscription;
+  EventSubscription<P2PUploadProgressEvent>? _p2pProgressSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -83,7 +98,21 @@ class _TransferPageState extends State<TransferPage>
         _refreshData();
       });
 
+      // P2P offer subscriptions
+      _offerReceivedSubscription = _eventBus.on<TransferOfferReceivedEvent>((event) {
+        _handleIncomingOffer(event);
+      });
+
+      _offerStatusSubscription = _eventBus.on<TransferOfferStatusChangedEvent>((event) {
+        _refreshP2POffers();
+      });
+
+      _p2pProgressSubscription = _eventBus.on<P2PUploadProgressEvent>((event) {
+        _refreshP2POffers();
+      });
+
       await _refreshData();
+      _refreshP2POffers();
 
       if (mounted) {
         setState(() => _isLoading = false);
@@ -133,7 +162,34 @@ class _TransferPageState extends State<TransferPage>
     _progressSubscription?.cancel();
     _completedSubscription?.cancel();
     _failedSubscription?.cancel();
+    _offerReceivedSubscription?.cancel();
+    _offerStatusSubscription?.cancel();
+    _p2pProgressSubscription?.cancel();
     super.dispose();
+  }
+
+  /// Refresh P2P offers
+  void _refreshP2POffers() {
+    if (mounted) {
+      setState(() {
+        _outgoingOffers = _p2pService.outgoingOffers;
+        _incomingOffers = _p2pService.incomingOffers;
+      });
+    }
+  }
+
+  /// Handle incoming transfer offer - show dialog
+  void _handleIncomingOffer(TransferOfferReceivedEvent event) async {
+    _refreshP2POffers();
+
+    final offer = _p2pService.getOffer(event.offerId);
+    if (offer == null) return;
+
+    // Show incoming offer dialog
+    await IncomingTransferDialog.show(context, offer);
+
+    // Dialog handles accept/reject, just refresh
+    _refreshP2POffers();
   }
 
   @override
@@ -238,6 +294,40 @@ class _TransferPageState extends State<TransferPage>
           _buildStatsTab(),
         ],
       ),
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Send button
+          FloatingActionButton(
+            heroTag: 'transfer_send',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TransferSendPage()),
+            ),
+            tooltip: 'Send',
+            child: SvgPicture.asset(
+              'assets/icon_file_send.svg',
+              width: 28,
+              height: 28,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Receive button
+          FloatingActionButton(
+            heroTag: 'transfer_receive',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TransferReceivePage()),
+            ),
+            tooltip: 'Receive',
+            child: SvgPicture.asset(
+              'assets/icon_file_receive.svg',
+              width: 28,
+              height: 28,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -301,7 +391,19 @@ class _TransferPageState extends State<TransferPage>
       ..._queuedTransfers,
     ];
 
-    if (combined.isEmpty) {
+    // Get active P2P offers (pending or transferring)
+    final activeOutgoing = _outgoingOffers.where((o) =>
+      o.status == TransferOfferStatus.pending ||
+      o.status == TransferOfferStatus.accepted ||
+      o.status == TransferOfferStatus.transferring
+    ).toList();
+
+    final activeIncoming = _incomingOffers.where((o) =>
+      o.status == TransferOfferStatus.accepted ||
+      o.status == TransferOfferStatus.transferring
+    ).toList();
+
+    if (combined.isEmpty && activeOutgoing.isEmpty && activeIncoming.isEmpty) {
       return _buildEmptyState(
         'No transfers in progress',
         'Active and queued transfers will appear here',
@@ -309,34 +411,175 @@ class _TransferPageState extends State<TransferPage>
       );
     }
 
+    final groups = groupTransfersByCallsign(combined);
+
     return RefreshIndicator(
-      onRefresh: _refreshData,
-      child: ListView.builder(
+      onRefresh: () async {
+        await _refreshData();
+        _refreshP2POffers();
+      },
+      child: ListView(
         padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: combined.length,
-        itemBuilder: (context, index) {
-          final transfer = combined[index];
-          final isSelected = _selectedIds.contains(transfer.id);
-          return TransferListItem(
-            transfer: transfer,
+        children: [
+          // P2P Outgoing Offers Section
+          if (activeOutgoing.isNotEmpty) ...[
+            _buildSectionHeader('Pending Offers (Sent)'),
+            ...activeOutgoing.map((offer) => _buildOfferTile(offer, isOutgoing: true)),
+            const SizedBox(height: 8),
+          ],
+
+          // P2P Incoming Offers Section (active downloads)
+          if (activeIncoming.isNotEmpty) ...[
+            _buildSectionHeader('Receiving'),
+            ...activeIncoming.map((offer) => _buildOfferTile(offer, isOutgoing: false)),
+            const SizedBox(height: 8),
+          ],
+
+          // Regular transfer groups
+          ...groups.map((group) => TransferCallsignGroupTile(
+            group: group,
             selectionMode: _selectionMode,
-            selected: isSelected,
-            onSelected: _selectionMode
-                ? (selected) => _toggleSelection(transfer.id, selected ?? false)
+            selectedIds: _selectedIds,
+            onTransferSelected: _selectionMode ? _toggleSelection : null,
+            onTransferTap: _showTransferDetails,
+            onPause: !_selectionMode
+                ? (t) => _service.pause(t.id)
                 : null,
-            onTap: _selectionMode
-                ? () => _toggleSelection(transfer.id, !isSelected)
-                : () => _showTransferDetails(transfer),
-            onPause: !_selectionMode && transfer.canPause
-                ? () => _service.pause(transfer.id)
-                : null,
-            onCancel: !_selectionMode && transfer.canCancel
-                ? () => _confirmCancel(transfer)
-                : null,
-          );
-        },
+            onCancel: !_selectionMode ? _confirmCancel : null,
+            initiallyExpanded: groups.length == 1,
+          )),
+        ],
       ),
     );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Text(
+        title,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: theme.colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOfferTile(TransferOffer offer, {required bool isOutgoing}) {
+    final theme = Theme.of(context);
+
+    String statusText;
+    Color statusColor;
+    IconData statusIcon;
+
+    switch (offer.status) {
+      case TransferOfferStatus.pending:
+        statusText = 'Waiting for acceptance';
+        statusColor = Colors.orange;
+        statusIcon = Icons.hourglass_empty;
+        break;
+      case TransferOfferStatus.accepted:
+        statusText = isOutgoing ? 'Accepted, preparing...' : 'Starting download...';
+        statusColor = Colors.blue;
+        statusIcon = Icons.check_circle;
+        break;
+      case TransferOfferStatus.transferring:
+        final percent = offer.progressPercent.toStringAsFixed(0);
+        statusText = isOutgoing
+            ? 'Uploading $percent%'
+            : 'Downloading $percent%';
+        statusColor = Colors.green;
+        statusIcon = isOutgoing ? Icons.upload : Icons.download;
+        break;
+      default:
+        statusText = offer.status.name;
+        statusColor = Colors.grey;
+        statusIcon = Icons.info;
+    }
+
+    final otherCallsign = isOutgoing
+        ? offer.receiverCallsign ?? 'Unknown'
+        : offer.senderCallsign;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: statusColor.withValues(alpha: 0.2),
+          child: Icon(statusIcon, color: statusColor, size: 20),
+        ),
+        title: Text(
+          '${isOutgoing ? "To" : "From"}: $otherCallsign',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text(
+              '${offer.totalFiles} files, ${_formatBytes(offer.totalBytes)}',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                Icon(statusIcon, size: 12, color: statusColor),
+                const SizedBox(width: 4),
+                Text(
+                  statusText,
+                  style: theme.textTheme.bodySmall?.copyWith(color: statusColor),
+                ),
+              ],
+            ),
+            if (offer.status == TransferOfferStatus.transferring) ...[
+              const SizedBox(height: 4),
+              LinearProgressIndicator(
+                value: offer.progressPercent / 100,
+                backgroundColor: statusColor.withValues(alpha: 0.2),
+                valueColor: AlwaysStoppedAnimation(statusColor),
+              ),
+            ],
+          ],
+        ),
+        trailing: isOutgoing && offer.status == TransferOfferStatus.pending
+            ? IconButton(
+                icon: const Icon(Icons.cancel),
+                onPressed: () => _cancelOffer(offer),
+                tooltip: 'Cancel',
+              )
+            : null,
+        isThreeLine: true,
+      ),
+    );
+  }
+
+  void _cancelOffer(TransferOffer offer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel Offer'),
+        content: Text('Cancel transfer to ${offer.receiverCallsign}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _p2pService.cancelOffer(offer.offerId);
+      _refreshP2POffers();
+    }
   }
 
   Widget _buildPreviousTab() {
@@ -353,6 +596,8 @@ class _TransferPageState extends State<TransferPage>
         Icons.history,
       );
     }
+
+    final groups = groupTransfersByCallsign(allPrevious);
 
     return RefreshIndicator(
       onRefresh: _refreshData,
@@ -374,19 +619,19 @@ class _TransferPageState extends State<TransferPage>
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.only(top: 8, bottom: 80),
-              itemCount: allPrevious.length,
+              itemCount: groups.length,
               itemBuilder: (context, index) {
-                final transfer = allPrevious[index];
-                final isFailed = transfer.status == TransferStatus.failed;
-                return TransferListItem(
-                  transfer: transfer,
-                  onTap: () => _showTransferDetails(transfer),
-                  onRetry: isFailed && transfer.canRetry
-                      ? () async {
-                          await _service.retry(transfer.id);
-                          _refreshData();
-                        }
-                      : null,
+                final group = groups[index];
+                return TransferCallsignGroupTile(
+                  group: group,
+                  onTransferTap: _showTransferDetails,
+                  onRetry: (t) async {
+                    if (t.canRetry) {
+                      await _service.retry(t.id);
+                      _refreshData();
+                    }
+                  },
+                  initiallyExpanded: groups.length == 1,
                 );
               },
             ),

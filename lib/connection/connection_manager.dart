@@ -8,6 +8,7 @@ import 'package:async/async.dart';
 import 'package:http/http.dart' as http;
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
+import '../transfer/services/p2p_transfer_service.dart';
 import 'transport.dart';
 import 'transport_message.dart';
 import 'routing_strategy.dart';
@@ -536,6 +537,7 @@ class ConnectionManager {
   ///
   /// Forwards the signed event to the local chat API for processing.
   /// The sender's callsign becomes the room ID (DM conversation identifier).
+  /// Also handles P2P transfer messages (offer, response, progress, complete).
   Future<void> _handleDirectMessage(TransportMessage message) async {
     final senderCallsign = message.targetCallsign;
     LogService().log('ConnectionManager: Received DM from $senderCallsign');
@@ -543,6 +545,22 @@ class ConnectionManager {
     if (message.signedEvent == null) {
       LogService().log('ConnectionManager: DM has no signed event, ignoring');
       return;
+    }
+
+    // Check if this is a P2P transfer message
+    try {
+      final content = message.signedEvent!['content'] as String?;
+      if (content != null) {
+        final decoded = jsonDecode(content) as Map<String, dynamic>;
+        final messageType = decoded['type'] as String?;
+
+        if (messageType != null) {
+          final handled = await _handleP2PTransferMessage(messageType, decoded);
+          if (handled) return;
+        }
+      }
+    } catch (_) {
+      // Not a P2P message, continue with normal DM handling
     }
 
     try {
@@ -573,6 +591,42 @@ class ConnectionManager {
       }
     } catch (e) {
       LogService().log('ConnectionManager: Error forwarding DM: $e');
+    }
+  }
+
+  /// Handle P2P transfer messages
+  ///
+  /// Routes transfer_offer, transfer_response, transfer_progress, and
+  /// transfer_complete messages to the P2PTransferService.
+  Future<bool> _handleP2PTransferMessage(
+    String messageType,
+    Map<String, dynamic> data,
+  ) async {
+    final p2pService = P2PTransferService();
+
+    switch (messageType) {
+      case 'transfer_offer':
+        LogService().log('ConnectionManager: Routing transfer_offer to P2PTransferService');
+        p2pService.handleIncomingOffer(data);
+        return true;
+
+      case 'transfer_response':
+        LogService().log('ConnectionManager: Routing transfer_response to P2PTransferService');
+        p2pService.handleTransferResponse(data);
+        return true;
+
+      case 'transfer_progress':
+        LogService().log('ConnectionManager: Routing transfer_progress to P2PTransferService');
+        p2pService.handleProgressUpdate(data);
+        return true;
+
+      case 'transfer_complete':
+        LogService().log('ConnectionManager: Routing transfer_complete to P2PTransferService');
+        p2pService.handleTransferComplete(data);
+        return true;
+
+      default:
+        return false;
     }
   }
 

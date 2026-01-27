@@ -39,6 +39,8 @@ import '../models/blog_post.dart';
 import '../models/report.dart';
 import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
+import 'mirror_config_service.dart';
+import 'mirror_sync_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
 import '../api/handlers/blog_handler.dart';
@@ -63,7 +65,9 @@ import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../transfer/models/transfer_models.dart';
+import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_service.dart';
+import '../transfer/services/p2p_transfer_service.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -414,6 +418,16 @@ class LogApiService {
       return await _handleBackupRequest(request, urlPath, headers);
     }
 
+    // Mirror Sync API endpoints
+    if (urlPath.startsWith('api/mirror/')) {
+      return await _handleMirrorRequest(request, urlPath, headers);
+    }
+
+    // P2P Transfer API endpoints
+    if (urlPath.startsWith('api/p2p/')) {
+      return await _handleP2PRequest(request, urlPath, headers);
+    }
+
     // Events API endpoints (public read-only access to events)
     if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
       return await _handleEventsRequest(request, urlPath, headers);
@@ -544,6 +558,10 @@ class LogApiService {
           '/api/wallet/requests/{id}/approve': 'POST approve sync request',
           '/api/wallet/requests/{id}/reject': 'POST reject sync request',
           '/api/wallet/sync': 'POST receive wallet sync data',
+          '/api/mirror/challenge': 'GET authentication challenge (prevents replay attacks)',
+          '/api/mirror/request': 'POST request simple mirror sync (with signed challenge)',
+          '/api/mirror/manifest': 'GET folder manifest for sync',
+          '/api/mirror/file': 'GET file content for sync',
         },
       }),
       headers: headers,
@@ -1262,6 +1280,11 @@ class LogApiService {
       // Handle email debug actions
       if (action.toLowerCase().startsWith('email_')) {
         return await _handleEmailAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle mirror sync debug actions
+      if (action.toLowerCase().startsWith('mirror_')) {
+        return await _handleMirrorAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -12936,6 +12959,868 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
     } catch (e, stack) {
       LogService().log('LogApiService: Error in email action: $e\n$stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Mirror Sync API
+  // ============================================================
+
+  /// Handle mirror sync API requests
+  Future<shelf.Response> _handleMirrorRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // GET /api/mirror/challenge - Get a challenge for authentication
+    if (urlPath == 'api/mirror/challenge' && request.method == 'GET') {
+      return await _handleMirrorChallenge(request, headers);
+    }
+
+    // POST /api/mirror/request - Request sync permission (with signed challenge)
+    if (urlPath == 'api/mirror/request' && request.method == 'POST') {
+      return await _handleMirrorSyncRequest(request, headers);
+    }
+
+    // GET /api/mirror/manifest - Get folder manifest
+    if (urlPath == 'api/mirror/manifest' && request.method == 'GET') {
+      return await _handleMirrorManifest(request, headers);
+    }
+
+    // GET /api/mirror/file - Download a file
+    if (urlPath == 'api/mirror/file' && request.method == 'GET') {
+      return await _handleMirrorFile(request, headers);
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Mirror endpoint not found'}),
+      headers: headers,
+    );
+  }
+
+  /// Handle GET /api/mirror/challenge - Generate authentication challenge
+  Future<shelf.Response> _handleMirrorChallenge(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final folder = request.url.queryParameters['folder'];
+
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder parameter',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Check if folder exists before generating challenge
+      final basePath = StorageConfig().baseDir;
+      final folderPath = '$basePath/$folder';
+
+      final dir = io.Directory(folderPath);
+      if (!await dir.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'Folder not found',
+            'code': 'FOLDER_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Generate challenge
+      final mirrorService = MirrorSyncService.instance;
+      final challenge = mirrorService.generateChallenge(folder);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'nonce': challenge.nonce,
+          'folder': challenge.folder,
+          'expires_at': challenge.expiresAt.millisecondsSinceEpoch ~/ 1000,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror challenge error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/mirror/request - Request sync permission (with signed challenge)
+  Future<shelf.Response> _handleMirrorSyncRequest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      if (body.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing request body',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
+
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final eventJson = data['event'] as Map<String, dynamic>?;
+      final folder = data['folder'] as String?;
+
+      if (eventJson == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing event field',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder field',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Parse NOSTR event
+      final event = NostrEvent.fromJson(eventJson);
+
+      // Verify request
+      final mirrorService = MirrorSyncService.instance;
+      final result = await mirrorService.verifyRequest(event, folder);
+
+      if (!result.allowed) {
+        final statusCode = result.error == 'PEER_NOT_ALLOWED' ||
+                result.error == 'FOLDER_NOT_ALLOWED'
+            ? 403
+            : result.error == 'FOLDER_NOT_FOUND'
+                ? 404
+                : 401;
+
+        return shelf.Response(
+          statusCode,
+          body: jsonEncode({
+            'success': false,
+            'allowed': false,
+            'error': result.error,
+            'code': result.error,
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'allowed': true,
+          'token': result.token,
+          'expires_at': result.expiresAt,
+          'peer_callsign': event.callsign,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror request error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/mirror/manifest - Get folder manifest
+  Future<shelf.Response> _handleMirrorManifest(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final folder = request.url.queryParameters['folder'];
+      final token = request.url.queryParameters['token'];
+
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Validate token
+      final mirrorService = MirrorSyncService.instance;
+      final validatedFolder = mirrorService.validateToken(token);
+
+      if (validatedFolder == null) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Verify requested folder matches token's folder
+      if (validatedFolder != folder) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Token not valid for requested folder',
+            'code': 'FOLDER_MISMATCH',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Generate manifest
+      final basePath = StorageConfig().baseDir;
+      final folderPath = '$basePath/$folder';
+
+      final dir = io.Directory(folderPath);
+      if (!await dir.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'Folder not found',
+            'code': 'FOLDER_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      final manifest = await mirrorService.generateManifest(folderPath);
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'folder': manifest.folder,
+          'total_files': manifest.totalFiles,
+          'total_bytes': manifest.totalBytes,
+          'files': manifest.files.map((f) => f.toJson()).toList(),
+          'generated_at': manifest.generatedAt,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror manifest error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/mirror/file - Download a file
+  Future<shelf.Response> _handleMirrorFile(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final filePath = request.url.queryParameters['path'];
+      final token = request.url.queryParameters['token'];
+
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing path parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Validate token
+      final mirrorService = MirrorSyncService.instance;
+      final folder = mirrorService.validateToken(token);
+
+      if (folder == null) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Construct full path
+      final basePath = StorageConfig().baseDir;
+      final folderPath = '$basePath/$folder';
+      final fullPath = '$folderPath/$filePath';
+
+      // Security: Ensure path doesn't escape folder
+      final normalizedPath = path.normalize(fullPath);
+      if (!normalizedPath.startsWith(path.normalize(folderPath))) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid path',
+            'code': 'PATH_TRAVERSAL',
+          }),
+          headers: headers,
+        );
+      }
+
+      final file = io.File(fullPath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'File not found',
+            'code': 'FILE_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Read file and compute SHA1
+      final bytes = await file.readAsBytes();
+      final sha1Hash = sha1.convert(bytes).toString();
+
+      // Determine content type
+      final ext = path.extension(fullPath).toLowerCase();
+      final contentType = _getContentType(ext);
+
+      // Handle Range requests for large files
+      final rangeHeader = request.headers['range'];
+      if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+        final rangeSpec = rangeHeader.substring(6);
+        final parts = rangeSpec.split('-');
+        final start = int.tryParse(parts[0]) ?? 0;
+        final end = parts.length > 1 && parts[1].isNotEmpty
+            ? int.tryParse(parts[1]) ?? bytes.length - 1
+            : bytes.length - 1;
+
+        if (start >= bytes.length || start > end) {
+          return shelf.Response(
+            416,
+            body: jsonEncode({
+              'success': false,
+              'error': 'Range not satisfiable',
+              'code': 'RANGE_NOT_SATISFIABLE',
+            }),
+            headers: {...headers, 'Content-Range': 'bytes */${bytes.length}'},
+          );
+        }
+
+        final rangeBytes = bytes.sublist(start, end + 1);
+        return shelf.Response(
+          206,
+          body: rangeBytes,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': rangeBytes.length.toString(),
+            'Content-Range': 'bytes $start-$end/${bytes.length}',
+            'X-SHA1': sha1Hash,
+            'Access-Control-Allow-Origin': '*',
+          },
+        );
+      }
+
+      return shelf.Response.ok(
+        bytes,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': bytes.length.toString(),
+          'X-SHA1': sha1Hash,
+          'Access-Control-Allow-Origin': '*',
+        },
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror file error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Get content type for file extension
+  String _getContentType(String ext) {
+    switch (ext) {
+      case '.json':
+        return 'application/json';
+      case '.md':
+      case '.txt':
+        return 'text/plain; charset=utf-8';
+      case '.html':
+      case '.htm':
+        return 'text/html; charset=utf-8';
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.png':
+        return 'image/png';
+      case '.gif':
+        return 'image/gif';
+      case '.webp':
+        return 'image/webp';
+      case '.pdf':
+        return 'application/pdf';
+      case '.mp3':
+        return 'audio/mpeg';
+      case '.mp4':
+        return 'video/mp4';
+      case '.webm':
+        return 'video/webm';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
+  // ============================================================
+  // P2P Transfer API
+  // ============================================================
+
+  /// Handle P2P transfer API requests
+  Future<shelf.Response> _handleP2PRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // GET /api/p2p/offer/{offerId}/manifest - Get offer manifest
+    final manifestMatch = RegExp(r'^api/p2p/offer/([^/]+)/manifest$').firstMatch(urlPath);
+    if (manifestMatch != null && request.method == 'GET') {
+      return await _handleP2PManifest(request, manifestMatch.group(1)!, headers);
+    }
+
+    // GET /api/p2p/offer/{offerId}/file - Download a file
+    final fileMatch = RegExp(r'^api/p2p/offer/([^/]+)/file$').firstMatch(urlPath);
+    if (fileMatch != null && request.method == 'GET') {
+      return await _handleP2PFile(request, fileMatch.group(1)!, headers);
+    }
+
+    return shelf.Response.notFound(
+      jsonEncode({
+        'success': false,
+        'error': 'Unknown P2P endpoint',
+      }),
+      headers: headers,
+    );
+  }
+
+  /// Handle GET /api/p2p/offer/{offerId}/manifest - Get offer manifest
+  Future<shelf.Response> _handleP2PManifest(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final p2pService = P2PTransferService();
+      final manifest = p2pService.getOfferManifest(offerId);
+
+      if (manifest == null) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'Offer not found or expired',
+            'code': 'OFFER_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode(manifest),
+        headers: {...headers, 'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      LogService().log('LogApiService: P2P manifest error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle GET /api/p2p/offer/{offerId}/file - Download a file
+  Future<shelf.Response> _handleP2PFile(
+    shelf.Request request,
+    String offerId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final filePath = request.url.queryParameters['path'];
+      final token = request.url.queryParameters['token'];
+
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing path parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      final p2pService = P2PTransferService();
+
+      // Validate token
+      final tokenOfferId = p2pService.validateToken(token);
+      if (tokenOfferId == null || tokenOfferId != offerId) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Get actual file path
+      final actualPath = p2pService.getFilePath(offerId, filePath);
+      if (actualPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'File not found in offer',
+            'code': 'FILE_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      final file = io.File(actualPath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({
+            'success': false,
+            'error': 'File not found on disk',
+            'code': 'FILE_NOT_FOUND',
+          }),
+          headers: headers,
+        );
+      }
+
+      // Read file and compute SHA1
+      final bytes = await file.readAsBytes();
+      final sha1Hash = sha1.convert(bytes).toString();
+
+      // Determine content type
+      final ext = path.extension(actualPath).toLowerCase();
+      final contentType = _getContentType(ext);
+
+      // Handle Range requests for large files
+      final rangeHeader = request.headers['range'];
+      if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+        final rangeSpec = rangeHeader.substring(6);
+        final parts = rangeSpec.split('-');
+        final start = int.tryParse(parts[0]) ?? 0;
+        final end = parts.length > 1 && parts[1].isNotEmpty
+            ? int.tryParse(parts[1]) ?? bytes.length - 1
+            : bytes.length - 1;
+
+        if (start >= bytes.length || start > end) {
+          return shelf.Response(
+            416,
+            body: jsonEncode({
+              'success': false,
+              'error': 'Range not satisfiable',
+              'code': 'RANGE_NOT_SATISFIABLE',
+            }),
+            headers: {...headers, 'Content-Range': 'bytes */${bytes.length}'},
+          );
+        }
+
+        final rangeBytes = bytes.sublist(start, end + 1);
+        return shelf.Response(
+          206,
+          body: rangeBytes,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': rangeBytes.length.toString(),
+            'Content-Range': 'bytes $start-$end/${bytes.length}',
+            'X-SHA1': sha1Hash,
+            'Access-Control-Allow-Origin': '*',
+          },
+        );
+      }
+
+      return shelf.Response.ok(
+        bytes,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': bytes.length.toString(),
+          'X-SHA1': sha1Hash,
+          'Access-Control-Allow-Origin': '*',
+        },
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: P2P file error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Mirror Actions
+  // ============================================================
+
+  /// Handle mirror debug actions asynchronously
+  Future<shelf.Response> _handleMirrorAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final mirrorService = MirrorSyncService.instance;
+
+      switch (action) {
+        case 'mirror_enable':
+          final enabled = params['enabled'];
+          if (enabled == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing enabled parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final isEnabled = enabled == true || enabled == 'true';
+          await MirrorConfigService.instance.setEnabled(isEnabled);
+
+          LogService().log('LogApiService: Mirror ${isEnabled ? 'enabled' : 'disabled'}');
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Mirror ${isEnabled ? 'enabled' : 'disabled'}',
+              'enabled': isEnabled,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_request_sync':
+          final peerUrl = params['peer_url'] as String?;
+          final folder = params['folder'] as String?;
+
+          if (peerUrl == null || peerUrl.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing peer_url parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (folder == null || folder.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing folder parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Perform sync
+          final result = await mirrorService.syncFolder(peerUrl, folder);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': result.success,
+              'error': result.error,
+              'files_added': result.filesAdded,
+              'files_modified': result.filesModified,
+              'files_deleted': result.filesDeleted,
+              'bytes_transferred': result.bytesTransferred,
+              'duration_ms': result.duration.inMilliseconds,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_get_status':
+          final status = mirrorService.status;
+          final allowedPeers = mirrorService.allowedPeers;
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'enabled': MirrorConfigService.instance.isEnabled,
+              'status': status.toJson(),
+              'allowed_peers': allowedPeers.entries
+                  .map((e) => {'npub': e.key, 'callsign': e.value})
+                  .toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_add_allowed_peer':
+          final npub = params['npub'] as String?;
+          final callsign = params['callsign'] as String?;
+
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing npub parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          mirrorService.addAllowedPeer(npub, callsign);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Added allowed peer $callsign',
+              'npub': npub,
+              'callsign': callsign,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_remove_allowed_peer':
+          final npub = params['npub'] as String?;
+
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing npub parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          mirrorService.removeAllowedPeer(npub);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Removed allowed peer',
+              'npub': npub,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown mirror action: $action',
+              'available': [
+                'mirror_enable',
+                'mirror_request_sync',
+                'mirror_get_status',
+                'mirror_add_allowed_peer',
+                'mirror_remove_allowed_peer',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror action error: $e');
+      LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({
           'success': false,

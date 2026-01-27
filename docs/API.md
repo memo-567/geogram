@@ -37,6 +37,8 @@ This document describes the HTTP API endpoints available on Geogram radio statio
   - [Logs](#logs)
   - [Debug API](#debug-api)
   - [Backup](#backup)
+  - [Mirror Sync](#mirror-sync)
+  - [P2P File Transfer](#p2p-file-transfer)
 - [WebSocket Connection](#websocket-connection)
 - [Station Configuration](#station-configuration)
 
@@ -3269,6 +3271,173 @@ curl -X POST http://localhost:3456/api/backup/discover \
 # Poll for results
 curl http://localhost:3456/api/backup/discover/abc123
 # Returns: {"status": "complete", "providers_found": [...]}
+```
+
+---
+
+## Mirror Sync
+
+Mirror sync enables one-way folder synchronization between Geogram instances using NOSTR-signed authentication.
+
+For full documentation of the sync protocol, see [API_synch.md](API_synch.md).
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/mirror/challenge` | GET | Get authentication challenge (prevents replay attacks) |
+| `/api/mirror/request` | POST | Request sync with signed challenge response |
+| `/api/mirror/manifest` | GET | Get folder structure with file hashes |
+| `/api/mirror/file` | GET | Download a specific file |
+
+### GET /api/mirror/challenge
+
+Get a challenge nonce that must be signed to prove identity.
+
+**Query Parameters:**
+- `folder`: Folder path to sync (required)
+
+**Response:**
+```json
+{
+  "success": true,
+  "nonce": "64_hex_chars...",
+  "folder": "collections/blog",
+  "expires_at": 1706000120
+}
+```
+
+### POST /api/mirror/request
+
+Request permission to sync a folder (with signed challenge response).
+
+**Request Body:**
+```json
+{
+  "event": {
+    "id": "...",
+    "kind": 1,
+    "pubkey": "...",
+    "created_at": 1706000000,
+    "content": "mirror_response:<nonce>:collections/blog",
+    "tags": [["t", "mirror_response"], ["folder", "collections/blog"], ["nonce", "<nonce>"]],
+    "sig": "..."
+  },
+  "folder": "collections/blog"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "allowed": true,
+  "token": "access_token_123",
+  "expires_at": 1706003600,
+  "peer_callsign": "X1ABCD"
+}
+```
+
+### GET /api/mirror/manifest
+
+Get folder structure with file metadata for comparison.
+
+**Query Parameters:**
+- `folder`: Folder path (required)
+- `token`: Access token from request step (required)
+
+**Response:**
+```json
+{
+  "success": true,
+  "folder": "blog",
+  "total_files": 3,
+  "total_bytes": 15360,
+  "files": [
+    {"path": "post1.md", "sha1": "abc123", "mtime": 1706000000, "size": 2048}
+  ],
+  "generated_at": 1706000500
+}
+```
+
+### GET /api/mirror/file
+
+Download a specific file.
+
+**Query Parameters:**
+- `path`: File path relative to synced folder (required)
+- `token`: Access token (required)
+
+**Headers (Optional):**
+- `Range`: Byte range for resumable downloads
+
+**Response:**
+- Raw file content
+- Header `X-SHA1`: File hash for verification
+
+### Debug Actions
+
+Mirror sync can be tested via the debug API:
+
+```bash
+# Enable mirror mode
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_enable", "enabled": true}'
+
+# Add allowed peer
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_add_allowed_peer", "npub": "npub1...", "callsign": "X1ABCD"}'
+
+# Request sync from peer
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_request_sync", "peer_url": "http://192.168.1.100:3456", "folder": "collections/blog"}'
+
+# Get sync status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_get_status"}'
+```
+
+---
+
+## P2P File Transfer
+
+P2P file transfer enables direct file sharing between Geogram devices. The sender creates an offer, the receiver accepts and downloads files directly from the sender's HTTP API.
+
+For full documentation of the P2P transfer protocol, see [API_p2p.md](API_p2p.md).
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/p2p/offer/{offerId}/manifest` | GET | Get offer manifest with serve token |
+| `/api/p2p/offer/{offerId}/file` | GET | Download a specific file |
+
+### Message Types
+
+P2P messages are sent as NOSTR DMs via the Connection Manager:
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `transfer_offer` | Sender → Receiver | Initial offer with file manifest |
+| `transfer_response` | Receiver → Sender | Accept or reject the offer |
+| `transfer_progress` | Receiver → Sender | Download progress updates |
+| `transfer_complete` | Receiver → Sender | Transfer completion notification |
+
+### Quick Example
+
+```dart
+// Send files to another device
+final offer = await P2PTransferService().sendOffer(
+  recipientCallsign: 'X1BOB',
+  items: [SendItem(path: '/path/to/file.jpg', name: 'file.jpg', isDirectory: false)],
+);
+
+// Accept incoming offer
+await P2PTransferService().acceptOffer(offerId, '/destination/folder');
 ```
 
 ---
