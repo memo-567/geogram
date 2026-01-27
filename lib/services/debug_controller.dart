@@ -141,6 +141,27 @@ enum DebugAction {
 
   /// Open Flasher on Monitor tab (triggered by USB attachment)
   openFlasherMonitor,
+
+  /// P2P Transfer: Navigate to transfer panel
+  p2pNavigate,
+
+  /// P2P Transfer: Send files to a device
+  p2pSend,
+
+  /// P2P Transfer: List incoming offers
+  p2pListIncoming,
+
+  /// P2P Transfer: List outgoing offers
+  p2pListOutgoing,
+
+  /// P2P Transfer: Accept an incoming offer
+  p2pAccept,
+
+  /// P2P Transfer: Reject an incoming offer
+  p2pReject,
+
+  /// P2P Transfer: Get transfer status
+  p2pStatus,
 }
 
 /// Toast message to be displayed
@@ -468,6 +489,47 @@ class DebugController {
     );
   }
 
+  /// Trigger P2P transfer navigation
+  void triggerP2PNavigate() {
+    triggerAction(DebugAction.p2pNavigate);
+  }
+
+  /// Trigger P2P send files
+  void triggerP2PSend({required String callsign, required String folder}) {
+    triggerAction(
+      DebugAction.p2pSend,
+      params: {'callsign': callsign, 'folder': folder},
+    );
+  }
+
+  /// Trigger P2P list incoming offers
+  void triggerP2PListIncoming() {
+    triggerAction(DebugAction.p2pListIncoming);
+  }
+
+  /// Trigger P2P list outgoing offers
+  void triggerP2PListOutgoing() {
+    triggerAction(DebugAction.p2pListOutgoing);
+  }
+
+  /// Trigger P2P accept offer
+  void triggerP2PAccept({required String offerId, required String destination}) {
+    triggerAction(
+      DebugAction.p2pAccept,
+      params: {'offer_id': offerId, 'destination': destination},
+    );
+  }
+
+  /// Trigger P2P reject offer
+  void triggerP2PReject({required String offerId}) {
+    triggerAction(DebugAction.p2pReject, params: {'offer_id': offerId});
+  }
+
+  /// Trigger P2P status check
+  void triggerP2PStatus({required String offerId}) {
+    triggerAction(DebugAction.p2pStatus, params: {'offer_id': offerId});
+  }
+
   /// Get available actions for API response
   static List<Map<String, dynamic>> getAvailableActions() {
     return [
@@ -779,6 +841,51 @@ class DebugController {
         'description': 'Open Flasher on Monitor tab with optional auto-connect',
         'params': {
           'device_path': '(optional) Serial port path to auto-connect',
+        },
+      },
+      {
+        'action': 'p2p_navigate',
+        'description': 'Navigate to P2P Transfer panel',
+        'params': {},
+      },
+      {
+        'action': 'p2p_send',
+        'description': 'Send files to another device via P2P transfer',
+        'params': {
+          'callsign': 'Target device callsign (required)',
+          'folder': 'Absolute path to folder containing files to send (required)',
+        },
+      },
+      {
+        'action': 'p2p_list_incoming',
+        'description': 'List pending incoming transfer offers',
+        'params': {},
+      },
+      {
+        'action': 'p2p_list_outgoing',
+        'description': 'List pending outgoing transfer offers',
+        'params': {},
+      },
+      {
+        'action': 'p2p_accept',
+        'description': 'Accept an incoming transfer offer',
+        'params': {
+          'offer_id': 'Offer ID to accept (required)',
+          'destination': 'Absolute path to destination folder (required)',
+        },
+      },
+      {
+        'action': 'p2p_reject',
+        'description': 'Reject an incoming transfer offer',
+        'params': {
+          'offer_id': 'Offer ID to reject (required)',
+        },
+      },
+      {
+        'action': 'p2p_status',
+        'description': 'Get status of a transfer offer',
+        'params': {
+          'offer_id': 'Offer ID to check (required)',
         },
       },
     ];

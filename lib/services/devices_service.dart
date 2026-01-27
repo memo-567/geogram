@@ -407,6 +407,15 @@ class DevicesService {
       case DebugAction.openFlasherMonitor:
         // Flasher monitor navigation is handled by main.dart
         break;
+      case DebugAction.p2pNavigate:
+      case DebugAction.p2pSend:
+      case DebugAction.p2pListIncoming:
+      case DebugAction.p2pListOutgoing:
+      case DebugAction.p2pAccept:
+      case DebugAction.p2pReject:
+      case DebugAction.p2pStatus:
+        // P2P transfer actions are handled directly by LogApiService
+        break;
     }
   }
 

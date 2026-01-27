@@ -68,6 +68,7 @@ import '../transfer/models/transfer_models.dart';
 import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
+import '../pages/transfer_send_page.dart';
 
 class LogApiService {
   static final LogApiService _instance = LogApiService._internal();
@@ -1285,6 +1286,11 @@ class LogApiService {
       // Handle mirror sync debug actions
       if (action.toLowerCase().startsWith('mirror_')) {
         return await _handleMirrorAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle P2P transfer debug actions
+      if (action.toLowerCase().startsWith('p2p_')) {
+        return await _handleP2PAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -13820,6 +13826,332 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
     } catch (e, stack) {
       LogService().log('LogApiService: Mirror action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - P2P Transfer Actions
+  // ============================================================
+
+  /// Handle P2P transfer debug actions asynchronously
+  Future<shelf.Response> _handleP2PAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final p2pService = P2PTransferService();
+
+      switch (action) {
+        case 'p2p_navigate':
+          // Navigate to Transfer panel (collections panel, then open transfer)
+          final debugController = DebugController();
+          debugController.navigateToPanel(PanelIndex.collections);
+          debugController.triggerP2PNavigate();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Navigating to P2P Transfer panel',
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_send':
+          final callsign = params['callsign'] as String?;
+          final folder = params['folder'] as String?;
+
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (folder == null || folder.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing folder parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check folder exists
+          final folderDir = io.Directory(folder);
+          if (!await folderDir.exists()) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Folder does not exist: $folder',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Build file list from folder
+          final items = <SendItem>[];
+          await for (final entity in folderDir.list(recursive: false)) {
+            if (entity is io.File) {
+              final stat = await entity.stat();
+              items.add(SendItem(
+                path: entity.path,
+                name: path.basename(entity.path),
+                isDirectory: false,
+                sizeBytes: stat.size,
+              ));
+            } else if (entity is io.Directory) {
+              // Calculate directory size recursively
+              int dirSize = 0;
+              await for (final f in io.Directory(entity.path).list(recursive: true)) {
+                if (f is io.File) {
+                  final fStat = await f.stat();
+                  dirSize += fStat.size;
+                }
+              }
+              items.add(SendItem(
+                path: entity.path,
+                name: path.basename(entity.path),
+                isDirectory: true,
+                sizeBytes: dirSize,
+              ));
+            }
+          }
+
+          if (items.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Folder is empty: $folder',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Send the offer
+          final offer = await p2pService.sendOffer(
+            recipientCallsign: callsign,
+            items: items,
+          );
+
+          if (offer == null) {
+            return shelf.Response.internalServerError(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Failed to create transfer offer',
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'offer_id': offer.offerId,
+              'recipient': callsign,
+              'files': offer.totalFiles,
+              'total_bytes': offer.totalBytes,
+              'status': offer.status.name,
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_list_incoming':
+          final offers = p2pService.incomingOffers;
+          final offerList = offers.map((o) => {
+            'offer_id': o.offerId,
+            'sender_callsign': o.senderCallsign,
+            'total_files': o.totalFiles,
+            'total_bytes': o.totalBytes,
+            'expires_at': o.expiresAt.millisecondsSinceEpoch ~/ 1000,
+            'status': o.status.name,
+          }).toList();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'offers': offerList,
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_list_outgoing':
+          final offers = p2pService.outgoingOffers;
+          final offerList = offers.map((o) => {
+            'offer_id': o.offerId,
+            'receiver_callsign': o.receiverCallsign,
+            'total_files': o.totalFiles,
+            'total_bytes': o.totalBytes,
+            'expires_at': o.expiresAt.millisecondsSinceEpoch ~/ 1000,
+            'status': o.status.name,
+            'bytes_transferred': o.bytesTransferred,
+            'files_completed': o.filesCompleted,
+          }).toList();
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'offers': offerList,
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_accept':
+          final offerId = params['offer_id'] as String?;
+          final destination = params['destination'] as String?;
+
+          if (offerId == null || offerId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing offer_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          if (destination == null || destination.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing destination parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final offer = p2pService.getOffer(offerId);
+          if (offer == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unknown offer: $offerId',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Accept the offer (this starts the download asynchronously)
+          await p2pService.acceptOffer(offerId, destination);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Offer accepted, download starting',
+              'offer_id': offerId,
+              'destination': destination,
+              'total_files': offer.totalFiles,
+              'total_bytes': offer.totalBytes,
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_reject':
+          final offerId = params['offer_id'] as String?;
+
+          if (offerId == null || offerId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing offer_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final offer = p2pService.getOffer(offerId);
+          if (offer == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unknown offer: $offerId',
+              }),
+              headers: headers,
+            );
+          }
+
+          await p2pService.rejectOffer(offerId);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Offer rejected',
+              'offer_id': offerId,
+            }),
+            headers: headers,
+          );
+
+        case 'p2p_status':
+          final offerId = params['offer_id'] as String?;
+
+          if (offerId == null || offerId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing offer_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final offer = p2pService.getOffer(offerId);
+          if (offer == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Unknown offer: $offerId',
+              }),
+              headers: headers,
+            );
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'offer_id': offerId,
+              'status': offer.status.name,
+              'bytes_transferred': offer.bytesTransferred,
+              'total_bytes': offer.totalBytes,
+              'files_completed': offer.filesCompleted,
+              'total_files': offer.totalFiles,
+              'current_file': offer.currentFile,
+              'error': offer.error,
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown P2P action: $action',
+              'available': [
+                'p2p_navigate',
+                'p2p_send',
+                'p2p_list_incoming',
+                'p2p_list_outgoing',
+                'p2p_accept',
+                'p2p_reject',
+                'p2p_status',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: P2P action error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({

@@ -2387,6 +2387,13 @@ Triggers a debug action.
 | `email_send` | Compose and send an email in one action | `to` (required): Recipient email(s), `subject` (required): Subject line, `content` (required): Message body, `cc` (optional): CC recipients, `station` (optional): Station domain |
 | `email_list` | List emails in a folder | `folder` (optional): inbox/sent/outbox/drafts/spam/trash (default: inbox), `station` (optional): Station domain (default: p2p.radio) |
 | `email_status` | Get email service status | None. Returns WebSocket connection status, preferred station, and registered accounts |
+| `p2p_navigate` | Navigate to P2P Transfer panel | None |
+| `p2p_send` | Send files to another device via P2P | `callsign`: Target device callsign (required), `folder`: Absolute path to folder containing files to send (required) |
+| `p2p_list_incoming` | List pending incoming transfer offers | None |
+| `p2p_list_outgoing` | List pending outgoing transfer offers | None |
+| `p2p_accept` | Accept an incoming transfer offer | `offer_id`: Offer ID to accept (required), `destination`: Absolute path to destination folder (required) |
+| `p2p_reject` | Reject an incoming transfer offer | `offer_id`: Offer ID to reject (required) |
+| `p2p_status` | Get status of a transfer offer | `offer_id`: Offer ID to check (required) |
 
 Place feedback actions send signed events to the station and only update local cache files if the place folder can be resolved via `place_path` or `callsign`.
 
@@ -2476,6 +2483,79 @@ Sample `email_send` response:
   "station": "p2p.radio",
   "delivery_status": "sent_to_station",
   "websocket_connected": true
+}
+```
+
+**P2P Transfer automation examples:**
+
+- Send files to another device:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"p2p_send","callsign":"X1BOB","folder":"/home/user/files-to-send"}'
+```
+
+Sample `p2p_send` response:
+```json
+{
+  "success": true,
+  "offer_id": "tr_abc123",
+  "recipient": "X1BOB",
+  "files": 3,
+  "total_bytes": 15360,
+  "status": "pending"
+}
+```
+
+- List incoming transfer offers:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"p2p_list_incoming"}'
+```
+
+Sample `p2p_list_incoming` response:
+```json
+{
+  "success": true,
+  "offers": [
+    {
+      "offer_id": "tr_abc123",
+      "sender_callsign": "X1ALICE",
+      "total_files": 3,
+      "total_bytes": 15360,
+      "expires_at": 1706003600,
+      "status": "pending"
+    }
+  ]
+}
+```
+
+- Accept an incoming offer:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"p2p_accept","offer_id":"tr_abc123","destination":"/home/user/received"}'
+```
+
+- Check transfer status:
+```bash
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"p2p_status","offer_id":"tr_abc123"}'
+```
+
+Sample `p2p_status` response:
+```json
+{
+  "success": true,
+  "offer_id": "tr_abc123",
+  "status": "transferring",
+  "bytes_transferred": 8192,
+  "total_bytes": 15360,
+  "files_completed": 1,
+  "total_files": 3,
+  "current_file": "docs/readme.txt"
 }
 ```
 

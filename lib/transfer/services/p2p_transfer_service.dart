@@ -491,29 +491,59 @@ class P2PTransferService {
           throw Exception('Failed to download ${file.path}: ${streamedResponse.statusCode}');
         }
 
-        // Write to file
-        final sink = destFile.openWrite();
-        int bytesReceived = 0;
+        // Download with retry on SHA1 mismatch
+        const maxRetries = 3;
+        int retries = 0;
+        bool sha1Verified = false;
 
-        await for (final chunk in streamedResponse.stream) {
-          sink.add(chunk);
-          bytesReceived += chunk.length;
-          totalBytesReceived += chunk.length;
+        while (retries < maxRetries && !sha1Verified) {
+          // Write to file
+          final sink = destFile.openWrite();
+          int bytesReceived = 0;
 
-          // Send progress update periodically (every 64KB)
-          if (bytesReceived % 65536 < chunk.length) {
-            await _sendProgressUpdate(offer, totalBytesReceived, filesCompleted);
+          // Need to re-request for retries
+          final retryRequest = http.Request('GET', fileUrl);
+          final retryResponse = retries == 0
+              ? streamedResponse
+              : await retryRequest.send();
+
+          if (retryResponse.statusCode != 200) {
+            throw Exception('Failed to download ${file.path}: ${retryResponse.statusCode}');
           }
-        }
 
-        await sink.close();
+          // Track bytes for this attempt (subtract previous attempt's bytes)
+          if (retries > 0) {
+            totalBytesReceived -= file.size;
+          }
 
-        // Verify SHA1 if provided
-        if (file.sha1 != null) {
-          final bytes = await destFile.readAsBytes();
-          final hash = sha1.convert(bytes).toString();
-          if (hash != file.sha1) {
-            throw Exception('SHA1 mismatch for ${file.path}');
+          await for (final chunk in retryResponse.stream) {
+            sink.add(chunk);
+            bytesReceived += chunk.length;
+            totalBytesReceived += chunk.length;
+
+            // Send progress update periodically (every 64KB)
+            if (bytesReceived % 65536 < chunk.length) {
+              await _sendProgressUpdate(offer, totalBytesReceived, filesCompleted);
+            }
+          }
+
+          await sink.close();
+
+          // Verify SHA1 if provided
+          if (file.sha1 != null) {
+            final bytes = await destFile.readAsBytes();
+            final hash = sha1.convert(bytes).toString();
+            if (hash == file.sha1) {
+              sha1Verified = true;
+            } else {
+              retries++;
+              if (retries >= maxRetries) {
+                throw Exception('SHA1 mismatch for ${file.path} after $maxRetries retries');
+              }
+              LogService().log('P2PTransfer: SHA1 mismatch for ${file.path}, retry $retries/$maxRetries');
+            }
+          } else {
+            sha1Verified = true;
           }
         }
 
@@ -521,7 +551,7 @@ class P2PTransferService {
         offer.filesCompleted = filesCompleted;
         offer.bytesTransferred = totalBytesReceived;
 
-        LogService().log('P2PTransfer: Downloaded ${file.path} ($bytesReceived bytes)');
+        LogService().log('P2PTransfer: Downloaded ${file.path} (${file.size} bytes)');
       }
 
       // All files downloaded successfully
