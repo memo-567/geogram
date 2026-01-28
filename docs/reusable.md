@@ -88,6 +88,15 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [Workspace](#workspace-model) - Workspace model with collaborators
 - [NdfDocument](#ndfdocument-model) - NDF document metadata model
 - [NdfPermission](#ndfpermission-model) - NDF permissions and access control
+- [NdfImageEmbedBuilder](#ndfimageembedbuilder) - Custom QuillEditor image embed for asset:// URLs
+- [PresentationContent](#presentationcontent-model) - Presentation content models (slides, elements, theme)
+- [SlideTemplate](#slidetemplate) - Predefined slide templates (Cyber, Retro80s, Black&White, etc.)
+- [SlideCanvasWidget](#slidecanvaswidget) - Renders slide at proper aspect ratio
+- [Inline Text Editing Pattern](#inline-text-editing-pattern) - WYSIWYG inline text editing in canvas widgets
+- [SlideThumbnailWidget](#slidethumbnailwidget) - Slide preview thumbnail for panel
+- [SheetGridWidget](#sheetgridwidget) - Reusable spreadsheet grid with formulas
+- [TodoContent](#todocontent-model) - TODO content models (items, links, updates, settings)
+- [TodoItemCardWidget](#todoitemcardwidget) - Expandable TODO item card with pictures/links/updates
 
 ### API Common Utilities
 - [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
@@ -5391,3 +5400,760 @@ while (isReading && isConnected) {
 ```
 
 This pattern is used in `UsbAoaLinux._readLoopAsync()` to reliably receive data from Android devices.
+
+## Work Document Editor Components
+
+### NdfImageEmbedBuilder
+
+**File:** `lib/work/pages/document_editor_page.dart`
+
+Custom QuillEditor EmbedBuilder that handles `asset://` URLs stored in NDF archives.
+
+**Use Case:**
+When images are embedded in Work documents, they are stored inside the NDF zip archive under `assets/images/`. The Quill document references them using `asset://images/filename.jpg` URLs. This embed builder extracts assets to temp files and displays them.
+
+**Architecture:**
+1. User clicks image button in toolbar
+2. `_pickAndSaveImage()` picks image via ImagePicker, saves to NDF archive via `NdfService.saveAsset()`
+3. Returns `asset://images/{timestamp}.{ext}` URL which is inserted into Quill document
+4. `_NdfImageEmbedBuilder.build()` is called when rendering
+5. `_getAssetImageProvider()` extracts asset to temp file via `NdfService.extractAssetToTemp()`
+6. Image is displayed with FileImage provider, cached for performance
+
+**Code Pattern:**
+```dart
+// Custom embed builder for asset:// URLs
+class _NdfImageEmbedBuilder extends EmbedBuilder {
+  final Future<ImageProvider?> Function(String imageUrl) getImageProvider;
+
+  _NdfImageEmbedBuilder({required this.getImageProvider});
+
+  @override
+  String get key => BlockEmbed.imageType;
+
+  @override
+  Widget build(BuildContext context, EmbedContext embedContext) {
+    final imageUrl = embedContext.node.value.data as String;
+    return FutureBuilder<ImageProvider?>(
+      future: getImageProvider(imageUrl),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const CircularProgressIndicator();
+        }
+        final provider = snapshot.data;
+        if (provider == null) return const Icon(Icons.broken_image);
+        return Image(image: provider, fit: BoxFit.contain);
+      },
+    );
+  }
+}
+
+// Configure QuillEditor with custom embed builder
+QuillEditor(
+  controller: _quillController,
+  config: QuillEditorConfig(
+    embedBuilders: [
+      _NdfImageEmbedBuilder(getImageProvider: _getAssetImageProvider),
+    ],
+  ),
+)
+```
+
+**Related Methods:**
+- `NdfService.saveAsset(filePath, assetPath, bytes)` - Save asset to archive
+- `NdfService.extractAssetToTemp(filePath, assetPath)` - Extract to temp file
+- `NdfService.readAsset(filePath, assetPath)` - Read asset bytes directly
+
+---
+
+### PresentationContent Model
+
+**File:** `lib/work/models/presentation_content.dart`
+
+Data models for NDF presentation files following the ndf-slides-1.0 schema.
+
+**Key Classes:**
+| Class | Description |
+|-------|-------------|
+| `PresentationContent` | Main content (main.json) with slide list, theme, transitions |
+| `PresentationSlide` | Individual slide with layout, background, elements, notes |
+| `SlideElement` | Element on a slide (text for MVP) |
+| `ElementPosition` | Position as percentages (x, y, w, h) |
+| `SlideTextStyle` | Text styling (color, fontSize, align, bold, italic) |
+| `SlideTextSpan` | Text span with formatting marks |
+| `SlideBackground` | Slide background (solid color for MVP) |
+| `PresentationTheme` | Theme with colors and fonts |
+
+**Enums:**
+- `SlideLayout`: blank, title, titleContent, twoColumn, sectionHeader
+- `SlideElementType`: text (MVP - images later)
+- `SlideTextAlign`: left, center, right
+
+**Factory Methods:**
+```dart
+// Create a blank slide
+PresentationSlide.blank(id: 'slide-001', index: 0);
+
+// Create a title slide
+PresentationSlide.title(id: 'slide-001', index: 0, title: 'Welcome', subtitle: 'Subtitle');
+
+// Create a title + content slide
+PresentationSlide.titleContent(id: 'slide-002', index: 1, title: 'Agenda', content: 'Topics...');
+
+// Create a text element
+SlideElement.text(
+  id: 'text-001',
+  position: ElementPosition.centerTitle(),
+  text: 'Hello World',
+  style: SlideTextStyle(fontSize: 48, bold: true, align: SlideTextAlign.center),
+);
+```
+
+**Usage:**
+```dart
+// Read presentation
+final content = await ndfService.readPresentationContent(filePath);
+final slide = await ndfService.readSlide(filePath, 'slide-001');
+
+// Save presentation
+await ndfService.savePresentation(filePath, content, slidesMap);
+```
+
+---
+
+### SlideTemplate
+
+**File:** `lib/work/models/presentation_content.dart`
+
+Predefined slide templates with color themes for presentations.
+
+**Available Templates:**
+| ID | Name | Description |
+|----|------|-------------|
+| `classic` | Classic | Traditional white background with navy/blue accents |
+| `blackwhite` | Black & White | Monochrome, elegant design |
+| `dark` | Dark Mode | Dark background with light text |
+| `cyber` | Cyber | Neon colors on dark background (cyan, magenta) |
+| `retro80s` | Retro 80s | Amber CRT-style terminal look |
+| `retro_green` | Green CRT | Green phosphor CRT terminal style |
+| `corporate` | Corporate | Professional blue business theme |
+| `nature` | Nature | Green, organic, natural colors |
+| `sunset` | Sunset | Warm orange/red colors |
+| `ocean` | Ocean | Teal and cyan aquatic theme |
+| `purple` | Purple | Elegant purple/violet theme |
+| `minimalist` | Minimalist | Clean gray minimal design |
+
+**Usage:**
+```dart
+// Get all templates
+final templates = SlideTemplate.templates;
+
+// Get template by ID
+final cyber = SlideTemplate.getById('cyber');
+
+// Access template colors
+final bgColor = cyber!.colors.background;  // '#0D0D1A'
+final textColor = cyber.colors.text;        // '#00FFFF'
+final primary = cyber.colors.primary;       // '#00FFFF'
+final accent = cyber.colors.accent;         // '#00FF00'
+```
+
+**Template Colors Structure:**
+```dart
+ThemeColors(
+  primary: '#...',      // Headers, titles
+  secondary: '#...',    // Subtitles, secondary elements
+  accent: '#...',       // Highlights, buttons
+  background: '#...',   // Slide background
+  text: '#...',         // Body text
+)
+```
+
+---
+
+### SlideCanvasWidget
+
+**File:** `lib/work/widgets/presentation/slide_canvas_widget.dart`
+
+Renders a slide at the correct aspect ratio with all elements.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `slide` | PresentationSlide | Yes | The slide to render |
+| `theme` | PresentationTheme | Yes | Theme for colors/fonts |
+| `aspectRatio` | double | No | Aspect ratio (default: 16:9) |
+| `selectedElementId` | String? | No | Currently selected element |
+| `isEditing` | bool | No | Show selection highlight |
+| `onElementTap` | Function? | No | Callback when element tapped |
+
+**Usage:**
+```dart
+SlideCanvasWidget(
+  slide: currentSlide,
+  theme: content.theme,
+  aspectRatio: content.aspectRatioValue,
+  selectedElementId: _selectedElementId,
+  isEditing: true,
+  onElementTap: (elementId) => setState(() => _selectedElementId = elementId),
+)
+```
+
+---
+
+### SlideThumbnailWidget
+
+**File:** `lib/work/widgets/presentation/slide_thumbnail_widget.dart`
+
+Mini slide preview for the slide panel sidebar.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `slide` | PresentationSlide | Yes | The slide to render |
+| `theme` | PresentationTheme | Yes | Theme for colors/fonts |
+| `slideNumber` | int | Yes | Slide number to display |
+| `isSelected` | bool | No | Highlight as selected |
+| `onTap` | VoidCallback? | No | Tap callback |
+
+**Usage:**
+```dart
+SlideThumbnailWidget(
+  slide: slide,
+  theme: content.theme,
+  slideNumber: index + 1,
+  isSelected: index == _currentSlideIndex,
+  onTap: () => _goToSlide(index),
+)
+```
+
+**DraggableSlideThumbnail** - Same but with drag handle for reordering in ReorderableListView.
+
+---
+
+### SheetGridWidget
+
+**File:** `lib/work/widgets/spreadsheet/sheet_grid_widget.dart`
+
+A fully-featured spreadsheet grid widget that can be embedded in any page. Supports cell editing, formulas, formatting, copy/paste, undo/redo, and column resizing.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sheet` | SpreadsheetSheet | Yes | The sheet data to display |
+| `onChanged` | ValueChanged\<SpreadsheetSheet\> | Yes | Called when sheet is modified |
+| `readOnly` | bool | No | If true, prevents editing (default: false) |
+
+**Features:**
+- Cell editing with formula support (=SUM, =AVG, =MIN, =MAX, etc.)
+- Formula autocomplete dropdown
+- Cell formatting (bold, italic, font size, text/background colors)
+- Currency formatting (fiat and crypto)
+- Text alignment (left, center, right)
+- Copy/paste with Ctrl+C/Ctrl+V
+- Undo with Ctrl+Z
+- Column resizing via drag
+- Select all via corner cell click
+- Context menu on right-click/long-press
+
+**Usage in Form Responses:**
+```dart
+// Display form responses as editable spreadsheet
+SheetGridWidget(
+  sheet: _responsesSheet!,
+  onChanged: (sheet) {
+    setState(() {
+      _responsesSheet = sheet;
+      _hasChanges = true;
+    });
+  },
+)
+```
+
+**Building a Spreadsheet from Data:**
+```dart
+SpreadsheetSheet _buildDataSpreadsheet(List<DataItem> items) {
+  final sheet = SpreadsheetSheet.create(id: 'data', name: 'Data');
+  sheet.cols = 5;
+  sheet.rows = items.length + 10;
+
+  // Header row
+  sheet.setCell(0, 0, SpreadsheetCell(value: 'ID', type: CellType.string));
+  sheet.setCell(0, 1, SpreadsheetCell(value: 'Name', type: CellType.string));
+  sheet.setCell(0, 2, SpreadsheetCell(value: 'Value', type: CellType.string));
+
+  // Data rows
+  for (int i = 0; i < items.length; i++) {
+    final item = items[i];
+    sheet.setCell(i + 1, 0, SpreadsheetCell(value: i + 1, type: CellType.number));
+    sheet.setCell(i + 1, 1, SpreadsheetCell(value: item.name, type: CellType.string));
+    sheet.setCell(i + 1, 2, SpreadsheetCell(value: item.value, type: CellType.number));
+  }
+
+  return sheet;
+}
+```
+
+**NdfService Methods for Persistence:**
+```dart
+// Read spreadsheet from NDF archive
+final sheet = await _ndfService.readResponsesSpreadsheet(filePath);
+
+// Save spreadsheet to NDF archive
+await _ndfService.saveResponsesSpreadsheet(filePath, sheet);
+```
+
+---
+
+### TodoContent Model
+
+**File:** `lib/work/models/todo_content.dart`
+
+Models for TODO document type in the NDF format. Includes content model, item model, links, updates, and settings.
+
+**Classes:**
+| Class | Description |
+|-------|-------------|
+| `TodoContent` | Main content stored in content/main.json |
+| `TodoItem` | Individual task with title, description, pictures, links, updates |
+| `TodoLink` | A link with title and URL |
+| `TodoUpdate` | A progress update/note with timestamp |
+| `TodoSettings` | Display settings (show completed, sort order, default expanded) |
+| `TodoSortOrder` | Enum for sorting (createdAsc, createdDesc, completedFirst, pendingFirst) |
+
+**TodoItem Features:**
+- `toggleCompleted()` - Toggle completion and set completedAt timestamp
+- `durationSummary` getter - Returns human-readable completion duration ("2d 3h", "45m")
+- Pictures stored as asset paths (images/item-xxx-timestamp.jpg)
+- Links with id, title, url
+- Updates with id, content, createdAt
+
+**Usage:**
+```dart
+// Create a new item
+final item = TodoItem.create(
+  title: 'Fix login bug',
+  description: 'Email validation not working',
+);
+
+// Toggle completion
+item.toggleCompleted();
+print(item.durationSummary); // "2h 15m"
+
+// Add attachments
+item.addPicture('images/screenshot.png');
+item.addLink(TodoLink.create(title: 'Issue', url: 'https://github.com/...'));
+item.addUpdate(TodoUpdate.create(content: 'Found the root cause'));
+```
+
+---
+
+### TodoItemCardWidget
+
+**File:** `lib/work/widgets/todo/todo_item_card_widget.dart`
+
+An expandable card widget for displaying TODO items. Shows checkbox, title, badges, and expands to show full details with pictures, links, and updates.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `item` | TodoItem | Yes | The TODO item to display |
+| `isExpanded` | bool | Yes | Whether details are shown |
+| `ndfFilePath` | String | Yes | Path to NDF file for loading pictures |
+| `onToggleCompleted` | VoidCallback | Yes | Called when checkbox toggled |
+| `onToggleExpanded` | VoidCallback | Yes | Called when expand/collapse tapped |
+| `onEdit` | VoidCallback | Yes | Called to edit item |
+| `onDelete` | VoidCallback | Yes | Called to delete item |
+| `onAddPicture` | VoidCallback | Yes | Called to add picture |
+| `onRemovePicture` | Function(String) | Yes | Called to remove picture by path |
+| `onAddLink` | VoidCallback | Yes | Called to add link |
+| `onRemoveLink` | Function(String) | Yes | Called to remove link by ID |
+| `onOpenLink` | Function(TodoLink) | Yes | Called to open link in browser |
+| `onAddUpdate` | VoidCallback | Yes | Called to add update |
+| `onRemoveUpdate` | Function(String) | Yes | Called to remove update by ID |
+
+**Features:**
+- Checkbox for completion toggle with strikethrough text when completed
+- Duration badge showing completion time ("Completed in 2d 3h")
+- Badges showing pictures/updates/links count
+- Expandable section with:
+  - Description text
+  - Picture grid with thumbnails loaded from NDF assets
+  - Updates list with timestamps
+  - Links list with tap-to-open
+- Edit/Delete action buttons
+
+**Platform-aware Image Picker Pattern:**
+```dart
+void _addPicture(TodoItem item) async {
+  final isMobile = Platform.isAndroid || Platform.isIOS;
+  if (isMobile) {
+    // Show bottom sheet with Camera + Gallery options
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.camera_alt),
+            title: Text('Take Photo'),
+            onTap: () { Navigator.pop(context); _takePhoto(item); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: Text('From Gallery'),
+            onTap: () { Navigator.pop(context); _pickFromGallery(item); },
+          ),
+        ],
+      ),
+    );
+  } else {
+    // Desktop: file picker only
+    _pickFromGallery(item);
+  }
+}
+```
+
+---
+
+## Presentation Decoration Painters
+
+**File:** `lib/work/widgets/presentation/slide_canvas_widget.dart`
+
+Custom painters for rendering slide template decorations. These can be reused in other contexts where similar visual patterns are needed.
+
+### _DiagonalStripesPainter
+
+Draws diagonal stripes pattern (like hazard tape or decorative backgrounds).
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Stripe color |
+| `count` | int | Number of stripes |
+
+**Usage:**
+```dart
+CustomPaint(
+  painter: _DiagonalStripesPainter(
+    color: Colors.blue.withOpacity(0.3),
+    count: 5,
+  ),
+  size: Size(200, 100),
+)
+```
+
+### _DotsPainter
+
+Draws a grid of dots (polka dot pattern).
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Dot color |
+| `count` | int | Dots per row/column |
+
+### _GridPainter
+
+Draws a grid pattern (like graph paper or cyber aesthetic).
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Line color |
+| `count` | int | Number of vertical lines |
+
+### _ScanlinesPainter
+
+Draws horizontal scanlines (CRT monitor effect).
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Line color |
+| `count` | int | Number of lines |
+
+### _CornerAccentPainter
+
+Draws a corner triangle accent decoration.
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Triangle fill color |
+
+### _WavePainter
+
+Draws a wave pattern (ocean/nature themes).
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Wave fill color |
+
+### _TrianglePainter
+
+Draws a simple triangle shape.
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `color` | Color | Triangle fill color |
+
+### SlideTemplate
+
+Predefined slide templates with decorations, colors, and visual patterns.
+
+**Available Templates:**
+| ID | Name Key | Style |
+|----|----------|-------|
+| `classic` | work_template_classic | Professional with header bar |
+| `blackwhite` | work_template_blackwhite | Elegant monochrome |
+| `dark` | work_template_dark | Dark mode with gradient |
+| `cyber` | work_template_cyber | Neon grid cyberpunk |
+| `retro80s` | work_template_retro80s | Amber CRT terminal |
+| `retro_green` | work_template_retro_green | Green phosphor CRT |
+| `corporate` | work_template_corporate | Business professional |
+| `nature` | work_template_nature | Organic green waves |
+| `sunset` | work_template_sunset | Warm gradient tones |
+| `ocean` | work_template_ocean | Blue wave patterns |
+| `purple` | work_template_purple | Elegant purple gradient |
+| `minimalist` | work_template_minimalist | Clean subtle accents |
+
+**Usage:**
+```dart
+// Get a template
+final template = SlideTemplate.getById('cyber');
+
+// Apply to SlideCanvasWidget
+SlideCanvasWidget(
+  slide: slide,
+  theme: content.theme,
+  template: template,  // Renders decorations
+  aspectRatio: 16 / 9,
+)
+```
+
+**Template Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | String | Unique identifier |
+| `nameKey` | String | i18n translation key |
+| `colors` | ThemeColors | primary, secondary, accent, background, text |
+| `decorations` | List<SlideDecoration> | Visual decorations to render |
+| `titleBarColor` | String? | Color for header bar |
+| `hasGradientBackground` | bool | Use gradient instead of solid |
+
+---
+
+## Inline Text Editing Pattern
+
+Pattern for inline text editing directly in a canvas/widget instead of using popup dialogs. This provides WYSIWYG editing where users see exactly how text looks while typing.
+
+**State Variables:**
+```dart
+bool _isInlineEditing = false;
+final TextEditingController _textEditController = TextEditingController();
+final FocusNode _textEditFocusNode = FocusNode();
+String? _originalTextBeforeEdit;  // For cancel/restore
+```
+
+**Enter Edit Mode:**
+```dart
+void _editElement(String elementId) {
+  final element = /* get element */;
+
+  // Store original text for cancel
+  _originalTextBeforeEdit = element.plainText;
+
+  setState(() {
+    _selectedElementId = elementId;
+    _isInlineEditing = true;
+  });
+
+  _textEditController.text = element.plainText;
+
+  // Request focus after build
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _textEditFocusNode.requestFocus();
+  });
+}
+```
+
+**Commit Edit:**
+```dart
+void _commitInlineEdit() {
+  if (!_isInlineEditing || _selectedElementId == null) return;
+
+  // Update element with new text
+  final newText = _textEditController.text.isEmpty
+      ? placeholderText
+      : _textEditController.text;
+
+  // Apply to element...
+
+  setState(() {
+    _isInlineEditing = false;
+    _originalTextBeforeEdit = null;
+  });
+}
+```
+
+**Cancel Edit (Restore Original):**
+```dart
+void _cancelInlineEdit() {
+  if (!_isInlineEditing) return;
+
+  // Restore original text
+  if (_originalTextBeforeEdit != null) {
+    // Restore element text...
+  }
+
+  setState(() {
+    _isInlineEditing = false;
+    _originalTextBeforeEdit = null;
+  });
+}
+```
+
+**Widget-Side Rendering (with Rich Text Overlay):**
+
+To show formatted text (bold, italic) while editing, use a Stack with:
+1. RichText layer (shows formatted content visually)
+2. Transparent TextField layer (captures input and selection)
+
+To capture Ctrl+B/I shortcuts before TextField consumes them, wrap in `Focus` with `onKeyEvent` returning `KeyEventResult.handled`.
+
+```dart
+// Conditionally render TextField when editing
+if (isSelected && widget.isInlineEditing && widget.textEditController != null) {
+  return Focus(
+    onKeyEvent: (node, event) {
+      if (event is KeyDownEvent) {
+        final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed;
+        if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyB) {
+          widget.onToggleFormatting?.call('bold');
+          return KeyEventResult.handled; // CRITICAL: consume event before TextField gets it
+        }
+        if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyI) {
+          widget.onToggleFormatting?.call('italic');
+          return KeyEventResult.handled;
+        }
+        if (event.logicalKey == LogicalKeyboardKey.escape) {
+          widget.onTextEditCancel?.call();
+          return KeyEventResult.handled;
+        }
+      }
+      return KeyEventResult.ignored; // Let TextField handle other keys
+    },
+    child: Stack(
+      children: [
+        // Visual layer: RichText showing formatted spans
+        Positioned.fill(
+          child: IgnorePointer(
+            child: RichText(
+              text: TextSpan(children: _buildFormattedSpans(element)),
+              textAlign: textAlign,
+            ),
+          ),
+        ),
+        // Input layer: Transparent TextField for typing/selection
+        TextField(
+          controller: widget.textEditController,
+          focusNode: widget.textEditFocusNode,
+          autofocus: true,
+          maxLines: null,
+          style: TextStyle(
+            fontSize: scaledFontSize,
+            color: Colors.transparent, // Invisible text
+          ),
+          cursorColor: textColor, // Visible cursor
+          decoration: const InputDecoration(
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
+            isDense: true,
+          ),
+          textInputAction: TextInputAction.newline,
+        ),
+      ],
+    ),
+  );
+}
+
+// Otherwise render normal RichText
+return RichText(...);
+```
+
+**Key patterns:**
+- `KeyboardListener` does NOT work for capturing Ctrl+B/I because it fires AFTER TextField
+- `Focus.onKeyEvent` returning `KeyEventResult.handled` intercepts events BEFORE TextField
+- Stack with transparent TextField + visible RichText shows formatting while allowing selection
+
+**Input Handling:**
+| Platform | Input | Action |
+|----------|-------|--------|
+| Desktop | Double-click | Start editing |
+| Desktop | Escape | Cancel, restore original |
+| Desktop | Ctrl+Enter | Commit text |
+| Desktop | Ctrl+B | Toggle bold (selection or whole text) |
+| Desktop | Ctrl+I | Toggle italic (selection or whole text) |
+| Desktop | Ctrl+U | Toggle underline (selection or whole text) |
+| Desktop | Click away | Commit text |
+| Mobile | Long-press | Start editing |
+| Mobile | Tap away | Commit text |
+
+**Inline Formatting Toggle (with existing formatting preservation):**
+```dart
+/// Toggle formatting during inline editing.
+/// - Selected text: toggles mark on selection only, preserves other formatting
+/// - No selection: toggles element-level style
+void _toggleInlineFormatting(String mark) {
+  // If no selection, toggle element-level style
+  if (!selection.isValid || selection.isCollapsed || text.isEmpty) {
+    _toggleElementStyle(mark);
+    return;
+  }
+
+  // Build character-level map of marks from existing spans
+  final charMarks = <int, Set<String>>{};
+  int pos = 0;
+  for (final span in element.content) {
+    for (int i = 0; i < span.value.length; i++) {
+      charMarks[pos++] = Set<String>.from(span.marks);
+    }
+  }
+
+  // Check if ALL selected characters have this mark (to toggle off)
+  bool allHaveMark = true;
+  for (int i = start; i < end; i++) {
+    if (!(charMarks[i]?.contains(mark) ?? false)) {
+      allHaveMark = false;
+      break;
+    }
+  }
+
+  // Toggle mark on selected characters only
+  for (int i = start; i < end; i++) {
+    if (allHaveMark) {
+      charMarks[i]!.remove(mark);
+    } else {
+      charMarks[i]!.add(mark);
+    }
+  }
+
+  // Convert back to spans - merge consecutive chars with same marks
+  // ...
+}
+
+bool _setsEqual(Set<String>? a, Set<String>? b) {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return a.length == b.length && a.containsAll(b);
+}
+```
+
+**Files using this pattern:**
+- `lib/work/pages/presentation_editor_page.dart`
+- `lib/work/widgets/presentation/slide_canvas_widget.dart`
+
