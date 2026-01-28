@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../models/file_browser_cache_models.dart';
+import '../services/file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
 
 /// Sort mode for file/folder listing
@@ -115,19 +118,27 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
   FileSortMode _sortMode = FileSortMode.name;
   bool _sortAscending = true;
   List<StorageLocation> _storageLocations = [];
-  final Map<String, int> _folderSizeCache = {};
+  final Map<String, int> _folderSizeCache = {};  // In-memory cache for current session
   final Set<String> _calculatingFolders = {};
   final Map<String, String?> _thumbnailCache = {};  // path -> thumbnail path
   final Set<String> _loadingThumbnails = {};
   String? _error;
   bool _isGridView = false;
+  final FileBrowserCacheService _cacheService = FileBrowserCacheService();
+  bool _cacheInitialized = false;
 
   @override
   void initState() {
     super.initState();
     _showHidden = widget.showHiddenFiles;
+    _initializeCacheService();
     _initializeDirectory();
     _detectStorageLocations();
+  }
+
+  Future<void> _initializeCacheService() async {
+    await _cacheService.initialize();
+    _cacheInitialized = true;
   }
 
   void _initializeDirectory() {
@@ -265,26 +276,83 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
     });
 
     try {
+      final dirPath = _currentDirectory.path;
+
+      // Try to load from persistent cache first
+      if (_cacheInitialized) {
+        final cachedDir = await _cacheService.getDirectoryCache(dirPath);
+        if (cachedDir != null) {
+          // Check if cache is still valid
+          final dirStat = await _currentDirectory.stat();
+          if (!cachedDir.isStale(dirStat.modified)) {
+            // Use cached entries - instant load!
+            final items = cachedDir.entries
+                .where((e) => _showHidden || !e.name.startsWith('.'))
+                .map((e) => e.toFileSystemItem())
+                .toList();
+
+            // Populate in-memory folder size cache from persistent cache
+            for (final entry in cachedDir.entries) {
+              if (entry.isDirectory && entry.size > 0) {
+                _folderSizeCache[entry.path] = entry.size;
+              }
+            }
+
+            _sortItems(items);
+
+            if (mounted) {
+              setState(() {
+                _items = items;
+                _isLoading = false;
+              });
+            }
+            return;
+          }
+        }
+      }
+
+      // No valid cache - scan directory
       final items = <FileSystemItem>[];
+      final cachedEntries = <CachedFileEntry>[];
+      DateTime? dirModified;
+
+      try {
+        dirModified = (await _currentDirectory.stat()).modified;
+      } catch (_) {}
 
       await for (final entity in _currentDirectory.list()) {
         final name = p.basename(entity.path);
-
-        // Skip hidden files if not showing them
-        if (!_showHidden && name.startsWith('.')) continue;
-
         final stat = await entity.stat();
         final isDir = entity is Directory;
 
         int size = stat.size;
         if (isDir) {
-          // Check cache first
+          // Check in-memory cache first, then persistent cache
           size = _folderSizeCache[entity.path] ?? 0;
+          if (size == 0 && _cacheInitialized) {
+            final cachedSize = await _cacheService.getCachedFolderSize(entity.path);
+            if (cachedSize != null && cachedSize > 0) {
+              size = cachedSize;
+              _folderSizeCache[entity.path] = size;
+            }
+          }
           if (size == 0) {
             // Calculate in background
             _calculateFolderSize(entity.path);
           }
         }
+
+        // Add to cache entries (always, even hidden files)
+        cachedEntries.add(CachedFileEntry(
+          name: name,
+          path: entity.path,
+          isDirectory: isDir,
+          size: size,
+          modified: stat.modified,
+        ));
+
+        // Skip hidden files if not showing them (for display only)
+        if (!_showHidden && name.startsWith('.')) continue;
 
         items.add(FileSystemItem(
           path: entity.path,
@@ -294,6 +362,11 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
           modified: stat.modified,
           type: stat.type,
         ));
+      }
+
+      // Save to persistent cache in background
+      if (_cacheInitialized && dirModified != null) {
+        _cacheService.saveDirectoryCache(dirPath, cachedEntries, dirModified);
       }
 
       _sortItems(items);
@@ -333,6 +406,11 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
 
     _folderSizeCache[folderPath] = totalSize;
     _calculatingFolders.remove(folderPath);
+
+    // Save to persistent cache
+    if (_cacheInitialized && totalSize > 0) {
+      _cacheService.saveFolderSize(folderPath, totalSize);
+    }
 
     // Update UI if still viewing this directory
     if (mounted && _currentDirectory.path == p.dirname(folderPath)) {
@@ -457,6 +535,20 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
       _thumbnailCache[item.path] = item.path;
       if (mounted) setState(() {});
     } else if (_isVideoFile(item.name)) {
+      // Check persistent cache first
+      if (_cacheInitialized) {
+        final hasCached = await _cacheService.hasThumbnail(item.path, item.modified);
+        if (hasCached) {
+          final cachedPath = await _cacheService.getThumbnailTempPath(item.path);
+          if (cachedPath != null) {
+            _thumbnailCache[item.path] = cachedPath;
+            _loadingThumbnails.remove(item.path);
+            if (mounted) setState(() {});
+            return;
+          }
+        }
+      }
+
       // Generate video thumbnail
       final tempDir = Directory.systemTemp;
       final outputPath = '${tempDir.path}/thumb_${item.name.hashCode}.png';
@@ -468,6 +560,25 @@ class _FileFolderPickerState extends State<FileFolderPicker> {
       );
 
       _thumbnailCache[item.path] = thumbPath;
+
+      // Save to persistent cache
+      if (_cacheInitialized && thumbPath != null) {
+        try {
+          final thumbFile = File(thumbPath);
+          if (await thumbFile.exists()) {
+            final bytes = await thumbFile.readAsBytes();
+            await _cacheService.saveThumbnail(
+              item.path,
+              Uint8List.fromList(bytes),
+              item.modified,
+              extension: 'png',
+            );
+          }
+        } catch (_) {
+          // Ignore thumbnail cache errors
+        }
+      }
+
       if (mounted) setState(() {});
     }
 

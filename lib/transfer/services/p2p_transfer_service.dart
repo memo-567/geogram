@@ -16,6 +16,7 @@ import '../../util/event_bus.dart';
 import '../../util/nostr_event.dart';
 import '../models/transfer_offer.dart';
 import '../../pages/transfer_send_page.dart';
+import 'transfer_metrics_service.dart';
 
 /// P2P Transfer Service - Manages peer-to-peer file transfers
 ///
@@ -297,6 +298,13 @@ class P2PTransferService {
     if (success) {
       offer.status = TransferOfferStatus.completed;
       LogService().log('P2PTransfer: Offer $offerId completed successfully');
+
+      // Record to metrics service (sender side - upload)
+      TransferMetricsService().recordP2PTransferComplete(
+        callsign: offer.receiverCallsign ?? 'Unknown',
+        bytesTransferred: offer.bytesTransferred,
+        isUpload: true, // We are uploading/sending
+      );
     } else {
       offer.status = TransferOfferStatus.failed;
       offer.error = message['error'] as String?;
@@ -607,6 +615,13 @@ class P2PTransferService {
 
       // All files downloaded successfully
       offer.status = TransferOfferStatus.completed;
+
+      // Record to metrics service (receiver side - download)
+      TransferMetricsService().recordP2PTransferComplete(
+        callsign: offer.senderCallsign,
+        bytesTransferred: totalBytesReceived,
+        isUpload: false, // We are downloading/receiving
+      );
 
       // Send completion notification
       await _sendCompletion(offer, true, totalBytesReceived, filesCompleted);

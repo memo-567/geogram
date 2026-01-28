@@ -1,6 +1,7 @@
 /// Routing strategies for selecting transports
 library;
 
+import '../services/log_service.dart';
 import 'transport.dart';
 import 'transport_message.dart';
 
@@ -59,16 +60,22 @@ class PriorityRoutingStrategy implements RoutingStrategy {
     if (filterUnreachable) {
       final reachableTransports = <Transport>[];
 
+      LogService().log('PriorityRoutingStrategy: Checking canReach($callsign) for ${transports.length} transports');
+
       // Check reachability in parallel with timeout
       final futures = transports.map((t) async {
         try {
           final canReach = await t.canReach(callsign).timeout(
             reachabilityTimeout,
-            onTimeout: () => false,
+            onTimeout: () {
+              LogService().log('PriorityRoutingStrategy: ${t.id} canReach() TIMEOUT');
+              return false;
+            },
           );
+          LogService().log('PriorityRoutingStrategy: ${t.id} canReach($callsign) = $canReach');
           if (canReach) return t;
-        } catch (_) {
-          // Ignore errors, transport is not reachable
+        } catch (e) {
+          LogService().log('PriorityRoutingStrategy: ${t.id} canReach() ERROR: $e');
         }
         return null;
       });
@@ -79,10 +86,12 @@ class PriorityRoutingStrategy implements RoutingStrategy {
       // If no transports can reach, fall back to all available
       // (let them try and fail with proper error messages)
       if (reachableTransports.isEmpty) {
+        LogService().log('PriorityRoutingStrategy: No transports can reach $callsign, falling back to all available');
         transports = availableTransports
             .where((t) => t.isAvailable && t.isInitialized)
             .toList();
       } else {
+        LogService().log('PriorityRoutingStrategy: ${reachableTransports.length} transports can reach $callsign: ${reachableTransports.map((t) => t.id).join(', ')}');
         transports = reachableTransports;
       }
     }

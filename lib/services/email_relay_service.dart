@@ -54,6 +54,7 @@
 
 import 'dart:convert';
 
+import '../util/email_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
@@ -314,7 +315,8 @@ class EmailRelayService {
     // Extract email body from content (base64 decoded thread.md content)
     String body;
     try {
-      body = utf8.decode(base64Decode(entry.content));
+      final rawContent = utf8.decode(base64Decode(entry.content));
+      body = _extractPlainTextBody(rawContent);
     } catch (_) {
       body = entry.content; // Already plain text
     }
@@ -377,6 +379,25 @@ class EmailRelayService {
         entry.sendToClientCallback!(entry.senderId, jsonEncode(dsn));
       }
     }
+  }
+
+  /// Extract plain text email body from thread.md format for external delivery
+  ///
+  /// The thread.md format includes headers and metadata that should not be
+  /// sent to external recipients. This method extracts only the message content.
+  String _extractPlainTextBody(String threadContent) {
+    final thread = EmailFormat.parse(threadContent);
+    if (thread == null || thread.messages.isEmpty) {
+      return threadContent; // Fallback to raw content
+    }
+
+    // Concatenate all message contents (chronological order)
+    final buffer = StringBuffer();
+    for (int i = 0; i < thread.messages.length; i++) {
+      if (i > 0) buffer.write('\n\n---\n\n');
+      buffer.write(thread.messages[i].content);
+    }
+    return buffer.toString();
   }
 
   /// Reject an external email

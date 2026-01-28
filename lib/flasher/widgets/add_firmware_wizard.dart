@@ -79,6 +79,7 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
   bool _isReading = false;
   FlashProgress? _readProgress;
   Uint8List? _readFirmware;
+  FlasherService? _flasherService;
 
   // Focus nodes for Enter key navigation
   final _modelTitleFocus = FocusNode();
@@ -742,6 +743,8 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 24),
 
@@ -873,6 +876,8 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
                           child: Text(
                             _modelPhotoPath!.split(Platform.pathSeparator).last,
                             style: theme.textTheme.bodyMedium,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         IconButton(
@@ -953,6 +958,8 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 24),
 
@@ -1109,6 +1116,8 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
                 Text(
                   _firmwarePath!.split(Platform.pathSeparator).last,
                   style: theme.textTheme.bodyMedium,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (_firmwareSize != null)
                   Text(
@@ -1213,6 +1222,7 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
             Expanded(
               child: DropdownButtonFormField<PortInfo>(
                 value: _selectedReadPort,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Select ESP32 Port',
                   border: OutlineInputBorder(),
@@ -1287,6 +1297,17 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
             const SizedBox(height: 8),
             LinearProgressIndicator(
               value: _readProgress!.progress,
+            ),
+            const SizedBox(height: 12),
+            Center(
+              child: OutlinedButton.icon(
+                onPressed: _cancelRead,
+                icon: const Icon(Icons.stop),
+                label: const Text('Stop'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                ),
+              ),
             ),
           ] else ...[
             const Center(
@@ -1377,9 +1398,9 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
     });
 
     try {
-      final service = FlasherService.withPath(widget.basePath);
+      _flasherService = FlasherService.withPath(widget.basePath);
 
-      final firmware = await service.readFirmwareFromDevice(
+      final firmware = await _flasherService!.readFirmwareFromDevice(
         portPath: _selectedReadPort!.path,
         onProgress: (progress) {
           if (mounted) {
@@ -1395,6 +1416,7 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
           _readFirmware = firmware;
           _firmwareSize = firmware.length;
           _isReading = false;
+          _flasherService = null;
         });
       }
     } catch (e) {
@@ -1402,8 +1424,20 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
         setState(() {
           _error = 'Failed to read firmware: $e';
           _isReading = false;
+          _flasherService = null;
         });
       }
+    }
+  }
+
+  Future<void> _cancelRead() async {
+    await _flasherService?.cancel();
+    if (mounted) {
+      setState(() {
+        _isReading = false;
+        _readProgress = null;
+        _flasherService = null;
+      });
     }
   }
 }

@@ -65,6 +65,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.menu_book;
     case 'flasher':
       return Icons.flash_on;
+    case 'work':
+      return Icons.work;
     default:
       return Icons.folder;
   }
@@ -264,6 +266,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFFFF6F00), const Color(0xFFE65100)]
             : [const Color(0xFFFFB74D), const Color(0xFFFFA726)],
+      );
+    case 'work':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
+            : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
       );
     default:
       return LinearGradient(

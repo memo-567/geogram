@@ -468,11 +468,13 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
     // Use orientation to decide layout: wrap in portrait, scroll in landscape
     final orientation = MediaQuery.of(context).orientation;
     final isLandscape = orientation == Orientation.landscape;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 400;
 
     final toolbarItems = [
           // Port selector
           SizedBox(
-            width: 180,
+            width: isLandscape ? 180 : (isNarrow ? 120 : 150),
             child: DropdownButton<PortInfo>(
               value: selectedPort,
               hint: const Text('Select port'),
@@ -493,7 +495,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
 
           // Baud rate selector
           SizedBox(
-            width: 90,
+            width: isLandscape ? 90 : (isNarrow ? 70 : 80),
             child: DropdownButton<int>(
               value: _baudRate,
               isExpanded: true,
@@ -604,7 +606,7 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
 
           // Line ending selector
           SizedBox(
-            width: 70,
+            width: isLandscape ? 70 : 60,
             child: DropdownButton<String>(
               value: _lineEnding,
               isExpanded: true,
@@ -623,8 +625,8 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
             ),
           ),
 
-          // Stats
-          if (_isConnected) ...[
+          // Stats (hide on very narrow screens in portrait)
+          if (_isConnected && (isLandscape || screenWidth > 350)) ...[
             const VerticalDivider(width: 16),
             Text(
               'RX: ${_formatBytes(_rxBytes)}',
@@ -655,12 +657,17 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
                   ..removeLast(),
               ),
             )
-          // Portrait: wrap to multiple lines
-          : Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: toolbarItems,
+          // Portrait: wrap to multiple lines with max height constraint
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 140),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: toolbarItems,
+                ),
+              ),
             ),
     );
   }
@@ -699,11 +706,14 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
           const SizedBox(width: 8),
           // Match count
           if (_searchQuery.isNotEmpty)
-            Text(
-              _searchMatches.isEmpty
-                  ? 'No matches'
-                  : '${_currentMatchIndex + 1}/${_searchMatches.length}',
-              style: theme.textTheme.bodySmall,
+            Flexible(
+              child: Text(
+                _searchMatches.isEmpty
+                    ? 'No matches'
+                    : '${_currentMatchIndex + 1}/${_searchMatches.length}',
+                style: theme.textTheme.bodySmall,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           const SizedBox(width: 8),
           // Previous match
@@ -803,26 +813,32 @@ class SerialMonitorWidgetState extends State<SerialMonitorWidget> {
           Positioned(
             top: 8,
             right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.orange.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.pause, size: 16, color: Colors.white),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Paused (${_pausedBuffer.length} buffered)',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 200),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.pause, size: 16, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        'Paused (${_pausedBuffer.length} buffered)',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

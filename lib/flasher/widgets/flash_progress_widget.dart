@@ -78,6 +78,8 @@ class FlashProgressWidget extends StatelessWidget {
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.textTheme.bodySmall?.color?.withOpacity(0.7),
                 ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -307,7 +309,7 @@ class FlashProgressWidget extends StatelessWidget {
   ) {
     return Column(
       children: [
-        Icon(icon, size: 20, color: theme.textTheme.bodySmall?.color),
+        Icon(icon, size: 18, color: theme.textTheme.bodySmall?.color),
         const SizedBox(height: 4),
         Text(
           label,
@@ -343,6 +345,8 @@ class FlashProgressWidget extends StatelessWidget {
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: Colors.red.shade700,
               ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -379,6 +383,8 @@ class FlashProgressWidget extends StatelessWidget {
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: Colors.green.shade700,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
               ],
             ),

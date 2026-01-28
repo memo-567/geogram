@@ -52,6 +52,16 @@ class UsbAttachmentService {
         }
         break;
 
+      case 'onUsbAccessoryAttached':
+        final args = call.arguments as Map<dynamic, dynamic>;
+        final manufacturer = args['manufacturer'] as String?;
+        final model = args['model'] as String?;
+        LogService().log(
+          '[USB] AOA accessory attached: $manufacturer $model, opening Devices panel',
+        );
+        DebugController().navigateToPanel(PanelIndex.devices);
+        break;
+
       default:
         LogService().log('[USB] Unknown method: ${call.method}');
     }

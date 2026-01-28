@@ -80,6 +80,14 @@ if ! "$FLUTTER_BIN" pub get --offline 2>/dev/null; then
     "$FLUTTER_BIN" pub get
 fi
 
+# Clean build to ensure fresh compilation
+echo "🧹 Cleaning previous build..."
+"$FLUTTER_BIN" clean
+
+# Re-fetch dependencies after clean
+echo "📦 Re-fetching dependencies..."
+"$FLUTTER_BIN" pub get --offline 2>/dev/null || "$FLUTTER_BIN" pub get
+
 # Restore fvp cache if available
 restore_fvp_if_needed "debug"
 restore_fvp_if_needed "release"

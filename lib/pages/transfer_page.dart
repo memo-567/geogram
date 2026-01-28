@@ -169,11 +169,14 @@ class _TransferPageState extends State<TransferPage>
   }
 
   /// Merge P2P transfer stats into the regular transfer metrics
+  ///
+  /// Only merges active/pending transfer counts for real-time UI.
+  /// Completed stats now come from persisted storage via TransferMetricsService.
   TransferMetrics _mergeP2PMetrics(TransferMetrics base) {
     final outgoing = _p2pService.outgoingOffers;
     final incoming = _p2pService.incomingOffers;
 
-    // Count active P2P transfers
+    // Count active P2P transfers (still needed for real-time UI)
     final activeP2P = [
       ...outgoing.where((o) =>
           o.status == TransferOfferStatus.accepted ||
@@ -188,120 +191,10 @@ class _TransferPageState extends State<TransferPage>
         .where((o) => o.status == TransferOfferStatus.pending)
         .length;
 
-    // Calculate P2P period stats
-    final completedOutgoing = outgoing
-        .where((o) => o.status == TransferOfferStatus.completed)
-        .toList();
-    final completedIncoming = incoming
-        .where((o) => o.status == TransferOfferStatus.completed)
-        .toList();
-    final failedP2P = [
-      ...outgoing.where((o) => o.status == TransferOfferStatus.failed),
-      ...incoming.where((o) => o.status == TransferOfferStatus.failed),
-    ].length;
-
-    // Calculate bytes
-    int p2pBytesUploaded = 0;
-    int p2pBytesDownloaded = 0;
-    for (final offer in completedOutgoing) {
-      p2pBytesUploaded += offer.bytesTransferred;
-    }
-    for (final offer in completedIncoming) {
-      p2pBytesDownloaded += offer.bytesTransferred;
-    }
-
-    // Merge today stats
-    final mergedToday = base.today.copyWith(
-      uploadCount: base.today.uploadCount + completedOutgoing.length,
-      downloadCount: base.today.downloadCount + completedIncoming.length,
-      bytesUploaded: base.today.bytesUploaded + p2pBytesUploaded,
-      bytesDownloaded: base.today.bytesDownloaded + p2pBytesDownloaded,
-      failedCount: base.today.failedCount + failedP2P,
-    );
-
-    // Build callsign stats from P2P
-    final callsignMap = <String, CallsignStats>{};
-    for (final stat in base.topCallsigns) {
-      callsignMap[stat.callsign] = stat;
-    }
-
-    // Add outgoing (uploads to receiver)
-    for (final offer in completedOutgoing) {
-      final callsign = offer.receiverCallsign ?? 'Unknown';
-      final existing = callsignMap[callsign];
-      if (existing != null) {
-        callsignMap[callsign] = existing.copyWith(
-          uploadCount: existing.uploadCount + 1,
-          bytesUploaded: existing.bytesUploaded + offer.bytesTransferred,
-          lastActivity: offer.createdAt.isAfter(existing.lastActivity)
-              ? offer.createdAt
-              : existing.lastActivity,
-        );
-      } else {
-        callsignMap[callsign] = CallsignStats(
-          callsign: callsign,
-          uploadCount: 1,
-          bytesUploaded: offer.bytesTransferred,
-          lastActivity: offer.createdAt,
-        );
-      }
-    }
-
-    // Add incoming (downloads from sender)
-    for (final offer in completedIncoming) {
-      final callsign = offer.senderCallsign;
-      final existing = callsignMap[callsign];
-      if (existing != null) {
-        callsignMap[callsign] = existing.copyWith(
-          downloadCount: existing.downloadCount + 1,
-          bytesDownloaded: existing.bytesDownloaded + offer.bytesTransferred,
-          lastActivity: offer.createdAt.isAfter(existing.lastActivity)
-              ? offer.createdAt
-              : existing.lastActivity,
-        );
-      } else {
-        callsignMap[callsign] = CallsignStats(
-          callsign: callsign,
-          downloadCount: 1,
-          bytesDownloaded: offer.bytesTransferred,
-          lastActivity: offer.createdAt,
-        );
-      }
-    }
-
-    // Sort by total bytes
-    final sortedCallsigns = callsignMap.values.toList()
-      ..sort((a, b) => b.totalBytes.compareTo(a.totalBytes));
-
-    // Merge transport stats - P2P uses HTTP
-    final transportMap = Map<String, TransportStats>.from(base.byTransport);
-    final p2pTotalBytes = p2pBytesUploaded + p2pBytesDownloaded;
-    final p2pTotalCount = completedOutgoing.length + completedIncoming.length;
-    if (p2pTotalCount > 0) {
-      final existingHttp = transportMap['internet_http'];
-      if (existingHttp != null) {
-        transportMap['internet_http'] = existingHttp.copyWith(
-          transferCount: existingHttp.transferCount + p2pTotalCount,
-          bytesTransferred: existingHttp.bytesTransferred + p2pTotalBytes,
-        );
-      } else {
-        transportMap['internet_http'] = TransportStats(
-          transportId: 'internet_http',
-          transferCount: p2pTotalCount,
-          bytesTransferred: p2pTotalBytes,
-          successRate: failedP2P > 0
-              ? p2pTotalCount / (p2pTotalCount + failedP2P)
-              : 1.0,
-        );
-      }
-    }
-
+    // Only merge active/pending counts - completed stats come from storage now
     return base.copyWith(
       activeTransfers: base.activeTransfers + activeP2P,
       queuedTransfers: base.queuedTransfers + pendingP2P,
-      today: mergedToday,
-      topCallsigns: sortedCallsigns,
-      byTransport: transportMap,
     );
   }
 

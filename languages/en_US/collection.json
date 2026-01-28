@@ -89,6 +89,9 @@
   "collection_type_videos": "Videos",
   "collection_type_desc_videos": "Share and stream videos from your device. Videos stay on your device and are streamed via WebRTC on demand, with metadata syncing to your station.",
   "collection_type_features_videos": "Local video playback|WebRTC streaming|Thumbnail generation|Folder organization|Category filtering|Likes and comments",
+  "collection_type_work": "Work",
+  "collection_type_desc_work": "Create and organize workspaces with NDF documents including spreadsheets, rich text documents, presentations, and forms. Sync-based collaboration with NOSTR signatures.",
+  "collection_type_features_work": "Spreadsheets with formulas|Rich text documents|Presentations with slides|Forms with responses|Workspace collaboration",
   "collection_updates": "Collection Updates",
   "collection_updates_desc": "Notify when collections are updated or synced",
 

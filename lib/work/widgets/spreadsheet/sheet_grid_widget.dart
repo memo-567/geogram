@@ -110,6 +110,10 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
   double _resizeStartX = 0;
   double _resizeStartWidth = 0;
 
+  // Multi-cell selection state (for select all)
+  bool _isSelectAll = false;
+  static const _selectAllMaxDistance = 26;
+
   static const _headerHeight = 32.0;
   static const _rowNumberWidth = 50.0;
   static const _defaultColWidth = 100.0;
@@ -459,6 +463,20 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
     });
   }
 
+  void _selectAll() {
+    setState(() {
+      _isSelectAll = true;
+      _selectedRow = 0;
+      _selectedCol = 0;
+    });
+    _gridFocusNode.requestFocus();
+  }
+
+  bool _isCellInSelectAllRange(int row, int col) {
+    if (!_isSelectAll) return false;
+    return row < _selectAllMaxDistance && col < _selectAllMaxDistance;
+  }
+
   void _selectCell(int row, int col) {
     // Insert cell reference if in formula editing mode
     if (_canSelectCellForFormula) {
@@ -475,6 +493,7 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
       _selectedRow = row;
       _selectedCol = col;
       _isEditing = false;
+      _isSelectAll = false; // Clear select all when selecting a single cell
       // Update formula bar to show selected cell's content
       final cell = widget.sheet.getCell(row, col);
       _editController.text = cell?.formula ?? cell?.value?.toString() ?? '';
@@ -720,16 +739,17 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
     final canUndo = _undoStack.isNotEmpty;
     final hasSelection = _selectedRow != null && _selectedCol != null;
 
-    // Get current cell's currency format for the toolbar button
+    // Get current cell's formatting for toolbar buttons
     final cell = hasSelection
         ? widget.sheet.getCell(_selectedRow!, _selectedCol!)
         : null;
     final currentCurrency = cell?.format != null
         ? CurrencyFormat.byCode(cell!.format!)
         : null;
+    final currentAlignment = _getCellHorizontalAlignment(cell);
 
-    final currencyButtonEnabled = hasSelection && !widget.readOnly;
-    final currencyButtonColor = currencyButtonEnabled
+    final buttonEnabled = hasSelection && !widget.readOnly;
+    final buttonColor = buttonEnabled
         ? theme.colorScheme.onSurface
         : theme.colorScheme.onSurface.withValues(alpha: 0.38);
 
@@ -796,7 +816,7 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
             tooltip: currentCurrency != null
                 ? 'Currency: ${currentCurrency.name} (${currentCurrency.code})'
                 : 'Currency Format',
-            enabled: currencyButtonEnabled,
+            enabled: buttonEnabled,
             onPressed: _showCurrencyMenu,
             child: currentCurrency != null
                 ? Text(
@@ -804,14 +824,22 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: currencyButtonColor,
+                      color: buttonColor,
                     ),
                   )
                 : Icon(
                     Icons.attach_money,
                     size: 20,
-                    color: currencyButtonColor,
+                    color: buttonColor,
                   ),
+          ),
+          const SizedBox(width: 4),
+          // Text alignment dropdown
+          _ToolbarButton(
+            icon: _getAlignmentIcon(currentAlignment),
+            tooltip: 'Text Alignment',
+            enabled: buttonEnabled,
+            onPressed: _showAlignmentMenu,
           ),
           const Spacer(),
         ],
@@ -919,7 +947,7 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
                     physics: const NeverScrollableScrollPhysics(),
                     child: Column(
                     children: [
-                      // Corner cell
+                      // Corner cell placeholder (interactive one is separate)
                       Container(
                         height: _headerHeight,
                         width: _rowNumberWidth,
@@ -939,6 +967,34 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
               ),
             ),
           ),
+            // Interactive corner cell (select all)
+            Positioned(
+              left: 0,
+              top: 0,
+              width: _rowNumberWidth,
+              height: _headerHeight,
+              child: GestureDetector(
+                onTap: _selectAll,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: _isSelectAll
+                        ? theme.colorScheme.primaryContainer
+                        : theme.colorScheme.surfaceContainerHighest,
+                    border: Border(
+                      right: BorderSide(color: theme.colorScheme.outlineVariant),
+                      bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+                    ),
+                  ),
+                  child: _isSelectAll
+                      ? Icon(
+                          Icons.check_box,
+                          size: 16,
+                          color: theme.colorScheme.primary,
+                        )
+                      : null,
+                ),
+              ),
+            ),
           ],
         );
       },
@@ -958,6 +1014,7 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
   Widget _buildColumnHeader(ThemeData theme, int col) {
     final width = _getColumnWidth(col);
     final isResizing = _isResizingColumn && _resizingColumnIndex == col;
+    final isSelected = _selectedCol == col || (_isSelectAll && col < _selectAllMaxDistance);
 
     return SizedBox(
       width: width,
@@ -967,7 +1024,9 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
           // Main header content
           Container(
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
+              color: isSelected
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.surfaceContainerHighest,
               border: Border(
                 right: BorderSide(color: theme.colorScheme.outlineVariant),
                 bottom: BorderSide(color: theme.colorScheme.outlineVariant),
@@ -1008,7 +1067,7 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
 
   Widget _buildRowNumber(ThemeData theme, int row) {
     final height = _getRowHeight(row);
-    final isSelected = _selectedRow == row;
+    final isSelected = _selectedRow == row || (_isSelectAll && row < _selectAllMaxDistance);
 
     return Container(
       width: _rowNumberWidth,
@@ -1053,6 +1112,8 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
 
     // Check if cell is in formula selection range
     final isInFormulaRange = _isInFormulaSelectionRange(row, col);
+    // Check if cell is in select all range
+    final isInSelectAllRange = _isCellInSelectAllRange(row, col);
 
     // Determine background color
     Color? bgColor;
@@ -1060,6 +1121,8 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
       bgColor = theme.colorScheme.tertiary.withValues(alpha: 0.3);
     } else if (isSelected) {
       bgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.3);
+    } else if (isInSelectAllRange) {
+      bgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.2);
     } else {
       bgColor = cellBgColor;
     }
@@ -1120,12 +1183,34 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
   Alignment _getAlignment(SpreadsheetCell? cell) {
     if (cell == null) return Alignment.centerLeft;
 
+    // Check for explicit alignment in style
+    if (cell.style != null) {
+      final cellStyle = widget.sheet.styles[cell.style];
+      final horizontal = cellStyle?.alignment?['horizontal'] as String?;
+      if (horizontal != null) {
+        switch (horizontal) {
+          case 'left':
+            return Alignment.centerLeft;
+          case 'center':
+            return Alignment.center;
+          case 'right':
+            return Alignment.centerRight;
+        }
+      }
+    }
+
     // Numbers align right by default
     if (cell.value is num) {
       return Alignment.centerRight;
     }
 
     return Alignment.centerLeft;
+  }
+
+  String? _getCellHorizontalAlignment(SpreadsheetCell? cell) {
+    if (cell?.style == null) return null;
+    final cellStyle = widget.sheet.styles[cell!.style];
+    return cellStyle?.alignment?['horizontal'] as String?;
   }
 
   // Parse hex color string to Color
@@ -1286,6 +1371,22 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
           ],
         ),
       ),
+      // Text Alignment submenu
+      PopupMenuItem<String>(
+        value: 'alignment',
+        child: Row(
+          children: [
+            Icon(
+              _getAlignmentIcon(_getCellHorizontalAlignment(cell)),
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            const Text('Text Alignment'),
+            const Spacer(),
+            const Icon(Icons.arrow_right, size: 16),
+          ],
+        ),
+      ),
       const PopupMenuDivider(),
       // Currency Format submenu
       PopupMenuItem<String>(
@@ -1331,6 +1432,9 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
         break;
       case 'backgroundColor':
         _showColorMenu(isBackground: true);
+        break;
+      case 'alignment':
+        _showAlignmentMenu();
         break;
       case 'currency':
         _showCurrencyMenu();
@@ -1439,6 +1543,98 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
           _setTextColor(value == 'none' ? null : value);
         }
       }
+    });
+  }
+
+  IconData _getAlignmentIcon(String? alignment) {
+    switch (alignment) {
+      case 'left':
+        return Icons.format_align_left;
+      case 'center':
+        return Icons.format_align_center;
+      case 'right':
+        return Icons.format_align_right;
+      default:
+        return Icons.format_align_left;
+    }
+  }
+
+  void _showAlignmentMenu() {
+    final RenderBox? box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+
+    final size = box.size;
+    final position = Offset(size.width / 2, size.height / 2);
+    final globalPos = box.localToGlobal(position);
+
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+
+    final cell = _selectedRow != null && _selectedCol != null
+        ? widget.sheet.getCell(_selectedRow!, _selectedCol!)
+        : null;
+    final currentAlignment = _getCellHorizontalAlignment(cell);
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPos.dx, globalPos.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem<String>(
+          value: 'left',
+          child: Row(
+            children: [
+              const Icon(Icons.format_align_left, size: 20),
+              const SizedBox(width: 8),
+              const Text('Left'),
+              if (currentAlignment == 'left' || currentAlignment == null) ...[
+                const Spacer(),
+                const Icon(Icons.check, size: 16),
+              ],
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'center',
+          child: Row(
+            children: [
+              const Icon(Icons.format_align_center, size: 20),
+              const SizedBox(width: 8),
+              const Text('Center'),
+              if (currentAlignment == 'center') ...[
+                const Spacer(),
+                const Icon(Icons.check, size: 16),
+              ],
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'right',
+          child: Row(
+            children: [
+              const Icon(Icons.format_align_right, size: 20),
+              const SizedBox(width: 8),
+              const Text('Right'),
+              if (currentAlignment == 'right') ...[
+                const Spacer(),
+                const Icon(Icons.check, size: 16),
+              ],
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value != null) {
+        _setAlignment(value);
+      }
+    });
+  }
+
+  void _setAlignment(String alignment) {
+    _applyCellStyle((style) {
+      style.alignment = {'horizontal': alignment};
     });
   }
 

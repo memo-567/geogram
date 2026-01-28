@@ -8,6 +8,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [UserPickerWidget](#userpickerwidget) - Select users from devices
 - [CurrencyPickerWidget](#currencypickerwidget) - Select currencies
 - [TypeSelectorWidget](#typeselectorwidget) - Select inventory types
+- [FileFolderPicker](#filefolderpicker) - Full-featured file and folder picker
 
 ### Notification Helpers
 - [BackupNotificationService](#backupnotificationservice) - Backup event notifications
@@ -58,6 +59,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
+- [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
 
 ### USB/Transport Services
 - [UsbAoaService](#usbaoapservice) - Cross-platform USB AOA service layer
@@ -79,6 +81,13 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ProtocolRegistry](#protocolregistry) - Protocol factory
 - [DeviceCard](#devicecard-widget) - Device selection card
 - [FlashProgressWidget](#flashprogresswidget) - Progress display
+
+### Work App Components
+- [WorkStorageService](#workstorageservice) - Workspace storage management
+- [NdfService](#ndfservice) - NDF document parsing and creation
+- [Workspace](#workspace-model) - Workspace model with collaborators
+- [NdfDocument](#ndfdocument-model) - NDF document metadata model
+- [NdfPermission](#ndfpermission-model) - NDF permissions and access control
 
 ### API Common Utilities
 - [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
@@ -225,6 +234,53 @@ final typeId = await showModalBottomSheet<String>(
 - Category tabs for quick navigation
 - Search with category filtering
 - Icons for each category
+
+---
+
+### FileFolderPicker
+
+**File:** `lib/widgets/file_folder_picker.dart`
+
+A professional file and folder picker widget with rich features.
+
+**Features:**
+- Browse files and folders with rich type-specific icons and colors
+- Show file sizes and folder total sizes (calculated in background)
+- Sort by name, size, or modification date
+- Access storage locations (Home, Downloads, Documents, Pictures)
+- Detect removable media (USB drives on Linux, SD cards on Android)
+- Multi-select support
+- Grid and list view modes
+- Show/hide hidden files toggle
+- Breadcrumb navigation
+- Works on Linux and Android
+
+**Usage:**
+
+```dart
+final selected = await FileFolderPicker.show(
+  context,
+  title: 'Select files or folders',
+  allowMultiSelect: true,
+  showHiddenFiles: false,
+);
+
+if (selected != null && selected.isNotEmpty) {
+  for (final path in selected) {
+    print('Selected: $path');
+  }
+}
+```
+
+**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `initialDirectory` | String? | No | $HOME or /storage/emulated/0 | Starting directory |
+| `title` | String | No | 'Select files or folders' | Dialog title |
+| `allowMultiSelect` | bool | No | true | Enable multi-selection |
+| `showHiddenFiles` | bool | No | false | Show hidden files initially |
+
+**Returns:** `List<String>?` - List of selected file/folder paths, or null if cancelled
 
 ---
 
@@ -3400,6 +3456,81 @@ if (result.success) {
 
 ---
 
+### FileBrowserCacheService
+
+**File:** `lib/services/file_browser_cache_service.dart`
+**Models:** `lib/models/file_browser_cache_models.dart`
+
+Singleton service for persistent caching of file browser data. Provides instant loading for previously visited folders and persistent video thumbnail storage.
+
+**Key Features:**
+- Directory listing cache (file names, sizes, modification times)
+- Folder size calculations (persisted to avoid repeated scans)
+- Video thumbnail ZIP archives per storage volume
+- Automatic cache invalidation when directories change
+- Volume-based organization (internal, USB drives, SD cards)
+
+**Cache Directory Structure:**
+```
+{StorageConfig.baseDir}/file_browser_cache/
+├── files_internal.json           # Directory listings for internal storage
+├── files_media_USB_NAME.json     # Directory listings for removable media
+├── thumbnails_internal.zip       # Thumbnail archive for internal storage
+├── thumbnails_internal_meta.json # Thumbnail metadata
+└── thumbnails_media_USB_NAME.zip # Thumbnail archive per volume
+```
+
+**Usage:**
+```dart
+final cacheService = FileBrowserCacheService();
+await cacheService.initialize();
+
+// Get cached directory listing
+final cache = await cacheService.getDirectoryCache('/home/user/Pictures');
+if (cache != null && !cache.isStale(currentDirModified)) {
+  // Use cached entries - instant load!
+  final items = cache.entries.map((e) => e.toFileSystemItem()).toList();
+}
+
+// Save directory cache after scanning
+await cacheService.saveDirectoryCache(path, entries, dirModified);
+
+// Folder sizes
+final size = await cacheService.getCachedFolderSize('/path/to/folder');
+await cacheService.saveFolderSize('/path/to/folder', calculatedSize);
+
+// Thumbnails
+if (await cacheService.hasThumbnail(videoPath, sourceModified)) {
+  final thumbPath = await cacheService.getThumbnailTempPath(videoPath);
+} else {
+  await cacheService.saveThumbnail(videoPath, pngBytes, sourceModified);
+}
+
+// Volume detection
+final volumeId = cacheService.getVolumeId('/media/user/USB_NAME/file.mp4');
+// Returns: "media_USB_NAME"
+
+// Clear cache for unmounted volume
+await cacheService.clearVolumeCache('media_USB_NAME');
+```
+
+**Volume Detection Logic:**
+| Path Pattern | Volume ID |
+|--------------|-----------|
+| `/storage/emulated/0/...` | `internal` |
+| `/storage/XXXX-XXXX/...` | `sdcard_XXXX-XXXX` |
+| `$HOME/...` | `internal` |
+| `/media/user/NAME/...` | `media_NAME` |
+| `/mnt/NAME/...` | `mnt_NAME` |
+| Other | `default` |
+
+**Cache Invalidation:**
+- Directory cache: Compare `Directory.stat().modified` with stored timestamp
+- Thumbnail cache: Compare source file's `modified` with stored `sourceModified`
+- Automatic flush to disk with 2-second debounce for batching
+
+---
+
 ## CLI/Console Abstractions
 
 ### ConsoleIO
@@ -5130,7 +5261,9 @@ Dart service for USB AOA (Android Open Accessory) device-to-device communication
 - Method channel bridge to native `UsbAoaPlugin.kt`
 - Connection state stream for tracking USB connection status
 - Data stream for receiving messages from connected device
-- Android-only (USB AOA is an Android protocol)
+- Linux host mode support via FFI (in addition to Android accessory mode)
+- Auto-reconnect on unexpected disconnects (3 attempts with exponential backoff)
+- Hotplug detection every 2 seconds on Linux
 
 **Usage:**
 ```dart

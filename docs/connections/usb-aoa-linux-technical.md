@@ -415,6 +415,50 @@ When a hello is received:
 - Hello retry interval: ~2 seconds
 - DevicesService subscribes to `remoteCallsignStream` for real-time callsign discovery
 
+### Known Issues and Fixes
+
+Several issues were discovered and fixed during development:
+
+#### 1. Hello Not Completing After Restart
+
+**Problem:** When one side restarts (fresh state) but the other side still has the remote callsign cached from a previous session, the cached side would not respond to hello messages. This left the restarted side's `remoteCallsign` null forever.
+
+**Fix:** Always send a hello reply when receiving a hello, regardless of whether the remote callsign was already known. The hello exchange must complete on both sides, even if one side thinks it already knows the peer.
+
+**File:** `lib/connection/transports/usb_aoa_transport.dart`
+
+#### 2. Race Condition on Transport Initialization
+
+**Problem:** If the USB connection was already established before the transport subscribed to state changes, the hello exchange would never start because the "connected" event was missed.
+
+**Fix:** Check if USB is already connected when initializing the transport. If so, send hello immediately (with a 2s delay to allow Android to open the accessory).
+
+**File:** `lib/connection/transports/usb_aoa_transport.dart`
+
+#### 3. Linux poll() Returning EINTR
+
+**Problem:** `poll()` on Linux USB device files (`/dev/bus/usb/XXX/YYY`) frequently returns -1 with `errno=EINTR` due to signal interruptions. This caused the read loop to miss incoming data.
+
+**Fix:** Try a bulk read whenever `poll()` fails (not just on timeout). Data is often available even when `poll()` doesn't report it. See the [Bulk I/O](#reading-data) section for the implementation pattern.
+
+**File:** `lib/services/usb_aoa_linux.dart`
+
+#### 4. POLLERR Causing Premature Disconnection
+
+**Problem:** The POLLERR/POLLHUP retry logic was only active when not yet connected (`!androidConnected`). Once connected, a transient POLLERR would cause the read loop to exit after just 1 attempt with: "Poll error/hangup after 1 attempts (POLLERR)".
+
+**Fix:** Retry POLLERR/POLLHUP errors regardless of connection state. Use a shorter delay (50ms) when already connected since these are typically transient.
+
+**File:** `lib/services/usb_aoa_linux.dart`
+
+#### 5. Android Duplicate App Instances
+
+**Problem:** When USB cable is plugged in, Android could launch a duplicate instance of the app instead of bringing the existing one to front.
+
+**Fix:** Change `launchMode` from `singleTop` to `singleTask` in AndroidManifest.xml.
+
+**File:** `android/app/src/main/AndroidManifest.xml`
+
 ## Performance
 
 - USB 2.0 High-Speed: ~30-40 MB/s practical throughput
@@ -491,6 +535,46 @@ While this document focuses on Linux host mode, the Android accessory implementa
 - **UsbAccessory**: Represents the connected Linux host
 - **ParcelFileDescriptor**: File descriptor for reading/writing USB data
 - **MethodChannel**: Bridge between Kotlin and Dart
+
+### Automatic Navigation on USB Attachment
+
+When Android receives a USB accessory attachment intent (`ACTION_USB_ACCESSORY_ATTACHED`), the app automatically navigates to the Devices panel. This provides immediate visibility of the USB connection.
+
+**Implementation:**
+
+1. **MainActivity.kt** (`handleUsbIntent()`):
+   - Receives `ACTION_USB_ACCESSORY_ATTACHED` intent
+   - Notifies the Dart layer via MethodChannel:
+   ```kotlin
+   usbMethodChannel?.invokeMethod("onUsbAccessoryAttached", mapOf(
+       "manufacturer" to accessory.manufacturer,
+       "model" to accessory.model,
+   ))
+   ```
+
+2. **UsbAttachmentService.dart** (`_handleMethodCall()`):
+   - Listens for `onUsbAccessoryAttached` method calls
+   - Navigates to Devices panel:
+   ```dart
+   case 'onUsbAccessoryAttached':
+     DebugController().navigateToPanel(PanelIndex.devices);
+     break;
+   ```
+
+**Files involved:**
+
+| File | Role |
+|------|------|
+| `android/app/src/main/kotlin/dev/geogram/MainActivity.kt` | Sends notification to Dart |
+| `lib/services/usb_attachment_service.dart` | Receives notification, triggers navigation |
+| `lib/services/debug_controller.dart` | Handles panel navigation via `navigateToPanel()` |
+
+**Log output:**
+```
+[USB] AOA accessory attached: Geogram Geogram Device, opening Devices panel
+```
+
+This differs from ESP32 USB device attachment, which navigates to the Flasher Monitor instead.
 
 ### Android Data Flow
 

@@ -53,6 +53,7 @@ import 'services/ble_foreground_service.dart';
 import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
+import 'connection/transports/usb_aoa_transport.dart';
 import 'models/collection.dart';
 import 'util/file_icon_helper.dart';
 import 'util/event_bus.dart';
@@ -91,6 +92,7 @@ import 'pages/transfer_page.dart';
 import 'pages/dm_chat_page.dart';
 import 'reader/pages/reader_home_page.dart';
 import 'flasher/pages/flasher_page.dart';
+import 'work/pages/work_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -100,6 +102,8 @@ import 'pages/storage_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'pages/mirror_settings_page.dart';
 import 'widgets/profile_switcher.dart';
+import 'widgets/transfer/incoming_transfer_dialog.dart';
+import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
 
 void main() async {
@@ -375,8 +379,9 @@ void main() async {
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
-      // Transport priority: LAN (10) > WebRTC (15) > Station (30) > BT Classic (35) > BLE (40)
+      // Transport priority: USB (5) > LAN (10) > WebRTC (15) > Station (30) > BT Classic (35) > BLE (40)
       final connectionManager = ConnectionManager();
+      connectionManager.registerTransport(UsbAoaTransport());
       connectionManager.registerTransport(LanTransport());
       connectionManager.registerTransport(WebRTCTransport());
       connectionManager.registerTransport(StationTransport());
@@ -384,7 +389,7 @@ void main() async {
       connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
       LogService().log(
-        'ConnectionManager initialized with LAN + WebRTC + Station + BT Classic + BLE transports (deferred)',
+        'ConnectionManager initialized with USB + LAN + WebRTC + Station + BT Classic + BLE transports (deferred)',
       );
 
       // UpdateService may check for updates - defer it
@@ -605,6 +610,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final AppThemeService _themeService = AppThemeService();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
+  EventSubscription<TransferOfferReceivedEvent>? _transferOfferSubscription;
 
   @override
   void initState() {
@@ -625,6 +631,16 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       _navigateToDMChat(event.targetCallsign);
     });
 
+    // Subscribe to incoming P2P transfer offers
+    _transferOfferSubscription = EventBus().on<TransferOfferReceivedEvent>((
+      event,
+    ) {
+      LogService().log(
+        'GeogramApp: Transfer offer received from ${event.senderCallsign}',
+      );
+      _showTransferOfferDialog(event);
+    });
+
     // Check for pending notification on startup (handles cold start)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPendingNotification();
@@ -636,6 +652,7 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
+    _transferOfferSubscription?.cancel();
     super.dispose();
   }
 
@@ -726,6 +743,22 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _navigateToDMChat(callsign);
     });
+  }
+
+  /// Show incoming transfer offer dialog
+  void _showTransferOfferDialog(TransferOfferReceivedEvent event) async {
+    final offer = P2PTransferService().getOffer(event.offerId);
+    if (offer == null) return;
+    if (_navigatorKey.currentContext == null) return;
+
+    final accepted = await IncomingTransferDialog.show(
+      _navigatorKey.currentContext!,
+      offer,
+    );
+
+    LogService().log(
+      'GeogramApp: Transfer offer ${event.offerId} ${accepted == true ? "accepted" : "declined"}',
+    );
   }
 
   @override
@@ -2360,6 +2393,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     collection.storagePath ??
                                                     '',
                                               )
+                                            : collection.type == 'work'
+                                            ? WorkPage(
+                                                basePath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2575,6 +2616,14 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                 basePath:
                                                     collection.storagePath ??
                                                     '',
+                                              )
+                                            : collection.type == 'work'
+                                            ? WorkPage(
+                                                basePath:
+                                                    collection.storagePath ??
+                                                    '',
+                                                collectionTitle:
+                                                    collection.title,
                                               )
                                             : CollectionBrowserPage(
                                                 collection: collection,

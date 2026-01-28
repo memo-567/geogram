@@ -63,6 +63,9 @@ class TransferOffer {
   final int totalBytes;
   TransferOfferStatus status;
 
+  // Timing for duration tracking
+  DateTime? startedAt;
+
   // Progress tracking
   int bytesTransferred;
   int filesCompleted;
@@ -83,6 +86,7 @@ class TransferOffer {
     required this.files,
     required this.totalBytes,
     this.status = TransferOfferStatus.pending,
+    this.startedAt,
     this.bytesTransferred = 0,
     this.filesCompleted = 0,
     this.currentFile,
@@ -112,6 +116,17 @@ class TransferOffer {
   bool get isActive =>
       status == TransferOfferStatus.accepted ||
       status == TransferOfferStatus.transferring;
+
+  /// Duration of the transfer (from start to completion)
+  Duration? get transferDuration {
+    if (startedAt == null) return null;
+    if (status == TransferOfferStatus.completed ||
+        status == TransferOfferStatus.failed) {
+      // Use current time as end time - ideally we'd have completedAt
+      return DateTime.now().difference(startedAt!);
+    }
+    return null;
+  }
 
   /// Generate a unique offer ID
   static String generateOfferId() {
@@ -193,6 +208,7 @@ class TransferOffer {
     'files': files.map((f) => f.toJson()).toList(),
     'totalBytes': totalBytes,
     'status': status.name,
+    if (startedAt != null) 'startedAt': startedAt!.toIso8601String(),
     'bytesTransferred': bytesTransferred,
     'filesCompleted': filesCompleted,
     if (currentFile != null) 'currentFile': currentFile,
@@ -213,6 +229,9 @@ class TransferOffer {
           .toList(),
       totalBytes: json['totalBytes'] as int,
       status: TransferOfferStatus.values.byName(json['status'] as String),
+      startedAt: json['startedAt'] != null
+          ? DateTime.parse(json['startedAt'] as String)
+          : null,
       bytesTransferred: json['bytesTransferred'] as int? ?? 0,
       filesCompleted: json['filesCompleted'] as int? ?? 0,
       currentFile: json['currentFile'] as String?,
@@ -254,6 +273,7 @@ class TransferOffer {
     List<TransferOfferFile>? files,
     int? totalBytes,
     TransferOfferStatus? status,
+    DateTime? startedAt,
     int? bytesTransferred,
     int? filesCompleted,
     String? currentFile,
@@ -271,6 +291,7 @@ class TransferOffer {
       files: files ?? this.files,
       totalBytes: totalBytes ?? this.totalBytes,
       status: status ?? this.status,
+      startedAt: startedAt ?? this.startedAt,
       bytesTransferred: bytesTransferred ?? this.bytesTransferred,
       filesCompleted: filesCompleted ?? this.filesCompleted,
       currentFile: currentFile ?? this.currentFile,

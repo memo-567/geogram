@@ -1,6 +1,7 @@
 package dev.geogram
 
 import android.content.Intent
+import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -21,6 +22,7 @@ class MainActivity : FlutterActivity() {
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
+    private var usbAoaPlugin: UsbAoaPlugin? = null
     private var usbMethodChannel: MethodChannel? = null
 
     // Known ESP32 USB identifiers (VID, PID pairs)
@@ -48,6 +50,10 @@ class MainActivity : FlutterActivity() {
         // Initialize USB Serial plugin for ESP32 flashing
         usbSerialPlugin = UsbSerialPlugin(this, flutterEngine)
         usbSerialPlugin?.initialize()
+
+        // Initialize USB AOA plugin for device-to-device communication
+        usbAoaPlugin = UsbAoaPlugin(this, flutterEngine)
+        usbAoaPlugin?.initialize()
 
         // Initialize USB attachment channel for auto-detection
         usbMethodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, USB_CHANNEL)
@@ -314,32 +320,53 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Check if intent contains USB device attachment and notify Dart
+     * Check if intent contains USB device/accessory attachment and notify Dart
      */
     private fun handleUsbIntent(intent: Intent?) {
-        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        when (intent?.action) {
+            UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+
+                if (device != null) {
+                    val vid = device.vendorId
+                    val pid = device.productId
+                    val deviceName = device.deviceName
+                    val isEsp32 = ESP32_IDENTIFIERS.any { it.first == vid && it.second == pid }
+
+                    android.util.Log.d("GeogramUSB", "USB device attached: $deviceName (VID=$vid, PID=$pid, isEsp32=$isEsp32)")
+
+                    // Notify Dart about the USB attachment
+                    usbMethodChannel?.invokeMethod("onUsbDeviceAttached", mapOf(
+                        "deviceName" to deviceName,
+                        "vid" to vid,
+                        "pid" to pid,
+                        "isEsp32" to isEsp32,
+                    ))
+                }
             }
+            UsbManager.ACTION_USB_ACCESSORY_ATTACHED -> {
+                val accessory = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+                }
 
-            if (device != null) {
-                val vid = device.vendorId
-                val pid = device.productId
-                val deviceName = device.deviceName
-                val isEsp32 = ESP32_IDENTIFIERS.any { it.first == vid && it.second == pid }
+                if (accessory != null) {
+                    android.util.Log.d("GeogramUSB", "USB accessory attached: ${accessory.manufacturer} ${accessory.model}")
+                    usbAoaPlugin?.handleAccessoryAttached(accessory)
 
-                android.util.Log.d("GeogramUSB", "USB device attached: $deviceName (VID=$vid, PID=$pid, isEsp32=$isEsp32)")
-
-                // Notify Dart about the USB attachment
-                usbMethodChannel?.invokeMethod("onUsbDeviceAttached", mapOf(
-                    "deviceName" to deviceName,
-                    "vid" to vid,
-                    "pid" to pid,
-                    "isEsp32" to isEsp32,
-                ))
+                    // Notify Dart to navigate to Devices panel
+                    usbMethodChannel?.invokeMethod("onUsbAccessoryAttached", mapOf(
+                        "manufacturer" to accessory.manufacturer,
+                        "model" to accessory.model,
+                    ))
+                }
             }
         }
     }
@@ -353,6 +380,8 @@ class MainActivity : FlutterActivity() {
         wifiDirectPlugin = null
         usbSerialPlugin?.dispose()
         usbSerialPlugin = null
+        usbAoaPlugin?.dispose()
+        usbAoaPlugin = null
         usbMethodChannel = null
         super.onDestroy()
     }

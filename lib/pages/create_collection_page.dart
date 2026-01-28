@@ -91,6 +91,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('videos', Icons.video_library),
     _CollectionTypeInfo('reader', Icons.menu_book),
     _CollectionTypeInfo('flasher', Icons.flash_on),
+    _CollectionTypeInfo('work', Icons.work),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -634,8 +635,11 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
               fillColor: theme.colorScheme.surface,
             ),
             enabled: !_isCreating,
-            textInputAction: TextInputAction.next,
+            textInputAction: TextInputAction.done,
             onChanged: (_) => setState(() {}),
+            onSubmitted: (_) {
+              if (_canCreate) _create();
+            },
           ),
           const SizedBox(height: 16),
 
@@ -831,6 +835,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Your personal reading hub for RSS feeds, manga, and e-books. Subscribe to news sources, follow manga series, and organize your digital library.';
       case 'flasher':
         return 'Flash firmware to ESP32 and other USB-connected devices. Supports multiple device families with auto-detection and progress tracking.';
+      case 'work':
+        return 'Create and organize workspaces with NDF documents including spreadsheets, rich text documents, presentations, and forms. Sync-based collaboration with NOSTR signatures.';
       default:
         return '';
     }
@@ -960,6 +966,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'USB auto-detection by VID/PID',
           'Multiple protocol support',
           'Progress tracking with verification',
+        ];
+      case 'work':
+        return [
+          'Spreadsheets with formulas',
+          'Rich text documents',
+          'Presentations with slides',
+          'Forms with responses',
+          'Workspace collaboration',
         ];
       default:
         return [];

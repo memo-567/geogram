@@ -67,6 +67,9 @@ class StorageConfig {
   /// Get the email directory path
   String get emailDir => path.join(baseDir, 'email');
 
+  /// Get the file browser cache directory path
+  String get fileBrowserCacheDir => path.join(baseDir, 'file_browser_cache');
+
   /// Get the main config file path
   String get configPath => path.join(baseDir, 'config.json');
 

@@ -99,16 +99,15 @@ class BLEPermissionService {
       final batteryStatus = await Permission.ignoreBatteryOptimizations.request();
       LogService().log('BLEPermission: BATTERY_OPTIMIZATION: ${batteryStatus.name}');
 
-      // Try to turn on Bluetooth if not already on
+      // Check Bluetooth state but DON'T auto-enable
+      // If user disabled Bluetooth, respect that choice
       try {
         final adapterState = await FlutterBluePlus.adapterState.first;
         if (adapterState != BluetoothAdapterState.on) {
-          LogService().log('BLEPermission: Attempting to turn on Bluetooth...');
-          await FlutterBluePlus.turnOn();
-          LogService().log('BLEPermission: Bluetooth turned on');
+          LogService().log('BLEPermission: Bluetooth is off (user choice respected)');
         }
       } catch (e) {
-        LogService().log('BLEPermission: Could not turn on Bluetooth: $e');
+        LogService().log('BLEPermission: Could not check Bluetooth state: $e');
       }
 
       // Initialize BlePeripheral for advertising

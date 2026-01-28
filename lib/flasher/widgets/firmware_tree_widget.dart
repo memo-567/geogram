@@ -601,6 +601,8 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                               ? FontWeight.bold
                               : FontWeight.normal,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       Text(
                         device.chip,
@@ -608,6 +610,8 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                           color: theme.colorScheme.outline,
                           fontSize: 11,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
@@ -732,6 +736,8 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     _buildInfoChip(context, Icons.memory, device.chip),
@@ -852,11 +858,15 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
                       : theme.colorScheme.outline,
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  'v${version.version}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    fontFamily: 'monospace',
+                Flexible(
+                  child: Text(
+                    'v${version.version}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      fontFamily: 'monospace',
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (isLatest) ...[
@@ -920,12 +930,15 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
           color: theme.colorScheme.outlineVariant,
         ),
       ),
-      child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 250;
+          return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Version info grid
           Wrap(
-            spacing: 16,
+            spacing: isNarrow ? 8 : 16,
             runSpacing: 8,
             children: [
               if (version.size != null)
@@ -1010,10 +1023,15 @@ class _FirmwareTreeWidgetState extends State<FirmwareTreeWidget> {
             child: FilledButton.icon(
               onPressed: () => widget.onSelected?.call(device, version),
               icon: const Icon(Icons.flash_on, size: 18),
-              label: Text('Flash v${version.version}'),
+              label: Text(
+                'Flash v${version.version}',
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
         ],
+          );
+        },
       ),
     );
   }

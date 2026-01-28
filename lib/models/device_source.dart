@@ -128,6 +128,8 @@ class DeviceSource {
         return 'wifi_tethering';
       case DeviceSourceType.ble:
         return 'bluetooth';
+      case DeviceSourceType.usb:
+        return 'usb';
     }
   }
 
@@ -159,4 +161,7 @@ enum DeviceSourceType {
 
   /// Device discovered via BLE (Bluetooth Low Energy)
   ble,
+
+  /// Device connected via USB AOA (Android Open Accessory)
+  usb,
 }

@@ -1455,7 +1455,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
               height: 12,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: device.isOnline ? Colors.green : Colors.grey,
+                color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
                 border: Border.all(
                   color: theme.colorScheme.surface,
                   width: 2,
@@ -1492,7 +1492,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         device.displayName,
         style: TextStyle(
           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          color: device.isOnline ? null : theme.colorScheme.onSurfaceVariant,
+          color: (device.isOnline && device.connectionMethods.isNotEmpty) ? null : theme.colorScheme.onSurfaceVariant,
         ),
         overflow: TextOverflow.ellipsis,
       ),
@@ -1711,7 +1711,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: device.isOnline
+        color: (device.isOnline && device.connectionMethods.isNotEmpty)
             ? Colors.green.withValues(alpha: 0.1)
             : Colors.grey.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
@@ -1724,14 +1724,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: device.isOnline ? Colors.green : Colors.grey,
+              color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
             ),
           ),
           const SizedBox(width: 4),
           Text(
-            device.isOnline ? _i18n.t('online') : _i18n.t('offline'),
+            (device.isOnline && device.connectionMethods.isNotEmpty) ? _i18n.t('online') : _i18n.t('offline'),
             style: theme.textTheme.bodySmall?.copyWith(
-              color: device.isOnline ? Colors.green : Colors.grey,
+              color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
             ),
           ),
         ],

@@ -148,10 +148,13 @@ class UsbAoaPlugin(
             }
 
             "write" -> {
+                Log.d(TAG, "Write method called from Dart")
                 val data = call.argument<ByteArray>("data")
                 if (data != null) {
+                    Log.d(TAG, "Write: data size = ${data.size}, isConnected = ${isConnected.get()}")
                     write(data, result)
                 } else {
+                    Log.e(TAG, "Write: data is null!")
                     result.error("INVALID_ARGUMENT", "Data required", null)
                 }
             }
@@ -281,12 +284,14 @@ class UsbAoaPlugin(
             outputStream = FileOutputStream(fd)
 
             isConnected.set(true)
+            resetAutoReconnect()
             Log.d(TAG, "USB accessory opened successfully")
 
             // Wait for USB endpoints to synchronize before starting I/O
             // This gives the host (Linux) time to also open the device
-            Log.d(TAG, "Waiting 2s for USB endpoints to synchronize...")
-            Thread.sleep(2000)
+            // Reduced from 2000ms to 500ms as the Linux side now waits properly
+            Log.d(TAG, "Waiting 500ms for USB endpoints to synchronize...")
+            Thread.sleep(500)
             Log.d(TAG, "Starting read thread")
 
             // Start reading thread
@@ -347,14 +352,20 @@ class UsbAoaPlugin(
      * Write data to the accessory
      */
     private fun write(data: ByteArray, result: MethodChannel.Result) {
+        Log.d(TAG, "write() called: dataSize=${data.size}, isConnected=${isConnected.get()}, isDisposed=${isDisposed.get()}, executorShutdown=${executor.isShutdown}")
         if (!isConnected.get()) {
+            Log.e(TAG, "write() - NOT_CONNECTED error")
             result.error("NOT_CONNECTED", "USB accessory not connected", null)
             return
         }
 
+        Log.d(TAG, "write() - scheduling safeExecute")
         safeExecute {
+            Log.d(TAG, "write() - inside safeExecute task")
             val success = writeInternal(data)
+            Log.d(TAG, "write() - writeInternal returned: $success")
             mainHandler.post {
+                Log.d(TAG, "write() - posting result to main handler, success=$success")
                 if (success) {
                     result.success(true)
                 } else {
@@ -362,22 +373,29 @@ class UsbAoaPlugin(
                 }
             }
         }
+        Log.d(TAG, "write() - safeExecute scheduled")
     }
 
     /**
      * Write data to the accessory (internal)
      */
     private fun writeInternal(data: ByteArray): Boolean {
+        Log.d(TAG, "writeInternal() called: dataSize=${data.size}, outputStream=${outputStream != null}")
         return try {
+            Log.d(TAG, "writeInternal() calling outputStream.write...")
             outputStream?.write(data)
+            Log.d(TAG, "writeInternal() calling outputStream.flush...")
             outputStream?.flush()
             Log.d(TAG, "Wrote ${data.size} bytes to USB accessory")
             true
         } catch (e: IOException) {
-            Log.e(TAG, "Error writing to accessory: ${e.message}")
+            Log.e(TAG, "Error writing to accessory: ${e.message}", e)
             // Connection likely lost
             closeInternal()
             mainHandler.post { notifyDisconnected() }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in writeInternal: ${e.message}", e)
             false
         }
     }
@@ -419,10 +437,55 @@ class UsbAoaPlugin(
             // Connection ended
             if (isConnected.getAndSet(false)) {
                 closeInternal()
-                mainHandler.post { notifyDisconnected() }
+                mainHandler.post {
+                    notifyDisconnected()
+                    // Schedule auto-reconnect after unexpected disconnect
+                    scheduleAutoReconnect()
+                }
             }
             isReading.set(false)
         }
+    }
+
+    private var autoReconnectAttempts = 0
+    private val maxAutoReconnectAttempts = 3
+
+    /**
+     * Schedule auto-reconnect with exponential backoff
+     */
+    private fun scheduleAutoReconnect() {
+        if (isDisposed.get()) return
+        if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
+            Log.d(TAG, "Max auto-reconnect attempts reached ($maxAutoReconnectAttempts)")
+            autoReconnectAttempts = 0
+            return
+        }
+
+        autoReconnectAttempts++
+        // Exponential backoff: 1s, 2s, 4s
+        val delayMs = 1000L * (1 shl (autoReconnectAttempts - 1))
+        Log.d(TAG, "Scheduling auto-reconnect attempt $autoReconnectAttempts in ${delayMs}ms")
+
+        mainHandler.postDelayed({
+            if (!isConnected.get() && !isDisposed.get()) {
+                Log.d(TAG, "Auto-reconnect attempt $autoReconnectAttempts")
+                // Check for existing accessory
+                val accessories = usbManager?.accessoryList
+                if (!accessories.isNullOrEmpty()) {
+                    handleAccessoryAttached(accessories[0])
+                } else {
+                    // No accessory found, start polling
+                    startAccessoryPolling()
+                }
+            }
+        }, delayMs)
+    }
+
+    /**
+     * Reset auto-reconnect state (called on successful connection)
+     */
+    private fun resetAutoReconnect() {
+        autoReconnectAttempts = 0
     }
 
     /**

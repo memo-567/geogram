@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 
+import '../../pages/transfer_page.dart';
 import '../../services/storage_config.dart';
 import '../../transfer/models/transfer_offer.dart';
 import '../../transfer/services/p2p_transfer_service.dart';
@@ -16,18 +17,27 @@ import '../../transfer/services/p2p_transfer_service.dart';
 /// - Expiry countdown
 class IncomingTransferDialog extends StatefulWidget {
   final TransferOffer offer;
+  final bool shownFromTransferPage;
 
   const IncomingTransferDialog({
     super.key,
     required this.offer,
+    this.shownFromTransferPage = false,
   });
 
   /// Show the dialog and return true if accepted, false if declined
-  static Future<bool?> show(BuildContext context, TransferOffer offer) {
+  static Future<bool?> show(
+    BuildContext context,
+    TransferOffer offer, {
+    bool shownFromTransferPage = false,
+  }) {
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => IncomingTransferDialog(offer: offer),
+      builder: (context) => IncomingTransferDialog(
+        offer: offer,
+        shownFromTransferPage: shownFromTransferPage,
+      ),
     );
   }
 
@@ -72,6 +82,14 @@ class _IncomingTransferDialogState extends State<IncomingTransferDialog> {
       );
       if (mounted) {
         Navigator.of(context).pop(true);
+
+        // Navigate to TransferPage only if we're not already on it
+        if (!widget.shownFromTransferPage) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const TransferPage()),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

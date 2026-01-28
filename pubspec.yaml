@@ -145,6 +145,8 @@ flutter:
     - assets/default_profile.svg
     - assets/geogram-icon-dark.svg
     - assets/geogram_icon_transparent.png
+    - assets/icon_file_send.svg
+    - assets/icon_file_receive.svg
     - assets/dbip-city-lite.mmdb
     - games/
     # Web themes for HTML/CSS customization

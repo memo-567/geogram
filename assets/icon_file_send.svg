@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+  <!-- Document base -->
+  <path d="M14 2H6C4.9 2 4 2.9 4 4v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="white"/>
+  <!-- Upload badge circle -->
+  <circle cx="20.5" cy="20.5" r="7" fill="white"/>
+  <!-- Upload arrow -->
+  <path d="M20.5 23.5v-6m0 0l-3 3m3-3l3 3" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

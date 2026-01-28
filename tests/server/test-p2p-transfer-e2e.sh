@@ -245,8 +245,13 @@ for i in $(seq 1 $DISCOVERY_TIMEOUT); do
     sleep 1
 done
 
-# Send transfer offer from A to B
-echo -e "${YELLOW}Sending transfer offer...${NC}"
+# Verify devices are registered correctly
+echo -e "${YELLOW}Checking device registration on A...${NC}"
+DEVICES_A_DEBUG=$(curl -s "http://localhost:$PORT_A/api/devices")
+echo "$DEVICES_A_DEBUG" | jq -c ".[] | {callsign, url}" 2>/dev/null || echo "Devices: $DEVICES_A_DEBUG"
+
+# Send transfer offer from A to B (now uses direct P2P API)
+echo -e "${YELLOW}Sending transfer offer via direct P2P API...${NC}"
 SEND_RESPONSE=$(curl -s -X POST "http://localhost:$PORT_A/api/debug" \
     -H "Content-Type: application/json" \
     -d "{\"action\":\"p2p_send\",\"callsign\":\"$CALLSIGN_B\",\"folder\":\"$TEST_SEND_DIR\"}")
@@ -259,19 +264,71 @@ fi
 OFFER_ID=$(echo "$SEND_RESPONSE" | jq -r '.offer_id')
 TOTAL_FILES=$(echo "$SEND_RESPONSE" | jq -r '.files')
 TOTAL_BYTES=$(echo "$SEND_RESPONSE" | jq -r '.total_bytes')
-echo -e "${GREEN}✓ Transfer offer created (offer_id: $OFFER_ID, $TOTAL_FILES files, $TOTAL_BYTES bytes)${NC}"
+SEND_STATUS=$(echo "$SEND_RESPONSE" | jq -r '.status')
+echo -e "${GREEN}✓ Transfer offer sent (offer_id: $OFFER_ID, $TOTAL_FILES files, $TOTAL_BYTES bytes, status: $SEND_STATUS)${NC}"
+echo "Full response: $SEND_RESPONSE"
 
-# Verify offer exists on A
-echo -e "${YELLOW}Verifying offer on A...${NC}"
+# Try direct API call to B to verify connectivity
+echo -e "${YELLOW}Testing direct P2P API call to B...${NC}"
+DIRECT_TEST=$(curl -s -X POST "http://localhost:$PORT_B/api/p2p/offer" \
+    -H "Content-Type: application/json" \
+    -d "{\"type\":\"transfer_offer\",\"offerId\":\"test123\",\"senderCallsign\":\"$CALLSIGN_A\",\"timestamp\":$(date +%s),\"expiresAt\":$(($(date +%s) + 3600)),\"files\":[],\"totalBytes\":0,\"senderUrl\":\"http://localhost:$PORT_A\"}")
+echo "Direct API test result: $DIRECT_TEST"
+
+# Verify offer exists on A (outgoing)
+echo -e "${YELLOW}Verifying offer on A (outgoing)...${NC}"
 OUTGOING=$(curl -s -X POST "http://localhost:$PORT_A/api/debug" \
     -H "Content-Type: application/json" \
     -d '{"action":"p2p_list_outgoing"}')
 
 if ! echo "$OUTGOING" | jq -e ".offers[] | select(.offer_id == \"$OFFER_ID\")" > /dev/null 2>&1; then
-    echo -e "${RED}✗ Offer not found in outgoing list${NC}"
+    echo -e "${RED}✗ Offer not found in A's outgoing list${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ Offer verified in outgoing list${NC}"
+echo -e "${GREEN}✓ Offer verified in A's outgoing list${NC}"
+
+# Poll B for incoming offer (now delivered via direct API)
+echo -e "${YELLOW}Checking if offer arrived on B...${NC}"
+OFFER_TIMEOUT=10
+for i in $(seq 1 $OFFER_TIMEOUT); do
+    INCOMING=$(curl -s -X POST "http://localhost:$PORT_B/api/debug" \
+        -H "Content-Type: application/json" \
+        -d '{"action":"p2p_list_incoming"}')
+
+    if echo "$INCOMING" | jq -e ".offers[] | select(.offer_id == \"$OFFER_ID\")" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Offer received on B (via direct P2P API)${NC}"
+        break
+    fi
+    if [ "$i" -eq "$OFFER_TIMEOUT" ]; then
+        echo -e "${RED}✗ Offer not found on B after ${OFFER_TIMEOUT}s${NC}"
+        echo "B's incoming offers: $INCOMING"
+        exit 1
+    fi
+    sleep 1
+done
+
+# Accept offer on B
+echo -e "${YELLOW}Accepting offer on B...${NC}"
+ACCEPT_RESPONSE=$(curl -s -X POST "http://localhost:$PORT_B/api/debug" \
+    -H "Content-Type: application/json" \
+    -d "{\"action\":\"p2p_accept\",\"offer_id\":\"$OFFER_ID\",\"destination\":\"$TEST_RECV_DIR\"}")
+
+if ! echo "$ACCEPT_RESPONSE" | jq -e '.success' > /dev/null 2>&1; then
+    echo -e "${RED}✗ Failed to accept offer: $ACCEPT_RESPONSE${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Offer accepted on B${NC}"
+
+# Give a moment for acceptance to propagate
+sleep 1
+
+# Verify A received the acceptance
+echo -e "${YELLOW}Checking if A received acceptance...${NC}"
+STATUS_ON_A=$(curl -s -X POST "http://localhost:$PORT_A/api/debug" \
+    -H "Content-Type: application/json" \
+    -d "{\"action\":\"p2p_status\",\"offer_id\":\"$OFFER_ID\"}")
+OFFER_STATUS=$(echo "$STATUS_ON_A" | jq -r '.status')
+echo -e "${CYAN}  Offer status on A: $OFFER_STATUS${NC}"
 
 # Get manifest from A's HTTP API (this tests the file serving)
 echo -e "${YELLOW}Getting manifest from A...${NC}"

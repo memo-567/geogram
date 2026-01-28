@@ -169,6 +169,111 @@ class TransferMetricsService {
     _emitMetrics();
   }
 
+  /// Record a completed P2P transfer (no Transfer object needed)
+  void recordP2PTransferComplete({
+    required String callsign,
+    required int bytesTransferred,
+    required bool isUpload, // true = sender, false = receiver
+  }) {
+    final now = DateTime.now();
+    final todayKey = _dateKey(now);
+    final hour = now.hour;
+
+    // Get or create daily stats
+    final daily = _storedMetrics.daily[todayKey] ?? DailyStats(date: todayKey);
+    final hourlyList = List<HourlyStats>.from(daily.hourly);
+
+    // Update or add hourly stats for activity graph
+    final hourlyIndex = hourlyList.indexWhere((h) => h.hour == hour);
+    if (hourlyIndex >= 0) {
+      final hourly = hourlyList[hourlyIndex];
+      hourlyList[hourlyIndex] = HourlyStats(
+        hour: hour,
+        bytesTransferred: hourly.bytesTransferred + bytesTransferred,
+        connections: hourly.connections,
+        transfers: hourly.transfers + 1,
+      );
+    } else {
+      hourlyList.add(HourlyStats(
+        hour: hour,
+        bytesTransferred: bytesTransferred,
+        connections: _activeConnections,
+        transfers: 1,
+      ));
+    }
+
+    // Calculate new daily stats
+    final newDailyStats = TransferPeriodStats(
+      uploadCount: daily.stats.uploadCount + (isUpload ? 1 : 0),
+      downloadCount: daily.stats.downloadCount + (isUpload ? 0 : 1),
+      streamCount: daily.stats.streamCount,
+      bytesUploaded: daily.stats.bytesUploaded + (isUpload ? bytesTransferred : 0),
+      bytesDownloaded: daily.stats.bytesDownloaded + (isUpload ? 0 : bytesTransferred),
+      failedCount: daily.stats.failedCount,
+      totalTransferTime: daily.stats.totalTransferTime,
+    );
+
+    final newDaily = Map<String, DailyStats>.from(_storedMetrics.daily);
+    newDaily[todayKey] = DailyStats(
+      date: todayKey,
+      stats: newDailyStats,
+      hourly: hourlyList,
+    );
+
+    // Update all-time stats
+    final newAllTime = TransferPeriodStats(
+      uploadCount: _storedMetrics.allTime.uploadCount + (isUpload ? 1 : 0),
+      downloadCount: _storedMetrics.allTime.downloadCount + (isUpload ? 0 : 1),
+      streamCount: _storedMetrics.allTime.streamCount,
+      bytesUploaded: _storedMetrics.allTime.bytesUploaded + (isUpload ? bytesTransferred : 0),
+      bytesDownloaded: _storedMetrics.allTime.bytesDownloaded + (isUpload ? 0 : bytesTransferred),
+      failedCount: _storedMetrics.allTime.failedCount,
+    );
+
+    // Update callsign stats
+    final callsignStats = _storedMetrics.byCallsign[callsign] ??
+        CallsignStats(callsign: callsign);
+    final newCallsignStats = CallsignStats(
+      callsign: callsign,
+      uploadCount: callsignStats.uploadCount + (isUpload ? 1 : 0),
+      downloadCount: callsignStats.downloadCount + (isUpload ? 0 : 1),
+      bytesUploaded: callsignStats.bytesUploaded + (isUpload ? bytesTransferred : 0),
+      bytesDownloaded: callsignStats.bytesDownloaded + (isUpload ? 0 : bytesTransferred),
+      lastActivity: now,
+    );
+    final newByCallsign = Map<String, CallsignStats>.from(_storedMetrics.byCallsign);
+    newByCallsign[callsign] = newCallsignStats;
+
+    // Update transport stats (P2P uses HTTP)
+    const transportId = 'internet_http';
+    final transportStats = _storedMetrics.byTransport[transportId] ??
+        TransportStats(transportId: transportId);
+    final newTransportStats = TransportStats(
+      transportId: transportId,
+      transferCount: transportStats.transferCount + 1,
+      bytesTransferred: transportStats.bytesTransferred + bytesTransferred,
+      averageSpeed: transportStats.averageSpeed,
+      successRate: transportStats.successRate,
+    );
+    final newByTransport = Map<String, TransportStats>.from(_storedMetrics.byTransport);
+    newByTransport[transportId] = newTransportStats;
+
+    // Save updated metrics
+    _storedMetrics = StoredMetrics(
+      allTime: newAllTime,
+      firstTransferAt: _storedMetrics.firstTransferAt ?? now,
+      daily: newDaily,
+      byCallsign: newByCallsign,
+      byTransport: newByTransport,
+    );
+
+    _markDirty();
+    _emitMetrics();
+
+    _log.log('TransferMetricsService: Recorded P2P transfer - '
+        '${isUpload ? "upload to" : "download from"} $callsign, $bytesTransferred bytes');
+  }
+
   /// Record connection opened
   void recordConnectionOpened(String callsign, String transport) {
     _activeConnections++;

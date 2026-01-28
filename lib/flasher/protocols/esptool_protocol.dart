@@ -291,10 +291,12 @@ class EspToolProtocol implements FlashProtocol {
   /// [offset] - Start address in flash
   /// [length] - Number of bytes to read
   /// [onProgress] - Progress callback
+  /// [isCancelled] - Function to check if operation should be cancelled
   Future<Uint8List> readFlash({
     required int offset,
     required int length,
     FlashProgressCallback? onProgress,
+    bool Function()? isCancelled,
   }) async {
     if (!_connected || _port == null) {
       throw FlashException('Not connected');
@@ -309,6 +311,11 @@ class EspToolProtocol implements FlashProtocol {
     // Read in chunks
     var bytesRead = 0;
     while (bytesRead < length) {
+      // Check for cancellation
+      if (isCancelled?.call() == true) {
+        throw FlashException('Read cancelled by user');
+      }
+
       final chunkSize = (length - bytesRead) < flashReadSize
           ? (length - bytesRead)
           : flashReadSize;

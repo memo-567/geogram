@@ -9,6 +9,7 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' show FlutterBluePlus, BluetoothAdapterState;
 import 'app_args.dart';
 import 'ble_permission_service.dart';
 import 'ble_linux_peripheral.dart';
@@ -120,6 +121,13 @@ class BLEGattServerService {
     }
 
     try {
+      // Check if Bluetooth is enabled first - don't initialize if disabled
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        LogService().log('BLEGattServer: Bluetooth is disabled, skipping initialization');
+        return;
+      }
+
       // Initialize BLE peripheral
       await BlePeripheral.initialize();
 
@@ -245,6 +253,13 @@ class BLEGattServerService {
         );
         await _linuxPeripheral?.start(callsign);
         _isRunning = true;
+        return;
+      }
+
+      // Check if Bluetooth is enabled - don't attempt advertising if disabled
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        LogService().log('BLEGattServer: Bluetooth is disabled, cannot advertise');
         return;
       }
 

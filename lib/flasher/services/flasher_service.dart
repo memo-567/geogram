@@ -26,6 +26,7 @@ class FlasherService {
   FlashProtocol? _currentProtocol;
   SerialPort? _currentPort;
   StreamController<FlashProgress>? _progressController;
+  bool _isCancelled = false;
 
   FlasherService(this._storage);
 
@@ -219,10 +220,11 @@ class FlasherService {
     }
   }
 
-  /// Cancel current flash operation
+  /// Cancel current flash/read operation
   Future<void> cancel() async {
+    _isCancelled = true;
     await _cleanup();
-    _progressController?.add(FlashProgress.error('Flash cancelled by user'));
+    _progressController?.add(FlashProgress.error('Operation cancelled by user'));
   }
 
   /// Read firmware from connected ESP32 device
@@ -238,6 +240,7 @@ class FlasherService {
     FlashProgressCallback? onProgress,
   }) async {
     _progressController = StreamController<FlashProgress>.broadcast();
+    _isCancelled = false;
 
     void reportProgress(FlashProgress progress) {
       onProgress?.call(progress);
@@ -248,9 +251,12 @@ class FlasherService {
       // Create EspToolProtocol directly (reading is ESP32-specific)
       final protocol = EspToolProtocol();
 
+      // Use high baud rate for faster reading (same as writing)
+      const readBaudRate = 921600;
+
       // Create and open serial port
       _currentPort = SerialPort();
-      final portOpened = await _currentPort!.open(portPath, 115200);
+      final portOpened = await _currentPort!.open(portPath, readBaudRate);
       if (!portOpened) {
         throw ConnectionException('Failed to open serial port: $portPath');
       }
@@ -258,7 +264,7 @@ class FlasherService {
       // Connect to bootloader
       final connected = await protocol.connect(
         _currentPort!,
-        baudRate: 115200,
+        baudRate: readBaudRate,
         onProgress: reportProgress,
       );
 
@@ -281,6 +287,7 @@ class FlasherService {
         offset: 0,
         length: size,
         onProgress: reportProgress,
+        isCancelled: () => _isCancelled,
       );
 
       // Disconnect
