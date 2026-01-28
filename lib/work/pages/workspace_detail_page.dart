@@ -16,6 +16,8 @@ import '../services/ndf_service.dart';
 import 'spreadsheet_editor_page.dart';
 import 'document_editor_page.dart';
 import 'form_editor_page.dart';
+import 'presentation_editor_page.dart';
+import 'todo_editor_page.dart';
 
 /// Workspace detail page showing documents and folders
 class WorkspaceDetailPage extends StatefulWidget {
@@ -282,60 +284,167 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.create_new_folder),
-              title: Text(_i18n.t('work_folder')),
-              subtitle: Text(_i18n.t('work_folder_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                _createFolder();
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.table_chart),
-              title: Text(_i18n.t('work_spreadsheet')),
-              subtitle: Text(_i18n.t('work_spreadsheet_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                _createDocument(NdfDocumentType.spreadsheet);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.description),
-              title: Text(_i18n.t('work_document')),
-              subtitle: Text(_i18n.t('work_document_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                _createDocument(NdfDocumentType.document);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.slideshow),
-              title: Text(_i18n.t('work_presentation')),
-              subtitle: Text(_i18n.t('work_presentation_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                _createDocument(NdfDocumentType.presentation);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.assignment),
-              title: Text(_i18n.t('work_form')),
-              subtitle: Text(_i18n.t('work_form_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                _createDocument(NdfDocumentType.form);
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.create_new_folder),
+                title: Text(_i18n.t('work_folder')),
+                subtitle: Text(_i18n.t('work_folder_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createFolder();
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.table_chart),
+                title: Text(_i18n.t('work_spreadsheet')),
+                subtitle: Text(_i18n.t('work_spreadsheet_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.spreadsheet);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.description),
+                title: Text(_i18n.t('work_document')),
+                subtitle: Text(_i18n.t('work_document_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.document);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.slideshow),
+                title: Text(_i18n.t('work_presentation')),
+                subtitle: Text(_i18n.t('work_presentation_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.presentation);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.assignment),
+                title: Text(_i18n.t('work_form')),
+                subtitle: Text(_i18n.t('work_form_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.form);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.checklist),
+                title: Text(_i18n.t('work_todo')),
+                subtitle: Text(_i18n.t('work_todo_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.todo);
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _renameDocument(NdfDocumentRef doc) async {
+    final controller = TextEditingController(text: doc.title);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('rename_document')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('document_title'),
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(_i18n.t('rename')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty && result != doc.title) {
+      try {
+        final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+        final metadata = await _ndfService.readMetadata(filePath);
+        if (metadata != null) {
+          metadata.title = result;
+          metadata.touch();
+          await _ndfService.updateMetadata(filePath, metadata);
+          await _loadWorkspace();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(_i18n.t('document_renamed'))),
+            );
+          }
+        }
+      } catch (e) {
+        LogService().log('WorkspaceDetailPage: Error renaming document: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error renaming document: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _moveDocument(NdfDocumentRef doc) async {
+    if (_workspace == null) return;
+
+    // Find current folder of this document
+    final currentFolderId = _workspace!.documentFolders[doc.filename];
+
+    final selectedFolderId = await showDialog<String?>(
+      context: context,
+      builder: (context) => _FolderPickerDialog(
+        i18n: _i18n,
+        folders: _workspace!.folders,
+        currentFolderId: currentFolderId,
+      ),
+    );
+
+    // Check if user selected a folder (including root which returns empty string)
+    if (selectedFolderId == null) return; // User cancelled
+
+    final targetFolderId = selectedFolderId.isEmpty ? null : selectedFolderId;
+    if (targetFolderId == currentFolderId) return; // Same folder, no change
+
+    try {
+      _workspace!.moveDocument(doc.filename, targetFolderId);
+      await _storage.saveWorkspace(_workspace!);
+      await _loadWorkspace();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('document_moved'))),
+        );
+      }
+    } catch (e) {
+      LogService().log('WorkspaceDetailPage: Error moving document: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error moving document: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _deleteDocument(NdfDocumentRef doc) async {
@@ -478,12 +587,27 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         break;
 
       case NdfDocumentType.presentation:
-        // Presentation editor not yet implemented
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_i18n.t('work_presentation_not_implemented')),
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PresentationEditorPage(
+              filePath: filePath,
+              title: doc.title,
+            ),
           ),
-        );
+        ).then((_) => _loadWorkspace());
+        break;
+
+      case NdfDocumentType.todo:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TodoEditorPage(
+              filePath: filePath,
+              title: doc.title,
+            ),
+          ),
+        ).then((_) => _loadWorkspace());
         break;
     }
   }
@@ -498,6 +622,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return _i18n.t('work_presentation');
       case NdfDocumentType.form:
         return _i18n.t('work_form');
+      case NdfDocumentType.todo:
+        return _i18n.t('work_todo');
     }
   }
 
@@ -511,6 +637,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Icons.slideshow;
       case NdfDocumentType.form:
         return Icons.assignment;
+      case NdfDocumentType.todo:
+        return Icons.checklist;
     }
   }
 
@@ -524,6 +652,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Colors.orange;
       case NdfDocumentType.form:
         return Colors.purple;
+      case NdfDocumentType.todo:
+        return Colors.teal;
     }
   }
 
@@ -880,11 +1010,40 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                           ),
                           padding: EdgeInsets.zero,
                           onSelected: (action) {
-                            if (action == 'delete') {
-                              _deleteDocument(doc);
+                            switch (action) {
+                              case 'rename':
+                                _renameDocument(doc);
+                                break;
+                              case 'move':
+                                _moveDocument(doc);
+                                break;
+                              case 'delete':
+                                _deleteDocument(doc);
+                                break;
                             }
                           },
                           itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'rename',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.edit_outlined),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('rename')),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'move',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.drive_file_move_outlined),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('move_document')),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuDivider(),
                             PopupMenuItem(
                               value: 'delete',
                               child: Row(
@@ -931,5 +1090,113 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     }
 
     return '${date.day}/${date.month}/${date.year}';
+  }
+}
+
+/// Dialog for selecting a folder within the workspace
+class _FolderPickerDialog extends StatelessWidget {
+  final I18nService i18n;
+  final List<WorkspaceFolder> folders;
+  final String? currentFolderId;
+
+  const _FolderPickerDialog({
+    required this.i18n,
+    required this.folders,
+    this.currentFolderId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    // Build folder tree structure
+    final rootFolders = folders.where((f) => f.parentId == null).toList();
+
+    return AlertDialog(
+      title: Text(i18n.t('select_folder')),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            // Root option
+            ListTile(
+              leading: Icon(
+                Icons.folder_special,
+                color: currentFolderId == null
+                    ? theme.colorScheme.primary
+                    : null,
+              ),
+              title: Text(
+                i18n.t('root_folder'),
+                style: currentFolderId == null
+                    ? TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      )
+                    : null,
+              ),
+              trailing: currentFolderId == null
+                  ? Icon(Icons.check, color: theme.colorScheme.primary)
+                  : null,
+              onTap: () => Navigator.pop(context, ''), // Empty string = root
+            ),
+            if (rootFolders.isNotEmpty) const Divider(),
+            // Folder tree
+            ..._buildFolderTree(context, rootFolders, 0),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context), // null = cancelled
+          child: Text(i18n.t('cancel')),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _buildFolderTree(
+    BuildContext context,
+    List<WorkspaceFolder> folderList,
+    int depth,
+  ) {
+    final theme = Theme.of(context);
+    final widgets = <Widget>[];
+
+    for (final folder in folderList) {
+      final isCurrentFolder = folder.id == currentFolderId;
+      final childFolders = folders.where((f) => f.parentId == folder.id).toList();
+
+      widgets.add(
+        ListTile(
+          contentPadding: EdgeInsets.only(left: 16.0 + (depth * 24.0), right: 16),
+          leading: Icon(
+            Icons.folder,
+            color: isCurrentFolder ? theme.colorScheme.primary : null,
+          ),
+          title: Text(
+            folder.name,
+            style: isCurrentFolder
+                ? TextStyle(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  )
+                : null,
+          ),
+          trailing: isCurrentFolder
+              ? Icon(Icons.check, color: theme.colorScheme.primary)
+              : null,
+          onTap: () => Navigator.pop(context, folder.id),
+        ),
+      );
+
+      // Add child folders recursively
+      if (childFolders.isNotEmpty) {
+        widgets.addAll(_buildFolderTree(context, childFolders, depth + 1));
+      }
+    }
+
+    return widgets;
   }
 }

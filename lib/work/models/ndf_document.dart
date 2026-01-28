@@ -11,6 +11,7 @@ enum NdfDocumentType {
   document,
   presentation,
   form,
+  todo,
 }
 
 /// Metadata for an NDF document (from ndf.json inside the archive)
@@ -130,6 +131,8 @@ class NdfDocument {
         return 'slideshow';
       case NdfDocumentType.form:
         return 'assignment';
+      case NdfDocumentType.todo:
+        return 'checklist';
     }
   }
 }
