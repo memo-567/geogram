@@ -15,6 +15,8 @@ import '../models/ndf_permission.dart';
 import '../models/spreadsheet_content.dart';
 import '../models/document_content.dart';
 import '../models/form_content.dart';
+import '../models/presentation_content.dart';
+import '../models/todo_content.dart';
 
 /// Service for reading and writing NDF (Nostr Data Format) documents
 class NdfService {
@@ -140,6 +142,17 @@ class NdfService {
       final defaultContent = _createDefaultContent(metadata.type);
       final contentJson = utf8.encode(const JsonEncoder.withIndent('  ').convert(defaultContent));
       archive.addFile(ArchiveFile('content/main.json', contentJson.length, contentJson));
+
+      // For presentations, also create the initial slide
+      if (metadata.type == NdfDocumentType.presentation) {
+        final initialSlide = PresentationSlide.title(
+          id: 'slide-001',
+          index: 0,
+          title: metadata.title,
+        );
+        final slideJson = utf8.encode(initialSlide.toJsonString());
+        archive.addFile(ArchiveFile('content/slides/slide-001.json', slideJson.length, slideJson));
+      }
     }
 
     // Create empty directories structure
@@ -235,12 +248,16 @@ class NdfService {
         };
 
       case NdfDocumentType.form:
+        final now = DateTime.now();
         return {
           'type': 'form',
+          'id': 'form-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-form-1.0',
           'title': 'Untitled Form',
           'description': '',
           'version': 1,
+          'created': now.toIso8601String(),
+          'modified': now.toIso8601String(),
           'settings': {
             'allow_anonymous': false,
             'require_signature': true,
@@ -251,6 +268,24 @@ class NdfService {
           'layout': {
             'type': 'linear',
           },
+        };
+
+      case NdfDocumentType.todo:
+        final now = DateTime.now();
+        return {
+          'type': 'todo',
+          'id': 'todo-${now.millisecondsSinceEpoch.toRadixString(36)}',
+          'schema': 'ndf-todo-1.0',
+          'title': 'Untitled TODO',
+          'version': 1,
+          'created': now.toIso8601String(),
+          'modified': now.toIso8601String(),
+          'settings': {
+            'show_completed': true,
+            'sort_order': 'createdDesc',
+            'default_expanded': false,
+          },
+          'items': [],
         };
     }
   }
@@ -441,6 +476,158 @@ class NdfService {
     await _updateArchiveFiles(filePath, {
       'social/responses/${response.id}.json': response.toJsonString(),
     });
+  }
+
+  /// Read the responses spreadsheet
+  Future<SpreadsheetSheet?> readResponsesSpreadsheet(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/responses-sheet.json');
+    if (json == null) return null;
+    try {
+      return SpreadsheetSheet.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing responses spreadsheet: $e');
+      return null;
+    }
+  }
+
+  /// Save the responses spreadsheet
+  Future<void> saveResponsesSpreadsheet(
+    String filePath,
+    SpreadsheetSheet sheet,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/responses-sheet.json': sheet.toJsonString(),
+    });
+  }
+
+  // ============================================================
+  // PRESENTATION CONTENT METHODS
+  // ============================================================
+
+  /// Read presentation main content
+  Future<PresentationContent?> readPresentationContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return PresentationContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing presentation content: $e');
+      return null;
+    }
+  }
+
+  /// Read a presentation slide
+  Future<PresentationSlide?> readSlide(String filePath, String slideId) async {
+    final json = await readArchiveJson(filePath, 'content/slides/$slideId.json');
+    if (json == null) return null;
+    try {
+      return PresentationSlide.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing slide $slideId: $e');
+      return null;
+    }
+  }
+
+  /// Save presentation content and slides
+  Future<void> savePresentation(
+    String filePath,
+    PresentationContent content,
+    Map<String, PresentationSlide> slides,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+      for (final entry in slides.entries)
+        'content/slides/${entry.key}.json': entry.value.toJsonString(),
+    });
+  }
+
+  /// Save a single presentation slide
+  Future<void> savePresentationSlide(
+    String filePath,
+    PresentationSlide slide,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/slides/${slide.id}.json': slide.toJsonString(),
+    });
+  }
+
+  /// Delete a presentation slide
+  Future<void> deletePresentationSlide(
+    String filePath,
+    String slideId,
+  ) async {
+    await deleteArchiveFiles(filePath, ['content/slides/$slideId.json']);
+  }
+
+  // ============================================================
+  // TODO CONTENT METHODS
+  // ============================================================
+
+  /// Read TODO main content
+  Future<TodoContent?> readTodoContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return TodoContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing TODO content: $e');
+      return null;
+    }
+  }
+
+  /// Read a TODO item
+  Future<TodoItem?> readTodoItem(String filePath, String itemId) async {
+    final json = await readArchiveJson(filePath, 'content/items/$itemId.json');
+    if (json == null) return null;
+    try {
+      return TodoItem.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing TODO item $itemId: $e');
+      return null;
+    }
+  }
+
+  /// Read all TODO items
+  Future<List<TodoItem>> readTodoItems(String filePath, List<String> itemIds) async {
+    final items = <TodoItem>[];
+    for (final itemId in itemIds) {
+      final item = await readTodoItem(filePath, itemId);
+      if (item != null) {
+        items.add(item);
+      }
+    }
+    return items;
+  }
+
+  /// Save TODO content and items
+  Future<void> saveTodo(
+    String filePath,
+    TodoContent content,
+    List<TodoItem> items,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+      for (final item in items)
+        'content/items/${item.id}.json': item.toJsonString(),
+    });
+  }
+
+  /// Save a single TODO item
+  Future<void> saveTodoItem(
+    String filePath,
+    TodoItem item,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/items/${item.id}.json': item.toJsonString(),
+    });
+  }
+
+  /// Delete a TODO item
+  Future<void> deleteTodoItem(
+    String filePath,
+    String itemId,
+  ) async {
+    await deleteArchiveFiles(filePath, ['content/items/$itemId.json']);
   }
 
   // ============================================================

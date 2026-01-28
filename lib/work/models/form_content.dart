@@ -284,7 +284,9 @@ class FormSettings {
   final bool requireSignature;
   final bool multipleSubmissions;
   final bool editableAfterSubmit;
+  final bool acceptingSubmissions;
   final List<String>? notifyOnSubmit;
+  final DateTime? openAfter;
   final DateTime? closeAfter;
   final int? maxResponses;
 
@@ -293,7 +295,9 @@ class FormSettings {
     this.requireSignature = true,
     this.multipleSubmissions = false,
     this.editableAfterSubmit = false,
+    this.acceptingSubmissions = true,
     this.notifyOnSubmit,
+    this.openAfter,
     this.closeAfter,
     this.maxResponses,
   });
@@ -304,9 +308,13 @@ class FormSettings {
       requireSignature: json['require_signature'] as bool? ?? true,
       multipleSubmissions: json['multiple_submissions'] as bool? ?? false,
       editableAfterSubmit: json['editable_after_submit'] as bool? ?? false,
+      acceptingSubmissions: json['accepting_submissions'] as bool? ?? true,
       notifyOnSubmit: (json['notify_on_submit'] as List<dynamic>?)
           ?.map((n) => n as String)
           .toList(),
+      openAfter: json['open_after'] != null
+          ? DateTime.parse(json['open_after'] as String)
+          : null,
       closeAfter: json['close_after'] != null
           ? DateTime.parse(json['close_after'] as String)
           : null,
@@ -319,10 +327,48 @@ class FormSettings {
     'require_signature': requireSignature,
     'multiple_submissions': multipleSubmissions,
     'editable_after_submit': editableAfterSubmit,
+    'accepting_submissions': acceptingSubmissions,
     if (notifyOnSubmit != null) 'notify_on_submit': notifyOnSubmit,
+    if (openAfter != null) 'open_after': openAfter!.toIso8601String(),
     if (closeAfter != null) 'close_after': closeAfter!.toIso8601String(),
     if (maxResponses != null) 'max_responses': maxResponses,
   };
+
+  /// Check if the form is currently accepting submissions
+  bool get isOpen {
+    if (!acceptingSubmissions) return false;
+    final now = DateTime.now();
+    if (openAfter != null && now.isBefore(openAfter!)) return false;
+    if (closeAfter != null && now.isAfter(closeAfter!)) return false;
+    return true;
+  }
+
+  /// Create a copy with modified fields
+  FormSettings copyWith({
+    bool? allowAnonymous,
+    bool? requireSignature,
+    bool? multipleSubmissions,
+    bool? editableAfterSubmit,
+    bool? acceptingSubmissions,
+    List<String>? notifyOnSubmit,
+    DateTime? openAfter,
+    DateTime? closeAfter,
+    int? maxResponses,
+    bool clearOpenAfter = false,
+    bool clearCloseAfter = false,
+  }) {
+    return FormSettings(
+      allowAnonymous: allowAnonymous ?? this.allowAnonymous,
+      requireSignature: requireSignature ?? this.requireSignature,
+      multipleSubmissions: multipleSubmissions ?? this.multipleSubmissions,
+      editableAfterSubmit: editableAfterSubmit ?? this.editableAfterSubmit,
+      acceptingSubmissions: acceptingSubmissions ?? this.acceptingSubmissions,
+      notifyOnSubmit: notifyOnSubmit ?? this.notifyOnSubmit,
+      openAfter: clearOpenAfter ? null : (openAfter ?? this.openAfter),
+      closeAfter: clearCloseAfter ? null : (closeAfter ?? this.closeAfter),
+      maxResponses: maxResponses ?? this.maxResponses,
+    );
+  }
 }
 
 /// Main form content (form definition)
@@ -334,7 +380,7 @@ class FormContent {
   int version;
   final DateTime created;
   DateTime modified;
-  final FormSettings settings;
+  FormSettings settings;
   final List<NdfFormField> fields;
   final FormLayout layout;
 
@@ -383,14 +429,22 @@ class FormContent {
       layout = FormLayout.fromJson(layoutJson);
     }
 
+    // Handle missing id, created, modified for backwards compatibility
+    final now = DateTime.now();
+    final id = json['id'] as String? ?? 'form-${now.millisecondsSinceEpoch.toRadixString(36)}';
+    final createdStr = json['created'] as String?;
+    final modifiedStr = json['modified'] as String?;
+    final created = createdStr != null ? DateTime.parse(createdStr) : now;
+    final modified = modifiedStr != null ? DateTime.parse(modifiedStr) : now;
+
     return FormContent(
-      id: json['id'] as String,
+      id: id,
       schema: json['schema'] as String? ?? 'ndf-form-1.0',
       title: json['title'] as String,
       description: json['description'] as String?,
       version: json['version'] as int? ?? 1,
-      created: DateTime.parse(json['created'] as String),
-      modified: DateTime.parse(json['modified'] as String),
+      created: created,
+      modified: modified,
       settings: settings,
       fields: fields,
       layout: layout,
