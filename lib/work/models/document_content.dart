@@ -572,11 +572,6 @@ class DocumentContent {
   factory DocumentContent.create() {
     return DocumentContent(
       content: [
-        HeadingElement(
-          id: 'h-001',
-          level: 1,
-          content: [RichTextSpan(value: 'Untitled Document')],
-        ),
         ParagraphElement(
           id: 'p-001',
           content: [RichTextSpan(value: '')],

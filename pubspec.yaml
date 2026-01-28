@@ -91,6 +91,7 @@ dependencies:
   flutter_zxing: ^1.8.0          # QR code scanning using ZXing (F-Droid compatible, no Google deps)
   whisper_flutter_new: ^1.0.1    # Offline speech-to-text using Whisper (Android/iOS/macOS)
   share_plus: ^10.1.4            # Native share sheet for sharing images and files
+  flutter_quill: ^11.5.0         # Rich text editor for Work documents
   maxminddb: ^1.1.0              # Offline IP geolocation using MMDB databases
   sqlite3: ^2.4.0                # SQLite database for NOSTR relay + Blossom storage
   sqlite3_flutter_libs: ^0.5.24  # SQLite native libs for Flutter platforms

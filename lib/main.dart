@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'services/crash_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -770,6 +772,16 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       theme: _themeService.getLightTheme(),
       darkTheme: _themeService.getDarkTheme(),
       themeMode: ThemeMode.system,
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        FlutterQuillLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en'),
+        Locale('pt'),
+      ],
       builder: (context, child) {
         if (child == null) return const SizedBox.shrink();
         return SafeArea(

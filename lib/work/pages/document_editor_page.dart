@@ -3,16 +3,23 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' show File, Platform;
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_quill/flutter_quill.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
 import '../models/ndf_document.dart';
 import '../models/document_content.dart';
 import '../services/ndf_service.dart';
-import '../widgets/document/rich_text_widget.dart';
+import '../utils/quill_ndf_converter.dart';
 
-/// Document editor page for rich text documents
+/// Document editor page for rich text documents using flutter_quill
 class DocumentEditorPage extends StatefulWidget {
   final String filePath;
   final String? title;
@@ -30,32 +37,34 @@ class DocumentEditorPage extends StatefulWidget {
 class _DocumentEditorPageState extends State<DocumentEditorPage> {
   final I18nService _i18n = I18nService();
   final NdfService _ndfService = NdfService();
+  final QuillNdfConverter _converter = QuillNdfConverter();
+  final ImagePicker _imagePicker = ImagePicker();
 
   NdfDocument? _metadata;
-  DocumentContent? _content;
+  PageStyles? _pageStyles;
   bool _isLoading = true;
   bool _hasChanges = false;
   String? _error;
 
-  String? _editingElementId;
-  final _editController = TextEditingController();
-  final _editFocusNode = FocusNode();
+  /// Cache of extracted asset paths (asset:// URL -> temp file path)
+  final Map<String, String> _assetCache = {};
 
-  // Formatting state
-  bool _isBold = false;
-  bool _isItalic = false;
-  bool _isUnderline = false;
+  late QuillController _quillController;
+  final FocusNode _editorFocusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _quillController = QuillController.basic();
     _loadDocument();
   }
 
   @override
   void dispose() {
-    _editController.dispose();
-    _editFocusNode.dispose();
+    _quillController.dispose();
+    _editorFocusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -74,11 +83,28 @@ class _DocumentEditorPageState extends State<DocumentEditorPage> {
 
       // Load content
       final content = await _ndfService.readDocumentContent(widget.filePath);
+      final documentContent = content ?? DocumentContent.create();
+
+      // Convert NDF to Quill document
+      final quillDoc = _converter.ndfToQuill(documentContent);
 
       setState(() {
         _metadata = metadata;
-        _content = content ?? DocumentContent.create();
+        _pageStyles = documentContent.styles;
+        _quillController = QuillController(
+          document: quillDoc,
+          selection: const TextSelection.collapsed(offset: 0),
+        );
         _isLoading = false;
+      });
+
+      // Listen for changes
+      _quillController.document.changes.listen((_) {
+        if (!_hasChanges && mounted) {
+          setState(() {
+            _hasChanges = true;
+          });
+        }
       });
     } catch (e) {
       LogService().log('DocumentEditorPage: Error loading document: $e');
@@ -90,17 +116,27 @@ class _DocumentEditorPageState extends State<DocumentEditorPage> {
   }
 
   Future<void> _save() async {
-    if (_content == null || _metadata == null) return;
-
-    // Commit any pending edits
-    _commitEdit();
+    if (_metadata == null) return;
 
     try {
+      // Convert Quill document to NDF
+      var content = _converter.quillToNdf(
+        _quillController.document,
+        styles: _pageStyles,
+      );
+
+      // Merge consecutive lists
+      content = DocumentContent(
+        schema: content.schema,
+        content: _converter.mergeConsecutiveLists(content.content),
+        styles: content.styles,
+      );
+
       // Update metadata modified time
       _metadata!.touch();
 
       // Save content
-      await _ndfService.saveDocumentContent(widget.filePath, _content!);
+      await _ndfService.saveDocumentContent(widget.filePath, content);
 
       // Update metadata
       await _ndfService.updateMetadata(widget.filePath, _metadata!);
@@ -124,171 +160,135 @@ class _DocumentEditorPageState extends State<DocumentEditorPage> {
     }
   }
 
-  void _startEditing(String elementId) {
-    _commitEdit();
-
-    final element = _content?.content.firstWhere(
-      (e) => e.id == elementId,
-      orElse: () => ParagraphElement(id: '', content: []),
-    );
-
-    if (element == null) return;
-
-    String text = '';
-    if (element is HeadingElement) {
-      text = element.plainText;
-    } else if (element is ParagraphElement) {
-      text = element.plainText;
-    } else if (element is BlockquoteElement) {
-      text = element.plainText;
-    } else if (element is CodeElement) {
-      text = element.content;
-    }
-
-    _editController.text = text;
-    setState(() {
-      _editingElementId = elementId;
-    });
-
-    _editFocusNode.requestFocus();
-  }
-
-  void _commitEdit() {
-    if (_editingElementId == null || _content == null) return;
-
-    final elementIndex = _content!.content.indexWhere(
-      (e) => e.id == _editingElementId,
-    );
-    if (elementIndex < 0) return;
-
-    final element = _content!.content[elementIndex];
-    final text = _editController.text;
-
-    // Update element based on type
-    if (element is HeadingElement) {
-      _content!.content[elementIndex] = HeadingElement(
-        id: element.id,
-        level: element.level,
-        content: _parseTextToSpans(text),
+  /// Pick an image and save it to the NDF archive, returning the asset:// URL
+  Future<String?> _pickAndSaveImage(BuildContext context) async {
+    try {
+      final XFile? pickedFile = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1920,
       );
-    } else if (element is ParagraphElement) {
-      _content!.content[elementIndex] = ParagraphElement(
-        id: element.id,
-        content: _parseTextToSpans(text),
-      );
-    } else if (element is BlockquoteElement) {
-      _content!.content[elementIndex] = BlockquoteElement(
-        id: element.id,
-        content: _parseTextToSpans(text),
-      );
-    } else if (element is CodeElement) {
-      _content!.content[elementIndex] = CodeElement(
-        id: element.id,
-        content: text,
-        language: element.language,
-      );
-    }
 
-    setState(() {
-      _editingElementId = null;
-      _hasChanges = true;
-    });
-  }
+      if (pickedFile == null) return null;
 
-  List<RichTextSpan> _parseTextToSpans(String text) {
-    // Simple implementation - create a single span
-    // In a full implementation, this would parse markdown-like formatting
-    final marks = <TextMark>{};
-    if (_isBold) marks.add(TextMark.bold);
-    if (_isItalic) marks.add(TextMark.italic);
-    if (_isUnderline) marks.add(TextMark.underline);
+      // Read image bytes
+      final Uint8List bytes = await pickedFile.readAsBytes();
 
-    return [RichTextSpan(value: text, marks: marks)];
-  }
+      // Generate filename from SHA1 hash (deduplicates identical images)
+      final ext = pickedFile.path.split('.').last.toLowerCase();
+      final hash = sha1.convert(bytes).toString();
+      final assetPath = 'images/$hash.$ext';
 
-  void _addElement(DocumentElementType type) {
-    if (_content == null) return;
+      // Save to NDF archive
+      await _ndfService.saveAsset(widget.filePath, assetPath, bytes);
 
-    final id = 'elem-${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
-    DocumentElement newElement;
-
-    switch (type) {
-      case DocumentElementType.heading:
-        newElement = HeadingElement(
-          id: id,
-          level: 2,
-          content: [RichTextSpan(value: 'New Heading')],
-        );
-        break;
-      case DocumentElementType.paragraph:
-        newElement = ParagraphElement(
-          id: id,
-          content: [RichTextSpan(value: '')],
-        );
-        break;
-      case DocumentElementType.list:
-        newElement = ListElement(
-          id: id,
-          ordered: false,
-          items: [ListItem(content: [RichTextSpan(value: 'Item 1')])],
-        );
-        break;
-      case DocumentElementType.code:
-        newElement = CodeElement(
-          id: id,
-          content: '',
-        );
-        break;
-      case DocumentElementType.blockquote:
-        newElement = BlockquoteElement(
-          id: id,
-          content: [RichTextSpan(value: '')],
-        );
-        break;
-      case DocumentElementType.horizontalRule:
-        newElement = HorizontalRuleElement(id: id);
-        break;
-      default:
-        return;
-    }
-
-    setState(() {
-      _content!.content.add(newElement);
-      _hasChanges = true;
-    });
-
-    // Start editing the new element
-    if (type != DocumentElementType.horizontalRule) {
-      _startEditing(id);
-    }
-  }
-
-  void _deleteElement(String elementId) {
-    if (_content == null) return;
-
-    setState(() {
-      _content!.content.removeWhere((e) => e.id == elementId);
-      if (_editingElementId == elementId) {
-        _editingElementId = null;
+      // Mark document as having changes
+      if (mounted) {
+        setState(() {
+          _hasChanges = true;
+        });
       }
-      _hasChanges = true;
-    });
+
+      // Return asset:// URL for quill
+      return 'asset://$assetPath';
+    } catch (e) {
+      LogService().log('DocumentEditorPage: Error picking image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error inserting image: $e')),
+        );
+      }
+      return null;
+    }
   }
 
-  void _moveElement(String elementId, int direction) {
-    if (_content == null) return;
+  /// Get an image provider for an asset:// URL
+  Future<ImageProvider?> _getAssetImageProvider(String imageUrl) async {
+    if (!imageUrl.startsWith('asset://')) {
+      // Network or file image
+      if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+        return NetworkImage(imageUrl);
+      } else if (!kIsWeb) {
+        return FileImage(File(imageUrl));
+      }
+      return null;
+    }
 
-    final index = _content!.content.indexWhere((e) => e.id == elementId);
-    if (index < 0) return;
+    // Check cache first
+    if (_assetCache.containsKey(imageUrl)) {
+      final tempPath = _assetCache[imageUrl]!;
+      return FileImage(File(tempPath));
+    }
 
-    final newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= _content!.content.length) return;
+    // Extract asset path from URL
+    final assetPath = imageUrl.substring(8); // Remove 'asset://'
 
-    setState(() {
-      final element = _content!.content.removeAt(index);
-      _content!.content.insert(newIndex, element);
-      _hasChanges = true;
-    });
+    // Extract to temp file
+    final tempPath = await _ndfService.extractAssetToTemp(
+      widget.filePath,
+      assetPath,
+    );
+
+    if (tempPath == null) return null;
+
+    // Cache the path
+    _assetCache[imageUrl] = tempPath;
+
+    return FileImage(File(tempPath));
+  }
+
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyS) {
+      _save();
+    }
+  }
+
+  Future<void> _renameDocument() async {
+    if (_metadata == null) return;
+
+    final controller = TextEditingController(text: _metadata!.title);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('rename_document')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('document_title'),
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(_i18n.t('rename')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty && result != _metadata!.title) {
+      setState(() {
+        _metadata!.title = result;
+        _hasChanges = true;
+      });
+    }
+  }
+
+  bool get _isDesktop {
+    if (kIsWeb) return false;
+    return Platform.isLinux || Platform.isWindows || Platform.isMacOS;
   }
 
   Future<bool> _onWillPop() async {
@@ -336,153 +336,28 @@ class _DocumentEditorPageState extends State<DocumentEditorPage> {
           }
         }
       },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_metadata?.title ?? widget.title ?? _i18n.t('work_document')),
-          actions: [
-            if (_hasChanges)
+      child: KeyboardListener(
+        focusNode: FocusNode(),
+        onKeyEvent: _handleKeyEvent,
+        child: Scaffold(
+          appBar: AppBar(
+            title: GestureDetector(
+              onTap: _isDesktop ? _renameDocument : null,
+              onLongPress: _isDesktop ? null : _renameDocument,
+              child: Text(_metadata?.title ?? widget.title ?? _i18n.t('work_document')),
+            ),
+            actions: [
               IconButton(
-                icon: const Icon(Icons.save),
+                icon: Icon(
+                  _hasChanges ? Icons.save : Icons.save_outlined,
+                  color: _hasChanges ? null : theme.disabledColor,
+                ),
                 onPressed: _save,
-                tooltip: _i18n.t('save'),
+                tooltip: '${_i18n.t('save')} (Ctrl+S)',
               ),
-            IconButton(
-              icon: const Icon(Icons.add),
-              onPressed: _showAddElementMenu,
-              tooltip: _i18n.t('add_element'),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            // Formatting toolbar (when editing)
-            if (_editingElementId != null)
-              _buildFormattingToolbar(theme),
-            // Content
-            Expanded(child: _buildBody(theme)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFormattingToolbar(ThemeData theme) {
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        border: Border(
-          bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
-      ),
-      child: Row(
-        children: [
-          _buildFormatButton(
-            icon: Icons.format_bold,
-            isActive: _isBold,
-            onPressed: () => setState(() => _isBold = !_isBold),
+            ],
           ),
-          _buildFormatButton(
-            icon: Icons.format_italic,
-            isActive: _isItalic,
-            onPressed: () => setState(() => _isItalic = !_isItalic),
-          ),
-          _buildFormatButton(
-            icon: Icons.format_underlined,
-            isActive: _isUnderline,
-            onPressed: () => setState(() => _isUnderline = !_isUnderline),
-          ),
-          const VerticalDivider(width: 16),
-          IconButton(
-            icon: const Icon(Icons.check),
-            onPressed: _commitEdit,
-            tooltip: _i18n.t('done'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => setState(() => _editingElementId = null),
-            tooltip: _i18n.t('cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFormatButton({
-    required IconData icon,
-    required bool isActive,
-    required VoidCallback onPressed,
-  }) {
-    final theme = Theme.of(context);
-    return IconButton(
-      icon: Icon(icon),
-      onPressed: onPressed,
-      style: IconButton.styleFrom(
-        backgroundColor: isActive
-            ? theme.colorScheme.primaryContainer
-            : null,
-      ),
-    );
-  }
-
-  void _showAddElementMenu() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.title),
-              title: Text(_i18n.t('heading')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.heading);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.notes),
-              title: Text(_i18n.t('paragraph')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.paragraph);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.format_list_bulleted),
-              title: Text(_i18n.t('list')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.list);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.code),
-              title: Text(_i18n.t('code_block')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.code);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.format_quote),
-              title: Text(_i18n.t('blockquote')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.blockquote);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.horizontal_rule),
-              title: Text(_i18n.t('horizontal_rule')),
-              onTap: () {
-                Navigator.pop(context);
-                _addElement(DocumentElementType.horizontalRule);
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+          body: _buildBody(theme),
         ),
       ),
     );
@@ -514,155 +389,190 @@ class _DocumentEditorPageState extends State<DocumentEditorPage> {
       );
     }
 
-    if (_content == null || _content!.content.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.description_outlined,
-              size: 64,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(height: 16),
-            Text(_i18n.t('empty_document')),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _showAddElementMenu,
-              icon: const Icon(Icons.add),
-              label: Text(_i18n.t('add_content')),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(24),
-      itemCount: _content!.content.length,
-      itemBuilder: (context, index) {
-        final element = _content!.content[index];
-        return _buildEditableElement(element, theme);
-      },
-    );
-  }
-
-  Widget _buildEditableElement(DocumentElement element, ThemeData theme) {
-    final isEditing = _editingElementId == element.id;
-
-    return Stack(
+    return Column(
       children: [
-        if (isEditing)
-          _buildEditingWidget(element, theme)
-        else
-          GestureDetector(
-            onTap: () => _startEditing(element.id),
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: Colors.transparent,
-                  width: 2,
-                ),
-                borderRadius: BorderRadius.circular(4),
+        // Toolbar
+        _buildToolbar(theme),
+        // Divider
+        Divider(height: 1, color: theme.colorScheme.outlineVariant),
+        // Editor
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: QuillEditor(
+              controller: _quillController,
+              focusNode: _editorFocusNode,
+              scrollController: _scrollController,
+              config: QuillEditorConfig(
+                placeholder: _i18n.t('work_enter_text'),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                expands: true,
+                autoFocus: false,
+                embedBuilders: [
+                  _NdfImageEmbedBuilder(
+                    getImageProvider: _getAssetImageProvider,
+                  ),
+                ],
               ),
-              child: DocumentElementWidget(element: element),
             ),
           ),
-        // Action buttons on hover/focus
-        if (!isEditing)
-          Positioned(
-            top: 0,
-            right: 0,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_upward, size: 16),
-                  onPressed: () => _moveElement(element.id, -1),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 28,
-                    minHeight: 28,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_downward, size: 16),
-                  onPressed: () => _moveElement(element.id, 1),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 28,
-                    minHeight: 28,
-                  ),
-                ),
-                IconButton(
-                  icon: Icon(Icons.delete_outline, size: 16, color: theme.colorScheme.error),
-                  onPressed: () => _deleteElement(element.id),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 28,
-                    minHeight: 28,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        ),
       ],
     );
   }
 
-  Widget _buildEditingWidget(DocumentElement element, ThemeData theme) {
+  Widget _buildToolbar(ThemeData theme) {
     return Container(
-      decoration: BoxDecoration(
-        border: Border.all(
-          color: theme.colorScheme.primary,
-          width: 2,
+      height: kDefaultToolbarSize * 1.4,
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            // Header dropdown first
+            QuillToolbarSelectHeaderStyleDropdownButton(controller: _quillController),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Undo/Redo
+            QuillToolbarHistoryButton(controller: _quillController, isUndo: true),
+            QuillToolbarHistoryButton(controller: _quillController, isUndo: false),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Text formatting
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.bold,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.italic,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.underline,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.strikeThrough,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.inlineCode,
+            ),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Lists
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.ul,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.ol,
+            ),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Block formatting
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.blockQuote,
+            ),
+            QuillToolbarToggleStyleButton(
+              controller: _quillController,
+              attribute: Attribute.codeBlock,
+            ),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Indent
+            QuillToolbarIndentButton(controller: _quillController, isIncrease: true),
+            QuillToolbarIndentButton(controller: _quillController, isIncrease: false),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Link
+            QuillToolbarLinkStyleButton(controller: _quillController),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Image
+            IconButton(
+              icon: const Icon(Icons.image),
+              tooltip: _i18n.t('work_add_image'),
+              onPressed: () async {
+                final imageUrl = await _pickAndSaveImage(context);
+                if (imageUrl != null) {
+                  final index = _quillController.selection.baseOffset;
+                  _quillController.document.insert(index, BlockEmbed.image(imageUrl));
+                  _quillController.updateSelection(
+                    TextSelection.collapsed(offset: index + 1),
+                    ChangeSource.local,
+                  );
+                }
+              },
+            ),
+            const QuillToolbarDivider(Axis.horizontal),
+            // Clear format
+            QuillToolbarClearFormatButton(controller: _quillController),
+          ],
         ),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      padding: const EdgeInsets.all(8),
-      child: TextField(
-        controller: _editController,
-        focusNode: _editFocusNode,
-        maxLines: element is CodeElement ? 10 : null,
-        style: _getEditingStyle(element, theme),
-        decoration: InputDecoration(
-          border: InputBorder.none,
-          hintText: _getHintText(element),
-          isDense: true,
-          contentPadding: EdgeInsets.zero,
-        ),
-        onSubmitted: (_) => _commitEdit(),
       ),
     );
   }
+}
 
-  TextStyle? _getEditingStyle(DocumentElement element, ThemeData theme) {
-    if (element is HeadingElement) {
-      switch (element.level) {
-        case 1:
-          return theme.textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.bold);
-        case 2:
-          return theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold);
-        case 3:
-          return theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold);
-        default:
-          return theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold);
-      }
-    }
-    if (element is CodeElement) {
-      return theme.textTheme.bodyMedium?.copyWith(fontFamily: 'monospace');
-    }
-    if (element is BlockquoteElement) {
-      return theme.textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic);
-    }
-    return theme.textTheme.bodyMedium;
-  }
+/// Custom image embed builder that handles asset:// URLs
+class _NdfImageEmbedBuilder extends EmbedBuilder {
+  final Future<ImageProvider?> Function(String imageUrl) getImageProvider;
 
-  String _getHintText(DocumentElement element) {
-    if (element is HeadingElement) return _i18n.t('enter_heading');
-    if (element is ParagraphElement) return _i18n.t('enter_text');
-    if (element is CodeElement) return _i18n.t('enter_code');
-    if (element is BlockquoteElement) return _i18n.t('enter_quote');
-    return _i18n.t('enter_text');
+  _NdfImageEmbedBuilder({required this.getImageProvider});
+
+  @override
+  String get key => BlockEmbed.imageType;
+
+  @override
+  Widget build(BuildContext context, EmbedContext embedContext) {
+    final imageUrl = embedContext.node.value.data as String;
+
+    return FutureBuilder<ImageProvider?>(
+      future: getImageProvider(imageUrl),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            width: 200,
+            height: 150,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final imageProvider = snapshot.data;
+        if (imageProvider == null) {
+          return Container(
+            width: 200,
+            height: 150,
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Center(
+              child: Icon(
+                Icons.broken_image,
+                size: 48,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Image(
+            image: imageProvider,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                width: 200,
+                height: 150,
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: Center(
+                  child: Icon(
+                    Icons.broken_image,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
   }
 }

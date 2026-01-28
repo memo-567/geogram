@@ -879,6 +879,27 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
             width: 16,
             color: theme.colorScheme.outlineVariant,
           ),
+          // Cancel/Commit buttons - only when editing
+          if (_isEditing) ...[
+            IconButton(
+              icon: const Icon(Icons.close, size: 20),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              tooltip: 'Cancel',
+              onPressed: _cancelEdit,
+            ),
+            IconButton(
+              icon: const Icon(Icons.check, size: 20),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              tooltip: 'Commit',
+              onPressed: () {
+                _commitEdit();
+                _moveSelection(1, 0);
+              },
+            ),
+            const SizedBox(width: 4),
+          ],
           // Formula/value display - TextField always mounted to avoid timing issues
           Expanded(
             child: TextField(
@@ -1128,10 +1149,12 @@ class _SheetGridWidgetState extends State<SheetGridWidget> {
     }
 
     return GestureDetector(
-      onTap: () => _selectCell(row, col),
-      onDoubleTap: () {
+      onTap: () {
+        final wasInFormulaMode = _canSelectCellForFormula;
         _selectCell(row, col);
-        _startEditing();
+        if (!wasInFormulaMode) {
+          _startEditing();
+        }
       },
       onSecondaryTapDown: (details) =>
           _showCellContextMenu(row, col, details.globalPosition),

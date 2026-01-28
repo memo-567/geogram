@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import '../../models/form_content.dart';
 
 /// Widget for rendering a form field based on its type
-class FormFieldWidget extends StatelessWidget {
+class FormFieldWidget extends StatefulWidget {
   final NdfFormField field;
   final dynamic value;
   final ValueChanged<dynamic> onChanged;
@@ -25,6 +25,35 @@ class FormFieldWidget extends StatelessWidget {
   });
 
   @override
+  State<FormFieldWidget> createState() => _FormFieldWidgetState();
+}
+
+class _FormFieldWidgetState extends State<FormFieldWidget> {
+  late TextEditingController _textController;
+
+  @override
+  void initState() {
+    super.initState();
+    _textController = TextEditingController(text: widget.value?.toString() ?? '');
+  }
+
+  @override
+  void didUpdateWidget(FormFieldWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only update controller text if the field changed (different field ID)
+    // or if value changed externally (not from typing)
+    if (oldWidget.field.id != widget.field.id) {
+      _textController.text = widget.value?.toString() ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
@@ -37,10 +66,10 @@ class FormFieldWidget extends StatelessWidget {
           Row(
             children: [
               Text(
-                field.label,
+                widget.field.label,
                 style: theme.textTheme.titleSmall,
               ),
-              if (field.required)
+              if (widget.field.required)
                 Text(
                   ' *',
                   style: TextStyle(color: theme.colorScheme.error),
@@ -48,11 +77,11 @@ class FormFieldWidget extends StatelessWidget {
             ],
           ),
           // Description
-          if (field.description != null)
+          if (widget.field.description != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                field.description!,
+                widget.field.description!,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -62,11 +91,11 @@ class FormFieldWidget extends StatelessWidget {
           // Field input
           _buildField(context, theme),
           // Error
-          if (error != null)
+          if (widget.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                error!,
+                widget.error!,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.error,
                 ),
@@ -78,7 +107,7 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildField(BuildContext context, ThemeData theme) {
-    switch (field.type) {
+    switch (widget.field.type) {
       case FormFieldType.text:
         return _buildTextField(theme);
       case FormFieldType.textarea:
@@ -121,84 +150,86 @@ class FormFieldWidget extends StatelessWidget {
 
   Widget _buildTextField(ThemeData theme) {
     return TextField(
-      controller: TextEditingController(text: value?.toString() ?? ''),
-      readOnly: readOnly,
+      controller: _textController,
+      readOnly: widget.readOnly,
+      textCapitalization: TextCapitalization.sentences,
       decoration: InputDecoration(
-        hintText: field.placeholder,
+        hintText: widget.field.placeholder,
         border: const OutlineInputBorder(),
       ),
-      onChanged: onChanged,
+      onChanged: widget.onChanged,
     );
   }
 
   Widget _buildTextArea(ThemeData theme) {
     return TextField(
-      controller: TextEditingController(text: value?.toString() ?? ''),
-      readOnly: readOnly,
-      maxLines: field.rows ?? 4,
+      controller: _textController,
+      readOnly: widget.readOnly,
+      textCapitalization: TextCapitalization.sentences,
+      maxLines: widget.field.rows ?? 4,
       decoration: InputDecoration(
-        hintText: field.placeholder,
+        hintText: widget.field.placeholder,
         border: const OutlineInputBorder(),
         alignLabelWithHint: true,
       ),
-      onChanged: onChanged,
+      onChanged: widget.onChanged,
     );
   }
 
   Widget _buildNumberField(ThemeData theme) {
     return TextField(
-      controller: TextEditingController(text: value?.toString() ?? ''),
-      readOnly: readOnly,
+      controller: _textController,
+      readOnly: widget.readOnly,
       keyboardType: TextInputType.numberWithOptions(
-        decimal: field.step != null && field.step! < 1,
+        decimal: widget.field.step != null && widget.field.step! < 1,
       ),
       decoration: InputDecoration(
-        hintText: field.placeholder,
+        hintText: widget.field.placeholder,
         border: const OutlineInputBorder(),
       ),
       onChanged: (text) {
         final num? number = num.tryParse(text);
-        onChanged(number);
+        widget.onChanged(number);
       },
     );
   }
 
   Widget _buildSelect(ThemeData theme) {
     return DropdownButtonFormField<String>(
-      value: value as String?,
+      value: widget.value as String?,
       decoration: InputDecoration(
-        hintText: field.placeholder,
+        hintText: widget.field.placeholder,
         border: const OutlineInputBorder(),
       ),
-      items: field.options?.map((opt) {
+      items: widget.field.options?.map((opt) {
         return DropdownMenuItem(
           value: opt.value,
           child: Text(opt.label),
         );
       }).toList() ?? [],
-      onChanged: readOnly ? null : (val) => onChanged(val),
+      onChanged: widget.readOnly ? null : (val) => widget.onChanged(val),
     );
   }
 
   Widget _buildMultiSelect(ThemeData theme) {
-    final selected = (value as List<String>?) ?? [];
+    final selected = (widget.value as List<String>?) ?? [];
 
     return Wrap(
       spacing: 8,
       runSpacing: 8,
-      children: field.options?.map((opt) {
+      children: widget.field.options?.map((opt) {
         final isSelected = selected.contains(opt.value);
         return FilterChip(
           label: Text(opt.label),
           selected: isSelected,
-          onSelected: readOnly ? null : (sel) {
+          onSelected: widget.readOnly ? null : (sel) {
             final newList = List<String>.from(selected);
             if (sel) {
               newList.add(opt.value);
             } else {
               newList.remove(opt.value);
             }
-            onChanged(newList);
+            widget.onChanged(newList);
           },
         );
       }).toList() ?? [],
@@ -208,13 +239,13 @@ class FormFieldWidget extends StatelessWidget {
   Widget _buildRadio(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: field.options?.map((opt) {
+      children: widget.field.options?.map((opt) {
         return RadioListTile<String>(
           value: opt.value,
-          groupValue: value as String?,
+          groupValue: widget.value as String?,
           title: Text(opt.label),
           contentPadding: EdgeInsets.zero,
-          onChanged: readOnly ? null : (val) => onChanged(val),
+          onChanged: widget.readOnly ? null : (val) => widget.onChanged(val),
         );
       }).toList() ?? [],
     );
@@ -222,33 +253,33 @@ class FormFieldWidget extends StatelessWidget {
 
   Widget _buildCheckbox(ThemeData theme) {
     return CheckboxListTile(
-      value: value == true,
-      title: Text(field.label),
+      value: widget.value == true,
+      title: Text(widget.field.label),
       contentPadding: EdgeInsets.zero,
       controlAffinity: ListTileControlAffinity.leading,
-      onChanged: readOnly ? null : (val) => onChanged(val),
+      onChanged: widget.readOnly ? null : (val) => widget.onChanged(val),
     );
   }
 
   Widget _buildCheckboxGroup(ThemeData theme) {
-    final selected = (value as List<String>?) ?? [];
+    final selected = (widget.value as List<String>?) ?? [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: field.options?.map((opt) {
+      children: widget.field.options?.map((opt) {
         return CheckboxListTile(
           value: selected.contains(opt.value),
           title: Text(opt.label),
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
-          onChanged: readOnly ? null : (sel) {
+          onChanged: widget.readOnly ? null : (sel) {
             final newList = List<String>.from(selected);
             if (sel == true) {
               newList.add(opt.value);
             } else {
               newList.remove(opt.value);
             }
-            onChanged(newList);
+            widget.onChanged(newList);
           },
         );
       }).toList() ?? [],
@@ -256,14 +287,14 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildDateField(BuildContext context, ThemeData theme) {
-    final dateStr = value as String?;
+    final dateStr = widget.value as String?;
     DateTime? date;
     if (dateStr != null) {
       date = DateTime.tryParse(dateStr);
     }
 
     return InkWell(
-      onTap: readOnly ? null : () async {
+      onTap: widget.readOnly ? null : () async {
         final picked = await showDatePicker(
           context: context,
           initialDate: date ?? DateTime.now(),
@@ -271,12 +302,12 @@ class FormFieldWidget extends StatelessWidget {
           lastDate: DateTime(2100),
         );
         if (picked != null) {
-          onChanged(picked.toIso8601String().split('T')[0]);
+          widget.onChanged(picked.toIso8601String().split('T')[0]);
         }
       },
       child: InputDecorator(
         decoration: InputDecoration(
-          hintText: field.placeholder ?? 'Select date',
+          hintText: widget.field.placeholder ?? 'Select date',
           border: const OutlineInputBorder(),
           suffixIcon: const Icon(Icons.calendar_today),
         ),
@@ -291,7 +322,7 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildTimeField(BuildContext context, ThemeData theme) {
-    final timeStr = value as String?;
+    final timeStr = widget.value as String?;
     TimeOfDay? time;
     if (timeStr != null) {
       final parts = timeStr.split(':');
@@ -304,20 +335,20 @@ class FormFieldWidget extends StatelessWidget {
     }
 
     return InkWell(
-      onTap: readOnly ? null : () async {
+      onTap: widget.readOnly ? null : () async {
         final picked = await showTimePicker(
           context: context,
           initialTime: time ?? TimeOfDay.now(),
         );
         if (picked != null) {
-          onChanged(
+          widget.onChanged(
             '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}',
           );
         }
       },
       child: InputDecorator(
         decoration: InputDecoration(
-          hintText: field.placeholder ?? 'Select time',
+          hintText: widget.field.placeholder ?? 'Select time',
           border: const OutlineInputBorder(),
           suffixIcon: const Icon(Icons.access_time),
         ),
@@ -330,14 +361,14 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildDateTimeField(BuildContext context, ThemeData theme) {
-    final dateTimeStr = value as String?;
+    final dateTimeStr = widget.value as String?;
     DateTime? dateTime;
     if (dateTimeStr != null) {
       dateTime = DateTime.tryParse(dateTimeStr);
     }
 
     return InkWell(
-      onTap: readOnly ? null : () async {
+      onTap: widget.readOnly ? null : () async {
         final date = await showDatePicker(
           context: context,
           initialDate: dateTime ?? DateTime.now(),
@@ -361,13 +392,13 @@ class FormFieldWidget extends StatelessWidget {
               time.hour,
               time.minute,
             );
-            onChanged(dt.toIso8601String());
+            widget.onChanged(dt.toIso8601String());
           }
         }
       },
       child: InputDecorator(
         decoration: InputDecoration(
-          hintText: field.placeholder ?? 'Select date and time',
+          hintText: widget.field.placeholder ?? 'Select date and time',
           border: const OutlineInputBorder(),
           suffixIcon: const Icon(Icons.event),
         ),
@@ -382,8 +413,8 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildRating(ThemeData theme) {
-    final rating = (value as num?)?.toInt() ?? 0;
-    final maxRating = field.maxRating?.toInt() ?? 5;
+    final rating = (widget.value as num?)?.toInt() ?? 0;
+    final maxRating = widget.field.maxRating?.toInt() ?? 5;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -394,16 +425,16 @@ class FormFieldWidget extends StatelessWidget {
             starValue <= rating ? Icons.star : Icons.star_border,
             color: starValue <= rating ? Colors.amber : theme.colorScheme.onSurfaceVariant,
           ),
-          onPressed: readOnly ? null : () => onChanged(starValue),
+          onPressed: widget.readOnly ? null : () => widget.onChanged(starValue),
         );
       }),
     );
   }
 
   Widget _buildScale(ThemeData theme) {
-    final min = field.minRating?.toDouble() ?? 1;
-    final max = field.maxRating?.toDouble() ?? 10;
-    final current = (value as num?)?.toDouble() ?? min;
+    final min = widget.field.minRating?.toDouble() ?? 1;
+    final max = widget.field.maxRating?.toDouble() ?? 10;
+    final current = (widget.value as num?)?.toDouble() ?? min;
 
     return Column(
       children: [
@@ -413,18 +444,18 @@ class FormFieldWidget extends StatelessWidget {
           max: max,
           divisions: (max - min).toInt(),
           label: current.round().toString(),
-          onChanged: readOnly ? null : (val) => onChanged(val.round()),
+          onChanged: widget.readOnly ? null : (val) => widget.onChanged(val.round()),
         ),
-        if (field.labels != null)
+        if (widget.field.labels != null)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                field.labels!['min'] ?? min.round().toString(),
+                widget.field.labels!['min'] ?? min.round().toString(),
                 style: theme.textTheme.bodySmall,
               ),
               Text(
-                field.labels!['max'] ?? max.round().toString(),
+                widget.field.labels!['max'] ?? max.round().toString(),
                 style: theme.textTheme.bodySmall,
               ),
             ],
@@ -434,7 +465,7 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildSignature(ThemeData theme) {
-    final hasSig = value != null;
+    final hasSig = widget.value != null;
 
     return Container(
       height: 150,
@@ -452,13 +483,13 @@ class FormFieldWidget extends StatelessWidget {
                     color: theme.colorScheme.primary,
                   ),
                 ),
-                if (!readOnly)
+                if (!widget.readOnly)
                   Positioned(
                     top: 8,
                     right: 8,
                     child: IconButton(
                       icon: const Icon(Icons.clear),
-                      onPressed: () => onChanged(null),
+                      onPressed: () => widget.onChanged(null),
                     ),
                   ),
               ],
@@ -492,16 +523,16 @@ class FormFieldWidget extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            field.label,
+            widget.field.label,
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
             ),
           ),
-          if (field.description != null)
+          if (widget.field.description != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                field.description!,
+                widget.field.description!,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -515,15 +546,15 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildLocation(ThemeData theme) {
-    final loc = value as Map<String, dynamic>?;
+    final loc = widget.value as Map<String, dynamic>?;
 
     return InkWell(
-      onTap: readOnly ? null : () {
+      onTap: widget.readOnly ? null : () {
         // TODO: Open location picker
       },
       child: InputDecorator(
         decoration: InputDecoration(
-          hintText: field.placeholder ?? 'Select location',
+          hintText: widget.field.placeholder ?? 'Select location',
           border: const OutlineInputBorder(),
           suffixIcon: const Icon(Icons.location_on),
         ),
@@ -538,15 +569,15 @@ class FormFieldWidget extends StatelessWidget {
   }
 
   Widget _buildFileField(ThemeData theme) {
-    final files = value as List<Map<String, dynamic>>? ?? [];
+    final files = widget.value as List<Map<String, dynamic>>? ?? [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (!readOnly)
+        if (!widget.readOnly)
           OutlinedButton.icon(
-            icon: Icon(field.type == FormFieldType.image ? Icons.add_photo_alternate : Icons.attach_file),
-            label: Text(field.type == FormFieldType.image ? 'Add Image' : 'Add File'),
+            icon: Icon(widget.field.type == FormFieldType.image ? Icons.add_photo_alternate : Icons.attach_file),
+            label: Text(widget.field.type == FormFieldType.image ? 'Add Image' : 'Add File'),
             onPressed: () {
               // TODO: Open file picker
             },
@@ -560,10 +591,10 @@ class FormFieldWidget extends StatelessWidget {
               children: files.map((file) {
                 return Chip(
                   label: Text(file['asset'] ?? 'File'),
-                  onDeleted: readOnly ? null : () {
+                  onDeleted: widget.readOnly ? null : () {
                     final newFiles = List<Map<String, dynamic>>.from(files);
                     newFiles.remove(file);
-                    onChanged(newFiles);
+                    widget.onChanged(newFiles);
                   },
                 );
               }).toList(),
