@@ -64,8 +64,17 @@ class StorageConfig {
   /// Get the logs directory path
   String get logsDir => path.join(baseDir, 'logs');
 
-  /// Get the email directory path
+  /// Get the email directory path (deprecated - use emailDirForProfile)
+  @Deprecated('Use emailDirForProfile(callsign) for profile-specific paths')
   String get emailDir => path.join(baseDir, 'email');
+
+  /// Get the email directory for a specific profile/callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}/email
+  String emailDirForProfile(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, sanitized, 'email');
+  }
 
   /// Get the file browser cache directory path
   String get fileBrowserCacheDir => path.join(baseDir, 'file_browser_cache');
@@ -86,6 +95,23 @@ class StorageConfig {
   String getChatDir(String callsign) {
     final sanitized = _sanitizeCallsign(callsign);
     return path.join(devicesDir, sanitized, 'chat');
+  }
+
+  /// Get the encrypted archive file path for a callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}.sqlite
+  String getEncryptedArchivePath(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, '$sanitized.sqlite');
+  }
+
+  /// Check if encrypted storage is being used for a callsign
+  ///
+  /// Returns true if the .sqlite archive file exists
+  bool isUsingEncryptedStorage(String callsign) {
+    if (kIsWeb) return false;
+    final archivePath = getEncryptedArchivePath(callsign);
+    return File(archivePath).existsSync();
   }
 
   /// Initialize the storage configuration

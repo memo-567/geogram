@@ -69,24 +69,45 @@ class EmailService {
   /// Whether the service is initialized
   bool _initialized = false;
 
+  /// The callsign for which the service is currently initialized
+  String? _initializedForCallsign;
+
   /// Initialize email service
   Future<void> initialize() async {
+    final profile = ProfileService().activeProfile;
+    final currentCallsign = profile?.callsign;
+
+    // Re-initialize if profile changed
+    if (_initialized && _initializedForCallsign != currentCallsign) {
+      _initialized = false;
+      _emailBasePath = null;
+      _frequentContacts = null; // Clear cached contacts for new profile
+    }
+
     if (_initialized) return;
 
     _emailBasePath = await _getEmailBasePath();
     await _ensureDirectoryStructure();
+    _initializedForCallsign = currentCallsign;
     _initialized = true;
   }
 
   /// Get base path for email storage
   /// Uses StorageConfig to respect --data-dir setting
+  /// Returns profile-specific path: {devicesDir}/{CALLSIGN}/email
   Future<String> _getEmailBasePath() async {
     if (kIsWeb) {
       return '/email';
     }
 
-    // Use centralized StorageConfig which respects --data-dir
-    return StorageConfig().emailDir;
+    // Get active profile callsign for profile-specific storage
+    final profile = ProfileService().activeProfile;
+    if (profile == null) {
+      throw StateError('No active profile for email storage');
+    }
+
+    // Use centralized StorageConfig with profile-specific path
+    return StorageConfig().emailDirForProfile(profile.callsign);
   }
 
   /// Ensure base directory structure exists (unified folders)
