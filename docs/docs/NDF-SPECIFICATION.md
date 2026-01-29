@@ -44,6 +44,7 @@ document.ndf (ZIP archive)
 │           └── resp-002.json
 │
 ├── assets/
+│   ├── logo.png                # Document branding logo (OPTIONAL)
 │   ├── images/
 │   │   ├── img-001.png
 │   │   └── img-002.jpg
@@ -54,7 +55,7 @@ document.ndf (ZIP archive)
 │   ├── fonts/
 │   │   └── custom-font.woff2
 │   └── thumbnails/
-│       └── preview.png
+│       └── preview.png         # Document preview thumbnail (OPTIONAL)
 │
 ├── social/
 │   ├── reactions.json          # Likes, emoticons per element (signed)
@@ -113,6 +114,39 @@ This file **must exist at the root** of the archive. Its presence identifies the
 | `content_hash` | string | SHA256 hash of document content |
 | `required_features` | array | Features required to render this document |
 | `extensions` | array | Custom extensions used in this document |
+
+### Branding Assets
+
+NDF documents support embedded branding assets for workspace/organization identity and document previews.
+
+#### Logo
+
+The logo is stored at `assets/logo.{ext}` (e.g., `assets/logo.png`) and referenced in metadata as:
+```json
+{
+  "logo": "asset://logo.png"
+}
+```
+
+**Usage:**
+- Displayed in document cards within workspace grids
+- Inherited from workspace when creating new documents
+- Can be applied to all documents in a workspace at once
+- Recommended size: 512x512 pixels or smaller
+
+#### Thumbnail
+
+The thumbnail is stored at `assets/thumbnails/preview.png` and referenced in metadata as:
+```json
+{
+  "thumbnail": "asset://thumbnails/preview.png"
+}
+```
+
+**Usage:**
+- Displayed as the background of document cards in workspace grids
+- Provides visual preview of document content
+- Recommended size: 800x600 pixels or smaller (16:9 or 4:3 aspect ratio)
 
 ---
 
