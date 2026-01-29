@@ -635,7 +635,30 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: Text(_content?.title ?? widget.title ?? _i18n.t('work_todo')),
+            title: InkWell(
+              onTap: _renameDocument,
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        _content?.title ?? widget.title ?? _i18n.t('work_todo'),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.edit_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             actions: [
               if (_hasChanges)
                 IconButton(
@@ -647,6 +670,16 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
                 icon: const Icon(Icons.more_vert),
                 onSelected: _handleMenuAction,
                 itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'rename',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.edit_outlined),
+                        const SizedBox(width: 8),
+                        Text(_i18n.t('work_todo_rename')),
+                      ],
+                    ),
+                  ),
                   PopupMenuItem(
                     value: 'settings',
                     child: Row(
@@ -672,8 +705,53 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
   }
 
   void _handleMenuAction(String action) {
-    if (action == 'settings') {
-      _showSettings();
+    switch (action) {
+      case 'rename':
+        _renameDocument();
+        break;
+      case 'settings':
+        _showSettings();
+        break;
+    }
+  }
+
+  void _renameDocument() async {
+    if (_content == null) return;
+
+    final controller = TextEditingController(text: _content!.title);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('work_todo_rename')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: _i18n.t('work_todo_title'),
+            border: const OutlineInputBorder(),
+          ),
+          textCapitalization: TextCapitalization.sentences,
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(_i18n.t('save')),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty && result != _content!.title) {
+      setState(() {
+        _content!.title = result;
+        _hasChanges = true;
+      });
     }
   }
 

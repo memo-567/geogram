@@ -281,6 +281,8 @@
   "work_todo_sort_created_desc": "Mais recentes primeiro",
   "work_todo_sort_completed_first": "Concluídas primeiro",
   "work_todo_sort_pending_first": "Pendentes primeiro",
+  "work_todo_rename": "Renomear TODO",
+  "work_todo_title": "Título",
   "edit": "Editar",
   "delete": "Eliminar",
   "create": "Criar",

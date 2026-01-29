@@ -281,6 +281,8 @@
   "work_todo_sort_created_desc": "Newest first",
   "work_todo_sort_completed_first": "Completed first",
   "work_todo_sort_pending_first": "Pending first",
+  "work_todo_rename": "Rename TODO",
+  "work_todo_title": "Title",
   "edit": "Edit",
   "delete": "Delete",
   "create": "Create",
