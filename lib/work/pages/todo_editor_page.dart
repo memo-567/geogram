@@ -635,29 +635,9 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: InkWell(
+            title: GestureDetector(
               onTap: _renameDocument,
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _content?.title ?? widget.title ?? _i18n.t('work_todo'),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.edit_outlined,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-                    ),
-                  ],
-                ),
-              ),
+              child: Text(_content?.title ?? widget.title ?? _i18n.t('work_todo')),
             ),
             actions: [
               if (_hasChanges)
