@@ -88,6 +88,8 @@ This file **must exist at the root** of the archive. Its presence identifies the
   "id": "ndf-uuid-here",
   "title": "Q4 Sales Report",
   "description": "Quarterly sales analysis",
+  "logo": "asset://logo.png",
+  "thumbnail": "asset://thumbnails/preview.png",
   "language": "en",
   "created": "2025-01-27T10:30:00Z",
   "modified": "2025-01-27T14:22:00Z",
@@ -98,6 +100,19 @@ This file **must exist at the root** of the archive. Its presence identifies the
   "extensions": ["geogram-mesh"]
 }
 ```
+
+### Optional Metadata Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | Brief description of the document content |
+| `logo` | string | Asset reference to embedded logo (e.g., "asset://logo.png") |
+| `thumbnail` | string | Asset reference to document preview image (e.g., "asset://thumbnails/preview.png") |
+| `language` | string | ISO 639-1 language code |
+| `tags` | array | List of keywords for categorization |
+| `content_hash` | string | SHA256 hash of document content |
+| `required_features` | array | Features required to render this document |
+| `extensions` | array | Custom extensions used in this document |
 
 ---
 

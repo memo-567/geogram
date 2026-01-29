@@ -3,7 +3,10 @@
  * License: Apache-2.0
  */
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
@@ -36,6 +39,7 @@ class WorkspaceDetailPage extends StatefulWidget {
 
 class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
   final I18nService _i18n = I18nService();
+  final ImagePicker _imagePicker = ImagePicker();
   late WorkStorageService _storage;
   late NdfService _ndfService;
   Workspace? _workspace;
@@ -43,6 +47,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
   bool _isLoading = true;
   String? _error;
   String? _currentFolderId; // null = root folder
+  Uint8List? _workspaceLogo; // Cached workspace logo
+  final Map<String, Uint8List> _thumbnailCache = {}; // filename -> thumbnail bytes
+  final Map<String, Uint8List> _logoCache = {}; // filename -> logo bytes
 
   @override
   void initState() {
@@ -70,9 +77,34 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
 
       final documents = await _storage.listDocuments(widget.workspaceId);
 
+      // Load workspace logo
+      Uint8List? workspaceLogo;
+      if (workspace.logo != null) {
+        workspaceLogo = await _storage.readWorkspaceLogo(widget.workspaceId);
+      }
+
+      // Pre-load document thumbnails and logos
+      for (final doc in documents) {
+        if (doc.thumbnail != null && !_thumbnailCache.containsKey(doc.filename)) {
+          final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+          final thumbBytes = await _ndfService.readThumbnail(filePath);
+          if (thumbBytes != null) {
+            _thumbnailCache[doc.filename] = thumbBytes;
+          }
+        }
+        if (doc.logo != null && !_logoCache.containsKey(doc.filename)) {
+          final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+          final logoBytes = await _ndfService.readLogo(filePath);
+          if (logoBytes != null) {
+            _logoCache[doc.filename] = logoBytes;
+          }
+        }
+      }
+
       setState(() {
         _workspace = workspace;
         _documents = documents;
+        _workspaceLogo = workspaceLogo;
         _isLoading = false;
       });
     } catch (e) {
@@ -112,6 +144,175 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     if (_workspace == null) return [];
     final docsInFolder = _workspace!.getDocumentsIn(_currentFolderId);
     return _documents.where((d) => docsInFolder.contains(d.filename)).toList();
+  }
+
+  Future<void> _showWorkspaceSettingsDialog() async {
+    final theme = Theme.of(context);
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text(_i18n.t('work_workspace_settings')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Logo section
+                  Text(
+                    _i18n.t('work_workspace_logo'),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Container(
+                      width: 100,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: _workspaceLogo != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(11),
+                              child: Image.memory(
+                                _workspaceLogo!,
+                                fit: BoxFit.cover,
+                              ),
+                            )
+                          : Icon(
+                              Icons.image_outlined,
+                              size: 40,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final image = await _imagePicker.pickImage(
+                            source: ImageSource.gallery,
+                            maxWidth: 512,
+                            maxHeight: 512,
+                          );
+                          if (image != null) {
+                            final bytes = await image.readAsBytes();
+                            final extension = image.path.split('.').last.toLowerCase();
+                            await _storage.saveWorkspaceLogo(
+                              widget.workspaceId,
+                              bytes,
+                              extension,
+                            );
+                            final newLogo = await _storage.readWorkspaceLogo(widget.workspaceId);
+                            setState(() {
+                              _workspaceLogo = newLogo;
+                            });
+                            setDialogState(() {});
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(_i18n.t('work_logo_updated'))),
+                              );
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.upload),
+                        label: Text(_i18n.t('work_change_logo')),
+                      ),
+                      if (_workspaceLogo != null) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: () async {
+                            await _storage.deleteWorkspaceLogo(widget.workspaceId);
+                            setState(() {
+                              _workspaceLogo = null;
+                            });
+                            setDialogState(() {});
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(_i18n.t('work_logo_removed'))),
+                              );
+                            }
+                          },
+                          icon: Icon(
+                            Icons.delete_outline,
+                            color: theme.colorScheme.error,
+                          ),
+                          tooltip: _i18n.t('work_remove_logo'),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (_workspaceLogo != null && _documents.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Center(
+                      child: FilledButton.icon(
+                        onPressed: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: Text(_i18n.t('work_apply_logo_all')),
+                              content: Text(
+                                _i18n.t('work_apply_logo_confirm')
+                                    .replaceAll('{count}', _documents.length.toString()),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: Text(_i18n.t('cancel')),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: Text(_i18n.t('work_apply_logo_all')),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed == true) {
+                            await _applyLogoToAllDocuments();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(_i18n.t('work_logo_applied_all'))),
+                              );
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.sync),
+                        label: Text(_i18n.t('work_apply_logo_all')),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(_i18n.t('save')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _applyLogoToAllDocuments() async {
+    if (_workspaceLogo == null || _workspace?.logo == null) return;
+
+    final extension = _workspace!.logo!.split('.').last;
+    for (final doc in _documents) {
+      final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+      await _ndfService.embedLogo(filePath, _workspaceLogo!, extension);
+    }
+    await _loadWorkspace();
   }
 
   Future<void> _createFolder() async {
@@ -254,6 +455,12 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           metadata: metadata,
           permissions: permissions,
         );
+
+        // Embed workspace logo if available
+        if (_workspaceLogo != null && _workspace?.logo != null) {
+          final extension = _workspace!.logo!.split('.').last;
+          await _ndfService.embedLogo(outputPath, _workspaceLogo!, extension);
+        }
 
         // Update workspace - add to current folder
         _workspace?.addDocument(filename, folderId: _currentFolderId);
@@ -668,7 +875,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (action) {
-              // TODO: Handle workspace actions
+              if (action == 'settings') {
+                _showWorkspaceSettingsDialog();
+              }
             },
             itemBuilder: (context) => [
               PopupMenuItem(
@@ -677,7 +886,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                   children: [
                     const Icon(Icons.settings_outlined),
                     const SizedBox(width: 8),
-                    Text(_i18n.t('settings')),
+                    Text(_i18n.t('work_workspace_settings')),
                   ],
                 ),
               ),
@@ -958,6 +1167,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
 
   Widget _buildDocumentCard(NdfDocumentRef doc, ThemeData theme) {
     final typeColor = _getDocumentTypeColor(doc.type, theme);
+    final hasThumbnail = _thumbnailCache.containsKey(doc.filename);
+    final hasLogo = _logoCache.containsKey(doc.filename);
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -966,15 +1177,82 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Type header
+            // Type header with optional thumbnail background
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              color: typeColor.withValues(alpha: 0.15),
-              child: Icon(
-                _getDocumentTypeIcon(doc.type),
-                size: 40,
-                color: typeColor,
+              height: 80,
+              decoration: BoxDecoration(
+                color: typeColor.withValues(alpha: 0.15),
+                image: hasThumbnail
+                    ? DecorationImage(
+                        image: MemoryImage(_thumbnailCache[doc.filename]!),
+                        fit: BoxFit.cover,
+                      )
+                    : null,
+              ),
+              child: Stack(
+                children: [
+                  // Gradient overlay for readability when thumbnail exists
+                  if (hasThumbnail)
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.black.withValues(alpha: 0.1),
+                            Colors.black.withValues(alpha: 0.4),
+                          ],
+                        ),
+                      ),
+                    ),
+                  // Type icon in top-left corner
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: hasThumbnail
+                            ? Colors.black.withValues(alpha: 0.5)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(
+                        _getDocumentTypeIcon(doc.type),
+                        size: hasThumbnail ? 18 : 40,
+                        color: hasThumbnail ? Colors.white : typeColor,
+                      ),
+                    ),
+                  ),
+                  // Logo in bottom-right corner
+                  if (hasLogo)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(4),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.2),
+                              blurRadius: 4,
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: Image.memory(
+                            _logoCache[doc.filename]!,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             // Content
@@ -989,9 +1267,20 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    if (doc.description != null && doc.description!.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        doc.description!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                     const Spacer(),
                     Row(
                       children: [
@@ -1017,6 +1306,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                               case 'move':
                                 _moveDocument(doc);
                                 break;
+                              case 'settings':
+                                _showDocumentSettingsDialog(doc);
+                                break;
                               case 'delete':
                                 _deleteDocument(doc);
                                 break;
@@ -1040,6 +1332,16 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                                   const Icon(Icons.drive_file_move_outlined),
                                   const SizedBox(width: 8),
                                   Text(_i18n.t('move_document')),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'settings',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.settings_outlined),
+                                  const SizedBox(width: 8),
+                                  Text(_i18n.t('work_document_settings')),
                                 ],
                               ),
                             ),
@@ -1068,6 +1370,148 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _showDocumentSettingsDialog(NdfDocumentRef doc) async {
+    final theme = Theme.of(context);
+    final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+    final metadata = await _ndfService.readMetadata(filePath);
+    if (metadata == null) return;
+
+    final descriptionController = TextEditingController(text: metadata.description ?? '');
+    Uint8List? currentThumbnail = _thumbnailCache[doc.filename];
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text(_i18n.t('work_document_settings')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Description field
+                  Text(
+                    _i18n.t('description'),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: descriptionController,
+                    decoration: InputDecoration(
+                      hintText: _i18n.t('work_no_description'),
+                      border: const OutlineInputBorder(),
+                    ),
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Thumbnail section
+                  Text(
+                    _i18n.t('work_document_thumbnail'),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Container(
+                      width: 160,
+                      height: 90,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: currentThumbnail != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(7),
+                              child: Image.memory(
+                                currentThumbnail!,
+                                fit: BoxFit.cover,
+                              ),
+                            )
+                          : Icon(
+                              Icons.image_outlined,
+                              size: 40,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final image = await _imagePicker.pickImage(
+                            source: ImageSource.gallery,
+                            maxWidth: 800,
+                            maxHeight: 600,
+                          );
+                          if (image != null) {
+                            final bytes = await image.readAsBytes();
+                            await _ndfService.embedThumbnail(filePath, bytes);
+                            currentThumbnail = bytes;
+                            _thumbnailCache[doc.filename] = bytes;
+                            setDialogState(() {});
+                          }
+                        },
+                        icon: const Icon(Icons.upload),
+                        label: Text(_i18n.t('work_set_thumbnail')),
+                      ),
+                      if (currentThumbnail != null) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: () async {
+                            await _ndfService.removeThumbnail(filePath);
+                            currentThumbnail = null;
+                            _thumbnailCache.remove(doc.filename);
+                            setDialogState(() {});
+                          },
+                          icon: Icon(
+                            Icons.delete_outline,
+                            color: theme.colorScheme.error,
+                          ),
+                          tooltip: _i18n.t('work_remove_thumbnail'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(_i18n.t('cancel')),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  // Update description
+                  final newDesc = descriptionController.text.trim();
+                  if (newDesc != (metadata.description ?? '')) {
+                    metadata.description = newDesc.isEmpty ? null : newDesc;
+                    metadata.touch();
+                    await _ndfService.updateMetadata(filePath, metadata);
+                  }
+                  if (mounted) {
+                    Navigator.pop(context);
+                    await _loadWorkspace();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(_i18n.t('document_saved'))),
+                    );
+                  }
+                },
+                child: Text(_i18n.t('save')),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

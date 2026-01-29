@@ -631,6 +631,107 @@ class NdfService {
   }
 
   // ============================================================
+  // LOGO METHODS
+  // ============================================================
+
+  /// Embed a logo into an NDF document
+  Future<void> embedLogo(String filePath, Uint8List logoBytes, String extension) async {
+    final assetPath = 'assets/logo.$extension';
+    await _updateArchiveFilesBytes(filePath, {assetPath: logoBytes});
+
+    // Update metadata with logo reference
+    final metadata = await readMetadata(filePath);
+    if (metadata != null) {
+      metadata.logo = 'asset://logo.$extension';
+      metadata.touch();
+      await updateMetadata(filePath, metadata);
+    }
+
+    LogService().log('NdfService: Embedded logo in $filePath');
+  }
+
+  /// Read logo bytes from an NDF archive
+  Future<Uint8List?> readLogo(String filePath) async {
+    final metadata = await readMetadata(filePath);
+    if (metadata?.logo == null) return null;
+
+    // Parse asset reference (e.g., "asset://logo.png")
+    final logoRef = metadata!.logo!;
+    if (!logoRef.startsWith('asset://')) return null;
+
+    final assetPath = logoRef.substring(8); // Remove "asset://"
+    return readArchiveFile(filePath, 'assets/$assetPath');
+  }
+
+  /// Remove logo from an NDF archive
+  Future<void> removeLogo(String filePath) async {
+    final metadata = await readMetadata(filePath);
+    if (metadata?.logo == null) return;
+
+    final logoRef = metadata!.logo!;
+    if (logoRef.startsWith('asset://')) {
+      final assetPath = 'assets/${logoRef.substring(8)}';
+      await deleteArchiveFiles(filePath, [assetPath]);
+    }
+
+    metadata.logo = null;
+    metadata.touch();
+    await updateMetadata(filePath, metadata);
+
+    LogService().log('NdfService: Removed logo from $filePath');
+  }
+
+  // ============================================================
+  // THUMBNAIL METHODS
+  // ============================================================
+
+  /// Embed a thumbnail into an NDF document
+  Future<void> embedThumbnail(String filePath, Uint8List imageBytes) async {
+    const assetPath = 'assets/thumbnails/preview.png';
+    await _updateArchiveFilesBytes(filePath, {assetPath: imageBytes});
+
+    // Update metadata with thumbnail reference
+    final metadata = await readMetadata(filePath);
+    if (metadata != null) {
+      metadata.thumbnail = 'asset://thumbnails/preview.png';
+      metadata.touch();
+      await updateMetadata(filePath, metadata);
+    }
+
+    LogService().log('NdfService: Embedded thumbnail in $filePath');
+  }
+
+  /// Read thumbnail bytes from an NDF archive
+  Future<Uint8List?> readThumbnail(String filePath) async {
+    final metadata = await readMetadata(filePath);
+    if (metadata?.thumbnail == null) return null;
+
+    final thumbRef = metadata!.thumbnail!;
+    if (!thumbRef.startsWith('asset://')) return null;
+
+    final assetPath = thumbRef.substring(8);
+    return readArchiveFile(filePath, 'assets/$assetPath');
+  }
+
+  /// Remove thumbnail from an NDF archive
+  Future<void> removeThumbnail(String filePath) async {
+    final metadata = await readMetadata(filePath);
+    if (metadata?.thumbnail == null) return;
+
+    final thumbRef = metadata!.thumbnail!;
+    if (thumbRef.startsWith('asset://')) {
+      final assetPath = 'assets/${thumbRef.substring(8)}';
+      await deleteArchiveFiles(filePath, [assetPath]);
+    }
+
+    metadata.thumbnail = null;
+    metadata.touch();
+    await updateMetadata(filePath, metadata);
+
+    LogService().log('NdfService: Removed thumbnail from $filePath');
+  }
+
+  // ============================================================
   // ASSET METHODS
   // ============================================================
 

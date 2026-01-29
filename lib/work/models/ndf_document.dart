@@ -21,6 +21,8 @@ class NdfDocument {
   final String id;
   String title;
   String? description;
+  String? logo; // asset reference (e.g., "asset://logo.png")
+  String? thumbnail; // asset reference (e.g., "asset://thumbnails/preview.png")
   String? language;
   final DateTime created;
   DateTime modified;
@@ -36,6 +38,8 @@ class NdfDocument {
     required this.id,
     required this.title,
     this.description,
+    this.logo,
+    this.thumbnail,
     this.language,
     required this.created,
     required this.modified,
@@ -50,6 +54,8 @@ class NdfDocument {
     required NdfDocumentType type,
     required String title,
     String? description,
+    String? logo,
+    String? thumbnail,
     String? language,
   }) {
     final now = DateTime.now();
@@ -60,6 +66,8 @@ class NdfDocument {
       id: id,
       title: title,
       description: description,
+      logo: logo,
+      thumbnail: thumbnail,
       language: language ?? 'en',
       created: now,
       modified: now,
@@ -76,6 +84,8 @@ class NdfDocument {
       id: json['id'] as String,
       title: json['title'] as String,
       description: json['description'] as String?,
+      logo: json['logo'] as String?,
+      thumbnail: json['thumbnail'] as String?,
       language: json['language'] as String?,
       created: DateTime.parse(json['created'] as String),
       modified: DateTime.parse(json['modified'] as String),
@@ -99,6 +109,8 @@ class NdfDocument {
     'id': id,
     'title': title,
     if (description != null) 'description': description,
+    if (logo != null) 'logo': logo,
+    if (thumbnail != null) 'thumbnail': thumbnail,
     if (language != null) 'language': language,
     'created': created.toIso8601String(),
     'modified': modified.toIso8601String(),
@@ -142,6 +154,9 @@ class NdfDocumentRef {
   final String filename;
   final NdfDocumentType type;
   final String title;
+  final String? description;
+  final String? logo; // asset reference (e.g., "asset://logo.png")
+  final String? thumbnail; // asset reference (e.g., "asset://thumbnails/preview.png")
   final DateTime modified;
   final int? fileSize;
 
@@ -149,6 +164,9 @@ class NdfDocumentRef {
     required this.filename,
     required this.type,
     required this.title,
+    this.description,
+    this.logo,
+    this.thumbnail,
     required this.modified,
     this.fileSize,
   });

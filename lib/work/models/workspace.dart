@@ -104,6 +104,7 @@ class Workspace {
   final String id;
   String name;
   String? description;
+  String? logo; // filename in workspace folder (e.g., "logo.png")
   final DateTime created;
   DateTime modified;
   final String ownerNpub;
@@ -116,6 +117,7 @@ class Workspace {
     required this.id,
     required this.name,
     this.description,
+    this.logo,
     required this.created,
     required this.modified,
     required this.ownerNpub,
@@ -132,6 +134,7 @@ class Workspace {
     required String name,
     required String ownerNpub,
     String? description,
+    String? logo,
   }) {
     final now = DateTime.now();
     final id = _generateId(name);
@@ -139,6 +142,7 @@ class Workspace {
       id: id,
       name: name,
       description: description,
+      logo: logo,
       created: now,
       modified: now,
       ownerNpub: ownerNpub,
@@ -158,6 +162,7 @@ class Workspace {
       id: json['id'] as String,
       name: json['name'] as String,
       description: json['description'] as String?,
+      logo: json['logo'] as String?,
       created: DateTime.parse(json['created'] as String),
       modified: DateTime.parse(json['modified'] as String),
       ownerNpub: json['owner_npub'] as String,
@@ -178,6 +183,7 @@ class Workspace {
     'id': id,
     'name': name,
     if (description != null) 'description': description,
+    if (logo != null) 'logo': logo,
     'created': created.toIso8601String(),
     'modified': modified.toIso8601String(),
     'owner_npub': ownerNpub,

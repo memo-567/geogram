@@ -97,6 +97,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [SheetGridWidget](#sheetgridwidget) - Reusable spreadsheet grid with formulas
 - [TodoContent](#todocontent-model) - TODO content models (items, links, updates, settings)
 - [TodoItemCardWidget](#todoitemcardwidget) - Expandable TODO item card with pictures/links/updates
+- [NDF Logo and Thumbnail Embedding](#ndf-logo-and-thumbnail-embedding) - Embed and read logos/thumbnails from NDF documents
 
 ### API Common Utilities
 - [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
@@ -6156,4 +6157,81 @@ bool _setsEqual(Set<String>? a, Set<String>? b) {
 **Files using this pattern:**
 - `lib/work/pages/presentation_editor_page.dart`
 - `lib/work/widgets/presentation/slide_canvas_widget.dart`
+
+---
+
+## NDF Logo and Thumbnail Embedding
+
+### Description
+Pattern for embedding and reading logo and thumbnail images from NDF documents. Logos and thumbnails are stored as assets inside the NDF archive and referenced via `asset://` URIs in the metadata.
+
+### Usage
+
+**Embed logo into document:**
+```dart
+final ndfService = NdfService();
+
+// Embed workspace logo into a document
+await ndfService.embedLogo(filePath, logoBytes, 'png');
+
+// Read logo from document
+final logoBytes = await ndfService.readLogo(filePath);
+
+// Remove logo
+await ndfService.removeLogo(filePath);
+```
+
+**Embed thumbnail into document:**
+```dart
+// Embed custom thumbnail
+await ndfService.embedThumbnail(filePath, imageBytes);
+
+// Read thumbnail
+final thumbnailBytes = await ndfService.readThumbnail(filePath);
+
+// Remove thumbnail
+await ndfService.removeThumbnail(filePath);
+```
+
+**Workspace logo management:**
+```dart
+final storage = WorkStorageService(basePath);
+
+// Save workspace logo
+await storage.saveWorkspaceLogo(workspaceId, bytes, 'png');
+
+// Read workspace logo
+final logoBytes = await storage.readWorkspaceLogo(workspaceId);
+
+// Delete workspace logo
+await storage.deleteWorkspaceLogo(workspaceId);
+```
+
+**Apply workspace logo to all documents:**
+```dart
+Future<void> _applyLogoToAllDocuments() async {
+  if (_workspaceLogo == null || _workspace?.logo == null) return;
+
+  final extension = _workspace!.logo!.split('.').last;
+  for (final doc in _documents) {
+    final filePath = _storage.documentPath(workspaceId, doc.filename);
+    await _ndfService.embedLogo(filePath, _workspaceLogo!, extension);
+  }
+}
+```
+
+### Metadata Fields
+```json
+{
+  "ndf": "1.0.0",
+  "type": "document",
+  "logo": "asset://logo.png",
+  "thumbnail": "asset://thumbnails/preview.png"
+}
+```
+
+**Files using this pattern:**
+- `lib/work/services/ndf_service.dart` - Core logo/thumbnail methods
+- `lib/work/services/work_storage_service.dart` - Workspace logo management
+- `lib/work/pages/workspace_detail_page.dart` - UI integration
 

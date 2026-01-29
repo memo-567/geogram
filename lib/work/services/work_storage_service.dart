@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../services/log_service.dart';
 import '../models/workspace.dart';
@@ -162,6 +163,9 @@ class WorkStorageService {
         filename: filename,
         type: metadata.type,
         title: metadata.title,
+        description: metadata.description,
+        logo: metadata.logo,
+        thumbnail: metadata.thumbnail,
         modified: metadata.modified,
         fileSize: (await ndfFile.stat()).size,
       );
@@ -177,6 +181,65 @@ class WorkStorageService {
       modified: stat.modified,
       fileSize: stat.size,
     );
+  }
+
+  /// Get the path for the workspace logo file
+  String? workspaceLogoPath(String workspaceId, String? logoFilename) {
+    if (logoFilename == null) return null;
+    return '${workspacePath(workspaceId)}/$logoFilename';
+  }
+
+  /// Read the workspace logo bytes
+  Future<Uint8List?> readWorkspaceLogo(String workspaceId) async {
+    final workspace = await loadWorkspace(workspaceId);
+    if (workspace?.logo == null) return null;
+
+    final logoPath = workspaceLogoPath(workspaceId, workspace!.logo);
+    if (logoPath == null) return null;
+
+    final file = File(logoPath);
+    if (!await file.exists()) return null;
+
+    return file.readAsBytes();
+  }
+
+  /// Save a workspace logo
+  Future<String> saveWorkspaceLogo(String workspaceId, Uint8List logoBytes, String extension) async {
+    final filename = 'logo.$extension';
+    final logoPath = '${workspacePath(workspaceId)}/$filename';
+    final file = File(logoPath);
+    await file.writeAsBytes(logoBytes);
+
+    // Update workspace with logo filename
+    final workspace = await loadWorkspace(workspaceId);
+    if (workspace != null) {
+      workspace.logo = filename;
+      workspace.touch();
+      await saveWorkspace(workspace);
+    }
+
+    LogService().log('WorkStorageService: Saved workspace logo $filename');
+    return filename;
+  }
+
+  /// Delete the workspace logo
+  Future<void> deleteWorkspaceLogo(String workspaceId) async {
+    final workspace = await loadWorkspace(workspaceId);
+    if (workspace?.logo == null) return;
+
+    final logoPath = workspaceLogoPath(workspaceId, workspace!.logo);
+    if (logoPath != null) {
+      final file = File(logoPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+
+    workspace.logo = null;
+    workspace.touch();
+    await saveWorkspace(workspace);
+
+    LogService().log('WorkStorageService: Deleted workspace logo');
   }
 
   /// Get the full path for an NDF document in a workspace
