@@ -730,6 +730,9 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
     if (result != null && result.isNotEmpty && result != _content!.title) {
       setState(() {
         _content!.title = result;
+        if (_metadata != null) {
+          _metadata!.title = result;
+        }
         _hasChanges = true;
       });
     }
