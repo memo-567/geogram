@@ -11,6 +11,26 @@ enum TodoSortOrder {
   createdDesc,
   completedFirst,
   pendingFirst,
+  priorityHighFirst,
+}
+
+/// Priority level for TODO items
+enum TodoPriority {
+  high,
+  normal,
+  low;
+
+  /// Get sort weight (lower = higher priority)
+  int get sortWeight {
+    switch (this) {
+      case TodoPriority.high:
+        return 0;
+      case TodoPriority.normal:
+        return 1;
+      case TodoPriority.low:
+        return 2;
+    }
+  }
 }
 
 /// A link attached to a TODO item
@@ -94,6 +114,7 @@ class TodoItem {
   final DateTime createdAt;
   DateTime? completedAt;
   bool isCompleted;
+  TodoPriority priority;
   List<String> pictures;
   List<TodoLink> links;
   List<TodoUpdate> updates;
@@ -105,6 +126,7 @@ class TodoItem {
     required this.createdAt,
     this.completedAt,
     this.isCompleted = false,
+    this.priority = TodoPriority.normal,
     List<String>? pictures,
     List<TodoLink>? links,
     List<TodoUpdate>? updates,
@@ -112,13 +134,18 @@ class TodoItem {
        links = links ?? [],
        updates = updates ?? [];
 
-  factory TodoItem.create({required String title, String? description}) {
+  factory TodoItem.create({
+    required String title,
+    String? description,
+    TodoPriority priority = TodoPriority.normal,
+  }) {
     final now = DateTime.now();
     final id = 'item-${now.millisecondsSinceEpoch.toRadixString(36)}';
     return TodoItem(
       id: id,
       title: title,
       description: description,
+      priority: priority,
       createdAt: now,
     );
   }
@@ -133,6 +160,10 @@ class TodoItem {
           ? DateTime.parse(json['completed_at'] as String)
           : null,
       isCompleted: json['is_completed'] as bool? ?? false,
+      priority: TodoPriority.values.firstWhere(
+        (p) => p.name == json['priority'],
+        orElse: () => TodoPriority.normal,
+      ),
       pictures: (json['pictures'] as List<dynamic>?)
           ?.map((p) => p as String)
           .toList() ?? [],
@@ -152,6 +183,7 @@ class TodoItem {
     'created_at': createdAt.toIso8601String(),
     if (completedAt != null) 'completed_at': completedAt!.toIso8601String(),
     'is_completed': isCompleted,
+    'priority': priority.name,
     if (pictures.isNotEmpty) 'pictures': pictures,
     if (links.isNotEmpty) 'links': links.map((l) => l.toJson()).toList(),
     if (updates.isNotEmpty) 'updates': updates.map((u) => u.toJson()).toList(),
@@ -227,6 +259,7 @@ class TodoItem {
     String? description,
     bool? isCompleted,
     DateTime? completedAt,
+    TodoPriority? priority,
     List<String>? pictures,
     List<TodoLink>? links,
     List<TodoUpdate>? updates,
@@ -238,6 +271,7 @@ class TodoItem {
       createdAt: createdAt,
       completedAt: completedAt ?? this.completedAt,
       isCompleted: isCompleted ?? this.isCompleted,
+      priority: priority ?? this.priority,
       pictures: pictures ?? List.from(this.pictures),
       links: links ?? List.from(this.links),
       updates: updates ?? List.from(this.updates),

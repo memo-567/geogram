@@ -89,6 +89,36 @@ class TodoItemCardWidget extends StatelessWidget {
                         const SizedBox(height: 4),
                         Row(
                           children: [
+                            // Priority badge (only for non-normal)
+                            if (item.priority != TodoPriority.normal)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: _getPriorityColor(item.priority).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _getPriorityIcon(item.priority),
+                                      size: 12,
+                                      color: _getPriorityColor(item.priority),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _getPriorityLabel(item.priority),
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        color: _getPriorityColor(item.priority),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             // Duration badge when completed
                             if (item.isCompleted && item.durationSummary != null)
                               Container(
@@ -542,5 +572,39 @@ class TodoItemCardWidget extends StatelessWidget {
     }
 
     return '${date.day}/${date.month}/${date.year}';
+  }
+
+  String _getPriorityLabel(TodoPriority priority) {
+    final i18n = I18nService();
+    switch (priority) {
+      case TodoPriority.high:
+        return i18n.t('work_todo_priority_high');
+      case TodoPriority.normal:
+        return i18n.t('work_todo_priority_normal');
+      case TodoPriority.low:
+        return i18n.t('work_todo_priority_low');
+    }
+  }
+
+  IconData _getPriorityIcon(TodoPriority priority) {
+    switch (priority) {
+      case TodoPriority.high:
+        return Icons.keyboard_double_arrow_up;
+      case TodoPriority.normal:
+        return Icons.remove;
+      case TodoPriority.low:
+        return Icons.keyboard_double_arrow_down;
+    }
+  }
+
+  Color _getPriorityColor(TodoPriority priority) {
+    switch (priority) {
+      case TodoPriority.high:
+        return Colors.red;
+      case TodoPriority.normal:
+        return Colors.grey;
+      case TodoPriority.low:
+        return Colors.blue;
+    }
   }
 }

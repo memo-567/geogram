@@ -130,46 +130,78 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
   void _addItem() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
+    var priority = TodoPriority.normal;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_i18n.t('work_todo_add_item')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('work_todo_item_title'),
-                border: const OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(_i18n.t('work_todo_add_item')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_item_title'),
+                  border: const OutlineInputBorder(),
+                ),
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
+                textInputAction: TextInputAction.next,
               ),
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              textInputAction: TextInputAction.next,
+              const SizedBox(height: 16),
+              TextField(
+                controller: descController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_item_description'),
+                  border: const OutlineInputBorder(),
+                ),
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<TodoPriority>(
+                value: priority,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_priority'),
+                  border: const OutlineInputBorder(),
+                ),
+                items: TodoPriority.values.map((p) {
+                  return DropdownMenuItem(
+                    value: p,
+                    child: Row(
+                      children: [
+                        Icon(
+                          _getPriorityIcon(p),
+                          size: 18,
+                          color: _getPriorityColor(p),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(_getPriorityLabel(p)),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setDialogState(() => priority = val);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: descController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('work_todo_item_description'),
-                border: const OutlineInputBorder(),
-              ),
-              maxLines: 3,
-              textCapitalization: TextCapitalization.sentences,
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(_i18n.t('save')),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(_i18n.t('cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(_i18n.t('save')),
-          ),
-        ],
       ),
     );
 
@@ -179,6 +211,7 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         description: descController.text.trim().isNotEmpty
             ? descController.text.trim()
             : null,
+        priority: priority,
       );
 
       setState(() {
@@ -192,45 +225,77 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
   void _editItem(TodoItem item) async {
     final titleController = TextEditingController(text: item.title);
     final descController = TextEditingController(text: item.description ?? '');
+    var priority = item.priority;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_i18n.t('work_todo_edit_item')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('work_todo_item_title'),
-                border: const OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(_i18n.t('work_todo_edit_item')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_item_title'),
+                  border: const OutlineInputBorder(),
+                ),
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
               ),
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
+              const SizedBox(height: 16),
+              TextField(
+                controller: descController,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_item_description'),
+                  border: const OutlineInputBorder(),
+                ),
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<TodoPriority>(
+                value: priority,
+                decoration: InputDecoration(
+                  labelText: _i18n.t('work_todo_priority'),
+                  border: const OutlineInputBorder(),
+                ),
+                items: TodoPriority.values.map((p) {
+                  return DropdownMenuItem(
+                    value: p,
+                    child: Row(
+                      children: [
+                        Icon(
+                          _getPriorityIcon(p),
+                          size: 18,
+                          color: _getPriorityColor(p),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(_getPriorityLabel(p)),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setDialogState(() => priority = val);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: descController,
-              decoration: InputDecoration(
-                labelText: _i18n.t('work_todo_item_description'),
-                border: const OutlineInputBorder(),
-              ),
-              maxLines: 3,
-              textCapitalization: TextCapitalization.sentences,
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(_i18n.t('save')),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(_i18n.t('cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(_i18n.t('save')),
-          ),
-        ],
       ),
     );
 
@@ -240,6 +305,7 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         item.description = descController.text.trim().isNotEmpty
             ? descController.text.trim()
             : null;
+        item.priority = priority;
         _hasChanges = true;
       });
     }
@@ -544,19 +610,29 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
       items.removeWhere((i) => i.isCompleted);
     }
 
-    // Sort
+    // Sort - always apply priority as secondary sort within each group
     switch (settings.sortOrder) {
       case TodoSortOrder.createdAsc:
-        items.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        items.sort((a, b) {
+          final cmp = a.createdAt.compareTo(b.createdAt);
+          if (cmp != 0) return cmp;
+          return a.priority.sortWeight.compareTo(b.priority.sortWeight);
+        });
         break;
       case TodoSortOrder.createdDesc:
-        items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        items.sort((a, b) {
+          final cmp = b.createdAt.compareTo(a.createdAt);
+          if (cmp != 0) return cmp;
+          return a.priority.sortWeight.compareTo(b.priority.sortWeight);
+        });
         break;
       case TodoSortOrder.completedFirst:
         items.sort((a, b) {
           if (a.isCompleted != b.isCompleted) {
             return a.isCompleted ? -1 : 1;
           }
+          final priorityCmp = a.priority.sortWeight.compareTo(b.priority.sortWeight);
+          if (priorityCmp != 0) return priorityCmp;
           return b.createdAt.compareTo(a.createdAt);
         });
         break;
@@ -565,6 +641,15 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
           if (a.isCompleted != b.isCompleted) {
             return a.isCompleted ? 1 : -1;
           }
+          final priorityCmp = a.priority.sortWeight.compareTo(b.priority.sortWeight);
+          if (priorityCmp != 0) return priorityCmp;
+          return b.createdAt.compareTo(a.createdAt);
+        });
+        break;
+      case TodoSortOrder.priorityHighFirst:
+        items.sort((a, b) {
+          final priorityCmp = a.priority.sortWeight.compareTo(b.priority.sortWeight);
+          if (priorityCmp != 0) return priorityCmp;
           return b.createdAt.compareTo(a.createdAt);
         });
         break;
@@ -825,6 +910,41 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         return _i18n.t('work_todo_sort_completed_first');
       case TodoSortOrder.pendingFirst:
         return _i18n.t('work_todo_sort_pending_first');
+      case TodoSortOrder.priorityHighFirst:
+        return _i18n.t('work_todo_sort_priority');
+    }
+  }
+
+  String _getPriorityLabel(TodoPriority priority) {
+    switch (priority) {
+      case TodoPriority.high:
+        return _i18n.t('work_todo_priority_high');
+      case TodoPriority.normal:
+        return _i18n.t('work_todo_priority_normal');
+      case TodoPriority.low:
+        return _i18n.t('work_todo_priority_low');
+    }
+  }
+
+  IconData _getPriorityIcon(TodoPriority priority) {
+    switch (priority) {
+      case TodoPriority.high:
+        return Icons.keyboard_double_arrow_up;
+      case TodoPriority.normal:
+        return Icons.remove;
+      case TodoPriority.low:
+        return Icons.keyboard_double_arrow_down;
+    }
+  }
+
+  Color _getPriorityColor(TodoPriority priority) {
+    switch (priority) {
+      case TodoPriority.high:
+        return Colors.red;
+      case TodoPriority.normal:
+        return Colors.grey;
+      case TodoPriority.low:
+        return Colors.blue;
     }
   }
 
