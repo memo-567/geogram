@@ -16,6 +16,10 @@ import '../services/app_args.dart';
 import '../services/storage_config.dart';
 import '../services/config_service.dart';
 import '../services/crash_service.dart';
+import '../services/encrypted_storage_service.dart';
+import '../services/encryption_progress_controller.dart';
+import '../services/profile_service.dart';
+import '../services/file_launcher_service.dart';
 
 /// Page for managing security and privacy settings
 class SecuritySettingsPage extends StatefulWidget {
@@ -30,16 +34,36 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   final LogApiService _logApiService = LogApiService();
   final ConfigService _configService = ConfigService();
   final I18nService _i18n = I18nService();
+  final EncryptedStorageService _encryptedService = EncryptedStorageService();
+  final ProfileService _profileService = ProfileService();
 
   String? _localIpAddress;
   bool _isLoadingIp = true;
   bool _autoStartOnBoot = true;
+  bool _isEncrypted = false;
+  bool _hasNsec = false;
 
   @override
   void initState() {
     super.initState();
     _loadLocalIpAddress();
     _autoStartOnBoot = _configService.autoStartOnBoot;
+    _loadEncryptedStatus();
+  }
+
+  Future<void> _loadEncryptedStatus() async {
+    if (kIsWeb) return;
+    final profile = _profileService.getProfile();
+    if (profile != null) {
+      final status = await _encryptedService.getStatus(profile.callsign);
+      final hasNsec = profile.nsec != null && profile.nsec!.isNotEmpty;
+      if (mounted) {
+        setState(() {
+          _isEncrypted = status.enabled;
+          _hasNsec = hasNsec;
+        });
+      }
+    }
   }
 
   Future<void> _loadLocalIpAddress() async {
@@ -146,6 +170,8 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
             _buildSectionHeader(theme, _i18n.t('storage'), Icons.folder),
             const SizedBox(height: 8),
             _buildWorkingFolderTile(theme),
+            const SizedBox(height: 8),
+            _buildEncryptedStorageTile(theme),
             const SizedBox(height: 24),
           ],
 
@@ -513,6 +539,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                   },
                   tooltip: _i18n.t('copy'),
                 ),
+                IconButton(
+                  icon: const Icon(Icons.open_in_new, size: 20),
+                  onPressed: () => _openFolder(currentPath),
+                  tooltip: _i18n.t('open_folder'),
+                ),
                 TextButton.icon(
                   icon: const Icon(Icons.folder, size: 18),
                   label: Text(_i18n.t('change_folder')),
@@ -524,6 +555,236 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildEncryptedStorageTile(ThemeData theme) {
+    final canToggle = _hasNsec;
+    final progressController = EncryptionProgressController.instance;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ValueListenableBuilder<EncryptionProgress?>(
+          valueListenable: progressController.progressNotifier,
+          builder: (context, progress, _) {
+            final isOperationRunning = progress != null;
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                _isEncrypted ? Icons.lock : Icons.lock_open,
+                                size: 20,
+                                color: _isEncrypted
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.outline,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _i18n.t('encrypted_storage'),
+                                style: theme.textTheme.titleSmall,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _i18n.t('encrypted_storage_description'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isOperationRunning)
+                      const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      Switch(
+                        value: _isEncrypted,
+                        onChanged: canToggle ? _toggleEncryption : null,
+                      ),
+                  ],
+                ),
+                // Progress indicator when operation is running
+                if (isOperationRunning) ...[
+                  const SizedBox(height: 12),
+                  _buildEncryptionProgress(theme, progress),
+                ],
+                if (!_hasNsec && !isOperationRunning) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(Icons.warning, size: 16, color: Colors.orange),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _i18n.t('encrypted_storage_requires_nsec'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.orange,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_isEncrypted && !isOperationRunning) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(Icons.verified_user, size: 16, color: Colors.green),
+                      const SizedBox(width: 8),
+                      Text(
+                        _i18n.t('profile_encrypted'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEncryptionProgress(ThemeData theme, EncryptionProgress progress) {
+    final progressText = progress.isEncrypting
+        ? _i18n.t('encrypting_progress', params: [
+            progress.filesProcessed.toString(),
+            progress.totalFiles.toString(),
+            progress.percent.toString(),
+          ])
+        : _i18n.t('decrypting_progress', params: [
+            progress.filesProcessed.toString(),
+            progress.totalFiles.toString(),
+            progress.percent.toString(),
+          ]);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Progress bar
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: progress.totalFiles > 0 ? progress.filesProcessed / progress.totalFiles : null,
+            minHeight: 6,
+            backgroundColor: theme.colorScheme.surfaceContainerHighest,
+            valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Progress text
+        Text(
+          progressText,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.primary,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        // Current file name (truncated)
+        if (progress.currentFile != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            progress.currentFile!,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontFamily: 'monospace',
+              fontSize: 11,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _toggleEncryption(bool enable) async {
+    final profile = _profileService.getProfile();
+    if (profile == null || profile.nsec == null) return;
+
+    final progressController = EncryptionProgressController.instance;
+
+    // Don't start if already running
+    if (progressController.isRunning) return;
+
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(enable ? _i18n.t('enable_encryption') : _i18n.t('disable_encryption')),
+        content: Text(_i18n.t('encryption_warning')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(enable ? _i18n.t('enable_encryption') : _i18n.t('disable_encryption')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      MigrationResult result;
+      if (enable) {
+        result = await progressController.runEncryption(profile.callsign, profile.nsec!);
+      } else {
+        result = await progressController.runDecryption(profile.callsign, profile.nsec!);
+      }
+
+      if (mounted) {
+        if (result.success) {
+          setState(() {
+            _isEncrypted = enable;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '${enable ? _i18n.t('encryption_enabled') : _i18n.t('encryption_disabled')} - ${result.filesProcessed} ${_i18n.t('files_migrated')}',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${_i18n.t('encryption_error')}: ${result.error}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_i18n.t('encryption_error')}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildCrashLogsTile(ThemeData theme) {
@@ -668,6 +929,18 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _openFolder(String path) async {
+    final success = await FileLauncherService().openFolder(path);
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n.t('could_not_open_folder')),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
