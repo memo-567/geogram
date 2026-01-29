@@ -7,16 +7,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path/path.dart' as p;
 import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
-import '../platform/file_system_service.dart';
 import '../util/chat_format.dart';
 import '../util/event_bus.dart';
 import '../util/reaction_utils.dart';
 import 'profile_service.dart';
+import 'profile_storage.dart';
 import 'signing_service.dart';
+
+// NOTE: All file operations now use ProfileStorage abstraction.
+// File watching (startWatching/stopWatching) still requires direct filesystem access
+// for Directory.watch() functionality - this is intentional as ProfileStorage
+// doesn't support file system event streams.
 
 /// Notification when chat files change
 class ChatFileChange {
@@ -27,10 +31,19 @@ class ChatFileChange {
 }
 
 /// Service for managing chat collections and messages
+///
+/// IMPORTANT: All file operations go through the ProfileStorage abstraction.
+/// Never use File() or Directory() directly in this service except for
+/// file watching functionality which requires direct filesystem access.
 class ChatService {
   static final ChatService _instance = ChatService._internal();
   factory ChatService() => _instance;
   ChatService._internal();
+
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  /// All file operations go through this abstraction.
+  late ProfileStorage _storage;
 
   /// Current collection path
   String? _collectionPath;
@@ -47,7 +60,7 @@ class ChatService {
   /// Hidden message IDs by channel (local-only)
   final Map<String, Set<String>> _hiddenMessageIds = {};
 
-  /// File system watcher subscriptions
+  /// File system watcher subscriptions (requires direct filesystem access)
   final List<StreamSubscription<FileSystemEvent>> _watchSubscriptions = [];
 
   /// Stream controller for file change notifications
@@ -56,6 +69,25 @@ class ChatService {
 
   /// Stream of file change notifications
   Stream<ChatFileChange> get onFileChange => _changeController.stream;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
+
+  /// Get the relative path from collection path
+  String _getRelativePath(String fullPath) {
+    if (_collectionPath == null) return fullPath;
+    if (fullPath.startsWith(_collectionPath!)) {
+      final rel = fullPath.substring(_collectionPath!.length);
+      return rel.startsWith('/') ? rel.substring(1) : rel;
+    }
+    return fullPath;
+  }
 
   /// Initialize chat service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
@@ -79,20 +111,9 @@ class ChatService {
   Future<void> _loadHiddenMessages() async {
     if (_collectionPath == null) return;
 
-    final hiddenPath = '$_collectionPath/extra/hidden_messages.json';
-
     try {
-      String? content;
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(hiddenPath)) return;
-        content = await fs.readAsString(hiddenPath);
-      } else {
-        final hiddenFile = File(p.join(_collectionPath!, 'extra', 'hidden_messages.json'));
-        if (!await hiddenFile.exists()) return;
-        content = await hiddenFile.readAsString();
-      }
+      final content = await _storage.readString('extra/hidden_messages.json');
+      if (content == null) return;
 
       final json = jsonDecode(content) as Map<String, dynamic>;
       final channels = json['channels'] as Map<String, dynamic>? ?? {};
@@ -110,9 +131,6 @@ class ChatService {
   Future<void> _saveHiddenMessages() async {
     if (_collectionPath == null) return;
 
-    final extraPath = '$_collectionPath/extra';
-    final hiddenPath = '$extraPath/hidden_messages.json';
-
     final data = {
       'version': '1.0',
       'channels': _hiddenMessageIds.map((channelId, ids) {
@@ -122,20 +140,8 @@ class ChatService {
 
     final content = const JsonEncoder.withIndent('  ').convert(data);
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(hiddenPath, content);
-    } else {
-      final extraDir = Directory(p.join(_collectionPath!, 'extra'));
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final hiddenFile = File(p.join(_collectionPath!, 'extra', 'hidden_messages.json'));
-      await hiddenFile.writeAsString(content);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/hidden_messages.json', content);
   }
 
   bool isMessageHidden(String channelId, ChatMessage message) {
@@ -224,25 +230,12 @@ class ChatService {
   Future<void> _loadChannels() async {
     if (_collectionPath == null) return;
 
-    final channelsPath = '$_collectionPath/extra/channels.json';
-
     try {
-      String? content;
+      final content = await _storage.readString('extra/channels.json');
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(channelsPath)) {
-          _channels = [];
-          return;
-        }
-        content = await fs.readAsString(channelsPath);
-      } else {
-        final channelsFile = File(p.join(_collectionPath!, 'extra', 'channels.json'));
-        if (!await channelsFile.exists()) {
-          _channels = [];
-          return;
-        }
-        content = await channelsFile.readAsString();
+      if (content == null) {
+        _channels = [];
+        return;
       }
 
       final json = jsonDecode(content) as Map<String, dynamic>;
@@ -261,54 +254,26 @@ class ChatService {
   Future<void> _saveChannels() async {
     if (_collectionPath == null) return;
 
-    final extraPath = '$_collectionPath/extra';
-    final channelsPath = '$extraPath/channels.json';
     final json = {
       'version': '1.0',
       'channels': _channels.map((ch) => ch.toJson()).toList(),
     };
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(channelsPath, content);
-    } else {
-      final extraDir = Directory(p.join(_collectionPath!, 'extra'));
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final channelsFile = File(p.join(_collectionPath!, 'extra', 'channels.json'));
-      await channelsFile.writeAsString(content);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/channels.json', content);
   }
 
   /// Load participants from participants.json
   Future<void> _loadParticipants() async {
     if (_collectionPath == null) return;
 
-    final participantsPath = '$_collectionPath/extra/participants.json';
-
     try {
-      String? content;
+      final content = await _storage.readString('extra/participants.json');
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(participantsPath)) {
-          _participants = {};
-          return;
-        }
-        content = await fs.readAsString(participantsPath);
-      } else {
-        final participantsFile =
-            File(p.join(_collectionPath!, 'extra', 'participants.json'));
-        if (!await participantsFile.exists()) {
-          _participants = {};
-          return;
-        }
-        content = await participantsFile.readAsString();
+      if (content == null) {
+        _participants = {};
+        return;
       }
 
       final json = jsonDecode(content) as Map<String, dynamic>;
@@ -331,9 +296,6 @@ class ChatService {
   Future<void> _saveParticipants() async {
     if (_collectionPath == null) return;
 
-    final extraPath = '$_collectionPath/extra';
-    final participantsPath = '$extraPath/participants.json';
-
     final Map<String, dynamic> participantsMap = {};
     _participants.forEach((callsign, npub) {
       participantsMap[callsign] = {
@@ -349,21 +311,8 @@ class ChatService {
     };
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(participantsPath, content);
-    } else {
-      final extraDir = Directory(p.join(_collectionPath!, 'extra'));
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final participantsFile =
-          File(p.join(_collectionPath!, 'extra', 'participants.json'));
-      await participantsFile.writeAsString(content);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/participants.json', content);
   }
 
   /// Add a new participant
@@ -378,26 +327,12 @@ class ChatService {
   Future<void> _loadSecurity() async {
     if (_collectionPath == null) return;
 
-    final securityPath = '$_collectionPath/extra/security.json';
-
     try {
-      String? content;
+      final content = await _storage.readString('extra/security.json');
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(securityPath)) {
-          _security = ChatSecurity();
-          return;
-        }
-        content = await fs.readAsString(securityPath);
-      } else {
-        final securityFile =
-            File(p.join(_collectionPath!, 'extra', 'security.json'));
-        if (!await securityFile.exists()) {
-          _security = ChatSecurity();
-          return;
-        }
-        content = await securityFile.readAsString();
+      if (content == null) {
+        _security = ChatSecurity();
+        return;
       }
 
       final json = jsonDecode(content) as Map<String, dynamic>;
@@ -414,29 +349,14 @@ class ChatService {
 
     _security = security;
 
-    final extraPath = '$_collectionPath/extra';
-    final securityPath = '$extraPath/security.json';
     final json = {
       'version': '1.0',
       ..._security.toJson(),
     };
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(securityPath, content);
-    } else {
-      final extraDir = Directory(p.join(_collectionPath!, 'extra'));
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final securityFile =
-          File(p.join(_collectionPath!, 'extra', 'security.json'));
-      await securityFile.writeAsString(content);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/security.json', content);
   }
 
   /// Create a new channel
@@ -464,46 +384,21 @@ class ChatService {
 
     final configContent = const JsonEncoder.withIndent('  ').convert(config.toJson());
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      final channelPath = '$_collectionPath/${channel.folder}';
-      final filesPath = '$channelPath/files';
-      final configPath = '$channelPath/config.json';
+    // Use ProfileStorage abstraction for all channel creation
+    final channelFolder = channel.folder;
 
-      // Create channel folder and files subfolder
-      await fs.createDirectory(channelPath, recursive: true);
-      await fs.createDirectory(filesPath, recursive: true);
+    // Create channel folder and files subfolder
+    await _storage.createDirectory(channelFolder);
+    await _storage.createDirectory('$channelFolder/files');
 
-      // Create config.json
-      await fs.writeAsString(configPath, configContent);
+    // Create config.json
+    await _storage.writeString('$channelFolder/config.json', configContent);
 
-      // For main channel, create year folder structure
-      if (channel.isMain) {
-        final yearPath = '$channelPath/${DateTime.now().year}';
-        final filesYearPath = '$yearPath/files';
-        await fs.createDirectory(yearPath, recursive: true);
-        await fs.createDirectory(filesYearPath, recursive: true);
-      }
-    } else {
-      // Create channel folder
-      final channelDir = Directory(p.join(_collectionPath!, channel.folder));
-      await channelDir.create(recursive: true);
-
-      // Create files subfolder
-      final filesDir = Directory(p.join(channelDir.path, 'files'));
-      await filesDir.create();
-
-      // Create config.json
-      final configFile = File(p.join(channelDir.path, 'config.json'));
-      await configFile.writeAsString(configContent);
-
-      // For main channel, create year folder structure
-      if (channel.isMain) {
-        final yearDir = Directory(p.join(channelDir.path, DateTime.now().year.toString()));
-        await yearDir.create();
-        final filesYearDir = Directory(p.join(yearDir.path, 'files'));
-        await filesYearDir.create();
-      }
+    // For main channel, create year folder structure
+    if (channel.isMain) {
+      final year = DateTime.now().year.toString();
+      await _storage.createDirectory('$channelFolder/$year');
+      await _storage.createDirectory('$channelFolder/$year/files');
     }
 
     // Add to channels list and save
@@ -527,19 +422,8 @@ class ChatService {
       throw Exception('Cannot delete main channel');
     }
 
-    // Delete channel folder
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      final channelPath = '$_collectionPath/${channel.folder}';
-      if (await fs.exists(channelPath)) {
-        await fs.delete(channelPath, recursive: true);
-      }
-    } else {
-      final channelDir = Directory(p.join(_collectionPath!, channel.folder));
-      if (await channelDir.exists()) {
-        await channelDir.delete(recursive: true);
-      }
-    }
+    // Delete channel folder via storage abstraction
+    await _storage.deleteDirectory(channel.folder, recursive: true);
 
     // Remove from list and save
     _channels.removeWhere((ch) => ch.id == channelId);
@@ -607,25 +491,17 @@ class ChatService {
     final channel = getChannel(channelId);
     if (channel == null) return [];
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
-    // Check if channel exists
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(channelPath)) return [];
-    } else {
-      final channelDir = Directory(p.join(_collectionPath!, channel.folder));
-      if (!await channelDir.exists()) return [];
-    }
+    // Check if channel exists via storage abstraction
+    if (!await _storage.directoryExists(channel.folder)) return [];
 
     List<ChatMessage> messages = [];
 
     if (channel.isMain) {
       // Load from daily files in year folders
-      messages = await _loadMainChannelMessages(channelPath, startDate, endDate);
+      messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
     } else {
       // Load from single messages.txt file
-      messages = await _loadSingleFileMessages(channelPath);
+      messages = await _loadSingleFileMessagesStorage(channel.folder);
     }
 
     // Sort by timestamp
@@ -646,132 +522,59 @@ class ChatService {
     return messages;
   }
 
-  /// Load messages from main channel (daily files)
-  Future<List<ChatMessage>> _loadMainChannelMessages(
-    String channelPath,
+  /// Load messages from single file (ProfileStorage)
+  Future<List<ChatMessage>> _loadSingleFileMessagesStorage(String channelFolder) async {
+    final messagesPath = '$channelFolder/messages.txt';
+    final content = await _storage.readString(messagesPath);
+    if (content == null) return [];
+    return parseMessageText(content);
+  }
+
+  /// Load messages from main channel (ProfileStorage)
+  Future<List<ChatMessage>> _loadMainChannelMessagesStorage(
+    String channelFolder,
     DateTime? startDate,
     DateTime? endDate,
   ) async {
     List<ChatMessage> messages = [];
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
+    // Find all year folders
+    final entries = await _storage.listDirectory(channelFolder);
+    final yearFolders = entries
+        .where((e) => e.isDirectory && _isYearFolder(e.name))
+        .toList();
 
-      // Find all year folders
-      final entities = await fs.list(channelPath);
-      final yearFolders = entities
-          .where((e) => e.type == FsEntityType.directory && _isYearFolder(e.path))
+    for (var yearFolder in yearFolders) {
+      // Find all chat files in year folder
+      final yearEntries = await _storage.listDirectory('$channelFolder/${yearFolder.name}');
+      final chatFiles = yearEntries
+          .where((e) => !e.isDirectory && e.name.endsWith('_chat.txt'))
           .toList();
 
-      for (var yearFolder in yearFolders) {
-        // Find all chat files in year folder
-        final yearEntities = await fs.list(yearFolder.path);
-        final chatFiles = yearEntities
-            .where((e) => e.type == FsEntityType.file && e.path.endsWith('_chat.txt'))
-            .toList();
+      for (var file in chatFiles) {
+        // Parse file date from filename (YYYY-MM-DD_chat.txt)
+        final dateStr = file.name.substring(0, 10); // YYYY-MM-DD
 
-        for (var file in chatFiles) {
-          // Parse file date from filename (YYYY-MM-DD_chat.txt)
-          final filename = file.path.split('/').last;
-          final dateStr = filename.substring(0, 10); // YYYY-MM-DD
-
-          // Skip if outside date range
-          if (startDate != null || endDate != null) {
-            try {
-              final fileDate = DateTime.parse(dateStr);
-              if (startDate != null && fileDate.isBefore(startDate)) continue;
-              if (endDate != null && fileDate.isAfter(endDate)) continue;
-            } catch (e) {
-              continue; // Skip files with invalid dates
-            }
+        // Skip if outside date range
+        if (startDate != null || endDate != null) {
+          try {
+            final fileDate = DateTime.parse(dateStr);
+            if (startDate != null && fileDate.isBefore(startDate)) continue;
+            if (endDate != null && fileDate.isAfter(endDate)) continue;
+          } catch (e) {
+            continue; // Skip files with invalid dates
           }
-
-          // Parse messages from file
-          final fileMessages = await _parseMessageFilePath(file.path);
-          messages.addAll(fileMessages);
         }
-      }
-    } else {
-      final channelDir = Directory(channelPath);
 
-      // Find all year folders
-      final yearDirs = await channelDir
-          .list()
-          .where((entity) => entity is Directory && _isYearFolder(entity.path))
-          .cast<Directory>()
-          .toList();
-
-      for (var yearDir in yearDirs) {
-        // Find all chat files in year folder
-        final chatFiles = await yearDir
-            .list()
-            .where((entity) =>
-                entity is File && entity.path.endsWith('_chat.txt'))
-            .cast<File>()
-            .toList();
-
-        for (var file in chatFiles) {
-          // Parse file date from filename (YYYY-MM-DD_chat.txt)
-          final filename = p.basename(file.path);
-          final dateStr = filename.substring(0, 10); // YYYY-MM-DD
-
-          // Skip if outside date range
-          if (startDate != null || endDate != null) {
-            try {
-              final fileDate = DateTime.parse(dateStr);
-              if (startDate != null && fileDate.isBefore(startDate)) continue;
-              if (endDate != null && fileDate.isAfter(endDate)) continue;
-            } catch (e) {
-              continue; // Skip files with invalid dates
-            }
-          }
-
-          // Parse messages from file
-          final fileMessages = await _parseMessageFile(file);
-          messages.addAll(fileMessages);
+        // Parse messages from file
+        final content = await _storage.readString('$channelFolder/${yearFolder.name}/${file.name}');
+        if (content != null) {
+          messages.addAll(parseMessageText(content));
         }
       }
     }
 
     return messages;
-  }
-
-  /// Load messages from single file (DM or group)
-  Future<List<ChatMessage>> _loadSingleFileMessages(String channelPath) async {
-    final messagesPath = '$channelPath/messages.txt';
-
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(messagesPath)) return [];
-      return await _parseMessageFilePath(messagesPath);
-    } else {
-      final messagesFile = File(p.join(channelPath, 'messages.txt'));
-      if (!await messagesFile.exists()) return [];
-      return await _parseMessageFile(messagesFile);
-    }
-  }
-
-  /// Parse message file according to specification (native)
-  Future<List<ChatMessage>> _parseMessageFile(File file) async {
-    try {
-      final content = await file.readAsString();
-      return parseMessageText(content);
-    } catch (e) {
-      print('Error parsing message file ${file.path}: $e');
-      return [];
-    }
-  }
-
-  /// Parse message file from path (web)
-  Future<List<ChatMessage>> _parseMessageFilePath(String filePath) async {
-    try {
-      final fs = FileSystemService.instance;
-      final content = await fs.readAsString(filePath);
-      return parseMessageText(content);
-    } catch (e) {
-      print('Error parsing message file $filePath: $e');
-      return [];
-    }
   }
 
   /// Parse message text content (static for testing)
@@ -798,80 +601,34 @@ class ChatService {
       throw Exception('Channel not found: $channelId');
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
+    // Use ProfileStorage abstraction for message saving
+    String messageFilePath;
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      String messageFilePath;
-
-      if (channel.isMain) {
-        // Get daily file path
-        messageFilePath = await _getDailyMessageFilePath(channelPath, message.dateTime);
-      } else {
-        // Ensure channel directory exists for non-main channels
-        if (!await fs.exists(channelPath)) {
-          await fs.createDirectory(channelPath, recursive: true);
-        }
-        messageFilePath = '$channelPath/messages.txt';
-      }
-
-      // Check if file exists and needs header
-      final needsHeader = !await fs.exists(messageFilePath);
-
-      // Build content
-      final buffer = StringBuffer();
-      if (needsHeader) {
-        buffer.write(_generateFileHeader(channel, message.dateTime));
-      } else {
-        // Read existing content
-        final existing = await fs.readAsString(messageFilePath);
-        buffer.write(existing);
-      }
-      buffer.write('\n');
-      buffer.write(message.exportAsText());
-      buffer.write('\n');
-
-      await fs.writeAsString(messageFilePath, buffer.toString());
+    if (channel.isMain) {
+      // Get daily file path
+      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, message.dateTime);
     } else {
-      final channelDir = Directory(p.join(_collectionPath!, channel.folder));
-
-      File messageFile;
-
-      if (channel.isMain) {
-        // Append to daily file
-        messageFile = await _getDailyMessageFile(channelDir, message.dateTime);
-      } else {
-        // Ensure channel directory exists for non-main channels
-        if (!await channelDir.exists()) {
-          await channelDir.create(recursive: true);
-        }
-        // Append to single messages.txt
-        messageFile = File(p.join(channelDir.path, 'messages.txt'));
-      }
-
-      // Check if file exists and needs header
-      final needsHeader = !await messageFile.exists();
-
-      // Open file for appending
-      final sink = messageFile.openWrite(mode: FileMode.append);
-
-      try {
-        if (needsHeader) {
-          // Write header
-          final header = _generateFileHeader(channel, message.dateTime);
-          sink.write(header);
-        }
-
-        // Write message
-        sink.write('\n');
-        sink.write(message.exportAsText());
-        sink.write('\n');
-
-        await sink.flush();
-      } finally {
-        await sink.close();
-      }
+      // Ensure channel directory exists for non-main channels
+      await _storage.createDirectory(channel.folder);
+      messageFilePath = '${channel.folder}/messages.txt';
     }
+
+    // Read existing content (for append simulation - ProfileStorage doesn't have native append)
+    final existing = await _storage.readString(messageFilePath);
+    final needsHeader = existing == null;
+
+    // Build content
+    final buffer = StringBuffer();
+    if (needsHeader) {
+      buffer.write(_generateFileHeader(channel, message.dateTime));
+    } else {
+      buffer.write(existing);
+    }
+    buffer.write('\n');
+    buffer.write(message.exportAsText());
+    buffer.write('\n');
+
+    await _storage.writeString(messageFilePath, buffer.toString());
 
     // Add author to participants if not already present
     if (!_participants.containsKey(message.author)) {
@@ -894,37 +651,17 @@ class ChatService {
     }
   }
 
-  /// Get daily message file path for main channel (web)
-  Future<String> _getDailyMessageFilePath(String channelPath, DateTime date) async {
-    final fs = FileSystemService.instance;
+  /// Get daily message file path for main channel (ProfileStorage)
+  Future<String> _getDailyMessageFilePathStorage(String channelFolder, DateTime date) async {
     final year = date.year.toString();
-    final yearPath = '$channelPath/$year';
+    final yearPath = '$channelFolder/$year';
 
     // Create year directory if doesn't exist
-    if (!await fs.exists(yearPath)) {
-      await fs.createDirectory(yearPath, recursive: true);
-      // Create files subfolder
-      await fs.createDirectory('$yearPath/files', recursive: true);
-    }
+    await _storage.createDirectory(yearPath);
+    await _storage.createDirectory('$yearPath/files');
 
     final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     return '$yearPath/${dateStr}_chat.txt';
-  }
-
-  /// Get daily message file for main channel (native)
-  Future<File> _getDailyMessageFile(Directory channelDir, DateTime date) async {
-    final year = date.year.toString();
-    final yearDir = Directory(p.join(channelDir.path, year));
-
-    // Create year directory if doesn't exist (recursive to handle missing channel dir)
-    if (!await yearDir.exists()) {
-      await yearDir.create(recursive: true);
-      // Create files subfolder
-      await Directory(p.join(yearDir.path, 'files')).create();
-    }
-
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    return File(p.join(yearDir.path, '${dateStr}_chat.txt'));
   }
 
   /// Generate file header
@@ -958,16 +695,7 @@ class ChatService {
     // Update config.json if config changed
     if (channel.config != null && _collectionPath != null) {
       final configContent = const JsonEncoder.withIndent('  ').convert(channel.config!.toJson());
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final configPath = '$_collectionPath/${channel.folder}/config.json';
-        await fs.writeAsString(configPath, configContent);
-      } else {
-        final channelDir = Directory(p.join(_collectionPath!, channel.folder));
-        final configFile = File(p.join(channelDir.path, 'config.json'));
-        await configFile.writeAsString(configContent);
-      }
+      await _storage.writeString('${channel.folder}/config.json', configContent);
     }
   }
 
@@ -1016,129 +744,64 @@ class ChatService {
       throw Exception('Channel not found: $channelId');
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
     if (channel.isMain) {
       // Delete from daily file
-      await _deleteFromDailyFile(channelPath, channel, message);
+      await _deleteFromDailyFileStorage(channel, message);
     } else {
       // Delete from single messages.txt
-      await _deleteFromSingleFile(channelPath, channel, message);
+      await _deleteFromSingleFileStorage(channel, message);
     }
   }
 
-  /// Delete message from daily file (main channel)
-  Future<void> _deleteFromDailyFile(
-    String channelPath,
+  /// Delete message from daily file using storage (main channel)
+  Future<void> _deleteFromDailyFileStorage(
     ChatChannel channel,
     ChatMessage message,
   ) async {
-    List<ChatMessage> messages;
-
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      final messageFilePath = await _getDailyMessageFilePath(channelPath, message.dateTime);
-      if (!await fs.exists(messageFilePath)) {
-        throw Exception('Message file not found');
-      }
-      messages = await _parseMessageFilePath(messageFilePath);
-
-      // Remove the target message
-      messages.removeWhere((msg) =>
-          msg.timestamp == message.timestamp && msg.author == message.author);
-
-      // Rewrite file
-      await _rewriteMessageFilePath(messageFilePath, channel, messages, message.dateTime);
-    } else {
-      final channelDir = Directory(channelPath);
-      final messageFile = await _getDailyMessageFile(channelDir, message.dateTime);
-      if (!await messageFile.exists()) {
-        throw Exception('Message file not found');
-      }
-      messages = await _parseMessageFile(messageFile);
-
-      // Remove the target message
-      messages.removeWhere((msg) =>
-          msg.timestamp == message.timestamp && msg.author == message.author);
-
-      // Rewrite file
-      await _rewriteMessageFile(messageFile, channel, messages, message.dateTime);
+    final messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, message.dateTime);
+    final content = await _storage.readString(messageFilePath);
+    if (content == null) {
+      throw Exception('Message file not found');
     }
+
+    var messages = parseMessageText(content);
+
+    // Remove the target message
+    messages.removeWhere((msg) =>
+        msg.timestamp == message.timestamp && msg.author == message.author);
+
+    // Rewrite file
+    await _rewriteMessageFileStorage(messageFilePath, channel, messages, message.dateTime);
   }
 
-  /// Delete message from single file (DM or group)
-  Future<void> _deleteFromSingleFile(
-    String channelPath,
+  /// Delete message from single file using storage (DM or group)
+  Future<void> _deleteFromSingleFileStorage(
     ChatChannel channel,
     ChatMessage message,
   ) async {
-    List<ChatMessage> messages;
-
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      final messageFilePath = '$channelPath/messages.txt';
-      if (!await fs.exists(messageFilePath)) {
-        throw Exception('Message file not found');
-      }
-      messages = await _parseMessageFilePath(messageFilePath);
-
-      // Remove the target message
-      messages.removeWhere((msg) =>
-          msg.timestamp == message.timestamp && msg.author == message.author);
-
-      // Rewrite file
-      await _rewriteMessageFilePath(messageFilePath, channel, messages, message.dateTime);
-    } else {
-      final messageFile = File(p.join(channelPath, 'messages.txt'));
-      if (!await messageFile.exists()) {
-        throw Exception('Message file not found');
-      }
-      messages = await _parseMessageFile(messageFile);
-
-      // Remove the target message
-      messages.removeWhere((msg) =>
-          msg.timestamp == message.timestamp && msg.author == message.author);
-
-      // Rewrite file
-      await _rewriteMessageFile(messageFile, channel, messages, message.dateTime);
+    final messageFilePath = '${channel.folder}/messages.txt';
+    final content = await _storage.readString(messageFilePath);
+    if (content == null) {
+      throw Exception('Message file not found');
     }
+
+    var messages = parseMessageText(content);
+
+    // Remove the target message
+    messages.removeWhere((msg) =>
+        msg.timestamp == message.timestamp && msg.author == message.author);
+
+    // Rewrite file
+    await _rewriteMessageFileStorage(messageFilePath, channel, messages, message.dateTime);
   }
 
-  /// Rewrite message file with updated messages (native)
-  Future<void> _rewriteMessageFile(
-    File file,
-    ChatChannel channel,
-    List<ChatMessage> messages,
-    DateTime date,
-  ) async {
-    // Write header and messages
-    final sink = file.openWrite(mode: FileMode.write);
-    try {
-      // Write header
-      final header = _generateFileHeader(channel, date);
-      sink.write(header);
-
-      // Write each message
-      for (var message in messages) {
-        sink.write('\n');
-        sink.write(message.exportAsText());
-        sink.write('\n');
-      }
-
-      await sink.flush();
-    } finally {
-      await sink.close();
-    }
-  }
-
-  /// Rewrite message file with updated messages (web)
-  Future<void> _rewriteMessageFilePath(
+  /// Rewrite message file with updated messages using storage
+  Future<void> _rewriteMessageFileStorage(
     String filePath,
     ChatChannel channel,
     List<ChatMessage> messages,
     DateTime date,
   ) async {
-    final fs = FileSystemService.instance;
     final buffer = StringBuffer();
 
     // Write header
@@ -1152,7 +815,7 @@ class ChatService {
       buffer.write('\n');
     }
 
-    await fs.writeAsString(filePath, buffer.toString());
+    await _storage.writeString(filePath, buffer.toString());
   }
 
   // ============================================================
@@ -1175,8 +838,6 @@ class ChatService {
       return null;
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
     // Parse the timestamp to get the date for daily files
     DateTime? messageDate;
     try {
@@ -1197,37 +858,20 @@ class ChatService {
 
     if (channel.isMain && messageDate != null) {
       // Load from specific daily file
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        if (!await fs.exists(messageFilePath)) {
-          return null;
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        if (!await messageFile.exists()) {
-          return null;
-        }
-        messages = await _parseMessageFile(messageFile);
+      final messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
+      final content = await _storage.readString(messageFilePath);
+      if (content == null) {
+        return null;
       }
+      messages = parseMessageText(content);
     } else if (!channel.isMain) {
       // Load from single messages.txt
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = '$channelPath/messages.txt';
-        if (!await fs.exists(messageFilePath)) {
-          return null;
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        if (!await messageFile.exists()) {
-          return null;
-        }
-        messages = await _parseMessageFile(messageFile);
+      final messageFilePath = '${channel.folder}/messages.txt';
+      final content = await _storage.readString(messageFilePath);
+      if (content == null) {
+        return null;
       }
+      messages = parseMessageText(content);
     } else {
       // Main channel but couldn't parse date - load all messages
       messages = await loadMessages(channelId, limit: 10000);
@@ -1265,8 +909,6 @@ class ChatService {
       throw Exception('Channel not found: $channelId');
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
     // Parse the timestamp to get the date for daily files
     DateTime messageDate;
     try {
@@ -1284,41 +926,21 @@ class ChatService {
     List<ChatMessage> messages;
     ChatMessage? targetMessage;
     int targetIndex = -1;
+    String messageFilePath;
 
     if (channel.isMain) {
       // Load from daily file
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        if (!await fs.exists(messageFilePath)) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        if (!await messageFile.exists()) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
     } else {
       // Load from single messages.txt
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = '$channelPath/messages.txt';
-        if (!await fs.exists(messageFilePath)) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        if (!await messageFile.exists()) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = '${channel.folder}/messages.txt';
     }
+
+    final content = await _storage.readString(messageFilePath);
+    if (content == null) {
+      throw Exception('Message file not found');
+    }
+    messages = parseMessageText(content);
 
     // Find the target message
     for (int i = 0; i < messages.length; i++) {
@@ -1359,24 +981,7 @@ class ChatService {
     messages[targetIndex] = updatedMessage;
 
     // Rewrite the file
-    if (channel.isMain) {
-      if (kIsWeb) {
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    } else {
-      if (kIsWeb) {
-        final messageFilePath = '$channelPath/messages.txt';
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    }
+    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
 
     return updatedMessage;
   }
@@ -1398,8 +1003,6 @@ class ChatService {
       throw Exception('Channel not found: $channelId');
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
     // Parse the timestamp to get the date for daily files
     DateTime messageDate;
     try {
@@ -1416,41 +1019,21 @@ class ChatService {
 
     List<ChatMessage> messages;
     ChatMessage? targetMessage;
+    String messageFilePath;
 
     if (channel.isMain) {
       // Load from daily file
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        if (!await fs.exists(messageFilePath)) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        if (!await messageFile.exists()) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
     } else {
       // Load from single messages.txt
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = '$channelPath/messages.txt';
-        if (!await fs.exists(messageFilePath)) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        if (!await messageFile.exists()) {
-          throw Exception('Message file not found');
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = '${channel.folder}/messages.txt';
     }
+
+    final content = await _storage.readString(messageFilePath);
+    if (content == null) {
+      throw Exception('Message file not found');
+    }
+    messages = parseMessageText(content);
 
     // Find the target message
     for (final msg in messages) {
@@ -1478,24 +1061,7 @@ class ChatService {
         msg.timestamp == timestamp && msg.author == authorCallsign);
 
     // Rewrite the file
-    if (channel.isMain) {
-      if (kIsWeb) {
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    } else {
-      if (kIsWeb) {
-        final messageFilePath = '$channelPath/messages.txt';
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    }
+    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
 
     return true;
   }
@@ -1523,8 +1089,6 @@ class ChatService {
       throw Exception('Invalid reaction or callsign');
     }
 
-    final channelPath = '$_collectionPath/${channel.folder}';
-
     // Parse the timestamp to get the date for daily files
     DateTime messageDate;
     try {
@@ -1541,39 +1105,19 @@ class ChatService {
 
     List<ChatMessage> messages;
     int targetIndex = -1;
+    String messageFilePath;
 
     if (channel.isMain) {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        if (!await fs.exists(messageFilePath)) {
-          return null;
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        if (!await messageFile.exists()) {
-          return null;
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
     } else {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        final messageFilePath = '$channelPath/messages.txt';
-        if (!await fs.exists(messageFilePath)) {
-          return null;
-        }
-        messages = await _parseMessageFilePath(messageFilePath);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        if (!await messageFile.exists()) {
-          return null;
-        }
-        messages = await _parseMessageFile(messageFile);
-      }
+      messageFilePath = '${channel.folder}/messages.txt';
     }
+
+    final content = await _storage.readString(messageFilePath);
+    if (content == null) {
+      return null;
+    }
+    messages = parseMessageText(content);
 
     for (int i = 0; i < messages.length; i++) {
       if (messages[i].timestamp == timestamp) {
@@ -1589,24 +1133,7 @@ class ChatService {
     final updatedMessage = _toggleMessageReaction(messages[targetIndex], reactionKey, actorKey);
     messages[targetIndex] = updatedMessage;
 
-    if (channel.isMain) {
-      if (kIsWeb) {
-        final messageFilePath = await _getDailyMessageFilePath(channelPath, messageDate);
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final channelDir = Directory(channelPath);
-        final messageFile = await _getDailyMessageFile(channelDir, messageDate);
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    } else {
-      if (kIsWeb) {
-        final messageFilePath = '$channelPath/messages.txt';
-        await _rewriteMessageFilePath(messageFilePath, channel, messages, messageDate);
-      } else {
-        final messageFile = File(p.join(channelPath, 'messages.txt'));
-        await _rewriteMessageFile(messageFile, channel, messages, messageDate);
-      }
-    }
+    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
 
     return updatedMessage;
   }
