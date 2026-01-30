@@ -7080,3 +7080,69 @@ Pre-configured presets:
 - **Aioe** - `news.aioe.org` (no auth)
 
 Or configure any RFC 3977 compliant NNTP server.
+
+---
+
+## WebSnapshotService
+
+**Location:** `lib/work/services/web_snapshot_service.dart`
+
+Service for capturing websites for offline viewing. Downloads HTML pages and their assets (images, CSS, JS, fonts), rewrites URLs to use local paths.
+
+### Usage
+
+```dart
+import 'package:geogram/work/services/web_snapshot_service.dart';
+import 'package:geogram/work/models/websnapshot_content.dart';
+
+final service = WebSnapshotService();
+final snapshot = WebSnapshot.create(
+  url: 'https://example.com',
+  depth: CrawlDepth.one,
+);
+
+// Capture website with progress updates
+service.captureWebsite(
+  url: 'https://example.com',
+  depth: CrawlDepth.one,
+  settings: WebSnapshotSettings(),
+  snapshot: snapshot,
+  saveAsset: (path, data) async {
+    // Save asset to storage
+    await ndfService.saveSnapshotAssets(filePath, snapshot.id, {path: data});
+  },
+).listen((progress) {
+  print('Phase: ${progress.phase}, Progress: ${progress.progress}');
+  print('Assets: ${progress.assetsDownloaded}/${progress.totalAssets}');
+});
+
+// Cancel capture
+service.cancel();
+```
+
+### CrawlDepth Options
+
+- `CrawlDepth.single` - Single page only
+- `CrawlDepth.one` - 1 level of linked pages
+- `CrawlDepth.two` - 2 levels deep
+- `CrawlDepth.three` - 3 levels deep
+
+### CaptureProgress
+
+```dart
+class CaptureProgress {
+  final CapturePhase phase;      // fetching, parsing, downloading, rewriting, complete, failed
+  final double progress;         // 0.0 - 1.0
+  final String message;
+  final int pagesProcessed;
+  final int totalPages;
+  final int assetsDownloaded;
+  final int totalAssets;
+}
+```
+
+### Related Widgets
+
+- **SnapshotCardWidget** - Displays snapshot with metadata, status icon, stats
+- **CaptureProgressWidget** - Shows capture progress with phase indicator and cancel button
+

@@ -25,6 +25,7 @@ import 'form_editor_page.dart';
 import 'presentation_editor_page.dart';
 import 'todo_editor_page.dart';
 import 'voicememo_editor_page.dart';
+import 'websnapshot_editor_page.dart';
 
 /// Workspace detail page showing documents and folders
 class WorkspaceDetailPage extends StatefulWidget {
@@ -612,6 +613,15 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                   _createDocument(NdfDocumentType.voicememo);
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.language),
+                title: Text(_i18n.t('work_websnapshot')),
+                subtitle: Text(_i18n.t('work_websnapshot_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.websnapshot);
+                },
+              ),
               const SizedBox(height: 16),
             ],
           ),
@@ -968,6 +978,18 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           ),
         ).then((_) => onEditorClosed());
         break;
+
+      case NdfDocumentType.websnapshot:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => WebSnapshotEditorPage(
+              filePath: filePath,
+              title: doc.title,
+            ),
+          ),
+        ).then((_) => onEditorClosed());
+        break;
     }
   }
 
@@ -985,6 +1007,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return _i18n.t('work_todo');
       case NdfDocumentType.voicememo:
         return _i18n.t('work_voicememo');
+      case NdfDocumentType.websnapshot:
+        return _i18n.t('work_websnapshot');
     }
   }
 
@@ -1002,6 +1026,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Icons.checklist;
       case NdfDocumentType.voicememo:
         return Icons.mic;
+      case NdfDocumentType.websnapshot:
+        return Icons.language;
     }
   }
 
@@ -1019,6 +1045,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Colors.teal;
       case NdfDocumentType.voicememo:
         return Colors.deepOrange;
+      case NdfDocumentType.websnapshot:
+        return Colors.indigo;
     }
   }
 

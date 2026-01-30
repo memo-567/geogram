@@ -18,6 +18,7 @@ import '../models/form_content.dart';
 import '../models/presentation_content.dart';
 import '../models/todo_content.dart';
 import '../models/voicememo_content.dart';
+import '../models/websnapshot_content.dart';
 
 /// Service for reading and writing NDF (Nostr Data Format) documents
 class NdfService {
@@ -478,6 +479,28 @@ class NdfService {
             'show_transcriptions': true,
           },
           'clips': [],
+        };
+
+      case NdfDocumentType.websnapshot:
+        final now = DateTime.now();
+        return {
+          'type': 'websnapshot',
+          'id': 'websnapshot-${now.millisecondsSinceEpoch.toRadixString(36)}',
+          'schema': 'ndf-websnapshot-1.0',
+          'title': 'Untitled Web Snapshot',
+          'target_url': '',
+          'version': 1,
+          'created': now.toIso8601String(),
+          'modified': now.toIso8601String(),
+          'settings': {
+            'default_depth': 'single',
+            'include_scripts': true,
+            'include_styles': true,
+            'include_images': true,
+            'include_fonts': true,
+            'max_asset_size_mb': 10,
+          },
+          'snapshots': [],
         };
     }
   }
@@ -993,8 +1016,15 @@ class NdfService {
     try {
       return VoiceMemoClip.fromJson(json);
     } catch (e) {
-      LogService().log('NdfService: Error parsing voice memo clip $clipId: $e');
-      return null;
+      LogService().log('NdfService: Error parsing clip $clipId, trying without transcription: $e');
+      // Try loading without transcription rather than dropping the entire clip
+      try {
+        json.remove('transcription');
+        return VoiceMemoClip.fromJson(json);
+      } catch (e2) {
+        LogService().log('NdfService: Failed to load clip $clipId even without transcription: $e2');
+        return null;
+      }
     }
   }
 
@@ -1104,6 +1134,151 @@ class NdfService {
 
     if (toDelete.isNotEmpty) {
       await deleteArchiveFiles(filePath, toDelete);
+    }
+  }
+
+  // ============================================================
+  // WEB SNAPSHOT CONTENT METHODS
+  // ============================================================
+
+  /// Read web snapshot main content
+  Future<WebSnapshotContent?> readWebSnapshotContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return WebSnapshotContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing web snapshot content: $e');
+      return null;
+    }
+  }
+
+  /// Save web snapshot content
+  Future<void> saveWebSnapshotContent(
+    String filePath,
+    WebSnapshotContent content,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+    });
+  }
+
+  /// Read a web snapshot metadata
+  Future<WebSnapshot?> readWebSnapshot(String filePath, String snapshotId) async {
+    final json = await readArchiveJson(filePath, 'content/snapshots/$snapshotId.json');
+    if (json == null) return null;
+    try {
+      return WebSnapshot.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing snapshot $snapshotId: $e');
+      return null;
+    }
+  }
+
+  /// Read all web snapshots
+  Future<List<WebSnapshot>> readWebSnapshots(String filePath, List<String> snapshotIds) async {
+    final snapshots = <WebSnapshot>[];
+    for (final snapshotId in snapshotIds) {
+      final snapshot = await readWebSnapshot(filePath, snapshotId);
+      if (snapshot != null) {
+        snapshots.add(snapshot);
+      }
+    }
+    return snapshots;
+  }
+
+  /// Save a web snapshot metadata
+  Future<void> saveWebSnapshot(
+    String filePath,
+    WebSnapshot snapshot,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/snapshots/${snapshot.id}.json': snapshot.toJsonString(),
+    });
+  }
+
+  /// Delete a web snapshot and all its assets
+  Future<void> deleteWebSnapshot(String filePath, String snapshotId) async {
+    final files = await listArchiveFiles(filePath);
+    final toDelete = <String>[
+      'content/snapshots/$snapshotId.json',
+    ];
+
+    // Add all assets belonging to this snapshot
+    for (final file in files) {
+      if (file.startsWith('assets/snapshots/$snapshotId/')) {
+        toDelete.add(file);
+      }
+    }
+
+    await deleteArchiveFiles(filePath, toDelete);
+  }
+
+  /// Save snapshot assets to the archive
+  Future<void> saveSnapshotAssets(
+    String filePath,
+    String snapshotId,
+    Map<String, Uint8List> assets,
+  ) async {
+    final assetMap = <String, Uint8List>{};
+    for (final entry in assets.entries) {
+      assetMap['assets/snapshots/$snapshotId/${entry.key}'] = entry.value;
+    }
+    await _updateArchiveFilesBytes(filePath, assetMap);
+  }
+
+  /// Read a snapshot asset
+  Future<Uint8List?> readSnapshotAsset(
+    String filePath,
+    String snapshotId,
+    String assetPath,
+  ) async {
+    return readArchiveFile(filePath, 'assets/snapshots/$snapshotId/$assetPath');
+  }
+
+  /// List all assets for a snapshot
+  Future<List<String>> listSnapshotAssets(String filePath, String snapshotId) async {
+    final files = await listArchiveFiles(filePath);
+    final prefix = 'assets/snapshots/$snapshotId/';
+    return files
+        .where((f) => f.startsWith(prefix) && !f.endsWith('/'))
+        .map((f) => f.substring(prefix.length))
+        .toList();
+  }
+
+  /// Extract all snapshot assets to a temp directory for viewing
+  Future<String?> extractSnapshotToTemp(String filePath, String snapshotId) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) return null;
+
+      final bytes = await file.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      // Create temp directory for this snapshot
+      final tempDir = Directory.systemTemp;
+      final snapshotDir = Directory('${tempDir.path}/websnapshot_$snapshotId');
+      if (await snapshotDir.exists()) {
+        await snapshotDir.delete(recursive: true);
+      }
+      await snapshotDir.create(recursive: true);
+
+      final prefix = 'assets/snapshots/$snapshotId/';
+
+      // Extract all files for this snapshot
+      for (final entry in archive) {
+        if (entry.isFile && entry.name.startsWith(prefix)) {
+          final relativePath = entry.name.substring(prefix.length);
+          final outFile = File('${snapshotDir.path}/$relativePath');
+          await outFile.parent.create(recursive: true);
+          await outFile.writeAsBytes(entry.content as List<int>);
+        }
+      }
+
+      return snapshotDir.path;
+    } catch (e) {
+      LogService().log('NdfService: Error extracting snapshot to temp: $e');
+      return null;
     }
   }
 

@@ -49,6 +49,7 @@ dependencies:
   hex: ^0.2.0
   bech32: ^0.2.2
   http: ^1.2.0
+  html: ^0.15.4              # HTML parsing for web snapshot capture
   async: ^2.11.0             # Stream utilities (StreamGroup for ConnectionManager)
   window_manager: ^0.4.3
   shelf: ^1.4.0
