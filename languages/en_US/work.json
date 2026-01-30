@@ -406,5 +406,13 @@
   "work_websnapshot_phase_failed": "Failed",
   "work_websnapshot_back": "Back",
   "work_websnapshot_forward": "Forward",
-  "work_websnapshot_reload": "Reload"
+  "work_websnapshot_reload": "Reload",
+  "work_websnapshot_external_blocked": "External links are blocked in offline snapshots",
+  "work_websnapshot_page_available": "This page is available in the snapshot",
+  "work_websnapshot_download_title": "Download Content",
+  "work_websnapshot_download_message": "This content is not in the snapshot. Do you want to download and index it?",
+  "work_websnapshot_download_action": "Download",
+  "work_websnapshot_downloading": "Downloading content...",
+  "work_websnapshot_download_complete": "Content downloaded and indexed",
+  "work_websnapshot_download_failed": "Download failed: {0}"
 }

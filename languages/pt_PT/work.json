@@ -406,5 +406,13 @@
   "work_websnapshot_phase_failed": "Falhou",
   "work_websnapshot_back": "Voltar",
   "work_websnapshot_forward": "Avançar",
-  "work_websnapshot_reload": "Recarregar"
+  "work_websnapshot_reload": "Recarregar",
+  "work_websnapshot_external_blocked": "Links externos estão bloqueados em capturas offline",
+  "work_websnapshot_page_available": "Esta página está disponível na captura",
+  "work_websnapshot_download_title": "Descarregar Conteúdo",
+  "work_websnapshot_download_message": "Este conteúdo não está na captura. Deseja descarregar e indexá-lo?",
+  "work_websnapshot_download_action": "Descarregar",
+  "work_websnapshot_downloading": "A descarregar conteúdo...",
+  "work_websnapshot_download_complete": "Conteúdo descarregado e indexado",
+  "work_websnapshot_download_failed": "Falha no download: {0}"
 }

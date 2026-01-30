@@ -69,6 +69,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.work;
     case 'usenet':
       return Icons.forum;
+    case 'music':
+      return Icons.library_music;
     default:
       return Icons.folder;
   }
@@ -284,6 +286,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
             : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
+      );
+    case 'music':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFFD84315), const Color(0xFFBF360C)]
+            : [const Color(0xFFFF7043), const Color(0xFFF4511E)],
       );
     default:
       return LinearGradient(

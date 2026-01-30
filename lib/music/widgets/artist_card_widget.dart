@@ -38,11 +38,10 @@ class ArtistCardWidget extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Artist artwork (circular)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: AspectRatio(
-                aspectRatio: 1,
+            // Artist artwork (circular) - Expanded to fill available space
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
                 child: ClipOval(
                   child: _buildArtwork(colorScheme),
                 ),
@@ -63,7 +62,7 @@ class ArtistCardWidget extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: 8, top: 4),
               child: Text(
                 '${artist.albumCount} albums',
                 style: TextStyle(

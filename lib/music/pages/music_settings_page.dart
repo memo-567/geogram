@@ -65,6 +65,8 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
           _updateSettings((s) => s.copyWith(
                 sourceFolders: [...s.sourceFolders, result],
               ));
+          // Auto-save when folder is added
+          await widget.storage.saveSettings(_settings);
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -76,10 +78,12 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
     }
   }
 
-  void _removeSourceFolder(String folder) {
+  Future<void> _removeSourceFolder(String folder) async {
     _updateSettings((s) => s.copyWith(
           sourceFolders: s.sourceFolders.where((f) => f != folder).toList(),
         ));
+    // Auto-save when folder is removed
+    await widget.storage.saveSettings(_settings);
   }
 
   @override

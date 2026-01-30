@@ -38,9 +38,8 @@ class AlbumCardWidget extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Album artwork
-            AspectRatio(
-              aspectRatio: 1,
+            // Album artwork - Expanded to fill available space
+            Expanded(
               child: _buildArtwork(colorScheme),
             ),
             // Album info
@@ -60,7 +59,7 @@ class AlbumCardWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    album.artist,
+                    album.artist + (album.year != null ? ' (${album.year})' : ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -68,14 +67,6 @@ class AlbumCardWidget extends StatelessWidget {
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (album.year != null)
-                    Text(
-                      '${album.year}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: colorScheme.onSurfaceVariant.withOpacity(0.7),
-                      ),
-                    ),
                 ],
               ),
             ),
