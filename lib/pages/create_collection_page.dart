@@ -92,6 +92,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('reader', Icons.menu_book),
     _CollectionTypeInfo('flasher', Icons.flash_on),
     _CollectionTypeInfo('work', Icons.work),
+    _CollectionTypeInfo('music', Icons.library_music),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -837,6 +838,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Flash firmware to ESP32 and other USB-connected devices. Supports multiple device families with auto-detection and progress tracking.';
       case 'work':
         return 'Create and organize workspaces with NDF documents including spreadsheets, rich text documents, presentations, and forms. Sync-based collaboration with NOSTR signatures.';
+      case 'music':
+        return 'Local music player with folder-based album discovery. Scan your music folders, play tracks with shuffle and repeat, track listening history and statistics.';
       default:
         return '';
     }
@@ -974,6 +977,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Presentations with slides',
           'Forms with responses',
           'Workspace collaboration',
+        ];
+      case 'music':
+        return [
+          'Folder-based album discovery',
+          'Cover art detection',
+          'Shuffle and repeat modes',
+          'Play queue management',
+          'Listening statistics',
         ];
       default:
         return [];
