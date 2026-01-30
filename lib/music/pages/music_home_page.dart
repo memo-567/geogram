@@ -4,8 +4,10 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../../services/i18n_service.dart';
 import '../models/music_models.dart';
@@ -49,7 +51,7 @@ class _MusicHomePageState extends State<MusicHomePage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
 
     _storage = MusicStorageService(basePath: widget.collectionPath);
     _libraryService = MusicLibraryService(storage: _storage);
@@ -104,6 +106,7 @@ class _MusicHomePageState extends State<MusicHomePage>
             _scanStatus = 'Scanning: $scanned/$total';
           });
         },
+        settings: _settings,
       );
 
       // Re-initialize playback with new library
@@ -116,7 +119,40 @@ class _MusicHomePageState extends State<MusicHomePage>
     }
   }
 
+  /// Quick add folder: pick folder, save settings, and start scanning immediately
+  Future<void> _addFolderAndScan() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select Music Folder',
+    );
+
+    if (result != null) {
+      final dir = Directory(result);
+      if (await dir.exists()) {
+        if (!_settings.sourceFolders.contains(result)) {
+          // Add folder to settings and save immediately
+          _settings = _settings.copyWith(
+            sourceFolders: [..._settings.sourceFolders, result],
+          );
+          await _storage.saveSettings(_settings);
+
+          setState(() {});
+
+          // Start scanning in background
+          _scanLibrary();
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Folder already added')),
+            );
+          }
+        }
+      }
+    }
+  }
+
   void _openSettings() async {
+    final oldFolders = List<String>.from(_settings.sourceFolders);
+
     final result = await Navigator.of(context).push<MusicSettings>(
       MaterialPageRoute(
         builder: (context) => MusicSettingsPage(
@@ -128,15 +164,25 @@ class _MusicHomePageState extends State<MusicHomePage>
     );
 
     if (result != null) {
+      final foldersChanged = !_listEquals(oldFolders, result.sourceFolders);
+
       setState(() {
         _settings = result;
       });
 
       // Rescan if source folders changed
-      if (result.sourceFolders != _settings.sourceFolders) {
+      if (foldersChanged) {
         _scanLibrary();
       }
     }
+  }
+
+  bool _listEquals<T>(List<T> a, List<T> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   void _openNowPlaying() {
@@ -221,7 +267,6 @@ class _MusicHomePageState extends State<MusicHomePage>
           tabs: const [
             Tab(text: 'Artists'),
             Tab(text: 'Albums'),
-            Tab(text: 'Tracks'),
             Tab(text: 'Playlists'),
           ],
         ),
@@ -252,7 +297,6 @@ class _MusicHomePageState extends State<MusicHomePage>
                           children: [
                             _buildArtistsTab(),
                             _buildAlbumsTab(),
-                            _buildTracksTab(),
                             _buildPlaylistsTab(),
                           ],
                         ),
@@ -298,18 +342,11 @@ class _MusicHomePageState extends State<MusicHomePage>
               ),
             ),
             const SizedBox(height: 24),
-            if (_settings.sourceFolders.isEmpty)
-              FilledButton.icon(
-                onPressed: _openSettings,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Add Music Folder'),
-              )
-            else
-              FilledButton.icon(
-                onPressed: _scanLibrary,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Scan Library'),
-              ),
+            FilledButton.icon(
+              onPressed: _addFolderAndScan,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('Add Music Folder'),
+            ),
           ],
         ),
       ),
@@ -363,32 +400,6 @@ class _MusicHomePageState extends State<MusicHomePage>
         return AlbumCardWidget(
           album: album,
           onTap: () => _openAlbum(album),
-        );
-      },
-    );
-  }
-
-  Widget _buildTracksTab() {
-    final tracks = _library.tracks;
-
-    if (tracks.isEmpty) {
-      return const Center(child: Text('No tracks found'));
-    }
-
-    final currentTrackId = _playbackService.currentTrack?.id;
-
-    return ListView.builder(
-      itemCount: tracks.length,
-      itemBuilder: (context, index) {
-        final track = tracks[index];
-        return TrackTileWidget(
-          track: track,
-          showAlbum: true,
-          showTrackNumber: false,
-          isPlaying: track.id == currentTrackId,
-          onTap: () {
-            _playbackService.playTracks(tracks, startIndex: index);
-          },
         );
       },
     );

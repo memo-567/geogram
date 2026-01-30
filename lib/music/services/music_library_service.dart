@@ -4,8 +4,10 @@
  */
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 
 import '../../services/log_service.dart';
@@ -52,6 +54,7 @@ class MusicLibraryService {
   Future<MusicLibrary> scanFolders(
     List<String> sourceFolders, {
     ScanProgressCallback? onProgress,
+    MusicSettings? settings,
   }) async {
     if (_isScanning) {
       _log.log('MusicLibraryService: Already scanning');
@@ -187,8 +190,19 @@ class MusicLibraryService {
         // Determine if compilation (multiple artists)
         final isCompilation = trackArtists.length >= 3;
 
-        // Find cover art
-        final artwork = await _findCoverArt(folderPath);
+        // Find cover art (local first, then online if enabled)
+        String? artwork = await _findCoverArt(folderPath);
+        ArtworkSource artworkSource = artwork != null ? ArtworkSource.folder : ArtworkSource.none;
+
+        // If no local cover and auto-fetch enabled, try online
+        if (artwork == null && settings != null && settings.online.autoFetchCovers) {
+          final artist = isCompilation ? 'Various Artists' : (albumArtist ?? 'Unknown Artist');
+          final title = albumTitle ?? path.basename(folderPath);
+          artwork = await _fetchCoverArt(artist, title, albumId);
+          if (artwork != null) {
+            artworkSource = ArtworkSource.downloaded;
+          }
+        }
 
         // Calculate total duration
         final totalDuration =
@@ -210,7 +224,7 @@ class MusicLibraryService {
           totalDurationSeconds: totalDuration,
           folderPath: folderPath,
           artwork: artwork,
-          artworkSource: artwork != null ? ArtworkSource.folder : ArtworkSource.none,
+          artworkSource: artworkSource,
           discCount: discCount,
           isCompilation: isCompilation,
           addedAt: DateTime.now(),
@@ -285,6 +299,56 @@ class MusicLibraryService {
     }
 
     return null;
+  }
+
+  /// Fetch cover art from Cover Art Archive (MusicBrainz)
+  Future<String?> _fetchCoverArt(String artist, String album, String albumId) async {
+    try {
+      // Search MusicBrainz for release
+      final query = Uri.encodeComponent('$artist $album');
+      final searchUrl = 'https://musicbrainz.org/ws/2/release?query=$query&limit=1&fmt=json';
+
+      _log.log('MusicLibraryService: Fetching cover for $artist - $album');
+
+      final searchResponse = await http.get(
+        Uri.parse(searchUrl),
+        headers: {'User-Agent': 'Geogram/1.0 (https://github.com/geograms/geogram)'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (searchResponse.statusCode != 200) {
+        _log.log('MusicLibraryService: MusicBrainz search failed: ${searchResponse.statusCode}');
+        return null;
+      }
+
+      final data = jsonDecode(searchResponse.body);
+      final releases = data['releases'] as List?;
+      if (releases == null || releases.isEmpty) {
+        _log.log('MusicLibraryService: No releases found for $artist - $album');
+        return null;
+      }
+
+      final mbid = releases[0]['id'] as String?;
+      if (mbid == null) return null;
+
+      // Fetch cover from Cover Art Archive
+      final coverUrl = 'https://coverartarchive.org/release/$mbid/front-500';
+      final coverResponse = await http.get(Uri.parse(coverUrl)).timeout(const Duration(seconds: 15));
+
+      if (coverResponse.statusCode != 200) {
+        _log.log('MusicLibraryService: Cover Art Archive returned ${coverResponse.statusCode}');
+        return null;
+      }
+
+      // Cache the artwork
+      final cachedPath = await storage.cacheArtwork(albumId, coverResponse.bodyBytes);
+      if (cachedPath != null) {
+        _log.log('MusicLibraryService: Cached cover art for $artist - $album');
+      }
+      return cachedPath;
+    } catch (e) {
+      _log.log('MusicLibraryService: Failed to fetch cover for $artist - $album: $e');
+      return null;
+    }
   }
 
   /// Get tracks for an album
