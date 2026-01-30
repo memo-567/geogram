@@ -9,7 +9,6 @@
 import "dart:convert";
 import "dart:ffi";
 import "dart:io";
-import "dart:isolate";
 
 import "package:ffi/ffi.dart";
 import "package:flutter/foundation.dart";
@@ -21,6 +20,56 @@ import "package:whisper_flutter_new/whisper_bindings_generated.dart";
 
 export "package:whisper_flutter_new/bean/_models.dart";
 export "package:whisper_flutter_new/download_model.dart" show WhisperModel;
+
+/// Parameters for isolate FFI work - must be top-level for serialization
+class _IsolateParams {
+  final String requestString;
+  final String? customLibraryPath;
+
+  const _IsolateParams({
+    required this.requestString,
+    this.customLibraryPath,
+  });
+}
+
+/// Top-level function for isolate execution - required for proper serialization
+/// This function runs entirely in the isolate, including library loading and FFI calls
+Map<String, dynamic> _executeInIsolate(_IsolateParams params) {
+  print('[WHISPER_ISOLATE] Starting FFI work in isolate');
+
+  // Open library inside isolate
+  DynamicLibrary lib;
+  if (Platform.isAndroid || Platform.isLinux) {
+    if (params.customLibraryPath != null) {
+      print('[WHISPER_ISOLATE] Opening custom library: ${params.customLibraryPath}');
+      lib = DynamicLibrary.open(params.customLibraryPath!);
+    } else {
+      print('[WHISPER_ISOLATE] Opening libwhisper.so');
+      lib = DynamicLibrary.open("libwhisper.so");
+    }
+  } else {
+    print('[WHISPER_ISOLATE] Using process library');
+    lib = DynamicLibrary.process();
+  }
+
+  print('[WHISPER_ISOLATE] Calling FFI request...');
+  // Perform FFI call
+  final Pointer<Utf8> data = params.requestString.toNativeUtf8();
+  final Pointer<Char> res = WhisperFlutterBindings(lib).request(data.cast<Char>());
+  print('[WHISPER_ISOLATE] FFI request completed');
+
+  final Map<String, dynamic> result = json.decode(
+    res.cast<Utf8>().toDartString(),
+  ) as Map<String, dynamic>;
+
+  try {
+    malloc.free(data);
+    malloc.free(res);
+  } catch (_) {}
+
+  print('[WHISPER_ISOLATE] Returning result from isolate');
+  return result;
+}
 
 /// Entry point of whisper_flutter_plus
 class Whisper {
@@ -53,7 +102,7 @@ class Whisper {
       return File(_customLibraryPath!).existsSync();
     }
     // For bundled library, try to open it
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isLinux) {
       try {
         DynamicLibrary.open("libwhisper.so");
         return true;
@@ -62,17 +111,6 @@ class Whisper {
       }
     }
     return true; // Other platforms use process()
-  }
-
-  DynamicLibrary _openLib() {
-    if (Platform.isAndroid) {
-      if (_customLibraryPath != null) {
-        return DynamicLibrary.open(_customLibraryPath!);
-      }
-      return DynamicLibrary.open("libwhisper.so");
-    } else {
-      return DynamicLibrary.process();
-    }
   }
 
   Future<String> _getModelDir() async {
@@ -106,25 +144,20 @@ class Whisper {
     if (model != WhisperModel.none) {
       await _initModel();
     }
-    return Isolate.run(
-      () async {
-        final Pointer<Utf8> data =
-            whisperRequest.toRequestString().toNativeUtf8();
-        final Pointer<Char> res =
-            WhisperFlutterBindings(_openLib()).request(data.cast<Char>());
-        final Map<String, dynamic> result = json.decode(
-          res.cast<Utf8>().toDartString(),
-        ) as Map<String, dynamic>;
-        try {
-          malloc.free(data);
-          malloc.free(res);
-        } catch (_) {}
-        if (kDebugMode) {
-          debugPrint("Result =  $result");
-        }
-        return result;
-      },
+
+    // Use compute() with top-level function for proper isolate serialization
+    // This ensures FFI work truly runs in a separate thread
+    final params = _IsolateParams(
+      requestString: whisperRequest.toRequestString(),
+      customLibraryPath: _customLibraryPath,
     );
+
+    final result = await compute(_executeInIsolate, params);
+
+    if (kDebugMode) {
+      debugPrint("Result =  $result");
+    }
+    return result;
   }
 
   /// Transcribe audio file to text

@@ -117,8 +117,8 @@ class SpeechToTextService {
   /// Check if speech-to-text is supported on this platform
   static bool get isSupported {
     if (kIsWeb) return false;
-    // whisper_flutter_new supports: Android 5.0+, iOS 13+, macOS 11+
-    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+    // whisper_flutter_new supports: Android 5.0+, iOS 13+, macOS 11+, Linux
+    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isLinux;
   }
 
   /// Check if the whisper native library is available
@@ -216,14 +216,17 @@ class SpeechToTextService {
   ///
   /// Returns true if model was loaded successfully
   Future<bool> loadModel(String modelId) async {
+    print('[STT_SERVICE] loadModel($modelId) called');
     // Check if whisper library is available (may need download on F-Droid)
     if (!await isLibraryAvailable()) {
       LogService().log('SpeechToTextService: Whisper library not available');
+      print('[STT_SERVICE] Library not available');
       return false;
     }
 
     if (_loadedModelId == modelId && _whisper != null) {
       LogService().log('SpeechToTextService: Model $modelId already loaded, skipping reload');
+      print('[STT_SERVICE] Model already loaded, returning true');
       return true; // Already loaded - instant
     }
 
@@ -233,30 +236,42 @@ class SpeechToTextService {
     final model = WhisperModels.getById(modelId);
     if (model == null) {
       LogService().log('SpeechToTextService: Unknown model $modelId');
+      print('[STT_SERVICE] Unknown model $modelId');
       return false;
     }
 
     _setState(SpeechToTextState.loadingModel);
+    print('[STT_SERVICE] State set to loadingModel');
 
     try {
       final modelDir = await _modelManager.modelsPath;
       final whisperModel = _getWhisperModel(modelId);
 
       LogService().log('SpeechToTextService: Loading model $modelId from $modelDir');
+      print('[STT_SERVICE] Model dir: $modelDir, creating Whisper object...');
+
+      // Yield before heavy FFI initialization
+      await Future.delayed(Duration.zero);
 
       // Create Whisper instance with our custom model directory
       _whisper = Whisper(
         model: whisperModel,
         modelDir: modelDir,
       );
+      print('[STT_SERVICE] Whisper object created successfully');
+
+      // Yield after FFI initialization
+      await Future.delayed(Duration.zero);
 
       _loadedModelId = modelId;
       _setState(SpeechToTextState.idle);
 
       LogService().log('SpeechToTextService: Model $modelId loaded');
+      print('[STT_SERVICE] Model $modelId loaded, returning true');
       return true;
     } catch (e) {
       LogService().log('SpeechToTextService: Error loading model: $e');
+      print('[STT_SERVICE] Error loading model: $e');
       _setState(SpeechToTextState.error);
       return false;
     }
@@ -271,10 +286,13 @@ class SpeechToTextService {
 
   /// Generate and transcribe a short silent WAV to fully load the model into memory.
   Future<bool> _warmupModel(String modelId) async {
+    print('[STT_SERVICE] _warmupModel($modelId) called');
     if (_whisper == null || _loadedModelId != modelId) {
+      print('[STT_SERVICE] Warmup skipped: whisper=${_whisper != null}, loadedId=$_loadedModelId');
       return false;
     }
     if (_warmedModels.contains(modelId)) {
+      print('[STT_SERVICE] Model already warmed, returning true');
       return true;
     }
 
@@ -282,11 +300,16 @@ class SpeechToTextService {
     final warmupPath = p.join(tempDir.path, 'whisper_warmup.wav');
 
     try {
+      print('[STT_SERVICE] Creating silent WAV at $warmupPath');
       await _createSilentWav(warmupPath);
       final warmupStopwatch = Stopwatch()..start();
       final cpuCores = Platform.numberOfProcessors;
       final warmupThreads = cpuCores > 4 ? cpuCores - 2 : cpuCores;
 
+      // Yield before warmup transcription
+      await Future.delayed(Duration.zero);
+
+      print('[STT_SERVICE] Starting warmup transcription (threads=$warmupThreads)...');
       await _whisper!.transcribe(
         transcribeRequest: TranscribeRequest(
           audio: warmupPath,
@@ -298,15 +321,21 @@ class SpeechToTextService {
           speedUp: false,
         ),
       );
+      print('[STT_SERVICE] Warmup transcription completed');
+
+      // Yield after warmup transcription
+      await Future.delayed(Duration.zero);
 
       warmupStopwatch.stop();
       _warmedModels.add(modelId);
       LogService().log(
           'SpeechToTextService: Warmed up model $modelId in ${warmupStopwatch.elapsedMilliseconds}ms');
+      print('[STT_SERVICE] Warmed up in ${warmupStopwatch.elapsedMilliseconds}ms');
       return true;
     } catch (e) {
       _warmedModels.remove(modelId);
       LogService().log('SpeechToTextService: Warmup failed for $modelId: $e');
+      print('[STT_SERVICE] Warmup failed: $e');
       return false;
     } finally {
       try {

@@ -6,8 +6,14 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
+import '../../bot/models/whisper_model_info.dart';
+import '../../bot/services/speech_to_text_service.dart';
+import '../../bot/services/whisper_model_manager.dart';
 import '../../services/log_service.dart';
 import '../models/voicememo_content.dart';
+import '../services/ndf_service.dart';
 
 /// Result of a voice memo transcription
 class VoiceMemoTranscriptionResult {
@@ -64,8 +70,84 @@ class VoiceMemoTranscriptionResult {
 enum TranscriptionState {
   idle,
   preparing,
+  downloadingModel,
+  loadingModel,
+  convertingAudio,
   transcribing,
   cancelling,
+}
+
+/// Event emitted when a background transcription completes
+class TranscriptionCompletedEvent {
+  final String filePath;
+  final String clipId;
+  final VoiceMemoClip? updatedClip;
+  final String? error;
+
+  const TranscriptionCompletedEvent({
+    required this.filePath,
+    required this.clipId,
+    this.updatedClip,
+    this.error,
+  });
+
+  bool get success => updatedClip != null;
+}
+
+/// Detailed progress information for transcription
+class TranscriptionProgress {
+  /// Current state
+  final TranscriptionState state;
+
+  /// Progress percentage (0.0 - 1.0)
+  final double progress;
+
+  /// Bytes downloaded (for download state)
+  final int bytesDownloaded;
+
+  /// Total bytes to download
+  final int totalBytes;
+
+  /// Model name being used
+  final String? modelName;
+
+  /// Human-readable status message
+  final String message;
+
+  /// File path of the document being transcribed (for background transcription)
+  final String? filePath;
+
+  const TranscriptionProgress({
+    required this.state,
+    this.progress = 0.0,
+    this.bytesDownloaded = 0,
+    this.totalBytes = 0,
+    this.modelName,
+    this.message = '',
+    this.filePath,
+  });
+
+  /// Format bytes to human-readable string (e.g., "45.2 MB")
+  static String formatBytes(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    } else if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    } else {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+  }
+
+  /// Get download progress string (e.g., "45.2 MB / 141.0 MB")
+  String get downloadProgressString {
+    if (totalBytes == 0) return '';
+    return '${formatBytes(bytesDownloaded)} / ${formatBytes(totalBytes)}';
+  }
+
+  /// Get progress percentage as integer (0-100)
+  int get progressPercent => (progress * 100).round();
 }
 
 /// Service for transcribing voice memo clips using Whisper
@@ -74,35 +156,55 @@ enum TranscriptionState {
 /// - Background transcription that doesn't block UI
 /// - Cancellation support at any time
 /// - Single session enforcement (only 1 transcription at a time)
-/// - Linux support via whisper CLI (whisper.cpp)
+/// - In-memory whisper via whisper_flutter_new (Android, iOS, macOS, Linux)
 ///
-/// On Linux, requires one of these whisper CLI tools to be installed:
-/// - main (from whisper.cpp build)
-/// - whisper (openai-whisper Python package)
-/// - whisper-cpp
+/// Models are auto-downloaded from HuggingFace on first use.
 class VoiceMemoTranscriptionService {
   static final VoiceMemoTranscriptionService _instance =
       VoiceMemoTranscriptionService._internal();
   factory VoiceMemoTranscriptionService() => _instance;
   VoiceMemoTranscriptionService._internal();
 
+  final SpeechToTextService _sttService = SpeechToTextService();
+  final WhisperModelManager _modelManager = WhisperModelManager();
+  final NdfService _ndfService = NdfService();
+
   TranscriptionState _state = TranscriptionState.idle;
-  Process? _currentProcess;
   String? _currentClipId;
-  Completer<VoiceMemoTranscriptionResult>? _currentCompleter;
-  String? _whisperPath;
-  String? _whisperModel;
+  String? _currentFilePath;
+  VoiceMemoClip? _currentClip;
+  bool _isCancelled = false;
+  TranscriptionProgress _currentProgress = const TranscriptionProgress(
+    state: TranscriptionState.idle,
+  );
 
   final _stateController = StreamController<TranscriptionState>.broadcast();
+  final _progressController = StreamController<TranscriptionProgress>.broadcast();
+  final _completionController = StreamController<TranscriptionCompletedEvent>.broadcast();
 
   /// Stream of state changes
   Stream<TranscriptionState> get stateStream => _stateController.stream;
 
+  /// Stream of detailed progress updates
+  Stream<TranscriptionProgress> get progressStream => _progressController.stream;
+
+  /// Stream of completion events (for background transcriptions)
+  Stream<TranscriptionCompletedEvent> get completionStream => _completionController.stream;
+
   /// Current state
   TranscriptionState get state => _state;
 
+  /// Current detailed progress
+  TranscriptionProgress get currentProgress => _currentProgress;
+
+  /// Current download progress (0.0 - 1.0) - for backward compatibility
+  double get downloadProgress => _currentProgress.progress;
+
   /// ID of the clip currently being transcribed
   String? get currentClipId => _currentClipId;
+
+  /// File path of the document currently being transcribed
+  String? get currentFilePath => _currentFilePath;
 
   /// Whether a transcription is in progress
   bool get isBusy => _state != TranscriptionState.idle;
@@ -112,65 +214,38 @@ class VoiceMemoTranscriptionService {
     _stateController.add(newState);
   }
 
-  /// Initialize the service - detect available whisper CLI
+  void _setProgress(TranscriptionProgress progress) {
+    _currentProgress = progress;
+    _state = progress.state;
+    _stateController.add(progress.state);
+    _progressController.add(progress);
+  }
+
+  /// Initialize the service
   Future<void> initialize() async {
-    if (_whisperPath != null) return;
-
-    // Try to find whisper CLI on the system
-    // Priority: main (whisper.cpp) > whisper-cpp > whisper (Python)
-    final candidates = ['main', 'whisper-cpp', 'whisper'];
-
-    for (final cmd in candidates) {
-      try {
-        final result = await Process.run('which', [cmd]);
-        if (result.exitCode == 0) {
-          final path = result.stdout.toString().trim();
-          if (path.isNotEmpty) {
-            // Verify it's actually whisper
-            final versionResult = await Process.run(path, ['--help']);
-            final help = versionResult.stdout.toString().toLowerCase() +
-                versionResult.stderr.toString().toLowerCase();
-            if (help.contains('whisper') || help.contains('transcri')) {
-              _whisperPath = path;
-              LogService().log(
-                'VoiceMemoTranscriptionService: Found whisper at $path',
-              );
-              break;
-            }
-          }
-        }
-      } catch (_) {
-        // Continue to next candidate
-      }
-    }
-
-    // Set default model (small is a good balance of speed/quality)
-    _whisperModel = 'small';
-
-    if (_whisperPath == null) {
-      LogService().log(
-        'VoiceMemoTranscriptionService: No whisper CLI found. '
-        'Install whisper.cpp or openai-whisper for transcription support.',
-      );
-    }
+    await _modelManager.initialize();
+    await _sttService.initialize();
+    LogService().log('VoiceMemoTranscriptionService: Initialized');
   }
 
   /// Check if transcription is supported on this platform
   Future<bool> isSupported() async {
     await initialize();
-    return _whisperPath != null;
+
+    // In-memory whisper (Android, iOS, macOS, Linux)
+    if (SpeechToTextService.isSupported) {
+      return await _sttService.isLibraryAvailable();
+    }
+
+    return false;
   }
 
-  /// Get help message for installing whisper
+  /// Get help message for unsupported platforms
   String getInstallHelp() {
-    if (Platform.isLinux) {
-      return 'Install whisper.cpp:\n'
-          '  git clone https://github.com/ggml-org/whisper.cpp\n'
-          '  cd whisper.cpp && make\n'
-          '  sudo cp main /usr/local/bin/whisper-cpp\n\n'
-          'Or install Python whisper:\n'
-          '  pip install openai-whisper';
+    if (SpeechToTextService.isSupported) {
+      return 'Speech model will be downloaded automatically on first use.';
     }
+
     return 'Speech-to-text is not available on this platform.';
   }
 
@@ -192,60 +267,307 @@ class VoiceMemoTranscriptionService {
       );
     }
 
-    // Check if whisper is available
     await initialize();
-    if (_whisperPath == null) {
+
+    // Use in-memory whisper (Android, iOS, macOS, Linux)
+    if (SpeechToTextService.isSupported) {
+      return _transcribeWithInMemoryWhisper(audioBytes, clipId);
+    } else {
       return VoiceMemoTranscriptionResult.failure(
-        'Whisper not installed. ${getInstallHelp()}',
+        'Transcription not supported. ${getInstallHelp()}',
       );
     }
+  }
 
+  /// Start a background transcription that auto-saves to the NDF when complete.
+  ///
+  /// This method returns immediately after starting the transcription.
+  /// The transcription runs in the background and saves the result directly
+  /// to the NDF file when complete, even if the UI navigates away.
+  ///
+  /// Listen to [completionStream] to be notified when transcription completes.
+  ///
+  /// [filePath] - Path to the NDF document
+  /// [clip] - The clip to transcribe
+  /// [audioBytes] - The audio data (OGG/Opus format)
+  ///
+  /// Returns true if transcription started, false if busy.
+  bool transcribeInBackground({
+    required String filePath,
+    required VoiceMemoClip clip,
+    required List<int> audioBytes,
+  }) {
+    if (isBusy) {
+      LogService().log(
+        'VoiceMemoTranscriptionService: Cannot start background transcription - busy',
+      );
+      return false;
+    }
+
+    _currentFilePath = filePath;
+    _currentClip = clip;
+
+    LogService().log(
+      'VoiceMemoTranscriptionService: Starting background transcription for clip ${clip.id}',
+    );
+
+    // Fire and forget - transcription runs in background
+    _runBackgroundTranscription(filePath, clip, audioBytes);
+
+    return true;
+  }
+
+  /// Internal method that runs the transcription and saves the result
+  Future<void> _runBackgroundTranscription(
+    String filePath,
+    VoiceMemoClip clip,
+    List<int> audioBytes,
+  ) async {
+    try {
+      final result = await transcribe(
+        audioBytes: audioBytes,
+        clipId: clip.id,
+      );
+
+      if (result.cancelled) {
+        LogService().log(
+          'VoiceMemoTranscriptionService: Background transcription cancelled for ${clip.id}',
+        );
+        _completionController.add(TranscriptionCompletedEvent(
+          filePath: filePath,
+          clipId: clip.id,
+          error: 'Transcription cancelled',
+        ));
+        return;
+      }
+
+      if (!result.success) {
+        LogService().log(
+          'VoiceMemoTranscriptionService: Background transcription failed for ${clip.id}: ${result.error}',
+        );
+        _completionController.add(TranscriptionCompletedEvent(
+          filePath: filePath,
+          clipId: clip.id,
+          error: result.error ?? 'Transcription failed',
+        ));
+        return;
+      }
+
+      // Create updated clip with transcription
+      final updatedClip = clip.copyWith(
+        transcription: result.toClipTranscription(),
+      );
+
+      // Save to NDF
+      LogService().log(
+        'VoiceMemoTranscriptionService: Saving transcription for clip ${clip.id} to $filePath',
+      );
+      await _ndfService.saveVoiceMemoClip(filePath, updatedClip);
+      LogService().log(
+        'VoiceMemoTranscriptionService: Transcription saved for clip ${clip.id}',
+      );
+
+      // Emit completion event
+      _completionController.add(TranscriptionCompletedEvent(
+        filePath: filePath,
+        clipId: clip.id,
+        updatedClip: updatedClip,
+      ));
+    } catch (e) {
+      LogService().log(
+        'VoiceMemoTranscriptionService: Background transcription error for ${clip.id}: $e',
+      );
+      _completionController.add(TranscriptionCompletedEvent(
+        filePath: filePath,
+        clipId: clip.id,
+        error: e.toString(),
+      ));
+    } finally {
+      _currentFilePath = null;
+      _currentClip = null;
+    }
+  }
+
+  /// Transcribe using in-memory whisper (Android, iOS, macOS, Linux)
+  Future<VoiceMemoTranscriptionResult> _transcribeWithInMemoryWhisper(
+    List<int> audioBytes,
+    String clipId,
+  ) async {
     _currentClipId = clipId;
-    _currentCompleter = Completer<VoiceMemoTranscriptionResult>();
-    _setState(TranscriptionState.preparing);
+    _isCancelled = false;
+
+    // Warn about debug mode performance
+    if (kDebugMode) {
+      LogService().log(
+        'VoiceMemoTranscriptionService: WARNING - Running in debug mode. '
+        'Whisper transcription will be extremely slow (100x+ slower). '
+        'Use "flutter run --profile" or "--release" for usable performance.',
+      );
+    }
 
     // Create temp files
     final tempDir = Directory.systemTemp;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final oggPath = '${tempDir.path}/transcribe_$timestamp.ogg';
-    final wavPath = '${tempDir.path}/transcribe_$timestamp.wav';
+    final oggPath = '${tempDir.path}/voicememo_$timestamp.ogg';
+    final wavPath = '${tempDir.path}/voicememo_$timestamp.wav';
 
     try {
-      // Write audio to temp file
-      await File(oggPath).writeAsBytes(audioBytes);
+      // Get preferred model
+      final modelId = await _modelManager.getPreferredModel();
+      final modelInfo = WhisperModels.getById(modelId);
+      final modelName = modelInfo?.name ?? modelId;
+      final modelSize = modelInfo?.size ?? 0;
 
-      // Convert OGG to WAV (16kHz mono for Whisper)
-      _setState(TranscriptionState.preparing);
-      final convertResult = await _convertToWav(oggPath, wavPath);
-      if (!convertResult) {
+      _setProgress(TranscriptionProgress(
+        state: TranscriptionState.preparing,
+        modelName: modelName,
+        message: 'Checking model...',
+      ));
+      await Future.delayed(Duration.zero); // Yield to allow UI update
+
+      // Check if model needs to be downloaded
+      if (!await _modelManager.isDownloaded(modelId)) {
+        LogService().log(
+          'VoiceMemoTranscriptionService: Downloading model $modelId ($modelSize bytes)',
+        );
+
+        // Download model (yields progress)
+        await for (final progress in _modelManager.downloadModel(modelId)) {
+          if (_isCancelled) {
+            return VoiceMemoTranscriptionResult.cancelled();
+          }
+          final bytesDownloaded = (progress * modelSize).round();
+          _setProgress(TranscriptionProgress(
+            state: TranscriptionState.downloadingModel,
+            progress: progress,
+            bytesDownloaded: bytesDownloaded,
+            totalBytes: modelSize,
+            modelName: modelName,
+            message: 'Downloading $modelName...',
+          ));
+        }
+      }
+
+      if (_isCancelled) return VoiceMemoTranscriptionResult.cancelled();
+      await Future.delayed(Duration.zero); // Yield after download check
+
+      // Load model if needed
+      if (!_sttService.isModelLoaded || _sttService.loadedModelId != modelId) {
+        print('[TRANSCRIBE] >>> Starting model load phase');
+        final debugWarning = kDebugMode ? ' (debug mode: very slow!)' : '';
+        _setProgress(TranscriptionProgress(
+          state: TranscriptionState.loadingModel,
+          progress: 0.0,
+          modelName: modelName,
+          message: 'Loading $modelName into memory...$debugWarning',
+        ));
+        await Future.delayed(Duration.zero); // Yield to allow UI update
+
+        LogService().log(
+          'VoiceMemoTranscriptionService: Loading model $modelId',
+        );
+        print('[TRANSCRIBE] >>> Calling _sttService.loadModel($modelId)...');
+
+        final loaded = await _sttService.loadModel(modelId);
+        print('[TRANSCRIBE] >>> loadModel returned: $loaded');
+        if (!loaded) {
+          return VoiceMemoTranscriptionResult.failure('Failed to load model');
+        }
+        await Future.delayed(Duration.zero); // Yield after model load
+
+        print('[TRANSCRIBE] >>> Starting warmup phase');
+        final warmupWarning = kDebugMode ? ' (debug mode: may take minutes)' : '';
+        _setProgress(TranscriptionProgress(
+          state: TranscriptionState.loadingModel,
+          progress: 0.5,
+          modelName: modelName,
+          message: 'Warming up model...$warmupWarning',
+        ));
+        await Future.delayed(Duration.zero); // Yield to allow UI update
+
+        print('[TRANSCRIBE] >>> Calling _sttService.ensureModelWarm($modelId)...');
+        await _sttService.ensureModelWarm(modelId);
+        print('[TRANSCRIBE] >>> ensureModelWarm completed');
+        await Future.delayed(Duration.zero); // Yield after warmup
+
+        _setProgress(TranscriptionProgress(
+          state: TranscriptionState.loadingModel,
+          progress: 1.0,
+          modelName: modelName,
+          message: 'Model ready',
+        ));
+        await Future.delayed(Duration.zero); // Yield to allow UI update
+        print('[TRANSCRIBE] >>> Model ready, proceeding to transcription');
+      }
+
+      if (_isCancelled) return VoiceMemoTranscriptionResult.cancelled();
+      await Future.delayed(Duration.zero); // Yield after cancelled check
+
+      // Write audio to temp file
+      _setProgress(TranscriptionProgress(
+        state: TranscriptionState.convertingAudio,
+        progress: 0.0,
+        modelName: modelName,
+        message: 'Converting audio format...',
+      ));
+      await Future.delayed(Duration.zero); // Yield to allow UI update
+
+      await File(oggPath).writeAsBytes(audioBytes);
+      await Future.delayed(Duration.zero); // Yield after file write
+
+      // Convert OGG to WAV (whisper needs 16kHz mono WAV)
+      final convertOk = await _convertToWav(oggPath, wavPath);
+      if (!convertOk) {
+        await _safeDelete(oggPath);
         return VoiceMemoTranscriptionResult.failure(
-          'Failed to convert audio format. Is ffmpeg installed?',
+          'Audio conversion failed. Is ffmpeg installed?',
         );
       }
 
-      // Check if cancelled during conversion
-      if (_state == TranscriptionState.cancelling) {
+      if (_isCancelled) {
+        await _safeDelete(oggPath);
+        await _safeDelete(wavPath);
         return VoiceMemoTranscriptionResult.cancelled();
       }
 
-      // Run whisper transcription
-      _setState(TranscriptionState.transcribing);
-      final result = await _runWhisper(wavPath);
+      // Transcribe using in-memory whisper
+      _setProgress(TranscriptionProgress(
+        state: TranscriptionState.transcribing,
+        progress: 0.0,
+        modelName: modelName,
+        message: 'Transcribing audio...',
+      ));
+      await Future.delayed(Duration.zero); // Yield to allow UI update
 
-      return result;
+      final result = await _sttService.transcribe(wavPath);
+
+      // Cleanup
+      await _safeDelete(oggPath);
+      await _safeDelete(wavPath);
+
+      if (!result.success) {
+        return VoiceMemoTranscriptionResult.failure(
+          result.error ?? 'Transcription failed',
+        );
+      }
+
+      LogService().log(
+        'VoiceMemoTranscriptionService: Transcription complete '
+        '(${result.text.length} chars, ${result.transcriptionTimeMs}ms)',
+      );
+
+      return VoiceMemoTranscriptionResult.success(
+        text: result.text,
+        model: 'whisper-${result.modelUsed}',
+      );
     } catch (e) {
       LogService().log('VoiceMemoTranscriptionService: Error: $e');
       return VoiceMemoTranscriptionResult.failure(e.toString());
     } finally {
-      // Cleanup
       _currentClipId = null;
-      _currentProcess = null;
-      _currentCompleter = null;
-      _setState(TranscriptionState.idle);
-
-      // Delete temp files
-      await _safeDelete(oggPath);
-      await _safeDelete(wavPath);
+      _setProgress(const TranscriptionProgress(
+        state: TranscriptionState.idle,
+      ));
     }
   }
 
@@ -253,18 +575,11 @@ class VoiceMemoTranscriptionService {
   Future<void> cancel() async {
     if (!isBusy) return;
 
-    _setState(TranscriptionState.cancelling);
-
-    // Kill the whisper process if running
-    if (_currentProcess != null) {
-      _currentProcess!.kill(ProcessSignal.sigterm);
-      _currentProcess = null;
-    }
-
-    // Complete with cancelled result
-    if (_currentCompleter != null && !_currentCompleter!.isCompleted) {
-      _currentCompleter!.complete(VoiceMemoTranscriptionResult.cancelled());
-    }
+    _isCancelled = true;
+    _setProgress(const TranscriptionProgress(
+      state: TranscriptionState.cancelling,
+      message: 'Cancelling...',
+    ));
 
     LogService().log(
       'VoiceMemoTranscriptionService: Cancelled transcription for $_currentClipId',
@@ -298,143 +613,6 @@ class VoiceMemoTranscriptionService {
     }
   }
 
-  /// Run whisper CLI to transcribe the audio
-  Future<VoiceMemoTranscriptionResult> _runWhisper(String wavPath) async {
-    try {
-      // Determine arguments based on whisper variant
-      final List<String> args;
-
-      if (_whisperPath!.contains('main') || _whisperPath!.contains('whisper-cpp')) {
-        // whisper.cpp main binary
-        // Needs model path - try standard locations
-        final modelPath = await _findWhisperModel();
-        if (modelPath == null) {
-          return VoiceMemoTranscriptionResult.failure(
-            'Whisper model not found. Download a model:\n'
-            '  cd whisper.cpp && ./models/download-ggml-model.sh small',
-          );
-        }
-
-        args = [
-          '-m', modelPath,
-          '-f', wavPath,
-          '--no-timestamps',
-          '-otxt', // Output as text
-        ];
-      } else {
-        // openai-whisper Python package
-        args = [
-          wavPath,
-          '--model', _whisperModel!,
-          '--output_format', 'txt',
-          '--output_dir', Directory.systemTemp.path,
-        ];
-      }
-
-      // Start the process
-      _currentProcess = await Process.start(_whisperPath!, args);
-
-      // Capture output
-      final stdout = StringBuffer();
-      final stderr = StringBuffer();
-
-      _currentProcess!.stdout.transform(const SystemEncoding().decoder).listen(
-        (data) => stdout.write(data),
-      );
-      _currentProcess!.stderr.transform(const SystemEncoding().decoder).listen(
-        (data) => stderr.write(data),
-      );
-
-      // Wait for completion
-      final exitCode = await _currentProcess!.exitCode;
-
-      // Check if cancelled
-      if (_state == TranscriptionState.cancelling) {
-        return VoiceMemoTranscriptionResult.cancelled();
-      }
-
-      if (exitCode != 0) {
-        LogService().log(
-          'VoiceMemoTranscriptionService: whisper failed: ${stderr.toString()}',
-        );
-        return VoiceMemoTranscriptionResult.failure(
-          'Transcription failed: ${stderr.toString().split('\n').first}',
-        );
-      }
-
-      // Get transcription text
-      String text;
-      if (_whisperPath!.contains('main') || _whisperPath!.contains('whisper-cpp')) {
-        // whisper.cpp outputs to stdout or .txt file
-        text = stdout.toString().trim();
-        if (text.isEmpty) {
-          // Try reading output file
-          final txtPath = wavPath.replaceAll('.wav', '.txt');
-          final txtFile = File(txtPath);
-          if (await txtFile.exists()) {
-            text = await txtFile.readAsString();
-            await txtFile.delete();
-          }
-        }
-      } else {
-        // openai-whisper creates a .txt file
-        final baseName = wavPath.split('/').last.replaceAll('.wav', '');
-        final txtPath = '${Directory.systemTemp.path}/$baseName.txt';
-        final txtFile = File(txtPath);
-        if (await txtFile.exists()) {
-          text = await txtFile.readAsString();
-          await txtFile.delete();
-        } else {
-          text = stdout.toString().trim();
-        }
-      }
-
-      text = text.trim();
-
-      if (text.isEmpty) {
-        return VoiceMemoTranscriptionResult.failure('No speech detected');
-      }
-
-      LogService().log(
-        'VoiceMemoTranscriptionService: Transcription complete (${text.length} chars)',
-      );
-
-      return VoiceMemoTranscriptionResult.success(
-        text: text,
-        model: 'whisper-$_whisperModel',
-      );
-    } catch (e) {
-      LogService().log('VoiceMemoTranscriptionService: whisper error: $e');
-      return VoiceMemoTranscriptionResult.failure(e.toString());
-    }
-  }
-
-  /// Find whisper model file
-  Future<String?> _findWhisperModel() async {
-    // Common locations for whisper.cpp models
-    final home = Platform.environment['HOME'] ?? '';
-    final modelName = 'ggml-$_whisperModel.bin';
-
-    final searchPaths = [
-      '/usr/share/whisper/models/$modelName',
-      '/usr/local/share/whisper/models/$modelName',
-      '$home/.local/share/whisper/models/$modelName',
-      '$home/whisper.cpp/models/$modelName',
-      '$home/.cache/whisper/$modelName',
-      // Also try without ggml- prefix
-      '/usr/share/whisper/models/$_whisperModel.bin',
-      '$home/.local/share/whisper/models/$_whisperModel.bin',
-    ];
-
-    for (final path in searchPaths) {
-      if (await File(path).exists()) {
-        return path;
-      }
-    }
-
-    return null;
-  }
-
   Future<void> _safeDelete(String path) async {
     try {
       final file = File(path);
@@ -449,5 +627,7 @@ class VoiceMemoTranscriptionService {
   void dispose() {
     cancel();
     _stateController.close();
+    _progressController.close();
+    _completionController.close();
   }
 }

@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 
 import '../../../services/i18n_service.dart';
 import '../../models/voicememo_content.dart';
+import '../../utils/voicememo_transcription_service.dart';
 
 /// Transcription display widget for voice memo clips
 ///
@@ -20,18 +21,26 @@ class VoiceMemoTranscriptionWidget extends StatelessWidget {
   /// Whether transcription is currently in progress
   final bool isTranscribing;
 
+  /// Detailed progress information
+  final TranscriptionProgress? progress;
+
   /// Called when user wants to start transcription
   final VoidCallback? onTranscribe;
 
   /// Called when user wants to re-transcribe
   final VoidCallback? onRetranscribe;
 
+  /// Called when user wants to cancel transcription
+  final VoidCallback? onCancel;
+
   const VoiceMemoTranscriptionWidget({
     super.key,
     this.transcription,
     this.isTranscribing = false,
+    this.progress,
     this.onTranscribe,
     this.onRetranscribe,
+    this.onCancel,
   });
 
   @override
@@ -39,32 +48,9 @@ class VoiceMemoTranscriptionWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final i18n = I18nService();
 
-    // Show loading state
+    // Show loading state with detailed progress
     if (isTranscribing) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              i18n.t('work_voicememo_transcribing'),
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      );
+      return _buildProgressUI(context, theme, i18n);
     }
 
     // Show transcribe button if no transcription
@@ -165,6 +151,124 @@ class VoiceMemoTranscriptionWidget extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressUI(BuildContext context, ThemeData theme, I18nService i18n) {
+    final p = progress;
+    final state = p?.state ?? TranscriptionState.preparing;
+    final progressValue = p?.progress ?? 0.0;
+
+    // Determine stage info
+    String stageTitle;
+    String? stageDetail;
+    bool showProgressBar = false;
+    bool showCancel = true;
+
+    switch (state) {
+      case TranscriptionState.preparing:
+        stageTitle = i18n.t('work_voicememo_checking_model');
+        break;
+      case TranscriptionState.downloadingModel:
+        stageTitle = i18n.t('work_voicememo_downloading_model');
+        if (p != null && p.totalBytes > 0) {
+          stageDetail = '${p.downloadProgressString} (${p.progressPercent}%)';
+        }
+        showProgressBar = true;
+        break;
+      case TranscriptionState.loadingModel:
+        stageTitle = i18n.t('work_voicememo_loading_model');
+        stageDetail = p?.modelName;
+        showProgressBar = true;
+        break;
+      case TranscriptionState.convertingAudio:
+        stageTitle = i18n.t('work_voicememo_converting_audio');
+        break;
+      case TranscriptionState.transcribing:
+        stageTitle = i18n.t('work_voicememo_transcribing');
+        stageDetail = p?.modelName;
+        break;
+      case TranscriptionState.cancelling:
+        stageTitle = i18n.t('cancelling');
+        showCancel = false;
+        break;
+      default:
+        stageTitle = i18n.t('work_voicememo_transcribing');
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with stage title and cancel button
+          Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  value: state == TranscriptionState.downloadingModel && progressValue > 0
+                      ? progressValue
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stageTitle,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (stageDetail != null)
+                      Text(
+                        stageDetail,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (showCancel && onCancel != null)
+                IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  onPressed: onCancel,
+                  tooltip: i18n.t('cancel'),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+            ],
+          ),
+
+          // Progress bar for download/loading stages
+          if (showProgressBar && progressValue > 0) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progressValue,
+                minHeight: 6,
+                backgroundColor: theme.colorScheme.surfaceContainerHighest,
+              ),
+            ),
+          ],
         ],
       ),
     );

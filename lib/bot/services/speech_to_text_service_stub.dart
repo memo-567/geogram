@@ -73,6 +73,15 @@ class SpeechToTextService {
 
   static bool get isSupported => false;
 
+  Future<bool> isLibraryAvailable() async => false;
+
+  Future<bool> needsLibraryDownload() async => false;
+
+  Future<void> downloadLibrary({
+    required String stationUrl,
+    void Function(double progress)? onProgress,
+  }) async {}
+
   Future<void> initialize() async {}
 
   Future<bool> loadModel(String modelId) async => false;

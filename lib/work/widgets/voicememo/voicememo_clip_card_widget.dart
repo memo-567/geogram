@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../../../services/i18n_service.dart';
 import '../../models/voicememo_content.dart';
+import '../../utils/voicememo_transcription_service.dart';
 
 /// Card widget for displaying a voice memo clip
 class VoiceMemoClipCardWidget extends StatelessWidget {
@@ -15,6 +16,7 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
   final bool isExpanded;
   final bool isPlaying;
   final bool isTranscribing;
+  final TranscriptionProgress? transcriptionProgress;
   final VoiceMemoSettings settings;
   final VoidCallback onToggleExpanded;
   final VoidCallback onPlay;
@@ -22,6 +24,8 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onMerge;
   final VoidCallback onTranscribe;
+  final VoidCallback? onCancelTranscription;
+  final VoidCallback? onDeleteTranscription;
 
   const VoiceMemoClipCardWidget({
     super.key,
@@ -29,6 +33,7 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
     required this.isExpanded,
     required this.isPlaying,
     this.isTranscribing = false,
+    this.transcriptionProgress,
     required this.settings,
     required this.onToggleExpanded,
     required this.onPlay,
@@ -36,6 +41,8 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
     required this.onDelete,
     required this.onMerge,
     required this.onTranscribe,
+    this.onCancelTranscription,
+    this.onDeleteTranscription,
   });
 
   @override
@@ -74,11 +81,37 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          clip.title,
-                          style: theme.textTheme.titleMedium,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                clip.title,
+                                style: theme.textTheme.titleMedium,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            // Compact transcription indicator (visible when collapsed)
+                            if (isTranscribing) ...[
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                i18n.t('work_voicememo_transcribing'),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Row(
@@ -160,16 +193,31 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
                                 color: theme.colorScheme.primary,
                               ),
                               const SizedBox(width: 8),
-                              Text(
-                                i18n.t('work_voicememo_transcription'),
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.primary,
+                              Expanded(
+                                child: Text(
+                                  i18n.t('work_voicememo_transcription'),
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: theme.colorScheme.primary,
+                                  ),
                                 ),
                               ),
+                              // Re-transcribe button
+                              if (onDeleteTranscription != null && !isTranscribing)
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.refresh,
+                                    size: 18,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  onPressed: onDeleteTranscription,
+                                  tooltip: i18n.t('work_voicememo_retranscribe'),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                ),
                             ],
                           ),
                           const SizedBox(height: 8),
-                          Text(
+                          SelectableText(
                             clip.transcription!.text,
                             style: theme.textTheme.bodyMedium,
                           ),
@@ -206,23 +254,21 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
                     const SizedBox(height: 12),
                   ],
 
+                  // Transcription progress (when transcribing)
+                  if (isTranscribing && clip.transcription == null) ...[
+                    _buildTranscriptionProgress(context, theme, i18n),
+                    const SizedBox(height: 12),
+                  ],
+
                   // Action buttons
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      if (clip.transcription == null)
+                      if (clip.transcription == null && !isTranscribing)
                         TextButton.icon(
-                          onPressed: isTranscribing ? null : onTranscribe,
-                          icon: isTranscribing
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Icon(Icons.text_snippet_outlined, size: 18),
-                          label: Text(isTranscribing
-                              ? i18n.t('work_voicememo_transcribing')
-                              : i18n.t('work_voicememo_transcribe')),
+                          onPressed: onTranscribe,
+                          icon: const Icon(Icons.text_snippet_outlined, size: 18),
+                          label: Text(i18n.t('work_voicememo_transcribe')),
                         ),
                       TextButton.icon(
                         onPressed: onMerge,
@@ -292,6 +338,127 @@ class VoiceMemoClipCardWidget extends StatelessWidget {
           Text('${social.commentIds.length}', style: theme.textTheme.bodySmall),
         ],
       ],
+    );
+  }
+
+  Widget _buildTranscriptionProgress(
+      BuildContext context, ThemeData theme, I18nService i18n) {
+    final p = transcriptionProgress;
+    final state = p?.state ?? TranscriptionState.preparing;
+    final progressValue = p?.progress ?? 0.0;
+
+    // Determine stage info
+    String stageTitle;
+    String? stageDetail;
+    bool showProgressBar = false;
+
+    switch (state) {
+      case TranscriptionState.preparing:
+        stageTitle = i18n.t('work_voicememo_checking_model');
+        break;
+      case TranscriptionState.downloadingModel:
+        stageTitle = i18n.t('work_voicememo_downloading_model');
+        if (p != null && p.totalBytes > 0) {
+          stageDetail = '${p.downloadProgressString} (${p.progressPercent}%)';
+        }
+        showProgressBar = true;
+        break;
+      case TranscriptionState.loadingModel:
+        stageTitle = i18n.t('work_voicememo_loading_model');
+        stageDetail = p?.modelName;
+        showProgressBar = true;
+        break;
+      case TranscriptionState.convertingAudio:
+        stageTitle = i18n.t('work_voicememo_converting_audio');
+        break;
+      case TranscriptionState.transcribing:
+        stageTitle = i18n.t('work_voicememo_transcribing');
+        stageDetail = p?.modelName;
+        break;
+      case TranscriptionState.cancelling:
+        stageTitle = i18n.t('cancelling');
+        break;
+      default:
+        stageTitle = i18n.t('work_voicememo_transcribing');
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.primary.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with stage title and cancel button
+          Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  value: state == TranscriptionState.downloadingModel && progressValue > 0
+                      ? progressValue
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stageTitle,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (stageDetail != null)
+                      Text(
+                        stageDetail,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (state != TranscriptionState.cancelling &&
+                  onCancelTranscription != null)
+                IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  onPressed: onCancelTranscription,
+                  tooltip: i18n.t('cancel'),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+            ],
+          ),
+
+          // Progress bar for download/loading stages
+          if (showProgressBar && progressValue > 0) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progressValue,
+                minHeight: 6,
+                backgroundColor:
+                    theme.colorScheme.surfaceContainerHighest,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

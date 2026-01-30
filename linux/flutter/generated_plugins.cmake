@@ -20,6 +20,7 @@ list(APPEND FLUTTER_FFI_PLUGIN_LIST
   flutter_pty
   flutter_zxing
   tflite_flutter
+  whisper_flutter_new
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

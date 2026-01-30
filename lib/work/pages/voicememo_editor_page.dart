@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -52,6 +53,9 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
   Set<String> _expandedClips = {};
   String? _playingClipId;
   String? _transcribingClipId; // Track which clip is being transcribed
+  TranscriptionProgress? _transcriptionProgress; // Detailed progress info
+  StreamSubscription<TranscriptionProgress>? _progressSubscription;
+  StreamSubscription<TranscriptionCompletedEvent>? _completionSubscription;
 
   @override
   void initState() {
@@ -59,10 +63,70 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
     _audioService.initialize();
     _transcriptionService.initialize();
     _loadDocument();
+
+    // Listen to transcription progress updates
+    _progressSubscription = _transcriptionService.progressStream.listen((progress) {
+      if (mounted) {
+        setState(() {
+          _transcriptionProgress = progress;
+        });
+      }
+    });
+
+    // Listen to transcription completion events (for background transcriptions)
+    _completionSubscription = _transcriptionService.completionStream.listen((event) {
+      if (!mounted) return;
+      // Only handle events for this document
+      if (event.filePath != widget.filePath) return;
+
+      if (event.success && event.updatedClip != null) {
+        // Update the clip in our list
+        final index = _clips.indexWhere((c) => c.id == event.clipId);
+        if (index != -1) {
+          setState(() {
+            _clips[index] = event.updatedClip!;
+            _transcribingClipId = null;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('work_voicememo_transcription_complete'))),
+          );
+        }
+      } else {
+        setState(() {
+          _transcribingClipId = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(event.error ?? _i18n.t('work_voicememo_transcription_failed')),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    });
+
+    // Check if there's already a transcription running for this file
+    _checkExistingTranscription();
+  }
+
+  /// Check if there's a transcription in progress for this file
+  void _checkExistingTranscription() {
+    if (_transcriptionService.isBusy &&
+        _transcriptionService.currentFilePath == widget.filePath) {
+      setState(() {
+        _transcribingClipId = _transcriptionService.currentClipId;
+        _transcriptionProgress = _transcriptionService.currentProgress;
+        // Expand the clip so user can see the progress
+        if (_transcribingClipId != null) {
+          _expandedClips.add(_transcribingClipId!);
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
+    _progressSubscription?.cancel();
+    _completionSubscription?.cancel();
     _focusNode.dispose();
     _audioService.stop();
     super.dispose();
@@ -499,7 +563,7 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
 
   Future<void> _transcribeClip(VoiceMemoClip clip) async {
     // Check if already transcribing
-    if (_transcribingClipId != null) {
+    if (_transcribingClipId != null || _transcriptionService.isBusy) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_i18n.t('work_voicememo_transcription_busy')),
@@ -532,96 +596,83 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
 
     setState(() {
       _transcribingClipId = clip.id;
+      _transcriptionProgress = null; // Reset progress
+      // Expand the clip so user can see the progress
+      _expandedClips.add(clip.id);
     });
 
-    // Show progress snackbar with cancel option
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Text(_i18n.t('work_voicememo_transcribing'))),
-          ],
-        ),
-        duration: const Duration(minutes: 30), // Long duration for transcription
-        action: SnackBarAction(
-          label: _i18n.t('cancel'),
-          onPressed: _cancelTranscription,
-        ),
-      ),
+    // Start background transcription - it will auto-save to NDF when complete
+    // The completion handler will update the UI via the completionStream listener
+    final started = _transcriptionService.transcribeInBackground(
+      filePath: widget.filePath,
+      clip: clip,
+      audioBytes: audioBytes,
     );
 
-    try {
-      // Run transcription (runs in background via subprocess)
-      final result = await _transcriptionService.transcribe(
-        audioBytes: audioBytes,
-        clipId: clip.id,
+    if (!started) {
+      setState(() {
+        _transcribingClipId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_i18n.t('work_voicememo_transcription_failed'))),
       );
-
-      if (!mounted) return;
-
-      // Hide the progress snackbar
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (result.cancelled) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('work_voicememo_transcription_cancelled'))),
-        );
-        return;
-      }
-
-      if (result.success && result.text != null) {
-        // Update clip with transcription
-        final index = _clips.indexWhere((c) => c.id == clip.id);
-        if (index != -1) {
-          final updatedClip = _clips[index].copyWith(
-            transcription: result.toClipTranscription(),
-          );
-
-          // Save to archive
-          await _ndfService.saveVoiceMemoClip(widget.filePath, updatedClip);
-
-          setState(() {
-            _clips[index] = updatedClip;
-            _hasChanges = false; // Already saved to archive
-          });
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_i18n.t('work_voicememo_transcription_complete'))),
-          );
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result.error ?? _i18n.t('work_voicememo_transcription_failed')),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    } catch (e) {
-      LogService().log('VoiceMemoEditorPage: Transcription error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${_i18n.t('work_voicememo_transcription_failed')}: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _transcribingClipId = null;
-        });
-      }
     }
+    // Note: UI updates and saving are handled by the completionStream listener in initState
   }
 
   void _cancelTranscription() {
     _transcriptionService.cancel();
+    setState(() {
+      _transcribingClipId = null;
+    });
+  }
+
+  Future<void> _deleteTranscriptionAndRetranscribe(VoiceMemoClip clip) async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_i18n.t('work_voicememo_retranscribe')),
+        content: Text(_i18n.t('work_voicememo_delete_transcription')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(_i18n.t('work_voicememo_retranscribe')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Delete transcription from clip
+    final index = _clips.indexWhere((c) => c.id == clip.id);
+    if (index == -1) return;
+
+    final updatedClip = _clips[index].copyWith(
+      transcription: null,
+      clearTranscription: true,
+    );
+
+    // Save to archive
+    await _ndfService.saveVoiceMemoClip(widget.filePath, updatedClip);
+
+    setState(() {
+      _clips[index] = updatedClip;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_i18n.t('work_voicememo_transcription_deleted'))),
+      );
+    }
+
+    // Start new transcription
+    await _transcribeClip(updatedClip);
   }
 
   void _showWhisperNotInstalledDialog() {
@@ -1097,6 +1148,15 @@ class _VoiceMemoEditorPageState extends State<VoiceMemoEditorPage> {
                 onMerge: () => _mergeClip(clip),
                 onTranscribe: () => _transcribeClip(clip),
                 isTranscribing: _transcribingClipId == clip.id,
+                transcriptionProgress: _transcribingClipId == clip.id
+                    ? _transcriptionProgress
+                    : null,
+                onCancelTranscription: _transcribingClipId == clip.id
+                    ? _cancelTranscription
+                    : null,
+                onDeleteTranscription: clip.transcription != null
+                    ? () => _deleteTranscriptionAndRetranscribe(clip)
+                    : null,
               );
             },
           ),

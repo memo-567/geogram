@@ -33,10 +33,21 @@ class ClipTranscription {
   });
 
   factory ClipTranscription.fromJson(Map<String, dynamic> json) {
+    final text = json['text'] as String?;
+    final model = json['model'] as String?;
+    final transcribedAtStr = json['transcribed_at'] as String?;
+
+    if (text == null || model == null || transcribedAtStr == null) {
+      throw FormatException(
+        'Missing required transcription fields: '
+        'text=${text != null}, model=${model != null}, transcribed_at=${transcribedAtStr != null}',
+      );
+    }
+
     return ClipTranscription(
-      text: json['text'] as String,
-      model: json['model'] as String,
-      transcribedAt: DateTime.parse(json['transcribed_at'] as String),
+      text: text,
+      model: model,
+      transcribedAt: DateTime.parse(transcribedAtStr),
     );
   }
 
@@ -303,6 +314,7 @@ class VoiceMemoClip {
     int? durationMs,
     String? audioFile,
     ClipTranscription? transcription,
+    bool clearTranscription = false,
     List<String>? mergedFrom,
     ClipSocialData? social,
   }) {
@@ -314,7 +326,7 @@ class VoiceMemoClip {
       finishedAt: finishedAt ?? this.finishedAt,
       durationMs: durationMs ?? this.durationMs,
       audioFile: audioFile ?? this.audioFile,
-      transcription: transcription ?? this.transcription,
+      transcription: clearTranscription ? null : (transcription ?? this.transcription),
       mergedFrom: mergedFrom ?? this.mergedFrom,
       social: social ?? this.social,
     );
