@@ -98,6 +98,7 @@ import 'reader/pages/reader_home_page.dart';
 import 'flasher/pages/flasher_page.dart';
 import 'work/pages/work_page.dart';
 import 'usenet/pages/usenet_app_page.dart';
+import 'music/pages/music_home_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -2527,6 +2528,15 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             ? _buildWorkPage(collection)
                                             : collection.type == 'usenet'
                                             ? const UsenetAppPage()
+                                            : collection.type == 'music'
+                                            ? MusicHomePage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                        '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2747,6 +2757,15 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                             ? _buildWorkPage(collection)
                                             : collection.type == 'usenet'
                                             ? const UsenetAppPage()
+                                            : collection.type == 'music'
+                                            ? MusicHomePage(
+                                                collectionPath:
+                                                    collection.storagePath ??
+                                                        '',
+                                                collectionTitle:
+                                                    collection.title,
+                                                i18n: _i18n,
+                                              )
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );

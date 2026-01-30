@@ -26,6 +26,13 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [VoicePlayerWidget](#voiceplayerwidget) - Voice messages
 - [MusicPlayerWidget](#musicplayerwidget) - Music tracks
 - [VoiceRecorderWidget](#voicerecorderwidget) - Record voice
+- [MiniPlayerWidget](#miniplayerwidget) - Music mini player bar
+- [NowPlayingWidget](#nowplayingwidget) - Full-screen music player
+
+### Music Widgets
+- [TrackTileWidget](#tracktilewidget) - Music track list tile
+- [AlbumCardWidget](#albumcardwidget) - Album grid card
+- [ArtistCardWidget](#artistcardwidget) - Artist grid card
 
 ### Dialog Widgets
 - [NewChannelDialog](#newchanneldialog) - Create chat channels

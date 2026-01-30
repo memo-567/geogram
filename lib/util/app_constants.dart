@@ -32,6 +32,7 @@ const List<String> knownAppTypesConst = [
   'reader',
   'work',
   'usenet',
+  'music',
 ];
 
 /// App types that can only have a single instance per profile
@@ -63,4 +64,5 @@ const Set<String> singleInstanceTypesConst = {
   'flasher',
   'work',
   'usenet',
+  'music',
 };
