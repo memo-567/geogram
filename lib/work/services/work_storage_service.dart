@@ -4,22 +4,24 @@
  */
 
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import '../../services/log_service.dart';
+import '../../services/profile_storage.dart';
 import '../models/workspace.dart';
 import '../models/ndf_document.dart';
 import 'ndf_service.dart';
 
 /// Service for managing workspace storage
+/// Now uses ProfileStorage abstraction for encrypted storage support
 class WorkStorageService {
-  final String basePath;
+  final ProfileStorage _storage;
+  final String _relativePath;
 
-  WorkStorageService(this.basePath);
+  WorkStorageService(this._storage, this._relativePath);
 
-  /// Get the workspaces directory
-  String get workspacesPath => '$basePath/workspaces';
+  /// Get the workspaces directory relative path
+  String get workspacesPath => '$_relativePath/workspaces';
 
   /// Get the path for a specific workspace
   String workspacePath(String workspaceId) => '$workspacesPath/$workspaceId';
@@ -30,9 +32,8 @@ class WorkStorageService {
 
   /// Initialize the storage directory structure
   Future<void> initialize() async {
-    final dir = Directory(workspacesPath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (!await _storage.directoryExists(workspacesPath)) {
+      await _storage.createDirectory(workspacesPath);
       LogService().log('WorkStorageService: Created workspaces directory');
     }
   }
@@ -40,21 +41,22 @@ class WorkStorageService {
   /// Load all workspaces
   Future<List<Workspace>> loadWorkspaces() async {
     final workspaces = <Workspace>[];
-    final dir = Directory(workspacesPath);
 
-    if (!await dir.exists()) {
+    if (!await _storage.directoryExists(workspacesPath)) {
       return workspaces;
     }
 
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
+    final entries = await _storage.listDirectory(workspacesPath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         try {
-          final workspace = await loadWorkspace(entity.path.split('/').last);
+          final workspaceId = entry.name;
+          final workspace = await loadWorkspace(workspaceId);
           if (workspace != null) {
             workspaces.add(workspace);
           }
         } catch (e) {
-          LogService().log('WorkStorageService: Error loading workspace ${entity.path}: $e');
+          LogService().log('WorkStorageService: Error loading workspace ${entry.path}: $e');
         }
       }
     }
@@ -67,14 +69,14 @@ class WorkStorageService {
   /// Load a specific workspace by ID
   Future<Workspace?> loadWorkspace(String workspaceId) async {
     final configPath = workspaceConfigPath(workspaceId);
-    final file = File(configPath);
 
-    if (!await file.exists()) {
+    if (!await _storage.exists(configPath)) {
       return null;
     }
 
     try {
-      final content = await file.readAsString();
+      final content = await _storage.readString(configPath);
+      if (content == null) return null;
       final json = jsonDecode(content) as Map<String, dynamic>;
       return Workspace.fromJson(json);
     } catch (e) {
@@ -86,14 +88,12 @@ class WorkStorageService {
   /// Save a workspace
   Future<void> saveWorkspace(Workspace workspace) async {
     final wsPath = workspacePath(workspace.id);
-    final dir = Directory(wsPath);
 
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (!await _storage.directoryExists(wsPath)) {
+      await _storage.createDirectory(wsPath);
     }
 
-    final configFile = File(workspaceConfigPath(workspace.id));
-    await configFile.writeAsString(workspace.toJsonString());
+    await _storage.writeString(workspaceConfigPath(workspace.id), workspace.toJsonString());
     LogService().log('WorkStorageService: Saved workspace ${workspace.id}');
   }
 
@@ -115,9 +115,8 @@ class WorkStorageService {
 
   /// Delete a workspace
   Future<void> deleteWorkspace(String workspaceId) async {
-    final dir = Directory(workspacePath(workspaceId));
-    if (await dir.exists()) {
-      await dir.delete(recursive: true);
+    if (await _storage.directoryExists(workspacePath(workspaceId))) {
+      await _storage.deleteDirectory(workspacePath(workspaceId), recursive: true);
       LogService().log('WorkStorageService: Deleted workspace $workspaceId');
     }
   }
@@ -126,21 +125,21 @@ class WorkStorageService {
   Future<List<NdfDocumentRef>> listDocuments(String workspaceId) async {
     final documents = <NdfDocumentRef>[];
     final wsPath = workspacePath(workspaceId);
-    final dir = Directory(wsPath);
 
-    if (!await dir.exists()) {
+    if (!await _storage.directoryExists(wsPath)) {
       return documents;
     }
 
-    await for (final entity in dir.list()) {
-      if (entity is File && entity.path.endsWith('.ndf')) {
+    final entries = await _storage.listDirectory(wsPath);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.ndf')) {
         try {
-          final ref = await _readDocumentRef(entity);
+          final ref = await _readDocumentRef(workspaceId, entry.name, entry.size ?? 0);
           if (ref != null) {
             documents.add(ref);
           }
         } catch (e) {
-          LogService().log('WorkStorageService: Error reading NDF ${entity.path}: $e');
+          LogService().log('WorkStorageService: Error reading NDF ${entry.name}: $e');
         }
       }
     }
@@ -150,13 +149,17 @@ class WorkStorageService {
     return documents;
   }
 
-  /// Read NDF document metadata from the archive
-  Future<NdfDocumentRef?> _readDocumentRef(File ndfFile) async {
-    final filename = ndfFile.path.split('/').last;
-
-    // Read actual metadata from NDF archive
+  /// Read NDF document metadata from storage
+  Future<NdfDocumentRef?> _readDocumentRef(String workspaceId, String filename, int fileSize) async {
+    final ndfPath = documentPath(workspaceId, filename);
     final ndfService = NdfService();
-    final metadata = await ndfService.readMetadata(ndfFile.path);
+
+    // Read NDF archive as bytes
+    final bytes = await _storage.readBytes(ndfPath);
+    if (bytes == null) return null;
+
+    // Read metadata using bytes-based method
+    final metadata = ndfService.readMetadataFromBytes(bytes);
 
     if (metadata != null) {
       return NdfDocumentRef(
@@ -167,19 +170,18 @@ class WorkStorageService {
         logo: metadata.logo,
         thumbnail: metadata.thumbnail,
         modified: metadata.modified,
-        fileSize: (await ndfFile.stat()).size,
+        fileSize: fileSize,
       );
     }
 
     // Fallback if metadata cannot be read
-    final stat = await ndfFile.stat();
     final basename = filename.replaceAll('.ndf', '');
     return NdfDocumentRef(
       filename: filename,
       type: NdfDocumentType.document,
       title: basename.replaceAll('-', ' ').replaceAll('_', ' '),
-      modified: stat.modified,
-      fileSize: stat.size,
+      modified: DateTime.now(),
+      fileSize: fileSize,
     );
   }
 
@@ -197,18 +199,14 @@ class WorkStorageService {
     final logoPath = workspaceLogoPath(workspaceId, workspace!.logo);
     if (logoPath == null) return null;
 
-    final file = File(logoPath);
-    if (!await file.exists()) return null;
-
-    return file.readAsBytes();
+    return _storage.readBytes(logoPath);
   }
 
   /// Save a workspace logo
   Future<String> saveWorkspaceLogo(String workspaceId, Uint8List logoBytes, String extension) async {
     final filename = 'logo.$extension';
     final logoPath = '${workspacePath(workspaceId)}/$filename';
-    final file = File(logoPath);
-    await file.writeAsBytes(logoBytes);
+    await _storage.writeBytes(logoPath, logoBytes);
 
     // Update workspace with logo filename
     final workspace = await loadWorkspace(workspaceId);
@@ -229,10 +227,7 @@ class WorkStorageService {
 
     final logoPath = workspaceLogoPath(workspaceId, workspace!.logo);
     if (logoPath != null) {
-      final file = File(logoPath);
-      if (await file.exists()) {
-        await file.delete();
-      }
+      await _storage.delete(logoPath);
     }
 
     workspace.logo = null;
@@ -242,15 +237,26 @@ class WorkStorageService {
     LogService().log('WorkStorageService: Deleted workspace logo');
   }
 
-  /// Get the full path for an NDF document in a workspace
+  /// Get the relative path for an NDF document in a workspace
   String documentPath(String workspaceId, String filename) =>
       '${workspacePath(workspaceId)}/$filename';
 
+  /// Read NDF document bytes
+  Future<Uint8List?> readDocumentBytes(String workspaceId, String filename) async {
+    return _storage.readBytes(documentPath(workspaceId, filename));
+  }
+
+  /// Write NDF document bytes
+  Future<void> writeDocumentBytes(String workspaceId, String filename, Uint8List bytes) async {
+    await _storage.writeBytes(documentPath(workspaceId, filename), bytes);
+    LogService().log('WorkStorageService: Wrote document $filename to $workspaceId');
+  }
+
   /// Delete an NDF document
   Future<void> deleteDocument(String workspaceId, String filename) async {
-    final file = File(documentPath(workspaceId, filename));
-    if (await file.exists()) {
-      await file.delete();
+    final docPath = documentPath(workspaceId, filename);
+    if (await _storage.exists(docPath)) {
+      await _storage.delete(docPath);
       LogService().log('WorkStorageService: Deleted document $filename from $workspaceId');
 
       // Update workspace to remove document reference
@@ -261,4 +267,7 @@ class WorkStorageService {
       }
     }
   }
+
+  /// Get the underlying ProfileStorage (for encrypted storage checks)
+  ProfileStorage get storage => _storage;
 }

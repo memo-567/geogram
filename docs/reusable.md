@@ -60,6 +60,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
 - [GeogramApi](#geogramapi) - Unified transport-agnostic API facade
 - [FileBrowserCacheService](#filebrowsercacheservice) - Persistent cache for file browser operations
+- [SQLiteLoader](#sqliteloader) - Platform-aware SQLite database loading
+- [ProfileStorage](#profilestorage) - Abstraction layer for encrypted/filesystem storage
 
 ### USB/Transport Services
 - [UsbAoaService](#usbaoapservice) - Cross-platform USB AOA service layer
@@ -6235,3 +6237,572 @@ Future<void> _applyLogoToAllDocuments() async {
 - `lib/work/services/work_storage_service.dart` - Workspace logo management
 - `lib/work/pages/workspace_detail_page.dart` - UI integration
 
+
+
+---
+
+## VoiceMemoClipCardWidget
+
+Expandable card widget for displaying voice memo clips with playback controls.
+
+**Location:** `lib/work/widgets/voicememo/voicememo_clip_card_widget.dart`
+
+**Features:**
+- Expandable/collapsible design
+- Play/stop audio button
+- Duration and timestamp display
+- Transcription display
+- Merge indicator for merged clips
+- Social data display (ratings, comments)
+- Action buttons (transcribe, merge, edit, delete)
+
+**Usage:**
+```dart
+VoiceMemoClipCardWidget(
+  clip: clip,
+  isExpanded: _expandedClips.contains(clip.id),
+  isPlaying: _playingClipId == clip.id,
+  settings: _content.settings,
+  onToggleExpanded: () => _toggleClipExpanded(clip.id),
+  onPlay: () => _playClip(clip),
+  onEdit: () => _editClip(clip),
+  onDelete: () => _deleteClip(clip),
+  onMerge: () => _mergeClip(clip),
+  onTranscribe: () => _transcribeClip(clip),
+)
+```
+
+---
+
+## VoiceMemoRatingWidget
+
+Rating widget supporting both star ratings (1-5) and like/dislike buttons.
+
+**Location:** `lib/work/widgets/voicememo/voicememo_rating_widget.dart`
+
+**Features:**
+- Star rating (1-5)
+- Like/dislike buttons
+- Configurable rating type (stars, likeDislike, or both)
+- Interactive or display-only mode
+
+**Usage:**
+```dart
+// Interactive rating
+VoiceMemoRatingWidget(
+  currentStars: userRating?.stars,
+  currentLiked: userRating?.liked,
+  ratingType: RatingType.both,
+  onStarsChanged: (stars) => _setStars(clipId, stars),
+  onLikeChanged: (liked) => _setLike(clipId, liked),
+  enabled: true,
+)
+
+// Display-only rating
+VoiceMemoRatingDisplayWidget(
+  social: clip.social,
+  ratingType: settings.ratingType,
+)
+```
+
+---
+
+## Audio Merge Approach
+
+The VoiceMemoMergeService handles concatenating OGG/Opus audio clips.
+
+**Location:** `lib/work/utils/voicememo_merge_service.dart`
+
+**Approach:**
+1. Read both audio files from NDF archive
+2. Use FFmpeg (if available) for proper audio concatenation
+3. Update target clip metadata (duration, mergedFrom)
+4. Clear transcription (needs re-transcription)
+5. Save merged audio and metadata
+
+**FFmpeg concat approach:**
+```dart
+// Create concat file list
+await File(listPath).writeAsString(
+  "file '$firstPath'\nfile '$secondPath'\n",
+);
+
+// Run ffmpeg concat
+final result = await Process.run('ffmpeg', [
+  '-f', 'concat',
+  '-safe', '0',
+  '-i', listPath,
+  '-c', 'copy', // Copy codec, no re-encoding
+  '-y',
+  outputPath,
+]);
+```
+
+**Usage:**
+```dart
+final mergeService = VoiceMemoMergeService();
+final updatedClip = await mergeService.mergeClips(
+  ndfFilePath: filePath,
+  sourceClip: clipToMerge,
+  targetClip: targetClip,
+);
+
+if (updatedClip != null) {
+  // Delete source clip after successful merge
+  await _ndfService.deleteVoiceMemoClip(
+    filePath,
+    clipToMerge.id,
+    clipToMerge.audioFile,
+  );
+}
+```
+
+**Files using this pattern:**
+- `lib/work/utils/voicememo_merge_service.dart` - Merge service
+- `lib/work/pages/voicememo_editor_page.dart` - UI integration
+
+---
+
+## SQLiteLoader
+
+Platform-aware SQLite database loading that works across Flutter (mobile, desktop) and pure Dart/CLI contexts.
+
+**Location:** `lib/services/sqlite_loader.dart` (conditional export)
+
+**Purpose:**
+- Flutter builds: Uses `sqlite3_flutter_libs` to provide bundled native SQLite libraries
+- Pure Dart/CLI builds: Loads bundled native libs from `third_party/sqlite/` or system fallback
+
+**Pattern - Conditional Export:**
+```dart
+// lib/services/sqlite_loader.dart
+export 'sqlite_loader_pure.dart'
+    if (dart.library.ui) 'sqlite_loader_flutter.dart';
+```
+
+**Flutter Implementation:**
+```dart
+// lib/services/sqlite_loader_flutter.dart
+import 'package:sqlite3/sqlite3.dart';
+import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
+
+class SQLiteLoader {
+  SQLiteLoader._();
+
+  static Database openDatabase(String dbPath) {
+    return sqlite3.open(dbPath);
+  }
+
+  static Database openInMemory() {
+    return sqlite3.openInMemory();
+  }
+}
+```
+
+**Pure Dart/CLI Implementation:**
+```dart
+// lib/services/sqlite_loader_pure.dart
+import 'dart:ffi';
+import 'dart:io';
+import 'package:sqlite3/open.dart' as sqlite_open;
+import 'package:sqlite3/sqlite3.dart';
+
+class SQLiteLoader {
+  static bool _initialized = false;
+
+  static void _ensureInitialized() {
+    if (_initialized) return;
+    final libPath = _resolveLibPath();
+    if (libPath != null) {
+      final loader = () => DynamicLibrary.open(libPath);
+      switch (Platform.operatingSystem) {
+        case 'linux':
+          sqlite_open.open.overrideFor(sqlite_open.OperatingSystem.linux, loader);
+        case 'macos':
+          sqlite_open.open.overrideFor(sqlite_open.OperatingSystem.macOS, loader);
+        case 'windows':
+          sqlite_open.open.overrideFor(sqlite_open.OperatingSystem.windows, loader);
+      }
+    }
+    _initialized = true;
+  }
+
+  static Database openDatabase(String dbPath) {
+    _ensureInitialized();
+    return sqlite3.open(dbPath);
+  }
+
+  // _resolveLibPath() searches:
+  // 1. SQLITE_DYLIB_PATH environment variable
+  // 2. third_party/sqlite/{platform}/ directories
+  // 3. libs/ directory
+  // 4. Falls back to system SQLite
+}
+```
+
+**Required Dependencies:**
+```yaml
+dependencies:
+  sqlite3: ^2.4.0
+  sqlite3_flutter_libs: ^0.5.24  # Native SQLite libs for Flutter platforms
+```
+
+**Usage:**
+```dart
+import 'package:your_package/sqlite_loader.dart';
+
+// Open a database file
+final db = SQLiteLoader.openDatabase('/path/to/database.sqlite3');
+
+// Open in-memory database
+final memDb = SQLiteLoader.openInMemory();
+
+// Use database
+db.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY)');
+final rows = db.select('SELECT * FROM items');
+db.dispose();
+```
+
+**Files using this pattern:**
+- `lib/services/sqlite_loader.dart` - Conditional export
+- `lib/services/sqlite_loader_flutter.dart` - Flutter implementation
+- `lib/services/sqlite_loader_pure.dart` - Pure Dart implementation
+- `lib/services/nostr_relay_storage.dart` - NOSTR relay storage
+- `lib/services/nostr_blossom_service.dart` - Blossom blob storage
+- `packages/encrypted_archive/lib/src/sqlite_loader.dart` - Encrypted archive package
+
+---
+
+## Encrypted Storage Service
+
+The `EncryptedStorageService` provides profile data encryption using the `encrypted_archive` package. It derives encryption keys from the user's NOSTR nsec using HKDF-SHA256.
+
+### Usage Pattern
+
+```dart
+import 'package:geogram/services/encrypted_storage_service.dart';
+
+final encryptedStorage = EncryptedStorageService();
+
+// Check if encryption is enabled
+final status = await encryptedStorage.getStatus(callsign);
+if (status.enabled) {
+  print('Profile is encrypted: ${status.archivePath}');
+}
+
+// Enable encryption (migrate files to .ear archive)
+final result = await encryptedStorage.migrateToEncrypted(
+  callsign,
+  nsec,
+);
+if (result.success) {
+  print('Migrated ${result.filesProcessed} files');
+}
+
+// Disable encryption (extract files back to folders)
+final result = await encryptedStorage.migrateToPlaintext(
+  callsign,
+  nsec,
+);
+```
+
+### Debug API Endpoints
+
+```bash
+# Check encryption status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "encrypt_storage_status"}'
+
+# Enable encryption
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "encrypt_storage_enable"}'
+
+# Disable encryption
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "encrypt_storage_disable"}'
+```
+
+**Files:**
+- `lib/services/encrypted_storage_service.dart` - Main service
+- `lib/services/storage_config.dart` - Archive path helpers
+- `packages/encrypted_archive/` - Encrypted archive package
+
+---
+
+## File Launcher Service
+
+The `FileLauncherService` provides cross-platform support for opening files and folders in the system's default application.
+
+### Supported Platforms
+
+| Platform | Folders | Files | Method |
+|----------|---------|-------|--------|
+| Linux | ✓ | ✓ | xdg-open |
+| macOS | ✓ | ✓ | open |
+| Windows | ✓ | ✓ | explorer / start |
+| Android | ✓ | ✓ | url_launcher (ACTION_VIEW) |
+| iOS | Limited | ✓ | url_launcher (Files app) |
+| Web | ✗ | ✗ | Not supported |
+
+### Usage Pattern
+
+```dart
+import 'package:geogram/services/file_launcher_service.dart';
+
+final launcher = FileLauncherService();
+
+// Open a folder in the system file browser
+final success = await launcher.openFolder('/path/to/folder');
+
+// Open a file with its associated application
+final success = await launcher.openFile('/path/to/file.pdf');
+
+// Open a URL in the default browser
+final success = await launcher.openUrl('https://example.com');
+
+// Check platform capabilities
+if (launcher.canOpenFolders) {
+  // Show open folder button
+}
+```
+
+**Files:**
+- `lib/services/file_launcher_service.dart` - Singleton service
+
+---
+
+## ProfileStorage
+
+Abstraction layer for profile storage operations that works transparently with both filesystem storage and encrypted archive storage.
+
+### Classes
+
+**ProfileStorage** - Abstract interface for storage operations
+**FilesystemProfileStorage** - Wraps standard File/Directory operations
+**EncryptedProfileStorage** - Wraps EncryptedStorageService for encrypted archives
+**StorageEntry** - Directory listing entry with name, path, isDirectory, size, modified
+
+### Usage Pattern
+
+```dart
+import 'package:geogram/services/profile_storage.dart';
+
+// CollectionService provides the storage instance
+final storage = CollectionService().profileStorage;
+
+// Read/write files
+final content = await storage.readString('extra/channels.json');
+await storage.writeString('extra/config.json', jsonContent);
+
+// Read/write binary data
+final bytes = await storage.readBytes('media/photo.jpg');
+await storage.writeBytes('media/new_photo.jpg', imageBytes);
+
+// Check existence
+if (await storage.exists('extra/settings.json')) {
+  // File exists
+}
+
+// List directory contents
+final entries = await storage.listDirectory('posts', recursive: false);
+for (final entry in entries) {
+  if (entry.isDirectory) {
+    print('Dir: ${entry.name}');
+  } else {
+    print('File: ${entry.name} (${entry.size} bytes)');
+  }
+}
+
+// Directory operations
+await storage.createDirectory('new_folder');
+await storage.deleteDirectory('old_folder', recursive: true);
+
+// Convenience JSON methods
+final data = await storage.readJson('config.json');
+await storage.writeJson('config.json', {'key': 'value'});
+
+// Copy files to/from external paths
+await storage.copyFromExternal('/tmp/upload.jpg', 'media/upload.jpg');
+await storage.copyToExternal('media/photo.jpg', '/tmp/export.jpg');
+```
+
+### Service Integration Pattern
+
+Services receive storage via `setStorage()` method:
+
+```dart
+class MyService {
+  ProfileStorage? _storage;
+
+  void setStorage(ProfileStorage? storage) {
+    _storage = storage;
+  }
+
+  bool get useEncryptedStorage => _storage?.isEncrypted ?? false;
+
+  Future<void> loadData() async {
+    if (_storage != null) {
+      // Use storage abstraction
+      final content = await _storage!.readString('data.json');
+    } else {
+      // Fallback to direct File() operations
+      final file = File('$_collectionPath/data.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+      }
+    }
+  }
+}
+
+// In initialization:
+final storage = CollectionService().profileStorage;
+MyService().setStorage(storage);
+```
+
+### Supported Services
+
+The following services support ProfileStorage:
+- CollectionService (creates and provides storage)
+- ChatService
+- ContactService
+- BlogService
+- EventService
+- GroupsService
+- ForumService
+- MarketService
+- NewsService
+- PostcardService
+- ReportService
+- DirectMessageService
+- ConsoleService
+- VideoService
+- PlaceService
+
+**Files:**
+- `lib/services/profile_storage.dart` - Abstract class and implementations
+- `lib/services/encrypted_storage_service.dart` - Encrypted archive backend
+
+- WorkStorageService (Work app - workspaces and NDF documents)
+
+### Work App Storage Pattern
+
+WorkStorageService uses ProfileStorage for workspace and document management:
+
+```dart
+// Create WorkStorageService with ProfileStorage
+final profileStorage = CollectionService().profileStorage;
+if (profileStorage != null) {
+  final workStorage = WorkStorageService(profileStorage, relativePath);
+  
+  // Load workspaces
+  final workspaces = await workStorage.loadWorkspaces();
+  
+  // Create workspace
+  final workspace = await workStorage.createWorkspace(
+    name: 'My Workspace',
+    ownerNpub: profile.npub,
+  );
+  
+  // List documents
+  final docs = await workStorage.listDocuments(workspaceId);
+  
+  // Read/write NDF document bytes
+  final ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
+  await workStorage.writeDocumentBytes(workspaceId, filename, newBytes);
+}
+```
+
+### NDF Bytes-Based Operations
+
+For encrypted storage support, NdfService provides bytes-based methods:
+
+```dart
+final ndfService = NdfService();
+
+// Read metadata from bytes (no file path needed)
+final bytes = await storage.readBytes('doc.ndf');
+final metadata = ndfService.readMetadataFromBytes(bytes);
+
+// Read thumbnail/logo from bytes
+final thumbBytes = ndfService.readThumbnailFromBytes(bytes);
+final logoBytes = ndfService.readLogoFromBytes(bytes);
+
+// Create new document as bytes
+final ndfBytes = ndfService.createDocumentAsBytes(
+  metadata: metadata,
+  permissions: permissions,
+);
+await storage.writeBytes('new_doc.ndf', ndfBytes);
+```
+
+**Note:** Some NDF operations (embedLogo, updateMetadata, document editing) are not yet
+supported for encrypted storage and will show "feature not available" messages.
+
+**Files:**
+- `lib/work/services/work_storage_service.dart` - Workspace storage with ProfileStorage
+- `lib/work/services/ndf_service.dart` - NDF document operations (file and bytes-based)
+
+### Singleton Persistent Archive Pattern
+
+EncryptedStorageService uses singleton pattern with persistent connections for performance:
+
+```dart
+// Archives are cached and reused (40-60x faster than opening per operation)
+final archive = await _getArchive(callsign, nsec);
+
+// Periodic flush every 30 seconds
+_flushTimer = Timer.periodic(Duration(seconds: 30), (_) {
+  for (final archive in _openArchives.values) {
+    archive.checkpoint();  // WAL checkpoint
+  }
+});
+
+// Close on profile switch
+await EncryptedStorageService().closeArchive(oldCallsign);
+
+// Close all on app shutdown
+await EncryptedStorageService().closeAllArchives();
+```
+
+**Files:**
+- `lib/services/encrypted_storage_service.dart` - Singleton with persistent connections
+- `packages/encrypted_archive/lib/src/archive.dart` - checkpoint() method
+
+### Temp File Pattern for NDF Editing with Encrypted Storage
+
+When editing NDF documents in encrypted storage, use temp files:
+
+```dart
+Future<void> _openDocument(NdfDocumentRef doc) async {
+  String filePath;
+  String? tempFilePath;
+
+  if (_storage.storage.isEncrypted) {
+    // Extract to temp file
+    final ndfBytes = await _storage.readDocumentBytes(workspaceId, doc.filename);
+    final tempDir = await Directory.systemTemp.createTemp('geogram_ndf_');
+    tempFilePath = p.join(tempDir.path, doc.filename);
+    await File(tempFilePath).writeAsBytes(ndfBytes);
+    filePath = tempFilePath;
+  } else {
+    filePath = _storage.storage.getAbsolutePath(relativePath);
+  }
+
+  // Open editor with filePath...
+
+  // On editor close: save back and cleanup
+  Future<void> onEditorClosed() async {
+    if (tempFilePath != null) {
+      final modifiedBytes = await File(tempFilePath).readAsBytes();
+      await _storage.writeDocumentBytes(workspaceId, doc.filename, modifiedBytes);
+      await File(tempFilePath).delete();
+      await File(tempFilePath).parent.delete();
+    }
+  }
+}
+```
+
+This pattern allows existing file-based editors to work with encrypted storage without modification.

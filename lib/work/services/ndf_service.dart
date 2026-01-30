@@ -17,9 +17,181 @@ import '../models/document_content.dart';
 import '../models/form_content.dart';
 import '../models/presentation_content.dart';
 import '../models/todo_content.dart';
+import '../models/voicememo_content.dart';
 
 /// Service for reading and writing NDF (Nostr Data Format) documents
 class NdfService {
+  // ============================================================
+  // BYTES-BASED METHODS (for encrypted storage support)
+  // ============================================================
+
+  /// Read NDF metadata from bytes
+  NdfDocument? readMetadataFromBytes(Uint8List bytes) {
+    try {
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      for (final entry in archive) {
+        if (entry.name == 'ndf.json' && entry.isFile) {
+          final content = utf8.decode(entry.content as List<int>);
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          return NdfDocument.fromJson(json);
+        }
+      }
+
+      LogService().log('NdfService: ndf.json not found in archive');
+      return null;
+    } catch (e) {
+      LogService().log('NdfService: Error reading NDF metadata from bytes: $e');
+      return null;
+    }
+  }
+
+  /// Read a specific file from NDF archive bytes
+  Uint8List? readArchiveFileFromBytes(Uint8List archiveBytes, String archivePath) {
+    try {
+      final archive = ZipDecoder().decodeBytes(archiveBytes);
+
+      for (final entry in archive) {
+        if (entry.name == archivePath && entry.isFile) {
+          return Uint8List.fromList(entry.content as List<int>);
+        }
+      }
+
+      return null;
+    } catch (e) {
+      LogService().log('NdfService: Error reading $archivePath from archive: $e');
+      return null;
+    }
+  }
+
+  /// Read JSON content from NDF archive bytes
+  Map<String, dynamic>? readArchiveJsonFromBytes(Uint8List archiveBytes, String archivePath) {
+    final bytes = readArchiveFileFromBytes(archiveBytes, archivePath);
+    if (bytes == null) return null;
+
+    try {
+      final content = utf8.decode(bytes);
+      return jsonDecode(content) as Map<String, dynamic>;
+    } catch (e) {
+      LogService().log('NdfService: Error parsing JSON from $archivePath: $e');
+      return null;
+    }
+  }
+
+  /// Read thumbnail bytes from NDF archive bytes
+  Uint8List? readThumbnailFromBytes(Uint8List archiveBytes) {
+    try {
+      final archive = ZipDecoder().decodeBytes(archiveBytes);
+
+      // Find ndf.json first to get thumbnail reference
+      NdfDocument? metadata;
+      for (final entry in archive) {
+        if (entry.name == 'ndf.json' && entry.isFile) {
+          final content = utf8.decode(entry.content as List<int>);
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          metadata = NdfDocument.fromJson(json);
+          break;
+        }
+      }
+
+      if (metadata?.thumbnail == null) return null;
+
+      final thumbRef = metadata!.thumbnail!;
+      if (!thumbRef.startsWith('asset://')) return null;
+
+      final assetPath = 'assets/${thumbRef.substring(8)}';
+      return readArchiveFileFromBytes(archiveBytes, assetPath);
+    } catch (e) {
+      LogService().log('NdfService: Error reading thumbnail from bytes: $e');
+      return null;
+    }
+  }
+
+  /// Read logo bytes from NDF archive bytes
+  Uint8List? readLogoFromBytes(Uint8List archiveBytes) {
+    try {
+      final archive = ZipDecoder().decodeBytes(archiveBytes);
+
+      // Find ndf.json first to get logo reference
+      NdfDocument? metadata;
+      for (final entry in archive) {
+        if (entry.name == 'ndf.json' && entry.isFile) {
+          final content = utf8.decode(entry.content as List<int>);
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          metadata = NdfDocument.fromJson(json);
+          break;
+        }
+      }
+
+      if (metadata?.logo == null) return null;
+
+      final logoRef = metadata!.logo!;
+      if (!logoRef.startsWith('asset://')) return null;
+
+      final assetPath = 'assets/${logoRef.substring(8)}';
+      return readArchiveFileFromBytes(archiveBytes, assetPath);
+    } catch (e) {
+      LogService().log('NdfService: Error reading logo from bytes: $e');
+      return null;
+    }
+  }
+
+  /// Create a new NDF document and return as bytes
+  Uint8List createDocumentAsBytes({
+    required NdfDocument metadata,
+    required NdfPermission permissions,
+    Map<String, dynamic>? mainContent,
+  }) {
+    final archive = Archive();
+
+    // Add ndf.json
+    final ndfJson = utf8.encode(metadata.toJsonString());
+    archive.addFile(ArchiveFile('ndf.json', ndfJson.length, ndfJson));
+
+    // Add permissions.json
+    final permissionsJson = utf8.encode(permissions.toJsonString());
+    archive.addFile(ArchiveFile('permissions.json', permissionsJson.length, permissionsJson));
+
+    // Add content/main.json if provided
+    if (mainContent != null) {
+      final mainJson = utf8.encode(const JsonEncoder.withIndent('  ').convert(mainContent));
+      archive.addFile(ArchiveFile('content/main.json', mainJson.length, mainJson));
+    }
+
+    // Create default content based on document type
+    if (mainContent == null) {
+      final defaultContent = _createDefaultContent(metadata.type);
+      final contentJson = utf8.encode(const JsonEncoder.withIndent('  ').convert(defaultContent));
+      archive.addFile(ArchiveFile('content/main.json', contentJson.length, contentJson));
+
+      // For presentations, also create the initial slide
+      if (metadata.type == NdfDocumentType.presentation) {
+        final initialSlide = PresentationSlide.title(
+          id: 'slide-001',
+          index: 0,
+          title: metadata.title,
+        );
+        final slideJson = utf8.encode(initialSlide.toJsonString());
+        archive.addFile(ArchiveFile('content/slides/slide-001.json', slideJson.length, slideJson));
+      }
+    }
+
+    // Create empty directories structure
+    _addEmptyDirectories(archive);
+
+    // Encode the ZIP
+    final zipData = ZipEncoder().encode(archive);
+    if (zipData == null) {
+      throw Exception('Failed to encode NDF archive');
+    }
+
+    return Uint8List.fromList(zipData);
+  }
+
+  // ============================================================
+  // FILE-BASED METHODS (original implementations)
+  // ============================================================
+
   /// Read NDF metadata from a file
   Future<NdfDocument?> readMetadata(String filePath) async {
     try {
@@ -286,6 +458,26 @@ class NdfService {
             'default_expanded': false,
           },
           'items': [],
+        };
+
+      case NdfDocumentType.voicememo:
+        final now = DateTime.now();
+        return {
+          'type': 'voicememo',
+          'id': 'voicememo-${now.millisecondsSinceEpoch.toRadixString(36)}',
+          'schema': 'ndf-voicememo-1.0',
+          'title': 'Untitled Voice Memo',
+          'version': 1,
+          'created': now.toIso8601String(),
+          'modified': now.toIso8601String(),
+          'settings': {
+            'allow_comments': true,
+            'allow_ratings': true,
+            'rating_type': 'both',
+            'default_sort': 'recordedDesc',
+            'show_transcriptions': true,
+          },
+          'clips': [],
         };
     }
   }
@@ -776,6 +968,143 @@ class NdfService {
     );
     await tempFile.writeAsBytes(data);
     return tempFile.path;
+  }
+
+  // ============================================================
+  // VOICE MEMO CONTENT METHODS
+  // ============================================================
+
+  /// Read voice memo main content
+  Future<VoiceMemoContent?> readVoiceMemoContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return VoiceMemoContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing voice memo content: $e');
+      return null;
+    }
+  }
+
+  /// Read a voice memo clip
+  Future<VoiceMemoClip?> readVoiceMemoClip(String filePath, String clipId) async {
+    final json = await readArchiveJson(filePath, 'content/clips/$clipId.json');
+    if (json == null) return null;
+    try {
+      return VoiceMemoClip.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing voice memo clip $clipId: $e');
+      return null;
+    }
+  }
+
+  /// Read all voice memo clips
+  Future<List<VoiceMemoClip>> readVoiceMemoClips(String filePath, List<String> clipIds) async {
+    final clips = <VoiceMemoClip>[];
+    for (final clipId in clipIds) {
+      final clip = await readVoiceMemoClip(filePath, clipId);
+      if (clip != null) {
+        clips.add(clip);
+      }
+    }
+    return clips;
+  }
+
+  /// Save voice memo content and clips
+  Future<void> saveVoiceMemo(
+    String filePath,
+    VoiceMemoContent content,
+    List<VoiceMemoClip> clips,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+      for (final clip in clips)
+        'content/clips/${clip.id}.json': clip.toJsonString(),
+    });
+  }
+
+  /// Save a single voice memo clip
+  Future<void> saveVoiceMemoClip(
+    String filePath,
+    VoiceMemoClip clip,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/clips/${clip.id}.json': clip.toJsonString(),
+    });
+  }
+
+  /// Delete a voice memo clip and its audio file
+  Future<void> deleteVoiceMemoClip(
+    String filePath,
+    String clipId,
+    String audioFile,
+  ) async {
+    await deleteArchiveFiles(filePath, [
+      'content/clips/$clipId.json',
+      'assets/$audioFile',
+    ]);
+  }
+
+  /// Save clip audio to the archive
+  Future<void> saveClipAudio(
+    String filePath,
+    String clipId,
+    Uint8List audioBytes,
+  ) async {
+    await _updateArchiveFilesBytes(filePath, {
+      'assets/audio/$clipId.ogg': audioBytes,
+    });
+  }
+
+  /// Read clip audio from the archive
+  Future<Uint8List?> readClipAudio(String filePath, String audioFile) async {
+    return readArchiveFile(filePath, 'assets/$audioFile');
+  }
+
+  /// Read clip ratings
+  Future<List<ClipRating>> readClipRatings(String filePath, String clipId) async {
+    final files = await listArchiveFiles(filePath);
+    final ratings = <ClipRating>[];
+
+    for (final file in files) {
+      if (file.startsWith('social/clips/$clipId/ratings/') && file.endsWith('.json')) {
+        final json = await readArchiveJson(filePath, file);
+        if (json != null) {
+          try {
+            ratings.add(ClipRating.fromJson(json));
+          } catch (e) {
+            LogService().log('NdfService: Error parsing rating $file: $e');
+          }
+        }
+      }
+    }
+
+    // Sort by creation date
+    ratings.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return ratings;
+  }
+
+  /// Save a clip rating
+  Future<void> saveClipRating(
+    String filePath,
+    String clipId,
+    ClipRating rating,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'social/clips/$clipId/ratings/${rating.id}.json': rating.toJsonString(),
+    });
+  }
+
+  /// Delete all social data for a clip (ratings and comments)
+  Future<void> deleteClipSocialData(String filePath, String clipId) async {
+    final files = await listArchiveFiles(filePath);
+    final toDelete = files
+        .where((f) => f.startsWith('social/clips/$clipId/'))
+        .toList();
+
+    if (toDelete.isNotEmpty) {
+      await deleteArchiveFiles(filePath, toDelete);
+    }
   }
 
   // ============================================================

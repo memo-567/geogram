@@ -19,7 +19,9 @@ import 'services/debug_controller.dart';
 import 'services/usb_attachment_service.dart';
 import 'services/config_service.dart';
 import 'services/collection_service.dart';
+import 'services/encrypted_storage_service.dart';
 import 'services/profile_service.dart';
+import 'services/profile_storage.dart';
 import 'services/station_service.dart';
 import 'services/station_node_service.dart';
 import 'services/station_discovery_service.dart';
@@ -298,6 +300,10 @@ void main() async {
 
     // Set active callsign for collection storage path
     final profile = ProfileService().getProfile();
+    // Set nsec for encrypted storage access (must be before setActiveCallsign)
+    if (profile.nsec.isNotEmpty) {
+      CollectionService().setNsec(profile.nsec);
+    }
     await CollectionService().setActiveCallsign(profile.callsign);
     LogService().log('CollectionService callsign set: ${profile.callsign}');
 
@@ -655,6 +661,8 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     _themeService.removeListener(_onThemeChanged);
     _dmNotificationSubscription?.cancel();
     _transferOfferSubscription?.cancel();
+    // Close all encrypted storage connections
+    EncryptedStorageService().closeAllArchives();
     super.dispose();
   }
 
@@ -1902,6 +1910,43 @@ class _CollectionsPageState extends State<CollectionsPage> {
     return collection.type == 'files';
   }
 
+  /// Build a WorkPage with ProfileStorage from CollectionService
+  Widget _buildWorkPage(Collection collection) {
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage == null) {
+      // Fallback: if no profile storage, show error
+      return Center(
+        child: Text(_i18n.t('work_storage_not_available')),
+      );
+    }
+
+    // Extract relative path from absolute storagePath
+    final storagePath = collection.storagePath ?? '';
+    final basePath = profileStorage.basePath;
+    String relativePath;
+
+    if (storagePath.startsWith(basePath)) {
+      // Remove basePath prefix and clean up leading slashes
+      relativePath = storagePath.substring(basePath.length);
+      while (relativePath.startsWith('/')) {
+        relativePath = relativePath.substring(1);
+      }
+      // Also remove trailing slashes
+      while (relativePath.endsWith('/')) {
+        relativePath = relativePath.substring(0, relativePath.length - 1);
+      }
+    } else {
+      // Fallback: use basename
+      relativePath = storagePath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+    }
+
+    return WorkPage(
+      storage: profileStorage,
+      relativePath: relativePath,
+      collectionTitle: collection.title,
+    );
+  }
+
   Future<void> _loadCollections() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
@@ -2406,13 +2451,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     '',
                                               )
                                             : collection.type == 'work'
-                                            ? WorkPage(
-                                                basePath:
-                                                    collection.storagePath ??
-                                                    '',
-                                                collectionTitle:
-                                                    collection.title,
-                                              )
+                                            ? _buildWorkPage(collection)
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2630,13 +2669,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                                     '',
                                               )
                                             : collection.type == 'work'
-                                            ? WorkPage(
-                                                basePath:
-                                                    collection.storagePath ??
-                                                    '',
-                                                collectionTitle:
-                                                    collection.title,
-                                              )
+                                            ? _buildWorkPage(collection)
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );

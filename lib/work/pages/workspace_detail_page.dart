@@ -3,14 +3,17 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:image_picker/image_picker.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/profile_storage.dart';
 import '../models/workspace.dart';
 import '../models/ndf_document.dart';
 import '../models/ndf_permission.dart';
@@ -21,15 +24,18 @@ import 'document_editor_page.dart';
 import 'form_editor_page.dart';
 import 'presentation_editor_page.dart';
 import 'todo_editor_page.dart';
+import 'voicememo_editor_page.dart';
 
 /// Workspace detail page showing documents and folders
 class WorkspaceDetailPage extends StatefulWidget {
-  final String basePath;
+  final ProfileStorage storage;
+  final String relativePath;
   final String workspaceId;
 
   const WorkspaceDetailPage({
     super.key,
-    required this.basePath,
+    required this.storage,
+    required this.relativePath,
     required this.workspaceId,
   });
 
@@ -54,7 +60,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
   @override
   void initState() {
     super.initState();
-    _storage = WorkStorageService(widget.basePath);
+    _storage = WorkStorageService(widget.storage, widget.relativePath);
     _ndfService = NdfService();
     _loadWorkspace();
   }
@@ -83,20 +89,24 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         workspaceLogo = await _storage.readWorkspaceLogo(widget.workspaceId);
       }
 
-      // Pre-load document thumbnails and logos
+      // Pre-load document thumbnails and logos using bytes-based methods
       for (final doc in documents) {
         if (doc.thumbnail != null && !_thumbnailCache.containsKey(doc.filename)) {
-          final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
-          final thumbBytes = await _ndfService.readThumbnail(filePath);
-          if (thumbBytes != null) {
-            _thumbnailCache[doc.filename] = thumbBytes;
+          final ndfBytes = await _storage.readDocumentBytes(widget.workspaceId, doc.filename);
+          if (ndfBytes != null) {
+            final thumbBytes = _ndfService.readThumbnailFromBytes(ndfBytes);
+            if (thumbBytes != null) {
+              _thumbnailCache[doc.filename] = thumbBytes;
+            }
           }
         }
         if (doc.logo != null && !_logoCache.containsKey(doc.filename)) {
-          final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
-          final logoBytes = await _ndfService.readLogo(filePath);
-          if (logoBytes != null) {
-            _logoCache[doc.filename] = logoBytes;
+          final ndfBytes = await _storage.readDocumentBytes(widget.workspaceId, doc.filename);
+          if (ndfBytes != null) {
+            final logoBytes = _ndfService.readLogoFromBytes(ndfBytes);
+            if (logoBytes != null) {
+              _logoCache[doc.filename] = logoBytes;
+            }
           }
         }
       }
@@ -308,9 +318,39 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     if (_workspaceLogo == null || _workspace?.logo == null) return;
 
     final extension = _workspace!.logo!.split('.').last;
+
     for (final doc in _documents) {
-      final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
-      await _ndfService.embedLogo(filePath, _workspaceLogo!, extension);
+      try {
+        String filePath;
+        String? tempFilePath;
+
+        if (_storage.storage.isEncrypted) {
+          // For encrypted storage: extract to temp, modify, save back
+          final ndfBytes = await _storage.readDocumentBytes(widget.workspaceId, doc.filename);
+          if (ndfBytes == null) continue;
+          final tempDir = await Directory.systemTemp.createTemp('geogram_ndf_');
+          tempFilePath = p.join(tempDir.path, doc.filename);
+          await File(tempFilePath).writeAsBytes(ndfBytes);
+          filePath = tempFilePath;
+        } else {
+          // For filesystem storage, use absolute path
+          filePath = _storage.storage.getAbsolutePath(_storage.documentPath(widget.workspaceId, doc.filename));
+        }
+
+        await _ndfService.embedLogo(filePath, _workspaceLogo!, extension);
+
+        // If using temp file, save back to encrypted storage
+        if (tempFilePath != null) {
+          final modifiedBytes = await File(tempFilePath).readAsBytes();
+          await _storage.writeDocumentBytes(widget.workspaceId, doc.filename, modifiedBytes);
+          // Cleanup
+          final tempFile = File(tempFilePath);
+          await tempFile.delete();
+          await tempFile.parent.delete();
+        }
+      } catch (e) {
+        LogService().log('WorkspaceDetailPage: Error applying logo to ${doc.filename}: $e');
+      }
     }
     await _loadWorkspace();
   }
@@ -447,19 +487,32 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
 
         // Generate filename
         final filename = '${metadata.id}.ndf';
-        final outputPath = _storage.documentPath(widget.workspaceId, filename);
 
-        // Create the NDF file
-        await _ndfService.createDocument(
-          outputPath: outputPath,
+        // Create the NDF file as bytes
+        var ndfBytes = _ndfService.createDocumentAsBytes(
           metadata: metadata,
           permissions: permissions,
         );
 
-        // Embed workspace logo if available
+        // Write NDF bytes to storage
+        await _storage.writeDocumentBytes(widget.workspaceId, filename, ndfBytes);
+
+        // Embed workspace logo if available (using temp file approach)
         if (_workspaceLogo != null && _workspace?.logo != null) {
-          final extension = _workspace!.logo!.split('.').last;
-          await _ndfService.embedLogo(outputPath, _workspaceLogo!, extension);
+          try {
+            final extension = _workspace!.logo!.split('.').last;
+            final tempDir = await Directory.systemTemp.createTemp('geogram_ndf_');
+            final tempFilePath = p.join(tempDir.path, filename);
+            await File(tempFilePath).writeAsBytes(ndfBytes);
+            await _ndfService.embedLogo(tempFilePath, _workspaceLogo!, extension);
+            final modifiedBytes = await File(tempFilePath).readAsBytes();
+            await _storage.writeDocumentBytes(widget.workspaceId, filename, modifiedBytes);
+            // Cleanup
+            await File(tempFilePath).delete();
+            await tempDir.delete();
+          } catch (e) {
+            LogService().log('WorkspaceDetailPage: Failed to embed logo in new document: $e');
+          }
         }
 
         // Update workspace - add to current folder
@@ -550,6 +603,15 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                   _createDocument(NdfDocumentType.todo);
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.mic),
+                title: Text(_i18n.t('work_voicememo')),
+                subtitle: Text(_i18n.t('work_voicememo_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.voicememo);
+                },
+              ),
               const SizedBox(height: 16),
             ],
           ),
@@ -589,12 +651,40 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
 
     if (result != null && result.isNotEmpty && result != doc.title) {
       try {
-        final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+        String filePath;
+        String? tempFilePath;
+
+        if (_storage.storage.isEncrypted) {
+          // For encrypted storage: extract to temp file, modify, save back
+          final ndfBytes = await _storage.readDocumentBytes(widget.workspaceId, doc.filename);
+          if (ndfBytes == null) {
+            throw Exception('Failed to read document');
+          }
+          final tempDir = await Directory.systemTemp.createTemp('geogram_ndf_');
+          tempFilePath = p.join(tempDir.path, doc.filename);
+          await File(tempFilePath).writeAsBytes(ndfBytes);
+          filePath = tempFilePath;
+        } else {
+          // For filesystem storage, use absolute path
+          filePath = _storage.storage.getAbsolutePath(_storage.documentPath(widget.workspaceId, doc.filename));
+        }
+
         final metadata = await _ndfService.readMetadata(filePath);
         if (metadata != null) {
           metadata.title = result;
           metadata.touch();
           await _ndfService.updateMetadata(filePath, metadata);
+
+          // If using temp file, save back to encrypted storage
+          if (tempFilePath != null) {
+            final modifiedBytes = await File(tempFilePath).readAsBytes();
+            await _storage.writeDocumentBytes(widget.workspaceId, doc.filename, modifiedBytes);
+            // Cleanup
+            final tempFile = File(tempFilePath);
+            await tempFile.delete();
+            await tempFile.parent.delete();
+          }
+
           await _loadWorkspace();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -753,8 +843,58 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     });
   }
 
-  void _openDocument(NdfDocumentRef doc) {
-    final filePath = _storage.documentPath(widget.workspaceId, doc.filename);
+  Future<void> _openDocument(NdfDocumentRef doc) async {
+    String filePath;
+    String? tempFilePath;
+
+    if (_storage.storage.isEncrypted) {
+      // For encrypted storage: extract to temp file
+      final ndfBytes = await _storage.readDocumentBytes(widget.workspaceId, doc.filename);
+      if (ndfBytes == null) {
+        LogService().log('WorkspaceDetailPage: Failed to read document ${doc.filename}');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(_i18n.t('error_loading_document'))),
+          );
+        }
+        return;
+      }
+
+      // Create temp file
+      final tempDir = await Directory.systemTemp.createTemp('geogram_ndf_');
+      tempFilePath = p.join(tempDir.path, doc.filename);
+      final tempFile = File(tempFilePath);
+      await tempFile.writeAsBytes(ndfBytes);
+      filePath = tempFilePath;
+      LogService().log('WorkspaceDetailPage: Extracted ${doc.filename} to temp: $tempFilePath');
+    } else {
+      // For filesystem storage, use absolute path
+      filePath = _storage.storage.getAbsolutePath(_storage.documentPath(widget.workspaceId, doc.filename));
+    }
+
+    // Callback to save changes back and cleanup temp file
+    Future<void> onEditorClosed() async {
+      if (tempFilePath != null && _storage.storage.isEncrypted) {
+        try {
+          // Read modified file and save back to encrypted storage
+          final tempFile = File(tempFilePath);
+          if (await tempFile.exists()) {
+            final modifiedBytes = await tempFile.readAsBytes();
+            await _storage.writeDocumentBytes(widget.workspaceId, doc.filename, modifiedBytes);
+            LogService().log('WorkspaceDetailPage: Saved changes from temp back to encrypted storage');
+
+            // Cleanup temp file and directory
+            final tempDir = tempFile.parent;
+            await tempFile.delete();
+            await tempDir.delete();
+            LogService().log('WorkspaceDetailPage: Cleaned up temp file');
+          }
+        } catch (e) {
+          LogService().log('WorkspaceDetailPage: Error saving changes from temp: $e');
+        }
+      }
+      await _loadWorkspace();
+    }
 
     switch (doc.type) {
       case NdfDocumentType.spreadsheet:
@@ -766,7 +906,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
               title: doc.title,
             ),
           ),
-        ).then((_) => _loadWorkspace());
+        ).then((_) => onEditorClosed());
         break;
 
       case NdfDocumentType.document:
@@ -778,7 +918,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
               title: doc.title,
             ),
           ),
-        ).then((_) => _loadWorkspace());
+        ).then((_) => onEditorClosed());
         break;
 
       case NdfDocumentType.form:
@@ -790,7 +930,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
               title: doc.title,
             ),
           ),
-        ).then((_) => _loadWorkspace());
+        ).then((_) => onEditorClosed());
         break;
 
       case NdfDocumentType.presentation:
@@ -802,7 +942,7 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
               title: doc.title,
             ),
           ),
-        ).then((_) => _loadWorkspace());
+        ).then((_) => onEditorClosed());
         break;
 
       case NdfDocumentType.todo:
@@ -814,7 +954,19 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
               title: doc.title,
             ),
           ),
-        ).then((_) => _loadWorkspace());
+        ).then((_) => onEditorClosed());
+        break;
+
+      case NdfDocumentType.voicememo:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VoiceMemoEditorPage(
+              filePath: filePath,
+              title: doc.title,
+            ),
+          ),
+        ).then((_) => onEditorClosed());
         break;
     }
   }
@@ -831,6 +983,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return _i18n.t('work_form');
       case NdfDocumentType.todo:
         return _i18n.t('work_todo');
+      case NdfDocumentType.voicememo:
+        return _i18n.t('work_voicememo');
     }
   }
 
@@ -846,6 +1000,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Icons.assignment;
       case NdfDocumentType.todo:
         return Icons.checklist;
+      case NdfDocumentType.voicememo:
+        return Icons.mic;
     }
   }
 
@@ -861,6 +1017,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Colors.purple;
       case NdfDocumentType.todo:
         return Colors.teal;
+      case NdfDocumentType.voicememo:
+        return Colors.deepOrange;
     }
   }
 

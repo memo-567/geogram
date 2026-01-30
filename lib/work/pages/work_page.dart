@@ -8,18 +8,21 @@ import 'package:flutter/material.dart';
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/profile_storage.dart';
 import '../models/workspace.dart';
 import '../services/work_storage_service.dart';
 import 'workspace_detail_page.dart';
 
 /// Main Work app page showing workspace list
 class WorkPage extends StatefulWidget {
-  final String basePath;
+  final ProfileStorage storage;
+  final String relativePath;
   final String? collectionTitle;
 
   const WorkPage({
     super.key,
-    required this.basePath,
+    required this.storage,
+    required this.relativePath,
     this.collectionTitle,
   });
 
@@ -37,7 +40,7 @@ class _WorkPageState extends State<WorkPage> {
   @override
   void initState() {
     super.initState();
-    _storage = WorkStorageService(widget.basePath);
+    _storage = WorkStorageService(widget.storage, widget.relativePath);
     _loadWorkspaces();
   }
 
@@ -131,7 +134,8 @@ class _WorkPageState extends State<WorkPage> {
             context,
             MaterialPageRoute(
               builder: (context) => WorkspaceDetailPage(
-                basePath: widget.basePath,
+                storage: widget.storage,
+                relativePath: widget.relativePath,
                 workspaceId: workspace.id,
               ),
             ),
@@ -312,7 +316,8 @@ class _WorkPageState extends State<WorkPage> {
             context,
             MaterialPageRoute(
               builder: (context) => WorkspaceDetailPage(
-                basePath: widget.basePath,
+                storage: widget.storage,
+                relativePath: widget.relativePath,
                 workspaceId: workspace.id,
               ),
             ),
