@@ -13,9 +13,11 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/video.dart' as geogram;
 import '../models/blog_comment.dart';
+import '../services/collection_service.dart';
 import '../services/video_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/i18n_service.dart';
 import '../widgets/video_tile_widget.dart';
@@ -80,6 +82,18 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
     _profileIdentifier = profile.nickname.isNotEmpty
         ? profile.nickname
         : profile.callsign;
+
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _videoService.setStorage(scopedStorage);
+    } else {
+      _videoService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
 
     await _videoService.initializeCollection(
       widget.collectionPath,

@@ -6,9 +6,11 @@
 import 'package:flutter/material.dart';
 import '../models/group.dart';
 import '../models/group_member.dart';
+import '../services/collection_service.dart';
 import '../services/groups_service.dart';
 import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import 'group_detail_page.dart';
 
@@ -53,6 +55,18 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
   }
 
   Future<void> _initialize() async {
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _groupsService.setStorage(scopedStorage);
+    } else {
+      _groupsService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
+
     final currentProfile = _profileService.getProfile();
     await _groupsService.initializeCollection(
       widget.collectionPath,

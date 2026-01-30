@@ -5,8 +5,10 @@
 
 import 'package:flutter/material.dart';
 import '../models/postcard.dart';
+import '../services/collection_service.dart';
 import '../services/postcard_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../widgets/postcard_tile_widget.dart';
 import '../widgets/postcard_detail_widget.dart';
@@ -60,6 +62,18 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     final profile = _profileService.getProfile();
     _currentUserNpub = profile.npub;
     _currentCallsign = profile.callsign;
+
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _postcardService.setStorage(scopedStorage);
+    } else {
+      _postcardService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
 
     // Initialize postcard service
     await _postcardService.initializeCollection(widget.collectionPath);

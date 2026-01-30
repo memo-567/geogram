@@ -12,8 +12,10 @@ import 'package:path/path.dart' as path;
 import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/event_registration.dart';
+import '../services/collection_service.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../widgets/event_tile_widget.dart';
@@ -89,6 +91,17 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     } else {
       // Local mode - initialize event service with collection path
       if (widget.collectionPath != null) {
+        // Set profile storage for encrypted storage support
+        final profileStorage = CollectionService().profileStorage;
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            widget.collectionPath!,
+          );
+          _eventService.setStorage(scopedStorage);
+        } else {
+          _eventService.setStorage(FilesystemProfileStorage(widget.collectionPath!));
+        }
         await _eventService.initializeCollection(widget.collectionPath!);
       }
       await _loadEvents();

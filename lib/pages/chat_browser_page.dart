@@ -15,7 +15,9 @@ import '../models/chat_settings.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/chat_service.dart';
+import '../services/collection_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
@@ -489,6 +491,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final storagePath = widget.collection?.storagePath;
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
+      }
+
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          storagePath,
+        );
+        _chatService.setStorage(scopedStorage);
+      } else {
+        _chatService.setStorage(FilesystemProfileStorage(storagePath));
       }
 
       // Pass current user's npub to initialize admin if needed

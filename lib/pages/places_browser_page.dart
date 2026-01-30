@@ -11,12 +11,14 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
+import '../services/collection_service.dart';
 import '../services/config_service.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/place_sharing_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/station_place_service.dart';
 import '../services/user_location_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
@@ -126,6 +128,17 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     setState(() => _isLoading = true);
 
     try {
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          widget.collectionPath,
+        );
+        _placeService.setStorage(scopedStorage);
+      } else {
+        _placeService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      }
       await _placeService.initializeCollection(widget.collectionPath);
       final places = await _placeService.loadAllPlaces();
 

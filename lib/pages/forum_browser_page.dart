@@ -12,8 +12,10 @@ import '../models/collection.dart';
 import '../models/forum_section.dart';
 import '../models/forum_thread.dart';
 import '../models/forum_post.dart';
+import '../services/collection_service.dart';
 import '../services/forum_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/signing_service.dart';
 import '../widgets/section_list_widget.dart';
 import '../widgets/thread_list_widget.dart';
@@ -72,6 +74,18 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
       final storagePath = widget.collection.storagePath;
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
+      }
+
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          storagePath,
+        );
+        _forumService.setStorage(scopedStorage);
+      } else {
+        _forumService.setStorage(FilesystemProfileStorage(storagePath));
       }
 
       // Pass current user's npub to initialize admin if needed

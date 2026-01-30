@@ -14,11 +14,13 @@ import '../models/contact.dart';
 // Re-export history entry types
 export '../models/contact.dart' show ContactHistoryEntry, ContactHistoryEntryType;
 import '../platform/file_image_helper.dart' as file_helper;
+import '../services/collection_service.dart';
 import '../services/contact_service.dart';
 // Re-export metrics and summary classes from contact_service
 export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics, ContactSummary;
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../models/event.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -91,6 +93,18 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
   }
 
   Future<void> _initialize() async {
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _contactService.setStorage(scopedStorage);
+    } else {
+      _contactService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
+
     // Initialize contact service
     await _contactService.initializeCollection(widget.collectionPath);
     await _loadContacts();

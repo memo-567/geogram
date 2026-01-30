@@ -6,8 +6,10 @@
 import 'package:flutter/material.dart';
 import '../models/market_shop.dart';
 import '../models/market_item.dart';
+import '../services/collection_service.dart';
 import '../services/market_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/user_location_service.dart';
 import '../services/i18n_service.dart';
 import 'shop_settings_page.dart';
@@ -58,6 +60,18 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
   Future<void> _initialize() async {
     final profile = _profileService.getProfile();
     _currentUserNpub = profile.npub;
+
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _marketService.setStorage(scopedStorage);
+    } else {
+      _marketService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
 
     await _marketService.initializeCollection(
       widget.collectionPath,

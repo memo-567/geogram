@@ -9,8 +9,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import '../models/news_article.dart';
 import '../models/collection.dart';
+import '../services/collection_service.dart';
 import '../services/news_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../dialogs/new_news_dialog.dart';
 
@@ -64,8 +66,21 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
     final appLang = _i18n.currentLanguage;
     _currentLanguage = appLang.split('_').first;
 
+    // Set profile storage for encrypted storage support
+    final collectionPath = widget.collection.storagePath ?? '';
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        collectionPath,
+      );
+      _newsService.setStorage(scopedStorage);
+    } else {
+      _newsService.setStorage(FilesystemProfileStorage(collectionPath));
+    }
+
     await _newsService.initializeCollection(
-      widget.collection.storagePath ?? '',
+      collectionPath,
       creatorNpub: _currentUserNpub,
     );
 

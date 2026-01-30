@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
+import '../services/collection_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/i18n_service.dart';
 import '../widgets/blog_post_tile_widget.dart';
@@ -77,6 +79,20 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     _profileIdentifier = profile.nickname.isNotEmpty
         ? profile.nickname
         : profile.callsign;
+
+    // Set profile storage for encrypted storage support
+    // Use ScopedProfileStorage to scope operations to the collection path
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _blogService.setStorage(scopedStorage);
+    } else {
+      // Fallback: create filesystem storage from collection path
+      _blogService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
 
     // Initialize blog service
     await _blogService.initializeCollection(

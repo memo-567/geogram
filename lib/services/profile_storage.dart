@@ -377,3 +377,147 @@ class EncryptedProfileStorage extends ProfileStorage {
     }
   }
 }
+
+/// Scoped storage that wraps another ProfileStorage with a path prefix.
+///
+/// This is useful when a service needs to operate within a specific collection
+/// directory, using relative paths from that collection root.
+///
+/// Example:
+/// ```dart
+/// // Profile storage rooted at /devices/X1ABC123/
+/// final profileStorage = CollectionService().profileStorage;
+///
+/// // Scoped storage rooted at /devices/X1ABC123/blog-xxx/
+/// final blogStorage = ScopedProfileStorage(profileStorage, 'blog-xxx');
+///
+/// // Now blogStorage.readString('2024/post1/post.md') reads from
+/// // /devices/X1ABC123/blog-xxx/2024/post1/post.md
+/// ```
+class ScopedProfileStorage extends ProfileStorage {
+  final ProfileStorage _inner;
+  final String _prefix;
+
+  ScopedProfileStorage(this._inner, this._prefix);
+
+  /// Create a scoped storage from an absolute collection path.
+  ///
+  /// Extracts the relative path by removing the base path prefix.
+  factory ScopedProfileStorage.fromAbsolutePath(
+    ProfileStorage baseStorage,
+    String absoluteCollectionPath,
+  ) {
+    final basePath = baseStorage.basePath;
+    String relativePath;
+
+    if (absoluteCollectionPath.startsWith(basePath)) {
+      relativePath = absoluteCollectionPath.substring(basePath.length);
+      // Clean up leading/trailing slashes
+      while (relativePath.startsWith('/')) {
+        relativePath = relativePath.substring(1);
+      }
+      while (relativePath.endsWith('/')) {
+        relativePath = relativePath.substring(0, relativePath.length - 1);
+      }
+    } else {
+      // Fallback: use last path component
+      relativePath = absoluteCollectionPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+    }
+
+    return ScopedProfileStorage(baseStorage, relativePath);
+  }
+
+  String _prefixPath(String relativePath) {
+    if (relativePath.isEmpty) return _prefix;
+    if (_prefix.isEmpty) return relativePath;
+    return '$_prefix/$relativePath';
+  }
+
+  @override
+  String get basePath => _inner.getAbsolutePath(_prefix);
+
+  @override
+  bool get isEncrypted => _inner.isEncrypted;
+
+  @override
+  String getAbsolutePath(String relativePath) {
+    return _inner.getAbsolutePath(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<String?> readString(String relativePath) {
+    return _inner.readString(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<Uint8List?> readBytes(String relativePath) {
+    return _inner.readBytes(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<void> writeString(String relativePath, String content) {
+    return _inner.writeString(_prefixPath(relativePath), content);
+  }
+
+  @override
+  Future<void> writeBytes(String relativePath, Uint8List bytes) {
+    return _inner.writeBytes(_prefixPath(relativePath), bytes);
+  }
+
+  @override
+  Future<bool> exists(String relativePath) {
+    return _inner.exists(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<void> delete(String relativePath) {
+    return _inner.delete(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<void> copyFromExternal(String externalPath, String relativePath) {
+    return _inner.copyFromExternal(externalPath, _prefixPath(relativePath));
+  }
+
+  @override
+  Future<void> copyToExternal(String relativePath, String externalPath) {
+    return _inner.copyToExternal(_prefixPath(relativePath), externalPath);
+  }
+
+  @override
+  Future<List<StorageEntry>> listDirectory(String relativePath, {bool recursive = false}) async {
+    final entries = await _inner.listDirectory(_prefixPath(relativePath), recursive: recursive);
+    // Adjust paths in entries to be relative to scope
+    final prefixWithSlash = _prefix.isEmpty ? '' : '$_prefix/';
+    return entries.map((e) {
+      var path = e.path;
+      if (path.startsWith(prefixWithSlash)) {
+        path = path.substring(prefixWithSlash.length);
+      } else if (path == _prefix) {
+        path = '';
+      }
+      return StorageEntry(
+        name: e.name,
+        path: path,
+        isDirectory: e.isDirectory,
+        size: e.size,
+        modified: e.modified,
+      );
+    }).toList();
+  }
+
+  @override
+  Future<void> createDirectory(String relativePath) {
+    return _inner.createDirectory(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<bool> directoryExists(String relativePath) {
+    return _inner.directoryExists(_prefixPath(relativePath));
+  }
+
+  @override
+  Future<void> deleteDirectory(String relativePath, {bool recursive = false}) {
+    return _inner.deleteDirectory(_prefixPath(relativePath), recursive: recursive);
+  }
+}

@@ -9,8 +9,10 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/report.dart';
+import '../services/collection_service.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/alert_sharing_service.dart';
 import '../services/station_alert_service.dart';
@@ -99,7 +101,19 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       await _loadRemoteAlerts();
     } else {
       // Local mode: load from local collection
-      await _reportService.initializeCollection(widget.collectionPath ?? '');
+      // Set profile storage for encrypted storage support
+      final collectionPath = widget.collectionPath ?? '';
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          collectionPath,
+        );
+        _reportService.setStorage(scopedStorage);
+      } else {
+        _reportService.setStorage(FilesystemProfileStorage(collectionPath));
+      }
+      await _reportService.initializeCollection(collectionPath);
       await _loadReports();
 
       // Initialize user location service for automatic updates
