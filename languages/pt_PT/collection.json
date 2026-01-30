@@ -92,9 +92,9 @@
   "collection_type_work": "Trabalho",
   "collection_type_desc_work": "Crie e organize espaços de trabalho com documentos NDF incluindo folhas de cálculo, documentos de texto rico, apresentações e formulários. Colaboração baseada em sincronização com assinaturas NOSTR.",
   "collection_type_features_work": "Folhas de cálculo com fórmulas|Documentos de texto rico|Apresentações com slides|Formulários com respostas|Colaboração em espaço de trabalho",
-  "collection_type_music": "Musica",
-  "collection_type_desc_music": "Leitor de musica local com descoberta de albuns por pasta. Analise as suas pastas de musica, reproduza faixas com modo aleatorio e repetir, acompanhe o historico e estatisticas de reproducao.",
-  "collection_type_features_music": "Descoberta de albuns por pasta|Detecao de capas|Modos aleatorio e repetir|Gestao de fila de reproducao|Estatisticas de reproducao",
+  "collection_type_music": "Música",
+  "collection_type_desc_music": "Leitor de música local com descoberta de álbuns por pasta. Analise as suas pastas de música, reproduza faixas com modo aleatório e repetir, acompanhe o histórico e estatísticas de reprodução.",
+  "collection_type_features_music": "Descoberta de álbuns por pasta|Deteção de capas|Modos aleatório e repetir|Gestão de fila de reprodução|Estatísticas de reprodução",
   "collection_updates": "Atualizações de Coleções",
   "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas",
 
