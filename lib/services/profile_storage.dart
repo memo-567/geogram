@@ -9,7 +9,8 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
-import 'encrypted_storage_service.dart';
+// Use stub for CLI/pure Dart builds, real implementation for Flutter
+import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'log_service.dart';
 
 /// Entry in a storage directory listing
