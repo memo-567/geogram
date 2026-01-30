@@ -6,6 +6,7 @@
 /// Platform-aware file image helper
 /// Provides FileImage support on native platforms while gracefully handling web
 
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
@@ -31,4 +32,15 @@ bool fileExists(String path) {
 Widget? buildFileImage(String path, {double? width, double? height, BoxFit fit = BoxFit.cover}) {
   if (kIsWeb) return null;
   return file_helper.buildFileImage(path, width: width, height: height, fit: fit);
+}
+
+/// Build an Image widget from bytes in memory
+/// Used for encrypted storage where files are kept in RAM only
+Widget? buildMemoryImage(Uint8List bytes, {double? width, double? height, BoxFit fit = BoxFit.cover}) {
+  return Image.memory(
+    bytes,
+    width: width,
+    height: height,
+    fit: fit,
+  );
 }

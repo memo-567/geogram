@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:typed_data';
 import '../models/chat_message.dart';
 import '../models/dm_conversation.dart';
 import '../services/direct_message_service.dart';
@@ -418,16 +419,17 @@ class _DMChatPageState extends State<DMChatPage> {
     return null;
   }
 
-  /// Get attachment path for a message file
-  Future<String?> _getAttachmentPath(ChatMessage message) async {
-    if (!message.hasFile || message.attachedFile == null) return null;
+  /// Get attachment data for a message file
+  /// DM uses filesystem storage, so returns (path, null)
+  Future<(String?, Uint8List?)> _getAttachmentData(ChatMessage message) async {
+    if (!message.hasFile || message.attachedFile == null) return (null, null);
 
     final filename = message.attachedFile!;
 
     // First check if file exists locally
     final localPath = await _dmService.getFilePath(widget.otherCallsign, filename);
     if (localPath != null) {
-      return localPath;
+      return (localPath, null);
     }
 
     // If not local and device is online, try to download
@@ -436,15 +438,16 @@ class _DMChatPageState extends State<DMChatPage> {
     final messageAge = DateTime.now().difference(message.dateTime);
     final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
 
-    if (!shouldAutoDownload) return null;
+    if (!shouldAutoDownload) return (null, null);
 
     final device = _devicesService.getDevice(widget.otherCallsign);
     if (device?.isOnline ?? false) {
       // Download via DM file sync
-      return await _dmService.downloadFile(widget.otherCallsign, filename);
+      final path = await _dmService.downloadFile(widget.otherCallsign, filename);
+      return (path, null);
     }
 
-    return null;
+    return (null, null);
   }
 
   /// Send a file message
@@ -477,7 +480,7 @@ class _DMChatPageState extends State<DMChatPage> {
 
   /// Open image in full-screen viewer
   Future<void> _openImage(ChatMessage message) async {
-    final filePath = await _getAttachmentPath(message);
+    final (filePath, _) = await _getAttachmentData(message);
     if (filePath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Image not available')),
@@ -489,7 +492,7 @@ class _DMChatPageState extends State<DMChatPage> {
     final imagePaths = <String>[];
     for (final msg in _messages) {
       if (!msg.hasFile) continue;
-      final path = await _getAttachmentPath(msg);
+      final (path, _) = await _getAttachmentData(msg);
       if (path == null) continue;
       if (!_isImageFile(path)) continue;
       imagePaths.add(path);
@@ -827,7 +830,7 @@ class _DMChatPageState extends State<DMChatPage> {
                   messages: _messages,
                   isGroupChat: false, // 1:1 DM conversation
                   getVoiceFilePath: _getVoiceFilePath,
-                  getAttachmentPath: _getAttachmentPath,
+                  getAttachmentData: _getAttachmentData,
                   onMessageQuote: _setQuotedMessage,
                   onMessageReact: _toggleReaction,
                   onImageOpen: _openImage,

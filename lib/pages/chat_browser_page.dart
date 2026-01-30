@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import '../models/collection.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -1865,21 +1867,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (!message.hasVoice || message.voiceFile == null) return null;
 
     // Voice files use the same storage as regular file attachments
-    return _getStationAttachmentPath(ChatMessage(
+    final (path, _) = await _getStationAttachmentData(ChatMessage(
       author: message.author,
       content: message.content,
       timestamp: message.timestamp,
       metadata: {'file': message.voiceFile!},
     ));
+    return path;
   }
 
-  /// Get attachment path for station room messages
-  Future<String?> _getStationAttachmentPath(ChatMessage message) async {
-    if (!message.hasFile) return null;
+  /// Get attachment data for station room messages
+  /// Station rooms use filesystem cache, so returns (path, null)
+  Future<(String?, Uint8List?)> _getStationAttachmentData(ChatMessage message) async {
+    if (!message.hasFile) return (null, null);
 
     final filename = message.attachedFile;
-    if (filename == null) return null;
-    if (_lastRelayCacheKey == null || _selectedStationRoom == null) return null;
+    if (filename == null) return (null, null);
+    if (_lastRelayCacheKey == null || _selectedStationRoom == null) return (null, null);
 
     // Check if already cached
     final cachedPath = await _cacheService.getChatFilePath(
@@ -1889,13 +1893,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     );
 
     if (cachedPath != null) {
-      return cachedPath;
+      return (cachedPath, null);
     }
 
     // Skip downloading files we just uploaded (bandwidth optimization)
     if (_recentlyUploadedFiles.contains(filename)) {
       LogService().log('Skipping download of recently uploaded file: $filename');
-      return null;
+      return (null, null);
     }
 
     // Check bandwidth-conscious download policy:
@@ -1905,7 +1909,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
 
     if (!shouldAutoDownload || !_stationReachable) {
-      return null;
+      return (null, null);
     }
 
     try {
@@ -1917,16 +1921,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         cacheKey: _lastRelayCacheKey,
       );
 
-      return localPath;
+      return (localPath, null);
     } catch (e) {
       LogService().log('Error downloading station attachment: $e');
-      return null;
+      return (null, null);
     }
   }
 
   /// Open image from station room message
   Future<void> _openStationImage(ChatMessage message) async {
-    final filePath = await _getStationAttachmentPath(message);
+    final (filePath, _) = await _getStationAttachmentData(message);
     if (filePath == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1941,7 +1945,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final convertedMessages = _convertStationMessages(_stationMessages);
     for (final msg in convertedMessages) {
       if (!msg.hasFile) continue;
-      final imgPath = await _getStationAttachmentPath(msg);
+      final (imgPath, _) = await _getStationAttachmentData(msg);
       if (imgPath == null) continue;
       if (!_isImageFile(imgPath)) continue;
       imagePaths.add(imgPath);
@@ -2075,6 +2079,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
+  /// Get file path for opening externally (writes to temp if encrypted)
+  /// This is only used for operations that require a file path (photo viewer, external apps)
+  /// For inline display, use _resolveAttachedFileData which keeps data in RAM
+  Future<String?> _getAttachmentFilePath(ChatMessage message) async {
+    final (path, bytes) = await _resolveAttachedFileData(message);
+    if (path != null) return path;
+    if (bytes == null) return null;
+
+    // For encrypted storage, we need to write to temp for external viewing
+    final filename = message.attachedFile!;
+    final tempDir = await getTemporaryDirectory();
+    final tempFile = File('${tempDir.path}/chat_temp/$filename');
+    await tempFile.parent.create(recursive: true);
+    await tempFile.writeAsBytes(bytes);
+    return tempFile.path;
+  }
+
   /// Open attached file
   Future<void> _openAttachedFile(ChatMessage message) async {
     if (!message.hasFile) return;
@@ -2086,36 +2107,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     try {
-      final storagePath = widget.collection!.storagePath;
-      if (storagePath == null) {
-        _showError('Collection storage path is null');
+      final filename = message.attachedFile!;
+      if (_isImageFile(filename)) {
+        await _openAttachedImage(message);
         return;
       }
 
-      // Construct file path based on channel type
-      String filePath;
-      if (_selectedChannel!.id == 'main') {
-        // For main channel, files are in year folders
-        final year = message.dateTime.year.toString();
-        filePath = path.join(
-          storagePath,
-          _selectedChannel!.folder,
-          year,
-          'files',
-          message.attachedFile!,
-        );
-      } else {
-        // For DM and group channels, files are in channel folder
-        filePath = path.join(
-          storagePath,
-          _selectedChannel!.folder,
-          'files',
-          message.attachedFile!,
-        );
-      }
-
-      if (_isImageFile(filePath)) {
-        await _openAttachedImage(message);
+      // Get file path (writes to temp if encrypted)
+      final filePath = await _getAttachmentFilePath(message);
+      if (filePath == null) {
+        _showError('File not found: ${message.attachedFile}');
         return;
       }
 
@@ -2138,31 +2139,37 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  Future<String?> _resolveAttachedFilePath(ChatMessage message) async {
-    if (!message.hasFile) return null;
-    if (widget.isRemoteDevice || widget.collection == null) return null;
+  /// Resolve attachment data for a message
+  /// Returns (path, bytes) tuple:
+  /// - For filesystem storage: (path, null)
+  /// - For encrypted storage: (null, bytes) - bytes stay in RAM only
+  Future<(String?, Uint8List?)> _resolveAttachedFileData(ChatMessage message) async {
+    if (!message.hasFile) return (null, null);
+    if (widget.isRemoteDevice || widget.collection == null) return (null, null);
 
     final storagePath = widget.collection!.storagePath;
-    if (storagePath == null) return null;
-    if (_selectedChannel == null) return null;
+    if (storagePath == null) return (null, null);
+    if (_selectedChannel == null) return (null, null);
 
+    final filename = message.attachedFile!;
+
+    // Determine the channel folder path for attachments
+    String channelFolder;
     if (_selectedChannel!.id == 'main') {
       final year = message.dateTime.year.toString();
-      return path.join(
-        storagePath,
-        _selectedChannel!.folder,
-        year,
-        'files',
-        message.attachedFile!,
-      );
+      channelFolder = '${_selectedChannel!.folder}/$year';
+    } else {
+      channelFolder = _selectedChannel!.folder;
     }
 
-    return path.join(
-      storagePath,
-      _selectedChannel!.folder,
-      'files',
-      message.attachedFile!,
-    );
+    // For encrypted storage, return bytes in RAM (never write to disk)
+    if (_chatService.useEncryptedStorage) {
+      final bytes = await _chatService.getAttachmentBytes(channelFolder, filename);
+      return (null, bytes);
+    }
+
+    // For filesystem storage, return direct path
+    return (path.join(storagePath, channelFolder, 'files', filename), null);
   }
 
   bool _isImageFile(String pathOrName) {
@@ -2176,7 +2183,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   Future<void> _openAttachedImage(ChatMessage message) async {
-    final filePath = await _resolveAttachedFilePath(message);
+    // For photo viewer we need file paths (writes to temp if encrypted)
+    final filePath = await _getAttachmentFilePath(message);
     if (filePath == null) {
       _showError('Image not available');
       return;
@@ -2190,11 +2198,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final imagePaths = <String>[];
     for (final msg in _messages) {
       if (!msg.hasFile) continue;
-      final path = await _resolveAttachedFilePath(msg);
-      if (path == null) continue;
-      if (!_isImageFile(path)) continue;
-      if (!file_helper.fileExists(path)) continue;
-      imagePaths.add(path);
+      final filename = msg.attachedFile;
+      if (filename == null || !_isImageFile(filename)) continue;
+      final imgPath = await _getAttachmentFilePath(msg);
+      if (imgPath == null) continue;
+      if (!file_helper.fileExists(imgPath)) continue;
+      imagePaths.add(imgPath);
     }
 
     if (imagePaths.isEmpty) {
@@ -2515,7 +2524,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                   onMessageHide: _hideMessage,
                                   isMessageHidden: _isMessageHidden,
                                   onMessageUnhide: _unhideMessage,
-                                  getAttachmentPath: _resolveAttachedFilePath,
+                                  getAttachmentData: _resolveAttachedFileData,
                                   onImageOpen: _openAttachedImage,
                                   onMessageReact: _toggleLocalReaction,
                                 ),
@@ -2560,7 +2569,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     onMessageHide: _hideMessage,
                     isMessageHidden: _isMessageHidden,
                     onMessageUnhide: _unhideMessage,
-                    getAttachmentPath: _resolveAttachedFilePath,
+                    getAttachmentData: _resolveAttachedFileData,
                     onImageOpen: _openAttachedImage,
                     onMessageReact: _toggleLocalReaction,
                   ),
@@ -2688,7 +2697,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             canDeleteMessage: _canDeleteStationMessage,
             onMessageQuote: _setQuotedMessage,
             onMessageReact: _toggleStationReaction,
-            getAttachmentPath: _getStationAttachmentPath,
+            getAttachmentData: _getStationAttachmentData,
             getVoiceFilePath: _getStationVoiceFilePath,
             onImageOpen: _openStationImage,
             // Download manager integration for station rooms

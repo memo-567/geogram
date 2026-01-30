@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/chat_file_download_manager.dart';
@@ -22,7 +23,10 @@ class MessageListWidget extends StatefulWidget {
   final Function(ChatMessage)? onMessageHide;
   final bool Function(ChatMessage)? isMessageHidden;
   final Function(ChatMessage)? onMessageUnhide;
-  final Future<String?> Function(ChatMessage)? getAttachmentPath;
+  /// Callback to get attachment data - returns (path, bytes) tuple
+  /// For filesystem storage: returns (path, null)
+  /// For encrypted storage: returns (null, bytes)
+  final Future<(String?, Uint8List?)> Function(ChatMessage)? getAttachmentData;
   final Function(ChatMessage)? onImageOpen;
   final void Function(ChatMessage, String)? onMessageReact;
   /// Callback to get voice file path for a message
@@ -55,7 +59,7 @@ class MessageListWidget extends StatefulWidget {
     this.onMessageHide,
     this.isMessageHidden,
     this.onMessageUnhide,
-    this.getAttachmentPath,
+    this.getAttachmentData,
     this.onImageOpen,
     this.onMessageReact,
     this.getVoiceFilePath,
@@ -256,8 +260,8 @@ class _MessageListWidgetState extends State<MessageListWidget> {
                     onUnhide: widget.onMessageUnhide != null
                         ? () => widget.onMessageUnhide!(message)
                         : null,
-                    onAttachmentPathRequested: widget.getAttachmentPath != null && message.hasFile
-                        ? () => widget.getAttachmentPath!(message)
+                    onAttachmentDataRequested: widget.getAttachmentData != null && message.hasFile
+                        ? () => widget.getAttachmentData!(message)
                         : null,
                     onImageOpen: widget.onImageOpen != null
                         ? () => widget.onImageOpen!(message)

@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/devices_service.dart';
@@ -361,21 +362,23 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     if (!message.hasVoice || message.voiceFile == null) return null;
 
     // Voice files use the same storage as regular file attachments
-    return _getAttachmentPath(ChatMessage(
+    final (path, _) = await _getAttachmentData(ChatMessage(
       author: message.author,
       content: message.content,
       timestamp: message.timestamp,
       metadata: {'file': message.voiceFile!},
     ));
+    return path;
   }
 
-  /// Get attachment path for a message
+  /// Get attachment data for a message
   /// Checks cache first, downloads if needed (respecting bandwidth limits)
-  Future<String?> _getAttachmentPath(ChatMessage message) async {
-    if (!message.hasFile) return null;
+  /// Remote rooms use filesystem cache, so returns (path, null)
+  Future<(String?, Uint8List?)> _getAttachmentData(ChatMessage message) async {
+    if (!message.hasFile) return (null, null);
 
     final filename = message.attachedFile;
-    if (filename == null) return null;
+    if (filename == null) return (null, null);
 
     // Check if already cached
     final cachedPath = await _cacheService.getChatFilePath(
@@ -385,7 +388,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     );
 
     if (cachedPath != null) {
-      return cachedPath;
+      return (cachedPath, null);
     }
 
     // Check bandwidth-conscious download policy:
@@ -396,12 +399,12 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
     if (!shouldAutoDownload) {
       // Don't auto-download, user must click download button
-      return null;
+      return (null, null);
     }
 
     // Check if download already in progress
     final downloadKey = '${widget.device.callsign}/${widget.room.id}/$filename';
-    if (_pendingDownloads.contains(downloadKey)) return null;
+    if (_pendingDownloads.contains(downloadKey)) return (null, null);
     _pendingDownloads.add(downloadKey);
 
     try {
@@ -412,7 +415,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
         filename: filename,
       );
 
-      return localPath;
+      return (localPath, null);
     } finally {
       _pendingDownloads.remove(downloadKey);
     }
@@ -420,7 +423,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
 
   /// Open image in full-screen viewer
   Future<void> _openImage(ChatMessage message) async {
-    final filePath = await _getAttachmentPath(message);
+    final (filePath, _) = await _getAttachmentData(message);
     if (filePath == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -434,7 +437,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
     final imagePaths = <String>[];
     for (final msg in _messages) {
       if (!msg.hasFile) continue;
-      final path = await _getAttachmentPath(msg);
+      final (path, _) = await _getAttachmentData(msg);
       if (path == null) continue;
       if (!_isImageFile(path)) continue;
       imagePaths.add(path);
@@ -868,7 +871,7 @@ class _RemoteChatRoomPageState extends State<RemoteChatRoomPage> {
                         onMessageDelete: _deleteMessage,
                         canDeleteMessage: _canDeleteMessage,
                         onMessageReact: _toggleReaction,
-                        getAttachmentPath: _getAttachmentPath,
+                        getAttachmentData: _getAttachmentData,
                         getVoiceFilePath: _getVoiceFilePath,
                         onImageOpen: _openImage,
                         // Download manager integration

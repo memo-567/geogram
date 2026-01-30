@@ -131,6 +131,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [App Constants](#app-constants) - Centralized app type definitions
 - [App Type Theme](#app-type-theme) - Centralized icons and gradients for app types
 
+### Platform Helpers
+- [file_image_helper](#file_image_helper) - Platform-aware file and memory image loading
+
 ---
 
 ## Picker Widgets
@@ -3188,6 +3191,81 @@ All types from `knownAppTypesConst` are supported with consistent icons and grad
 2. Add to `singleInstanceTypesConst` if it should be single-instance
 3. Add icon case to `getAppTypeIcon()` in `app_type_theme.dart`
 4. Add gradient case to `getAppTypeGradient()` in `app_type_theme.dart`
+
+---
+
+### file_image_helper
+
+**File:** `lib/platform/file_image_helper.dart`
+
+Platform-aware file image helper that provides FileImage support on native platforms while gracefully handling web. Supports both file-based images (for filesystem storage) and memory-based images (for encrypted storage where files stay in RAM).
+
+**Functions:**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `getFileImageProvider(String path)` | `ImageProvider?` | Get a FileImage provider from a file path |
+| `fileExists(String path)` | `bool` | Check if a file exists at the given path |
+| `buildFileImage(String path, {...})` | `Widget?` | Build an Image widget from a file path |
+| `buildMemoryImage(Uint8List bytes, {...})` | `Widget?` | Build an Image widget from bytes in memory |
+
+**Usage for filesystem storage:**
+```dart
+import '../platform/file_image_helper.dart' as file_helper;
+
+// Check if file exists before displaying
+if (file_helper.fileExists(imagePath)) {
+  final imageWidget = file_helper.buildFileImage(
+    imagePath,
+    width: 280,
+    height: 200,
+    fit: BoxFit.cover,
+  );
+  if (imageWidget != null) {
+    // Display the image
+  }
+}
+```
+
+**Usage for encrypted storage (RAM-only):**
+```dart
+import '../platform/file_image_helper.dart' as file_helper;
+
+// Display image from encrypted bytes without writing to disk
+final imageWidget = file_helper.buildMemoryImage(
+  imageBytes,  // Uint8List from decrypted storage
+  width: 280,
+  height: 200,
+  fit: BoxFit.cover,
+);
+```
+
+**Pattern for dual-mode (encrypted + filesystem):**
+```dart
+// Return tuple: (path, bytes) - one will be null
+Future<(String?, Uint8List?)> getAttachmentData(Message msg) async {
+  if (useEncryptedStorage) {
+    final bytes = await storage.getBytes(msg.file);
+    return (null, bytes);  // RAM only - never write to disk
+  }
+  return (getFilePath(msg.file), null);  // Filesystem path
+}
+
+// Display using whichever is available
+Widget? buildImage(String? path, Uint8List? bytes) {
+  if (bytes != null) {
+    return file_helper.buildMemoryImage(bytes, ...);
+  }
+  if (path != null) {
+    return file_helper.buildFileImage(path, ...);
+  }
+  return null;
+}
+```
+
+**Platform behavior:**
+- **Native platforms (Linux, macOS, Windows, Android, iOS):** Full support for file operations
+- **Web:** Returns null for file operations (files not accessible), memory images work
 
 ---
 
@@ -6662,6 +6740,45 @@ final storage = CollectionService().profileStorage;
 MyService().setStorage(storage);
 ```
 
+### UI Pattern: Displaying Attachments from Encrypted Storage
+
+When displaying attachments (images, files) that might be in encrypted storage, UI code cannot use `Image.file()` or `File()` directly because the files don't exist on disk. Instead, extract to temp file first:
+
+```dart
+import 'package:path_provider/path_provider.dart';
+
+Future<String?> _resolveAttachmentPath(String channelFolder, String filename) async {
+  // For encrypted storage, extract to temp file
+  if (_service.useEncryptedStorage) {
+    final bytes = await _service.getAttachmentBytes(channelFolder, filename);
+    if (bytes == null) return null;
+
+    final tempDir = await getTemporaryDirectory();
+    final tempFile = File('${tempDir.path}/cache_folder/$filename');
+    await tempFile.parent.create(recursive: true);
+    await tempFile.writeAsBytes(bytes);
+    return tempFile.path;
+  }
+
+  // For filesystem storage, return direct path
+  return path.join(storagePath, channelFolder, 'files', filename);
+}
+```
+
+The service should expose a method to get attachment bytes:
+
+```dart
+// In ChatService or similar:
+Future<Uint8List?> getAttachmentBytes(String channelFolder, String filename) async {
+  final relativePath = '$channelFolder/files/$filename';
+  return await _storage.readBytes(relativePath);
+}
+```
+
+**Files using this pattern:**
+- `lib/pages/chat_browser_page.dart` - `_resolveAttachedFilePath()` for chat images
+- `lib/services/chat_service.dart` - `getAttachmentBytes()` for reading via ProfileStorage
+
 ### Supported Services
 
 The following services support ProfileStorage:
@@ -6806,3 +6923,160 @@ Future<void> _openDocument(NdfDocumentRef doc) async {
 ```
 
 This pattern allows existing file-based editors to work with encrypted storage without modification.
+
+---
+
+## NNTP Package
+
+The `packages/nntp/` package provides a pure Dart implementation of the NNTP (Network News Transfer Protocol) client following RFC 3977 for reading and posting to Usenet newsgroups.
+
+### Location
+`packages/nntp/`
+
+### Public API
+```dart
+import 'package:nntp/nntp.dart';
+```
+
+### Core Classes
+
+#### NNTPClient
+High-level client for interacting with NNTP servers.
+
+```dart
+final client = NNTPClient(
+  host: 'news.example.com',
+  port: 119,       // 563 for NNTPS
+  useTLS: false,
+);
+
+// Connect and authenticate
+await client.connect();
+await client.authenticate('username', 'password');
+
+// List newsgroups
+final groups = await client.listGroups(pattern: 'comp.lang.*');
+
+// Select a group
+final group = await client.selectGroup('comp.lang.dart');
+
+// Fetch overview data
+final entries = await client.fetchOverview(range: Range(1, 100));
+
+// Fetch full article
+final article = await client.fetchArticle(12345);
+
+// Post a new article
+await client.post(NNTPArticle(
+  messageId: '',  // Server assigns
+  subject: 'Hello World',
+  from: 'John Doe <john@example.com>',
+  newsgroups: 'comp.lang.dart',
+  body: 'Article body here...',
+  date: DateTime.now(),
+));
+
+// Disconnect
+await client.disconnect();
+```
+
+#### Models
+
+- **Newsgroup** - Newsgroup metadata (name, article range, posting status)
+- **NNTPArticle** - Complete article with headers and body
+- **OverviewEntry** - Compact article summary from XOVER
+- **Range** - Article number range for queries
+
+#### Exceptions
+
+All NNTP errors are typed exceptions:
+- `NNTPConnectionException` - Socket/TLS errors
+- `NNTPAuthException` - Authentication failures
+- `NNTPNoSuchGroupException` - Group not found
+- `NNTPArticleNotFoundException` - Article not found
+- `NNTPPostingException` - Posting not allowed or failed
+- `NNTPProtocolException` - Invalid server response
+
+### Integration Service
+
+The `NNTPService` (`lib/services/nntp_service.dart`) provides geogram integration:
+
+```dart
+final service = NNTPService();
+
+// Set storage (ProfileStorage abstraction)
+service.setStorage(scopedStorage);
+
+// Initialize
+await service.initialize();
+
+// Account management
+await service.addAccount(NNTPAccount.eternalSeptember(
+  username: 'user',
+  password: 'pass',
+));
+await service.connect('eternal-september');
+
+// Subscribe to newsgroups
+await service.subscribe('eternal-september', 'comp.lang.dart');
+
+// Fetch and read articles
+final overview = await service.fetchOverview('eternal-september', 'comp.lang.dart');
+final article = await service.fetchArticle('eternal-september', 'comp.lang.dart', 12345);
+
+// Build threads from overview
+final threads = service.buildThreads(overview);
+
+// Post articles
+await service.post('eternal-september', article);
+
+// Events
+service.onNNTPChange.listen((event) {
+  // Handle connection, subscription, sync events
+});
+```
+
+### UI Components
+
+Located in `lib/usenet/`:
+
+- **UsenetAppPage** - Main app entry point
+- **NewsgroupListPage** - Browse and subscribe to groups
+- **ThreadViewPage** - Read articles in threaded view
+- **ArticleTile** - Article list item widget
+- **NewsgroupTile** - Subscription list item widget
+- **ComposeDialog** - Write new articles or replies
+- **AccountSetupDialog** - Configure NNTP server connection
+
+### Article Format
+
+Articles can be stored in markdown format:
+
+```dart
+import 'package:geogram/usenet/utils/article_format.dart';
+
+// Export article to markdown
+final markdown = ArticleFormat.export(article);
+
+// Parse markdown back to article
+final article = ArticleFormat.parse(markdown);
+
+// Quote for reply
+final quoted = ArticleFormat.quoteForReply(article);
+
+// Create reply
+final reply = ArticleFormat.createReply(
+  original: article,
+  from: 'Jane <jane@example.com>',
+  body: 'Reply content...',
+);
+```
+
+### Supported Servers
+
+Pre-configured presets:
+- **Eternal September** - `news.eternal-september.org` (free registration required)
+- **Gmane** - `news.gmane.io` (read-only, no auth)
+- **Aioe** - `news.aioe.org` (no auth)
+
+Or configure any RFC 3977 compliant NNTP server.

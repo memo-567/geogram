@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -43,8 +44,9 @@ class MessageBubbleWidget extends StatefulWidget {
   final String? voiceFilePath;
   /// Callback to request download of voice file from remote
   final Future<String?> Function()? onVoiceDownloadRequested;
-  /// Callback to request attachment file path (async)
-  final Future<String?> Function()? onAttachmentPathRequested;
+  /// Callback to request attachment data (async)
+  /// Returns (path, bytes) tuple - either path for filesystem or bytes for encrypted storage
+  final Future<(String?, Uint8List?)> Function()? onAttachmentDataRequested;
   /// Callback when content size changes (e.g., image loaded)
   final VoidCallback? onContentSizeChanged;
   /// Whether to show download button (file exceeds auto-download threshold)
@@ -76,7 +78,7 @@ class MessageBubbleWidget extends StatefulWidget {
     this.onVoiceDownloadRequested,
     this.isHidden = false,
     this.onUnhide,
-    this.onAttachmentPathRequested,
+    this.onAttachmentDataRequested,
     this.onImageOpen,
     this.onReact,
     this.onContentSizeChanged,
@@ -95,12 +97,13 @@ class MessageBubbleWidget extends StatefulWidget {
 
 class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
   String? _attachmentPath;
+  Uint8List? _attachmentBytes;
   bool _isLoadingAttachment = false;
 
   @override
   void initState() {
     super.initState();
-    _loadAttachmentPath();
+    _loadAttachmentData();
   }
 
   @override
@@ -115,15 +118,16 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
 
     if (timestampChanged || fileChanged) {
       _attachmentPath = null;
-      _loadAttachmentPath();
-    } else if (_attachmentPath == null && widget.message.hasFile && !_isLoadingAttachment) {
-      // If we have a file but no path yet, try loading it
-      _loadAttachmentPath();
+      _attachmentBytes = null;
+      _loadAttachmentData();
+    } else if (_attachmentPath == null && _attachmentBytes == null && widget.message.hasFile && !_isLoadingAttachment) {
+      // If we have a file but no data yet, try loading it
+      _loadAttachmentData();
     }
   }
 
-  Future<void> _loadAttachmentPath() async {
-    if (widget.onAttachmentPathRequested == null || !widget.message.hasFile) {
+  Future<void> _loadAttachmentData() async {
+    if (widget.onAttachmentDataRequested == null || !widget.message.hasFile) {
       return;
     }
     if (_isLoadingAttachment) return;
@@ -133,15 +137,16 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
     });
 
     try {
-      final path = await widget.onAttachmentPathRequested!();
+      final (path, bytes) = await widget.onAttachmentDataRequested!();
       if (mounted) {
-        final hadNoPath = _attachmentPath == null;
+        final hadNoData = _attachmentPath == null && _attachmentBytes == null;
         setState(() {
           _attachmentPath = path;
+          _attachmentBytes = bytes;
           _isLoadingAttachment = false;
         });
         // Notify parent that content size changed (image loaded)
-        if (hadNoPath && path != null && widget.onContentSizeChanged != null) {
+        if (hadNoData && (path != null || bytes != null)) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             widget.onContentSizeChanged?.call();
           });
@@ -154,6 +159,27 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
         });
       }
     }
+  }
+
+  /// Build image widget from either path or bytes
+  Widget? _buildImageWidget() {
+    if (_attachmentBytes != null) {
+      return file_helper.buildMemoryImage(
+        _attachmentBytes!,
+        width: 280,
+        height: 200,
+        fit: BoxFit.cover,
+      );
+    }
+    if (_attachmentPath != null) {
+      return file_helper.buildFileImage(
+        _attachmentPath!,
+        width: 280,
+        height: 200,
+        fit: BoxFit.cover,
+      );
+    }
+    return null;
   }
 
   @override
@@ -186,19 +212,15 @@ class _MessageBubbleWidgetState extends State<MessageBubbleWidget> {
     final hasActions = (widget.onQuote != null) || (widget.onHide != null) || (widget.canDelete && widget.onDelete != null);
     final isImageAttachment = _isImageAttachment();
     final isDownloading = widget.downloadState?.status == ChatDownloadStatus.downloading;
-    final showDownloadCard = widget.showDownloadButton && !isDownloading && _attachmentPath == null;
+    final hasAttachmentData = _attachmentPath != null || _attachmentBytes != null;
+    final showDownloadCard = widget.showDownloadButton && !isDownloading && !hasAttachmentData;
     // Upload state for sender-side progress tracking
     final isUploading = widget.uploadState?.status == ChatUploadStatus.uploading;
     final uploadFailed = widget.uploadState?.status == ChatUploadStatus.failed;
     final uploadPending = widget.uploadState?.status == ChatUploadStatus.pending;
     final showUploadProgress = isOwnMessage && isImageAttachment && (isUploading || uploadFailed || uploadPending);
-    final imageWidget = isImageAttachment && _attachmentPath != null && !showDownloadCard
-        ? file_helper.buildFileImage(
-            _attachmentPath!,
-            width: 280,
-            height: 200,
-            fit: BoxFit.cover,
-          )
+    final imageWidget = isImageAttachment && hasAttachmentData && !showDownloadCard
+        ? _buildImageWidget()
         : null;
     final showImagePreview = imageWidget != null;
 
