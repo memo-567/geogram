@@ -13,11 +13,12 @@ import '../services/music_playback_service.dart';
 import '../widgets/music_widgets.dart';
 
 /// Album detail page showing tracks
-class AlbumDetailPage extends StatelessWidget {
+class AlbumDetailPage extends StatefulWidget {
   final MusicAlbum album;
   final MusicLibrary library;
   final MusicPlaybackService playback;
   final I18nService i18n;
+  final FetchArtworkCallback? onFetchArtwork;
 
   const AlbumDetailPage({
     super.key,
@@ -25,13 +26,43 @@ class AlbumDetailPage extends StatelessWidget {
     required this.library,
     required this.playback,
     required this.i18n,
+    this.onFetchArtwork,
   });
+
+  @override
+  State<AlbumDetailPage> createState() => _AlbumDetailPageState();
+}
+
+class _AlbumDetailPageState extends State<AlbumDetailPage> {
+  String? _artworkPath;
+  bool _isFetching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _artworkPath = widget.album.artwork;
+    _tryFetchArtwork();
+  }
+
+  void _tryFetchArtwork() {
+    if (_artworkPath == null && !_isFetching && widget.onFetchArtwork != null) {
+      setState(() => _isFetching = true);
+      widget.onFetchArtwork!(widget.album).then((path) {
+        if (mounted) {
+          setState(() {
+            _artworkPath = path;
+            _isFetching = false;
+          });
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final tracks = library.getAlbumTracks(album.id);
-    final currentTrackId = playback.currentTrack?.id;
+    final tracks = widget.library.getAlbumTracks(widget.album.id);
+    final currentTrackId = widget.playback.currentTrack?.id;
 
     return Scaffold(
       body: CustomScrollView(
@@ -42,7 +73,7 @@ class AlbumDetailPage extends StatelessWidget {
             pinned: true,
             flexibleSpace: FlexibleSpaceBar(
               title: Text(
-                album.title,
+                widget.album.title,
                 style: const TextStyle(
                   shadows: [
                     Shadow(
@@ -56,14 +87,16 @@ class AlbumDetailPage extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   // Album artwork
-                  if (album.artwork != null)
+                  if (_artworkPath != null)
                     Image.file(
-                      File(album.artwork!),
+                      File(_artworkPath!),
                       fit: BoxFit.cover,
                       errorBuilder: (context, error, stackTrace) {
                         return _buildPlaceholder(colorScheme);
                       },
                     )
+                  else if (_isFetching)
+                    _buildLoadingPlaceholder(colorScheme)
                   else
                     _buildPlaceholder(colorScheme),
                   // Gradient overlay
@@ -86,8 +119,8 @@ class AlbumDetailPage extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.shuffle),
                 onPressed: () {
-                  playback.playTracks(tracks);
-                  playback.toggleShuffle();
+                  widget.playback.playTracks(tracks);
+                  widget.playback.toggleShuffle();
                 },
                 tooltip: 'Shuffle play',
               ),
@@ -101,7 +134,7 @@ class AlbumDetailPage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    album.artist,
+                    widget.album.artist,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -110,15 +143,15 @@ class AlbumDetailPage extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     [
-                      if (album.year != null) '${album.year}',
-                      '${album.trackCount} tracks',
-                      album.formattedDuration,
+                      if (widget.album.year != null) '${widget.album.year}',
+                      '${widget.album.trackCount} tracks',
+                      widget.album.formattedDuration,
                     ].join(' - '),
                     style: TextStyle(
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (album.genre != null) ...[
+                  if (widget.album.genre != null) ...[
                     const SizedBox(height: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -130,7 +163,7 @@ class AlbumDetailPage extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        album.genre!,
+                        widget.album.genre!,
                         style: TextStyle(
                           fontSize: 12,
                           color: colorScheme.onPrimaryContainer,
@@ -144,7 +177,7 @@ class AlbumDetailPage extends StatelessWidget {
                     children: [
                       FilledButton.icon(
                         onPressed: () {
-                          playback.playAlbum(album.id);
+                          widget.playback.playAlbum(widget.album.id);
                         },
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('Play'),
@@ -154,7 +187,7 @@ class AlbumDetailPage extends StatelessWidget {
                         onPressed: () {
                           // Add all tracks to queue
                           for (final track in tracks) {
-                            playback.addToQueue(track.id);
+                            widget.playback.addToQueue(track.id);
                           }
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -183,20 +216,20 @@ class AlbumDetailPage extends StatelessWidget {
               (context, index) {
                 final track = tracks[index];
                 return StreamBuilder<MusicTrack?>(
-                  stream: playback.trackStream,
+                  stream: widget.playback.trackStream,
                   builder: (context, snapshot) {
                     final isPlaying = (snapshot.data?.id ?? currentTrackId) == track.id;
                     return TrackTileWidget(
                       track: track,
                       isPlaying: isPlaying,
                       onTap: () {
-                        playback.playAlbum(album.id, startIndex: index);
+                        widget.playback.playAlbum(widget.album.id, startIndex: index);
                       },
                       trailing: PopupMenuButton<String>(
                         onSelected: (value) {
                           switch (value) {
                             case 'queue':
-                              playback.addToQueue(track.id);
+                              widget.playback.addToQueue(track.id);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text('Added to queue'),
@@ -239,7 +272,7 @@ class AlbumDetailPage extends StatelessWidget {
         ],
       ),
       bottomNavigationBar: MiniPlayerWidget(
-        playback: playback,
+        playback: widget.playback,
         onTap: () {
           showModalBottomSheet(
             context: context,
@@ -251,8 +284,8 @@ class AlbumDetailPage extends StatelessWidget {
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(16)),
                 child: NowPlayingWidget(
-                  playback: playback,
-                  library: library,
+                  playback: widget.playback,
+                  library: widget.library,
                 ),
               ),
             ),
@@ -270,6 +303,33 @@ class AlbumDetailPage extends StatelessWidget {
           Icons.album,
           size: 80,
           color: colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingPlaceholder(ColorScheme colorScheme) {
+    return Container(
+      color: colorScheme.surfaceContainerHighest,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.album,
+              size: 80,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ),
       ),
     );

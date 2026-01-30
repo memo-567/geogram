@@ -19,6 +19,7 @@ class ArtistDetailPage extends StatelessWidget {
   final MusicLibrary library;
   final MusicPlaybackService playback;
   final I18nService i18n;
+  final FetchArtworkCallback? onFetchArtwork;
 
   const ArtistDetailPage({
     super.key,
@@ -26,6 +27,7 @@ class ArtistDetailPage extends StatelessWidget {
     required this.library,
     required this.playback,
     required this.i18n,
+    this.onFetchArtwork,
   });
 
   @override
@@ -191,6 +193,7 @@ class ArtistDetailPage extends StatelessWidget {
                     final album = albums[index];
                     return AlbumCardWidget(
                       album: album,
+                      onFetchArtwork: onFetchArtwork,
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
@@ -199,6 +202,7 @@ class ArtistDetailPage extends StatelessWidget {
                               library: library,
                               playback: playback,
                               i18n: i18n,
+                              onFetchArtwork: onFetchArtwork,
                             ),
                           ),
                         );

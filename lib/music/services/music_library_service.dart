@@ -351,6 +351,31 @@ class MusicLibraryService {
     }
   }
 
+  /// Fetch artwork for a specific album (on-demand)
+  /// Returns the artwork path if successful, null otherwise
+  Future<String?> fetchAlbumArtwork(MusicAlbum album) async {
+    // Skip if already has artwork
+    if (album.artwork != null) return album.artwork;
+
+    final artworkPath = await _fetchCoverArt(album.artist, album.title, album.id);
+    if (artworkPath != null) {
+      // Update the album in the library
+      final updatedAlbum = album.copyWith(
+        artwork: artworkPath,
+        artworkSource: ArtworkSource.downloaded,
+      );
+
+      // Update library
+      final albumIndex = _library.albums.indexWhere((a) => a.id == album.id);
+      if (albumIndex >= 0) {
+        _library.albums[albumIndex] = updatedAlbum;
+        // Save library in background (don't await)
+        saveLibrary();
+      }
+    }
+    return artworkPath;
+  }
+
   /// Get tracks for an album
   List<MusicTrack> getAlbumTracks(String albumId) {
     return _library.getAlbumTracks(albumId);

@@ -211,6 +211,9 @@ class _MusicHomePageState extends State<MusicHomePage>
           library: _library,
           playback: _playbackService,
           i18n: widget.i18n,
+          onFetchArtwork: _settings.online.autoFetchCovers
+              ? (a) => _libraryService.fetchAlbumArtwork(a)
+              : null,
         ),
       ),
     );
@@ -224,6 +227,9 @@ class _MusicHomePageState extends State<MusicHomePage>
           library: _library,
           playback: _playbackService,
           i18n: widget.i18n,
+          onFetchArtwork: _settings.online.autoFetchCovers
+              ? (a) => _libraryService.fetchAlbumArtwork(a)
+              : null,
         ),
       ),
     );
@@ -400,6 +406,9 @@ class _MusicHomePageState extends State<MusicHomePage>
         return AlbumCardWidget(
           album: album,
           onTap: () => _openAlbum(album),
+          onFetchArtwork: _settings.online.autoFetchCovers
+              ? (a) => _libraryService.fetchAlbumArtwork(a)
+              : null,
         );
       },
     );
