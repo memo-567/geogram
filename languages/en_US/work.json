@@ -403,5 +403,8 @@
   "work_websnapshot_phase_downloading": "Downloading assets...",
   "work_websnapshot_phase_rewriting": "Processing...",
   "work_websnapshot_phase_complete": "Complete",
-  "work_websnapshot_phase_failed": "Failed"
+  "work_websnapshot_phase_failed": "Failed",
+  "work_websnapshot_back": "Back",
+  "work_websnapshot_forward": "Forward",
+  "work_websnapshot_reload": "Reload"
 }

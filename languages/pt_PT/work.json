@@ -403,5 +403,8 @@
   "work_websnapshot_phase_downloading": "A descarregar recursos...",
   "work_websnapshot_phase_rewriting": "A processar...",
   "work_websnapshot_phase_complete": "Concluído",
-  "work_websnapshot_phase_failed": "Falhou"
+  "work_websnapshot_phase_failed": "Falhou",
+  "work_websnapshot_back": "Voltar",
+  "work_websnapshot_forward": "Avançar",
+  "work_websnapshot_reload": "Recarregar"
 }

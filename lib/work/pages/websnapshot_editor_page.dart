@@ -16,6 +16,7 @@ import '../services/ndf_service.dart';
 import '../services/web_snapshot_service.dart';
 import '../widgets/websnapshot/snapshot_card_widget.dart';
 import '../widgets/websnapshot/capture_progress_widget.dart';
+import 'websnapshot_viewer_page.dart';
 
 /// Web snapshot editor page
 class WebSnapshotEditorPage extends StatefulWidget {
@@ -275,64 +276,16 @@ class _WebSnapshotEditorPageState extends State<WebSnapshotEditorPage> {
     }
   }
 
-  Future<void> _viewSnapshot(WebSnapshot snapshot) async {
-    // Extract snapshot to temp directory and open in browser
-    final tempDir = await _ndfService.extractSnapshotToTemp(
-      widget.filePath,
-      snapshot.id,
-    );
-
-    if (tempDir == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('work_websnapshot_view_error'))),
-        );
-      }
-      return;
-    }
-
-    // Show dialog with info about viewing
-    if (mounted) {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(_i18n.t('work_websnapshot_view')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(_i18n.t('work_websnapshot_extracted_to')),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SelectableText(
-                  '$tempDir/index.html',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _i18n.t('work_websnapshot_open_browser_hint'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_i18n.t('ok')),
-            ),
-          ],
+  void _viewSnapshot(WebSnapshot snapshot) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WebSnapshotViewerPage(
+          filePath: widget.filePath,
+          snapshot: snapshot,
         ),
-      );
-    }
+      ),
+    );
   }
 
   Future<bool> _onWillPop() async {
