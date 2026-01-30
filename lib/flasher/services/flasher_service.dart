@@ -11,6 +11,7 @@ import '../protocols/flash_protocol.dart';
 import '../protocols/protocol_registry.dart';
 import '../serial/serial_port.dart';
 import 'flasher_storage_service.dart';
+import '../../services/profile_storage.dart';
 
 /// Main flasher service
 ///
@@ -22,17 +23,24 @@ import 'flasher_storage_service.dart';
 /// - Progress reporting
 class FlasherService {
   final FlasherStorageService _storage;
+  final ProfileStorage _profileStorage;
 
   FlashProtocol? _currentProtocol;
   SerialPort? _currentPort;
   StreamController<FlashProgress>? _progressController;
   bool _isCancelled = false;
 
-  FlasherService(this._storage);
+  FlasherService(this._storage, this._profileStorage);
 
-  /// Create with default storage path
+  /// Create with storage
+  factory FlasherService.withStorage(String basePath, ProfileStorage storage) {
+    return FlasherService(FlasherStorageService(basePath, storage), storage);
+  }
+
+  /// Create with default filesystem storage path
   factory FlasherService.withPath(String basePath) {
-    return FlasherService(FlasherStorageService(basePath));
+    final storage = FilesystemProfileStorage(basePath);
+    return FlasherService(FlasherStorageService(basePath, storage), storage);
   }
 
   /// Get storage service
@@ -104,7 +112,25 @@ class FlasherService {
   }
 
   /// Load firmware from file
+  ///
+  /// For encrypted storage, paths within the collection are read via ProfileStorage.
+  /// For external files (e.g., user-selected files), direct filesystem access is used.
   Future<Uint8List> loadFirmwareFromFile(String path) async {
+    // Check if this is a path within the collection (starts with basePath)
+    if (_profileStorage.isEncrypted && path.startsWith(_storage.basePath)) {
+      // Extract relative path and read via storage
+      var relativePath = path.substring(_storage.basePath.length);
+      if (relativePath.startsWith('/')) {
+        relativePath = relativePath.substring(1);
+      }
+      final bytes = await _storage.readFirmwareBytes(relativePath);
+      if (bytes == null) {
+        throw FlashException('Firmware file not found: $path');
+      }
+      return Uint8List.fromList(bytes);
+    }
+
+    // External file - use direct filesystem access
     final file = File(path);
     if (!await file.exists()) {
       throw FlashException('Firmware file not found: $path');

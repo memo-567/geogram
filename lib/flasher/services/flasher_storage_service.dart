@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../models/device_definition.dart';
+import '../../services/profile_storage.dart';
 
 /// Service for loading and managing device definitions
 ///
@@ -12,15 +12,17 @@ class FlasherStorageService {
   /// Base path for flasher data
   final String basePath;
 
-  FlasherStorageService(this.basePath);
+  /// Profile storage for file operations (encrypted or filesystem)
+  final ProfileStorage _storage;
+
+  FlasherStorageService(this.basePath, this._storage);
 
   /// Load metadata.json
   Future<FlasherMetadata?> loadMetadata() async {
-    final file = File('$basePath/metadata.json');
-    if (!await file.exists()) return null;
-
     try {
-      final content = await file.readAsString();
+      final content = await _storage.readString('metadata.json');
+      if (content == null) return null;
+
       final json = jsonDecode(content) as Map<String, dynamic>;
       return FlasherMetadata.fromJson(json);
     } catch (e) {
@@ -33,16 +35,15 @@ class FlasherStorageService {
 
   /// List all projects (v2.0)
   Future<List<String>> listProjects() async {
-    final dir = Directory(basePath);
-    if (!await dir.exists()) return [];
+    if (!await _storage.exists('')) return [];
 
+    final entries = await _storage.listDirectory('');
     final projects = <String>[];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final name = entity.path.split(Platform.pathSeparator).last;
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         // Check if it's a project folder (contains architecture subfolders)
-        if (await _isProjectFolder(entity.path)) {
-          projects.add(name);
+        if (await _isProjectFolder(entry.name)) {
+          projects.add(entry.name);
         }
       }
     }
@@ -51,16 +52,19 @@ class FlasherStorageService {
   }
 
   /// Check if a folder is a v2.0 project folder
-  Future<bool> _isProjectFolder(String path) async {
-    final dir = Directory(path);
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
+  Future<bool> _isProjectFolder(String relativePath) async {
+    if (!await _storage.exists(relativePath)) return false;
+
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         // Check if subfolders contain model folders with device.json
-        final subDir = Directory(entity.path);
-        await for (final subEntity in subDir.list()) {
-          if (subEntity is Directory) {
-            final deviceFile = File('${subEntity.path}/device.json');
-            if (await deviceFile.exists()) {
+        final subPath = '$relativePath/${entry.name}';
+        final subEntries = await _storage.listDirectory(subPath);
+        for (final subEntry in subEntries) {
+          if (subEntry.isDirectory) {
+            final devicePath = '$subPath/${subEntry.name}/device.json';
+            if (await _storage.exists(devicePath)) {
               return true;
             }
           }
@@ -72,14 +76,14 @@ class FlasherStorageService {
 
   /// List architectures in a project (v2.0)
   Future<List<String>> listArchitectures(String project) async {
-    final dir = Directory('$basePath/$project');
-    if (!await dir.exists()) return [];
+    final relativePath = project;
+    if (!await _storage.exists(relativePath)) return [];
 
+    final entries = await _storage.listDirectory(relativePath);
     final architectures = <String>[];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final name = entity.path.split(Platform.pathSeparator).last;
-        architectures.add(name);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        architectures.add(entry.name);
       }
     }
 
@@ -88,17 +92,17 @@ class FlasherStorageService {
 
   /// List models in a project/architecture (v2.0)
   Future<List<String>> listModels(String project, String architecture) async {
-    final dir = Directory('$basePath/$project/$architecture');
-    if (!await dir.exists()) return [];
+    final relativePath = '$project/$architecture';
+    if (!await _storage.exists(relativePath)) return [];
 
+    final entries = await _storage.listDirectory(relativePath);
     final models = <String>[];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final name = entity.path.split(Platform.pathSeparator).last;
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         // Check if it has device.json
-        final deviceFile = File('${entity.path}/device.json');
-        if (await deviceFile.exists()) {
-          models.add(name);
+        final devicePath = '$relativePath/${entry.name}/device.json';
+        if (await _storage.exists(devicePath)) {
+          models.add(entry.name);
         }
       }
     }
@@ -112,11 +116,11 @@ class FlasherStorageService {
     String architecture,
     String model,
   ) async {
-    final file = File('$basePath/$project/$architecture/$model/device.json');
-    if (!await file.exists()) return null;
-
+    final relativePath = '$project/$architecture/$model/device.json';
     try {
-      final content = await file.readAsString();
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
+
       final json = jsonDecode(content) as Map<String, dynamic>;
       final device = DeviceDefinition.fromJson(json);
       device.setBasePath('$basePath/$project/$architecture/$model');
@@ -133,34 +137,36 @@ class FlasherStorageService {
     String architecture,
     String model,
   ) async {
-    final deviceDir = Directory('$basePath/$project/$architecture/$model');
-    if (!await deviceDir.exists()) return [];
+    final relativePath = '$project/$architecture/$model';
+    if (!await _storage.exists(relativePath)) return [];
 
+    final entries = await _storage.listDirectory(relativePath);
     final versions = <FirmwareVersion>[];
-    await for (final entity in deviceDir.list()) {
-      if (entity is Directory) {
-        final name = entity.path.split(Platform.pathSeparator).last;
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        final name = entry.name;
         // Skip non-version folders (like 'media', 'latest')
         if (name == 'media') continue;
 
         // Check for version.json or firmware.bin
-        final versionFile = File('${entity.path}/version.json');
-        final firmwareFile = File('${entity.path}/firmware.bin');
+        final versionPath = '$relativePath/$name/version.json';
+        final firmwarePath = '$relativePath/$name/firmware.bin';
 
-        if (await versionFile.exists()) {
+        if (await _storage.exists(versionPath)) {
           try {
-            final content = await versionFile.readAsString();
-            final json = jsonDecode(content) as Map<String, dynamic>;
-            versions.add(FirmwareVersion.fromJson(json));
+            final content = await _storage.readString(versionPath);
+            if (content != null) {
+              final json = jsonDecode(content) as Map<String, dynamic>;
+              versions.add(FirmwareVersion.fromJson(json));
+            }
           } catch (e) {
             print('Error loading version $name: $e');
           }
-        } else if (await firmwareFile.exists()) {
-          // Create version from folder name
-          final stat = await firmwareFile.stat();
+        } else if (await _storage.exists(firmwarePath)) {
+          // Create version from folder name (size not available via storage)
           versions.add(FirmwareVersion(
             version: name,
-            size: stat.size,
+            size: 0, // Size not available without reading entire file
           ));
         }
       }
@@ -175,19 +181,19 @@ class FlasherStorageService {
 
   /// List all device families (v1.0)
   Future<List<String>> listFamilies() async {
-    final dir = Directory(basePath);
-    if (!await dir.exists()) return [];
+    if (!await _storage.exists('')) return [];
 
+    final entries = await _storage.listDirectory('');
     final families = <String>[];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final name = entity.path.split(Platform.pathSeparator).last;
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        final name = entry.name;
         // Skip extra folder and v2.0 project folders
-        if (name != 'extra' && !await _isProjectFolder(entity.path)) {
+        if (name != 'extra' && !await _isProjectFolder(name)) {
           // Check if it contains .json files (v1.0 format)
-          final subDir = Directory(entity.path);
-          await for (final subEntity in subDir.list()) {
-            if (subEntity is File && subEntity.path.endsWith('.json')) {
+          final subEntries = await _storage.listDirectory(name);
+          for (final subEntry in subEntries) {
+            if (!subEntry.isDirectory && subEntry.name.endsWith('.json')) {
               families.add(name);
               break;
             }
@@ -201,14 +207,13 @@ class FlasherStorageService {
 
   /// List devices in a family (v1.0)
   Future<List<String>> listDevices(String family) async {
-    final dir = Directory('$basePath/$family');
-    if (!await dir.exists()) return [];
+    if (!await _storage.exists(family)) return [];
 
+    final entries = await _storage.listDirectory(family);
     final devices = <String>[];
-    await for (final entity in dir.list()) {
-      if (entity is File && entity.path.endsWith('.json')) {
-        final name = entity.path.split(Platform.pathSeparator).last;
-        devices.add(name.replaceAll('.json', ''));
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.json')) {
+        devices.add(entry.name.replaceAll('.json', ''));
       }
     }
 
@@ -217,11 +222,11 @@ class FlasherStorageService {
 
   /// Load a device definition (v1.0)
   Future<DeviceDefinition?> loadDevice(String family, String deviceId) async {
-    final file = File('$basePath/$family/$deviceId.json');
-    if (!await file.exists()) return null;
-
+    final relativePath = '$family/$deviceId.json';
     try {
-      final content = await file.readAsString();
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
+
       final json = jsonDecode(content) as Map<String, dynamic>;
       final device = DeviceDefinition.fromJson(json);
       device.setBasePath('$basePath/$family');
@@ -359,16 +364,16 @@ class FlasherStorageService {
 
   /// Save a device definition
   Future<bool> saveDevice(DeviceDefinition device) async {
-    final file = File('$basePath/${device.family}/${device.id}.json');
+    final relativePath = '${device.family}/${device.id}.json';
 
     try {
       // Ensure directory exists
-      await file.parent.create(recursive: true);
+      await _storage.createDirectory(device.family);
 
       // Write JSON
       final json = device.toJson();
       final content = const JsonEncoder.withIndent('  ').convert(json);
-      await file.writeAsString(content);
+      await _storage.writeString(relativePath, content);
 
       return true;
     } catch (e) {
@@ -379,16 +384,20 @@ class FlasherStorageService {
 
   /// Check if media file exists
   Future<bool> mediaExists(String family, String filename) async {
-    final file = File('$basePath/$family/media/$filename');
-    return file.exists();
+    final relativePath = '$family/media/$filename';
+    return _storage.exists(relativePath);
   }
 
-  /// Get media file path
+  /// Get media file path (returns absolute path for display)
+  /// Note: For encrypted storage, this returns the virtual path which
+  /// won't work for direct file access. Use readMediaBytes() instead.
   String getMediaPath(String family, String filename) {
     return '$basePath/$family/media/$filename';
   }
 
   /// Get media file path for v2.0 structure
+  /// Note: For encrypted storage, this returns the virtual path which
+  /// won't work for direct file access. Use readMediaBytesV2() instead.
   String getMediaPathV2(
     String project,
     String architecture,
@@ -397,4 +406,29 @@ class FlasherStorageService {
   ) {
     return '$basePath/$project/$architecture/$model/media/$filename';
   }
+
+  /// Read media file bytes (works with encrypted storage)
+  Future<List<int>?> readMediaBytes(String family, String filename) async {
+    final relativePath = '$family/media/$filename';
+    return _storage.readBytes(relativePath);
+  }
+
+  /// Read media file bytes for v2.0 structure (works with encrypted storage)
+  Future<List<int>?> readMediaBytesV2(
+    String project,
+    String architecture,
+    String model,
+    String filename,
+  ) async {
+    final relativePath = '$project/$architecture/$model/media/$filename';
+    return _storage.readBytes(relativePath);
+  }
+
+  /// Read firmware bytes (works with encrypted storage)
+  Future<List<int>?> readFirmwareBytes(String relativePath) async {
+    return _storage.readBytes(relativePath);
+  }
+
+  /// Check if storage is encrypted
+  bool get isEncrypted => _storage.isEncrypted;
 }

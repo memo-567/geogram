@@ -3,26 +3,24 @@
  * License: Apache-2.0
  *
  * Email Service - Manages email threads across multiple stations
+ *
+ * NOTE: All file operations now use ProfileStorage abstraction.
+ * Never use File() or Directory() directly in this service.
  */
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path/path.dart' as p;
 
 import '../models/email_account.dart';
-import 'storage_config.dart';
 import '../models/email_message.dart';
 import '../models/email_thread.dart';
-import '../platform/file_system_service.dart';
 import '../util/email_format.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'profile_storage.dart';
 import 'signing_service.dart';
 import 'station_service.dart';
 import 'websocket_service.dart';
@@ -50,8 +48,8 @@ class EmailService {
   factory EmailService() => _instance;
   EmailService._internal();
 
-  /// Base path for email storage
-  String? _emailBasePath;
+  /// Profile storage abstraction - MUST be set before using the service
+  late ProfileStorage _storage;
 
   /// Connected email accounts (station -> account)
   final Map<String, EmailAccount> _accounts = {};
@@ -72,77 +70,48 @@ class EmailService {
   /// The callsign for which the service is currently initialized
   String? _initializedForCallsign;
 
+  /// Set the storage implementation
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+    // Reset initialization when storage changes
+    _initialized = false;
+    _frequentContacts = null;
+  }
+
   /// Initialize email service
   Future<void> initialize() async {
-    final profile = ProfileService().activeProfile;
+    final profile = ProfileService().getProfile();
     final currentCallsign = profile?.callsign;
 
     // Re-initialize if profile changed
     if (_initialized && _initializedForCallsign != currentCallsign) {
       _initialized = false;
-      _emailBasePath = null;
       _frequentContacts = null; // Clear cached contacts for new profile
     }
 
     if (_initialized) return;
 
-    _emailBasePath = await _getEmailBasePath();
     await _ensureDirectoryStructure();
     _initializedForCallsign = currentCallsign;
     _initialized = true;
   }
 
-  /// Get base path for email storage
-  /// Uses StorageConfig to respect --data-dir setting
-  /// Returns profile-specific path: {devicesDir}/{CALLSIGN}/email
-  Future<String> _getEmailBasePath() async {
-    if (kIsWeb) {
-      return '/email';
-    }
-
-    // Get active profile callsign for profile-specific storage
-    final profile = ProfileService().activeProfile;
-    if (profile == null) {
-      throw StateError('No active profile for email storage');
-    }
-
-    // Use centralized StorageConfig with profile-specific path
-    return StorageConfig().emailDirForProfile(profile.callsign);
-  }
-
   /// Ensure base directory structure exists (unified folders)
   Future<void> _ensureDirectoryStructure() async {
-    if (_emailBasePath == null) return;
-
     final dirs = [
-      _emailBasePath!,
-      '$_emailBasePath/inbox',
-      '$_emailBasePath/outbox',
-      '$_emailBasePath/sent',
-      '$_emailBasePath/spam',
-      '$_emailBasePath/drafts',
-      '$_emailBasePath/garbage',
-      '$_emailBasePath/archive',
-      '$_emailBasePath/labels',
+      '',
+      'inbox',
+      'outbox',
+      'sent',
+      'spam',
+      'drafts',
+      'garbage',
+      'archive',
+      'labels',
     ];
 
     for (final dir in dirs) {
-      await _ensureDirectory(dir);
-    }
-  }
-
-  /// Ensure directory exists
-  Future<void> _ensureDirectory(String path) async {
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(path)) {
-        await fs.createDirectory(path, recursive: true);
-      }
-    } else {
-      final dir = Directory(path);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
+      await _storage.createDirectory(dir);
     }
   }
 
@@ -206,30 +175,17 @@ class EmailService {
 
   /// Save a thread to disk
   Future<void> saveThread(EmailThread thread) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
     final relativePath = EmailFormat.getThreadPath(thread);
-    final threadPath = '$_emailBasePath/$relativePath';
 
     // Ensure all parent directories exist (including year subdirectories)
-    if (kIsWeb) {
-      await FileSystemService.instance.createDirectory(threadPath, recursive: true);
-    } else {
-      final dir = Directory(threadPath);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-    }
+    await _storage.createDirectory(relativePath);
 
     // Write thread.md
     final content = EmailFormat.export(thread);
-    final filePath = '$threadPath/thread.md';
-
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(filePath, content);
-    } else {
-      await File(filePath).writeAsString(content);
-    }
+    final filePath = '$relativePath/thread.md';
+    await _storage.writeString(filePath, content);
 
     thread.folderPath = relativePath;
 
@@ -243,28 +199,21 @@ class EmailService {
 
   /// Get the full folder path for a thread (for attachments)
   Future<String?> getThreadFolderPath(EmailThread thread) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
     final relativePath =
         thread.folderPath ?? EmailFormat.getThreadPath(thread);
-    return '$_emailBasePath/$relativePath';
+    return _storage.getAbsolutePath(relativePath);
   }
 
   /// Load a thread from disk
   Future<EmailThread?> loadThread(String threadPath) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
-    final filePath = '$_emailBasePath/$threadPath/thread.md';
+    final filePath = '$threadPath/thread.md';
 
     try {
-      String content;
-      if (kIsWeb) {
-        if (!await FileSystemService.instance.exists(filePath)) return null;
-        content = await FileSystemService.instance.readAsString(filePath);
-      } else {
-        final file = File(filePath);
-        if (!await file.exists()) return null;
-        content = await file.readAsString();
-      }
+      final content = await _storage.readString(filePath);
+      if (content == null) return null;
 
       final thread = EmailFormat.parse(content);
       if (thread != null) {
@@ -279,32 +228,25 @@ class EmailService {
 
   /// List threads in a folder (unified folder structure)
   Future<List<EmailThread>> listThreads(String folder) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
     final threads = <EmailThread>[];
-    final basePath = '$_emailBasePath/$folder';
 
     try {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(basePath)) return threads;
-        // Web implementation would need directory listing
-        return threads;
-      }
-
-      final dir = Directory(basePath);
-      if (!await dir.exists()) return threads;
+      if (!await _storage.directoryExists(folder)) return threads;
 
       // Handle year subdirectories for inbox/sent/spam/garbage
       if (folder == 'inbox' ||
           folder == 'sent' ||
           folder == 'spam' ||
           folder == 'garbage') {
-        await for (final yearEntity in dir.list()) {
-          if (yearEntity is Directory) {
-            await for (final threadEntity in yearEntity.list()) {
-              if (threadEntity is Directory) {
-                final thread = await _loadThreadFromDir(threadEntity.path);
+        final yearEntries = await _storage.listDirectory(folder);
+        for (final yearEntry in yearEntries) {
+          if (yearEntry.isDirectory) {
+            final threadEntries = await _storage.listDirectory(yearEntry.path);
+            for (final threadEntry in threadEntries) {
+              if (threadEntry.isDirectory) {
+                final thread = await _loadThreadFromRelativePath(threadEntry.path);
                 if (thread != null) threads.add(thread);
               }
             }
@@ -312,9 +254,10 @@ class EmailService {
         }
       } else {
         // Outbox and drafts don't have year subdirectories
-        await for (final threadEntity in dir.list()) {
-          if (threadEntity is Directory) {
-            final thread = await _loadThreadFromDir(threadEntity.path);
+        final entries = await _storage.listDirectory(folder);
+        for (final entry in entries) {
+          if (entry.isDirectory) {
+            final thread = await _loadThreadFromRelativePath(entry.path);
             if (thread != null) threads.add(thread);
           }
         }
@@ -329,18 +272,15 @@ class EmailService {
     return threads;
   }
 
-  /// Load thread from directory path
-  Future<EmailThread?> _loadThreadFromDir(String dirPath) async {
-    final filePath = '$dirPath/thread.md';
+  /// Load thread from relative path
+  Future<EmailThread?> _loadThreadFromRelativePath(String relativePath) async {
+    final filePath = '$relativePath/thread.md';
     try {
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final content = await _storage.readString(filePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final thread = EmailFormat.parse(content);
       if (thread != null) {
-        // Extract relative path
-        final relativePath = dirPath.substring(_emailBasePath!.length + 1);
         thread.folderPath = relativePath;
       }
       return thread;
@@ -569,16 +509,9 @@ class EmailService {
   Future<void> _deleteThreadFiles(EmailThread thread) async {
     if (thread.folderPath == null) return;
 
-    final threadPath = '$_emailBasePath/${thread.folderPath}';
-
     try {
-      if (kIsWeb) {
-        // Web implementation would need recursive delete
-      } else {
-        final dir = Directory(threadPath);
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-        }
+      if (await _storage.directoryExists(thread.folderPath!)) {
+        await _storage.deleteDirectory(thread.folderPath!, recursive: true);
       }
     } catch (e) {
       print('Error deleting thread files: $e');
@@ -609,28 +542,19 @@ class EmailService {
 
   /// Update label refs.json
   Future<void> _updateLabelRefs(String label, EmailThread thread, {required bool add}) async {
-    final labelPath = '$_emailBasePath/labels/$label';
+    final labelPath = 'labels/$label';
     final refsPath = '$labelPath/refs.json';
 
-    await _ensureDirectory(labelPath);
+    await _storage.createDirectory(labelPath);
 
     Map<String, dynamic> refs;
 
     try {
-      if (kIsWeb) {
-        if (await FileSystemService.instance.exists(refsPath)) {
-          final content = await FileSystemService.instance.readAsString(refsPath);
-          refs = jsonDecode(content) as Map<String, dynamic>;
-        } else {
-          refs = {'label': label, 'threads': []};
-        }
+      final content = await _storage.readString(refsPath);
+      if (content != null) {
+        refs = jsonDecode(content) as Map<String, dynamic>;
       } else {
-        final file = File(refsPath);
-        if (await file.exists()) {
-          refs = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-        } else {
-          refs = {'label': label, 'threads': []};
-        }
+        refs = {'label': label, 'threads': []};
       }
     } catch (e) {
       refs = {'label': label, 'threads': []};
@@ -649,33 +573,22 @@ class EmailService {
     refs['threads'] = threads;
 
     final content = const JsonEncoder.withIndent('  ').convert(refs);
-
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(refsPath, content);
-    } else {
-      await File(refsPath).writeAsString(content);
-    }
+    await _storage.writeString(refsPath, content);
   }
 
   /// Get all labels
   Future<List<String>> getLabels() async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
     final labels = <String>[];
-    final labelsPath = '$_emailBasePath/labels';
 
     try {
-      if (kIsWeb) {
-        // Web implementation would need directory listing
-        return labels;
-      }
+      if (!await _storage.directoryExists('labels')) return labels;
 
-      final dir = Directory(labelsPath);
-      if (!await dir.exists()) return labels;
-
-      await for (final entity in dir.list()) {
-        if (entity is Directory) {
-          labels.add(p.basename(entity.path));
+      final entries = await _storage.listDirectory('labels');
+      for (final entry in entries) {
+        if (entry.isDirectory) {
+          labels.add(entry.name);
         }
       }
 
@@ -689,36 +602,26 @@ class EmailService {
 
   /// Create a new label
   Future<void> createLabel(String label) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
-    final labelPath = '$_emailBasePath/labels/$label';
-    await _ensureDirectory(labelPath);
+    final labelPath = 'labels/$label';
+    await _storage.createDirectory(labelPath);
 
     // Create empty refs.json
     final refsPath = '$labelPath/refs.json';
     final content = '{"label": "$label", "threads": []}';
-
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(refsPath, content);
-    } else {
-      await File(refsPath).writeAsString(content);
-    }
+    await _storage.writeString(refsPath, content);
   }
 
   /// Delete a label
   Future<void> deleteLabel(String label) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
-    final labelPath = '$_emailBasePath/labels/$label';
+    final labelPath = 'labels/$label';
 
     try {
-      if (kIsWeb) {
-        // Web implementation would need recursive delete
-      } else {
-        final dir = Directory(labelPath);
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-        }
+      if (await _storage.directoryExists(labelPath)) {
+        await _storage.deleteDirectory(labelPath, recursive: true);
       }
     } catch (e) {
       print('Error deleting label: $e');
@@ -728,18 +631,11 @@ class EmailService {
   /// Get threads with a specific label
   Future<List<EmailThread>> getThreadsByLabel(String label) async {
     final threads = <EmailThread>[];
-    final refsPath = '$_emailBasePath/labels/$label/refs.json';
+    final refsPath = 'labels/$label/refs.json';
 
     try {
-      String content;
-      if (kIsWeb) {
-        if (!await FileSystemService.instance.exists(refsPath)) return threads;
-        content = await FileSystemService.instance.readAsString(refsPath);
-      } else {
-        final file = File(refsPath);
-        if (!await file.exists()) return threads;
-        content = await file.readAsString();
-      }
+      final content = await _storage.readString(refsPath);
+      if (content == null) return threads;
 
       final refs = jsonDecode(content) as Map<String, dynamic>;
       final threadPaths = (refs['threads'] as List).cast<String>();
@@ -765,34 +661,19 @@ class EmailService {
 
   /// Save email config
   Future<void> saveConfig(Map<String, dynamic> config) async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
-    final configPath = '$_emailBasePath/config.json';
     final content = const JsonEncoder.withIndent('  ').convert(config);
-
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(configPath, content);
-    } else {
-      await File(configPath).writeAsString(content);
-    }
+    await _storage.writeString('config.json', content);
   }
 
   /// Load email config
   Future<Map<String, dynamic>> loadConfig() async {
-    if (_emailBasePath == null) await initialize();
-
-    final configPath = '$_emailBasePath/config.json';
+    await initialize();
 
     try {
-      String content;
-      if (kIsWeb) {
-        if (!await FileSystemService.instance.exists(configPath)) return {};
-        content = await FileSystemService.instance.readAsString(configPath);
-      } else {
-        final file = File(configPath);
-        if (!await file.exists()) return {};
-        content = await file.readAsString();
-      }
+      final content = await _storage.readString('config.json');
+      if (content == null) return {};
 
       return jsonDecode(content) as Map<String, dynamic>;
     } catch (e) {
@@ -1070,30 +951,17 @@ class EmailService {
   /// Cached frequent contacts
   List<FrequentContact>? _frequentContacts;
 
-  /// Get the path to frequent.json
-  String get _frequentJsonPath => '$_emailBasePath/frequent.json';
-
   /// Load frequent contacts from disk
   Future<List<FrequentContact>> loadFrequentContacts() async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
 
     if (_frequentContacts != null) return _frequentContacts!;
 
     try {
-      String content;
-      if (kIsWeb) {
-        if (!await FileSystemService.instance.exists(_frequentJsonPath)) {
-          _frequentContacts = [];
-          return _frequentContacts!;
-        }
-        content = await FileSystemService.instance.readAsString(_frequentJsonPath);
-      } else {
-        final file = File(_frequentJsonPath);
-        if (!await file.exists()) {
-          _frequentContacts = [];
-          return _frequentContacts!;
-        }
-        content = await file.readAsString();
+      final content = await _storage.readString('frequent.json');
+      if (content == null) {
+        _frequentContacts = [];
+        return _frequentContacts!;
       }
 
       final List<dynamic> jsonList = jsonDecode(content);
@@ -1113,18 +981,13 @@ class EmailService {
 
   /// Save frequent contacts to disk
   Future<void> _saveFrequentContacts() async {
-    if (_emailBasePath == null) await initialize();
+    await initialize();
     if (_frequentContacts == null) return;
 
     try {
       final content = jsonEncode(
           _frequentContacts!.map((c) => c.toJson()).toList());
-
-      if (kIsWeb) {
-        await FileSystemService.instance.writeAsString(_frequentJsonPath, content);
-      } else {
-        await File(_frequentJsonPath).writeAsString(content);
-      }
+      await _storage.writeString('frequent.json', content);
     } catch (e) {
       print('Error saving frequent contacts: $e');
     }

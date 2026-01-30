@@ -19,6 +19,7 @@ import '../services/storage_config.dart';
 import '../services/collection_service.dart';
 import '../services/direct_message_service.dart';
 import '../services/chat_service.dart';
+import '../services/profile_storage.dart';
 import '../services/app_args.dart';
 import '../services/event_service.dart';
 import '../api/handlers/alert_handler.dart';
@@ -2337,6 +2338,19 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
 
       final profile = ProfileService().getProfile();
+
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          chatDir.path,
+        );
+        chatService.setStorage(scopedStorage);
+      } else {
+        chatService.setStorage(FilesystemProfileStorage(chatDir.path));
+      }
+
       await chatService.initializeCollection(chatDir.path, creatorNpub: profile.npub);
       LogService().log('StationServerService: ChatService initialized with ${chatService.channels.length} channels');
       return true;

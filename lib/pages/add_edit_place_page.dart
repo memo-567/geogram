@@ -19,6 +19,7 @@ import '../platform/file_image_helper.dart' as file_helper;
 import '../services/location_provider_service.dart';
 import '../services/collection_service.dart';
 import '../services/groups_service.dart';
+import '../services/profile_storage.dart';
 import '../models/group.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
@@ -300,6 +301,17 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       final profile = _profileService.getProfile();
 
       for (final collection in groupCollections) {
+        // Set profile storage for encrypted storage support
+        final profileStorage = CollectionService().profileStorage;
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            collection.storagePath!,
+          );
+          groupsService.setStorage(scopedStorage);
+        } else {
+          groupsService.setStorage(FilesystemProfileStorage(collection.storagePath!));
+        }
         await groupsService.initializeCollection(
           collection.storagePath!,
           creatorNpub: profile.npub,

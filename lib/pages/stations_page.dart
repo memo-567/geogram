@@ -994,6 +994,7 @@ class _AddStationDialogState extends State<_AddStationDialog> {
         attempts.add((protocol: 'http', port: 80));
       }
 
+      String? lastError;
       for (final attempt in attempts) {
         try {
           setState(() {
@@ -1011,17 +1012,33 @@ class _AddStationDialogState extends State<_AddStationDialog> {
               workingProtocol = attempt.protocol == 'https' ? 'wss' : 'ws';
               workingPort = attempt.port;
               break;
+            } else {
+              lastError = 'Not a Geogram Station (service: ${data['service']})';
             }
+          } else {
+            lastError = 'HTTP ${response.statusCode}';
           }
-        } catch (_) {
-          // Try next protocol+port combination
+        } catch (e) {
+          // Store last error for better diagnostics
+          final errorStr = e.toString();
+          if (errorStr.contains('SocketException')) {
+            lastError = 'Connection refused';
+          } else if (errorStr.contains('TimeoutException')) {
+            lastError = 'Connection timeout';
+          } else if (errorStr.contains('HandshakeException') || errorStr.contains('CERTIFICATE')) {
+            lastError = 'SSL/Certificate error';
+          } else {
+            lastError = errorStr.length > 50 ? '${errorStr.substring(0, 50)}...' : errorStr;
+          }
         }
       }
 
       if (stationInfo == null || workingPort == null) {
         final triedPorts = attempts.map((a) => '${a.protocol}:${a.port}').join(', ');
         setState(() {
-          _statusMessage = 'Could not connect to station at $host (tried $triedPorts)';
+          _statusMessage = lastError != null
+              ? 'Could not connect to $host: $lastError (tried $triedPorts)'
+              : 'Could not connect to station at $host (tried $triedPorts)';
           _isError = true;
           _isConnecting = false;
         });
@@ -1034,15 +1051,18 @@ class _AddStationDialogState extends State<_AddStationDialog> {
                    '$host:$workingPort';
       final callsign = stationInfo['callsign'] as String?;
       final description = stationInfo['description'] as String?;
-      final location = stationInfo['location'] as Map<String, dynamic>?;
 
       String? locationStr;
       double? latitude;
       double? longitude;
 
-      if (location != null) {
-        final city = location['city'] as String?;
-        final country = location['country'] as String?;
+      // Handle location - can be a string or an object
+      final locationData = stationInfo['location'];
+      if (locationData is String) {
+        locationStr = locationData;
+      } else if (locationData is Map<String, dynamic>) {
+        final city = locationData['city'] as String?;
+        final country = locationData['country'] as String?;
         if (city != null && country != null) {
           locationStr = '$city, $country';
         } else if (city != null) {
@@ -1050,9 +1070,13 @@ class _AddStationDialogState extends State<_AddStationDialog> {
         } else if (country != null) {
           locationStr = country;
         }
-        latitude = (location['latitude'] as num?)?.toDouble();
-        longitude = (location['longitude'] as num?)?.toDouble();
+        latitude = (locationData['latitude'] as num?)?.toDouble();
+        longitude = (locationData['longitude'] as num?)?.toDouble();
       }
+
+      // Get lat/lon from top-level if not in location object
+      latitude ??= (stationInfo['latitude'] as num?)?.toDouble();
+      longitude ??= (stationInfo['longitude'] as num?)?.toDouble();
 
       setState(() {
         _statusMessage = 'Connected! Found station: $name';
@@ -1064,10 +1088,19 @@ class _AddStationDialogState extends State<_AddStationDialog> {
 
       if (!mounted) return;
 
+      // Build the WebSocket URL, omitting port for standard ports (443 for wss, 80 for ws)
+      String wsUrl;
+      if ((workingProtocol == 'wss' && workingPort == 443) ||
+          (workingProtocol == 'ws' && workingPort == 80)) {
+        wsUrl = '$workingProtocol://$host';
+      } else {
+        wsUrl = '$workingProtocol://$host:$workingPort';
+      }
+
       // Return the station info
       Navigator.pop(context, {
         'name': name,
-        'url': '$workingProtocol://$host:$workingPort',
+        'url': wsUrl,
         if (callsign != null) 'callsign': callsign,
         if (locationStr != null) 'location': locationStr,
         if (latitude != null) 'latitude': latitude.toString(),

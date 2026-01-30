@@ -111,6 +111,9 @@ enum DebugAction {
   /// Open station chat app and first chat room
   openStationChat,
 
+  /// Open local chat collection (for testing encrypted storage)
+  openLocalChat,
+
   /// Select a specific chat room by ID
   selectChatRoom,
 
@@ -167,6 +170,15 @@ enum DebugAction {
 
   /// List all known devices with online status
   listDevices,
+
+  /// Get encrypted storage status
+  encryptStorageStatus,
+
+  /// Enable encrypted storage (migrate to encrypted archive)
+  encryptStorageEnable,
+
+  /// Disable encrypted storage (extract to folders)
+  encryptStorageDisable,
 }
 
 /// Toast message to be displayed
@@ -416,6 +428,11 @@ class DebugController {
   /// Trigger opening station chat app and first chat room
   void triggerOpenStationChat() {
     triggerAction(DebugAction.openStationChat);
+  }
+
+  /// Trigger opening local chat collection (for testing encrypted storage)
+  void triggerOpenLocalChat() {
+    triggerAction(DebugAction.openLocalChat);
   }
 
   /// Trigger selecting a chat room by ID
@@ -898,6 +915,25 @@ class DebugController {
         'description': 'List all known devices with online status',
         'params': {},
       },
+      {
+        'action': 'encrypt_storage_status',
+        'description': 'Get encrypted storage status for current profile',
+        'params': {},
+      },
+      {
+        'action': 'encrypt_storage_enable',
+        'description': 'Enable encrypted storage for current profile (migrate files to encrypted archive)',
+        'params': {
+          'nsec': '(optional) NOSTR secret key for encryption - uses profile nsec if not provided',
+        },
+      },
+      {
+        'action': 'encrypt_storage_disable',
+        'description': 'Disable encrypted storage for current profile (extract files to folders)',
+        'params': {
+          'nsec': '(optional) NOSTR secret key for decryption - uses profile nsec if not provided',
+        },
+      },
     ];
   }
 
@@ -1169,6 +1205,13 @@ class DebugController {
         return {
           'success': true,
           'message': 'Opening station chat app and first chat room',
+        };
+
+      case 'open_local_chat':
+        triggerOpenLocalChat();
+        return {
+          'success': true,
+          'message': 'Opening local chat collection',
         };
 
       case 'select_chat_room':

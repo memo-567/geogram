@@ -4,21 +4,25 @@
  */
 
 import 'dart:convert';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:path/path.dart' as path;
 import '../models/forum_section.dart';
 import '../models/forum_thread.dart';
 import '../models/forum_post.dart';
 import '../models/chat_security.dart';
+import 'profile_storage.dart';
 
 /// Service for managing forum collections and posts
+///
+/// IMPORTANT: All file operations go through the ProfileStorage abstraction.
+/// Never use File() or Directory() directly in this service.
 class ForumService {
   static final ForumService _instance = ForumService._internal();
   factory ForumService() => _instance;
   ForumService._internal();
 
-  /// Current collection path
-  String? _collectionPath;
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// MUST be set before using the service.
+  late ProfileStorage _storage;
 
   /// Loaded sections
   List<ForumSection> _sections = [];
@@ -26,10 +30,18 @@ class ForumService {
   /// Security settings (admin/moderators)
   ChatSecurity _security = ChatSecurity();
 
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
+
   /// Initialize forum service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
     print('ForumService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
     await _loadSections();
     await _loadSecurity();
 
@@ -41,9 +53,6 @@ class ForumService {
     }
   }
 
-  /// Get collection path
-  String? get collectionPath => _collectionPath;
-
   /// Get loaded sections
   List<ForumSection> get sections => List.unmodifiable(_sections);
 
@@ -52,11 +61,9 @@ class ForumService {
 
   /// Load sections from sections.json
   Future<void> _loadSections() async {
-    if (_collectionPath == null) return;
+    final content = await _storage.readString('extra/sections.json');
 
-    final sectionsFile =
-        File(path.join(_collectionPath!, 'extra', 'sections.json'));
-    if (!await sectionsFile.exists()) {
+    if (content == null) {
       // Create default sections if file doesn't exist
       _sections = _createDefaultSections();
       await _saveSections();
@@ -64,7 +71,6 @@ class ForumService {
     }
 
     try {
-      final content = await sectionsFile.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       final sectionsList = json['sections'] as List;
 
@@ -112,39 +118,29 @@ class ForumService {
 
   /// Save sections to sections.json
   Future<void> _saveSections() async {
-    if (_collectionPath == null) return;
-
-    final extraDir = Directory(path.join(_collectionPath!, 'extra'));
-    if (!await extraDir.exists()) {
-      await extraDir.create(recursive: true);
-    }
-
-    final sectionsFile =
-        File(path.join(_collectionPath!, 'extra', 'sections.json'));
     final json = {
       'version': '1.0',
       'sections': _sections.map((s) => s.toJson()).toList(),
     };
+    final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    await sectionsFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(json),
-    );
+    if (!await _storage.exists('extra')) {
+      await _storage.createDirectory('extra');
+    }
+    await _storage.writeString('extra/sections.json', content);
   }
 
   /// Load security settings from security.json
   Future<void> _loadSecurity() async {
-    if (_collectionPath == null) return;
+    final content = await _storage.readString('extra/security.json');
 
-    final securityFile =
-        File(path.join(_collectionPath!, 'extra', 'security.json'));
-    if (!await securityFile.exists()) {
+    if (content == null) {
       // New forum - create empty security (admin will be set when needed)
       _security = ChatSecurity();
       return;
     }
 
     try {
-      final content = await securityFile.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       _security = ChatSecurity.fromJson(json);
     } catch (e) {
@@ -155,25 +151,18 @@ class ForumService {
 
   /// Save security settings to security.json
   Future<void> saveSecurity(ChatSecurity security) async {
-    if (_collectionPath == null) return;
-
     _security = security;
 
-    final extraDir = Directory(path.join(_collectionPath!, 'extra'));
-    if (!await extraDir.exists()) {
-      await extraDir.create(recursive: true);
-    }
-
-    final securityFile =
-        File(path.join(_collectionPath!, 'extra', 'security.json'));
     final json = {
       'version': '1.0',
       ..._security.toJson(),
     };
+    final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    await securityFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(json),
-    );
+    if (!await _storage.exists('extra')) {
+      await _storage.createDirectory('extra');
+    }
+    await _storage.writeString('extra/security.json', content);
   }
 
   /// Get section by ID
@@ -187,40 +176,35 @@ class ForumService {
 
   /// Load threads for a section
   Future<List<ForumThread>> loadThreads(String sectionId) async {
-    if (_collectionPath == null) return [];
-
     final section = getSection(sectionId);
     if (section == null) return [];
 
-    final sectionDir = Directory(path.join(_collectionPath!, section.folder));
-    print('ForumService: Loading threads from: ${sectionDir.path}');
-    if (!await sectionDir.exists()) {
+    if (!await _storage.exists(section.folder)) {
       print('ForumService: Section directory does not exist');
       return [];
     }
 
     List<ForumThread> threads = [];
 
-    // Find all thread files (thread-*.txt or *.txt except config.json)
-    final files = await sectionDir
-        .list()
-        .where((entity) =>
-            entity is File &&
-            entity.path.endsWith('.txt') &&
-            !entity.path.endsWith('config.json'))
-        .cast<File>()
-        .toList();
+    final entries = await _storage.listDirectory(section.folder);
+    final threadEntries = entries.where((e) =>
+        !e.isDirectory &&
+        e.name.endsWith('.txt') &&
+        !e.name.endsWith('config.json'));
 
-    print('ForumService: Found ${files.length} thread files');
+    print('ForumService: Found ${threadEntries.length} thread files');
 
-    for (var file in files) {
+    for (var entry in threadEntries) {
       try {
-        final thread = await _parseThreadMetadata(file, sectionId);
-        if (thread != null) {
-          threads.add(thread);
+        final content = await _storage.readString(entry.path);
+        if (content != null) {
+          final thread = _parseThreadMetadataFromContent(content, sectionId, entry.path, entry.name);
+          if (thread != null) {
+            threads.add(thread);
+          }
         }
       } catch (e) {
-        print('Error parsing thread ${file.path}: $e');
+        print('Error parsing thread ${entry.path}: $e');
       }
     }
 
@@ -230,11 +214,10 @@ class ForumService {
     return threads;
   }
 
-  /// Parse thread metadata from file (without loading all posts)
-  Future<ForumThread?> _parseThreadMetadata(
-      File file, String sectionId) async {
+  /// Parse thread metadata from content string
+  ForumThread? _parseThreadMetadataFromContent(
+      String content, String sectionId, String filePath, String filename) {
     try {
-      final content = await file.readAsString();
       final lines = content.split('\n');
 
       if (lines.length < 6) return null;
@@ -277,7 +260,7 @@ class ForumService {
         }
       }
 
-      final threadId = path.basenameWithoutExtension(file.path);
+      final threadId = path.basenameWithoutExtension(filename);
 
       return ForumThread(
         id: threadId,
@@ -287,7 +270,7 @@ class ForumService {
         created: created,
         lastReply: lastReply,
         replyCount: replyCount,
-        filePath: file.path,
+        filePath: filePath,
       );
     } catch (e) {
       print('Error parsing thread metadata: $e');
@@ -297,31 +280,13 @@ class ForumService {
 
   /// Load posts for a thread
   Future<List<ForumPost>> loadPosts(String sectionId, String threadId) async {
-    if (_collectionPath == null) return [];
-
     final section = getSection(sectionId);
     if (section == null) return [];
 
-    final threadFile = File(path.join(
-      _collectionPath!,
-      section.folder,
-      '$threadId.txt',
-    ));
+    final content = await _storage.readString('${section.folder}/$threadId.txt');
+    if (content == null) return [];
 
-    if (!await threadFile.exists()) return [];
-
-    return await _parseThreadFile(threadFile);
-  }
-
-  /// Parse thread file to extract all posts
-  Future<List<ForumPost>> _parseThreadFile(File file) async {
-    try {
-      final content = await file.readAsString();
-      return parseThreadText(content);
-    } catch (e) {
-      print('Error parsing thread file ${file.path}: $e');
-      return [];
-    }
+    return parseThreadText(content);
   }
 
   /// Parse thread text content (static for testing)
@@ -470,10 +435,6 @@ class ForumService {
     String title,
     ForumPost originalPost,
   ) async {
-    if (_collectionPath == null) {
-      throw Exception('Collection not initialized');
-    }
-
     final section = getSection(sectionId);
     if (section == null) {
       throw Exception('Section not found: $sectionId');
@@ -481,27 +442,31 @@ class ForumService {
 
     // Sanitize title for filename
     final threadId = _sanitizeFilename(title);
+    final threadFilePath = '${section.folder}/$threadId.txt';
 
-    // Create thread folder if doesn't exist
-    final sectionDir = Directory(path.join(_collectionPath!, section.folder));
-    if (!await sectionDir.exists()) {
-      await sectionDir.create(recursive: true);
+    // Build thread content
+    final buffer = StringBuffer();
+    buffer.writeln('# THREAD: $title');
+    buffer.writeln('');
+    buffer.writeln('AUTHOR: ${originalPost.author}');
+    buffer.writeln('CREATED: ${originalPost.timestamp}');
+    buffer.writeln('SECTION: $sectionId');
+    buffer.writeln('');
+    buffer.write(originalPost.exportAsText());
+    final content = buffer.toString();
+
+    // Create section directory if needed
+    if (!await _storage.exists(section.folder)) {
+      await _storage.createDirectory(section.folder);
     }
 
     // Check if thread already exists
-    final threadFile = File(path.join(sectionDir.path, '$threadId.txt'));
-    if (await threadFile.exists()) {
+    if (await _storage.exists(threadFilePath)) {
       throw Exception('Thread already exists: $title');
     }
 
-    // Write thread file
-    print('ForumService: Creating thread file at: ${threadFile.path}');
-    await _writeThreadFile(
-      threadFile,
-      title,
-      sectionId,
-      originalPost,
-    );
+    print('ForumService: Creating thread file at: $threadFilePath');
+    await _storage.writeString(threadFilePath, content);
     print('ForumService: Thread file created successfully');
 
     return ForumThread(
@@ -510,32 +475,8 @@ class ForumService {
       sectionId: sectionId,
       author: originalPost.author,
       created: originalPost.dateTime,
-      filePath: threadFile.path,
+      filePath: threadFilePath,
     );
-  }
-
-  /// Write thread file with header and original post
-  Future<void> _writeThreadFile(
-    File file,
-    String title,
-    String sectionId,
-    ForumPost originalPost,
-  ) async {
-    final buffer = StringBuffer();
-
-    // Write header
-    buffer.writeln('# THREAD: $title');
-    buffer.writeln('');
-    buffer.writeln('AUTHOR: ${originalPost.author}');
-    buffer.writeln('CREATED: ${originalPost.timestamp}');
-    buffer.writeln('SECTION: $sectionId');
-    buffer.writeln('');
-
-    // Write original post (content + metadata)
-    buffer.write(originalPost.exportAsText());
-
-    // Write to file and flush immediately
-    await file.writeAsString(buffer.toString(), flush: true);
   }
 
   /// Add reply to a thread
@@ -544,35 +485,21 @@ class ForumService {
     String threadId,
     ForumPost reply,
   ) async {
-    if (_collectionPath == null) {
-      throw Exception('Collection not initialized');
-    }
-
     final section = getSection(sectionId);
     if (section == null) {
       throw Exception('Section not found: $sectionId');
     }
 
-    final threadFile = File(path.join(
-      _collectionPath!,
-      section.folder,
-      '$threadId.txt',
-    ));
+    final threadFilePath = '${section.folder}/$threadId.txt';
+    final replyText = '\n${reply.exportAsText()}\n';
 
-    if (!await threadFile.exists()) {
+    // Read-append-write pattern for storage abstraction
+    final existingContent = await _storage.readString(threadFilePath);
+    if (existingContent == null) {
       throw Exception('Thread not found: $threadId');
     }
 
-    // Append reply to file
-    final sink = threadFile.openWrite(mode: FileMode.append);
-    try {
-      sink.write('\n');
-      sink.write(reply.exportAsText());
-      sink.write('\n');
-      await sink.flush();
-    } finally {
-      await sink.close();
-    }
+    await _storage.writeString(threadFilePath, existingContent + replyText);
   }
 
   /// Delete a post (admin/moderator only)
@@ -582,10 +509,6 @@ class ForumService {
     ForumPost post,
     String? userNpub,
   ) async {
-    if (_collectionPath == null) {
-      throw Exception('Collection not initialized');
-    }
-
     // Check permissions
     if (!_security.canModerate(userNpub, sectionId)) {
       throw Exception('Insufficient permissions to delete post');
@@ -596,24 +519,25 @@ class ForumService {
       throw Exception('Section not found: $sectionId');
     }
 
-    final threadFile = File(path.join(
-      _collectionPath!,
-      section.folder,
-      '$threadId.txt',
-    ));
+    final threadFilePath = '${section.folder}/$threadId.txt';
 
-    if (!await threadFile.exists()) {
+    if (!await _storage.exists(threadFilePath)) {
       throw Exception('Thread not found: $threadId');
     }
 
     // If deleting original post, delete entire thread
     if (post.isOriginalPost) {
-      await threadFile.delete();
+      await _storage.delete(threadFilePath);
       return;
     }
 
     // Load all posts
-    final posts = await _parseThreadFile(threadFile);
+    final content = await _storage.readString(threadFilePath);
+    if (content == null) {
+      throw Exception('Thread not found: $threadId');
+    }
+
+    final posts = parseThreadText(content);
 
     // Remove the target post
     posts.removeWhere((p) =>
@@ -626,18 +550,16 @@ class ForumService {
       throw Exception('Cannot delete all posts');
     }
 
-    await _rewriteThreadFile(threadFile, posts);
+    await _rewriteThreadFile(threadFilePath, posts, content);
   }
 
   /// Rewrite thread file with updated posts
   Future<void> _rewriteThreadFile(
-      File file, List<ForumPost> posts) async {
+      String filePath, List<ForumPost> posts, String existingContent) async {
     if (posts.isEmpty) {
       throw Exception('Cannot write empty thread');
     }
 
-    // Read header from existing file
-    final existingContent = await file.readAsString();
     final lines = existingContent.split('\n');
 
     // Extract header (first 6 lines: title, blank, author, created, section, blank)
@@ -655,7 +577,7 @@ class ForumService {
       buffer.write(posts[i].exportAsText());
     }
 
-    await file.writeAsString(buffer.toString(), flush: true);
+    await _storage.writeString(filePath, buffer.toString());
   }
 
   /// Sanitize filename
@@ -678,10 +600,6 @@ class ForumService {
     bool readonly = false,
     String? adminNpub,
   }) async {
-    if (_collectionPath == null) {
-      throw Exception('Forum not initialized');
-    }
-
     // Check if user is admin
     if (adminNpub != null && _security.adminNpub != adminNpub) {
       throw Exception('Only admin can create sections');
@@ -695,22 +613,16 @@ class ForumService {
     // Sanitize folder name
     final folder = id.toLowerCase().replaceAll(RegExp(r'[^a-z0-9-]'), '-');
 
-    // Create section folder
-    final sectionDir = Directory(path.join(_collectionPath!, folder));
-    await sectionDir.create();
-
     // Create section config
     final config = ForumSectionConfig.defaults(
       id: id,
       name: name,
       description: description,
     );
+    final configContent = const JsonEncoder.withIndent('  ').convert(config.toJson());
 
-    final configFile = File(path.join(sectionDir.path, 'config.json'));
-    await configFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(config.toJson()),
-      flush: true,
-    );
+    await _storage.createDirectory(folder);
+    await _storage.writeString('$folder/config.json', configContent);
 
     // Create section object
     final section = ForumSection(
@@ -739,26 +651,24 @@ class ForumService {
     String? newDescription,
     String? adminNpub,
   }) async {
-    if (_collectionPath == null) {
-      throw Exception('Forum not initialized');
-    }
-
     // Check if user is admin
     if (adminNpub != null && _security.adminNpub != adminNpub) {
       throw Exception('Only admin can rename sections');
     }
 
-    // Find section
-    final section = _sections.firstWhere(
+    // Find section (used for validation)
+    _sections.firstWhere(
       (s) => s.id == sectionId,
       orElse: () => throw Exception('Section not found'),
     );
 
-    // Update sections.json
-    final sectionsFile =
-        File(path.join(_collectionPath!, 'extra', 'sections.json'));
-    final content = await sectionsFile.readAsString();
-    final data = json.decode(content) as Map<String, dynamic>;
+    // Load and update sections.json
+    final content = await _storage.readString('extra/sections.json');
+    if (content == null) {
+      throw Exception('Sections file not found');
+    }
+
+    final data = jsonDecode(content) as Map<String, dynamic>;
 
     final sections = (data['sections'] as List<dynamic>).map((s) {
       final sectionData = s as Map<String, dynamic>;
@@ -773,22 +683,9 @@ class ForumService {
     }).toList();
 
     data['sections'] = sections;
+    final updatedContent = const JsonEncoder.withIndent('  ').convert(data);
 
-    await sectionsFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(data),
-      flush: true,
-    );
-
-    // Update section config
-    final configFile =
-        File(path.join(_collectionPath!, section.folder, 'config.json'));
-    if (await configFile.exists()) {
-      final configContent = await configFile.readAsString();
-      final configData = json.decode(configContent) as Map<String, dynamic>;
-
-      // Update config if needed (though config doesn't store name)
-      // Config is mainly for permissions and limits
-    }
+    await _storage.writeString('extra/sections.json', updatedContent);
 
     // Reload sections
     await refreshSections();
@@ -799,10 +696,6 @@ class ForumService {
     required String sectionId,
     String? adminNpub,
   }) async {
-    if (_collectionPath == null) {
-      throw Exception('Forum not initialized');
-    }
-
     // Check if user is admin
     if (adminNpub != null && _security.adminNpub != adminNpub) {
       throw Exception('Only admin can delete sections');
@@ -815,27 +708,26 @@ class ForumService {
     );
 
     // Delete section folder and all its contents
-    final sectionDir = Directory(path.join(_collectionPath!, section.folder));
-    if (await sectionDir.exists()) {
-      await sectionDir.delete(recursive: true);
+    if (await _storage.exists(section.folder)) {
+      await _storage.deleteDirectory(section.folder, recursive: true);
     }
 
-    // Update sections.json
-    final sectionsFile =
-        File(path.join(_collectionPath!, 'extra', 'sections.json'));
-    final content = await sectionsFile.readAsString();
-    final data = json.decode(content) as Map<String, dynamic>;
+    // Load and update sections.json
+    final content = await _storage.readString('extra/sections.json');
+    if (content == null) {
+      throw Exception('Sections file not found');
+    }
+
+    final data = jsonDecode(content) as Map<String, dynamic>;
 
     final sections = (data['sections'] as List<dynamic>)
         .where((s) => (s as Map<String, dynamic>)['id'] != sectionId)
         .toList();
 
     data['sections'] = sections;
+    final updatedContent = const JsonEncoder.withIndent('  ').convert(data);
 
-    await sectionsFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(data),
-      flush: true,
-    );
+    await _storage.writeString('extra/sections.json', updatedContent);
 
     // Reload sections
     await refreshSections();
@@ -843,13 +735,11 @@ class ForumService {
 
   /// Update sections.json with a new section
   Future<void> _updateSectionsJson(ForumSection section) async {
-    final sectionsFile =
-        File(path.join(_collectionPath!, 'extra', 'sections.json'));
-
     Map<String, dynamic> data;
-    if (await sectionsFile.exists()) {
-      final content = await sectionsFile.readAsString();
-      data = json.decode(content) as Map<String, dynamic>;
+    final content = await _storage.readString('extra/sections.json');
+
+    if (content != null) {
+      data = jsonDecode(content) as Map<String, dynamic>;
     } else {
       data = {
         'version': '1.0',
@@ -868,11 +758,9 @@ class ForumService {
     });
 
     data['sections'] = sections;
+    final updatedContent = const JsonEncoder.withIndent('  ').convert(data);
 
-    await sectionsFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(data),
-      flush: true,
-    );
+    await _storage.writeString('extra/sections.json', updatedContent);
   }
 
   /// Delete a thread (admin/moderator only)
@@ -881,10 +769,6 @@ class ForumService {
     required String threadId,
     String? userNpub,
   }) async {
-    if (_collectionPath == null) {
-      throw Exception('Forum not initialized');
-    }
-
     // Check if user is admin (moderators not yet implemented for forums)
     if (userNpub != null && _security.adminNpub != userNpub) {
       throw Exception('Only admin can delete threads');
@@ -896,35 +780,32 @@ class ForumService {
       throw Exception('Section not found');
     }
 
-    // Find thread file
-    final sectionDir = Directory(path.join(_collectionPath!, section.folder));
-    final files = await sectionDir
-        .list()
-        .where((entity) =>
-            entity is File &&
-            entity.path.endsWith('.txt') &&
-            !entity.path.endsWith('config.json'))
-        .toList();
+    final entries = await _storage.listDirectory(section.folder);
+    final threadEntries = entries.where((e) =>
+        !e.isDirectory &&
+        e.name.endsWith('.txt') &&
+        !e.name.endsWith('config.json'));
 
-    File? threadFile;
-    for (var file in files) {
-      final f = file as File;
+    String? threadPath;
+    for (var entry in threadEntries) {
       try {
-        final thread = await _parseThreadMetadata(f, sectionId);
-        if (thread != null && thread.id == threadId) {
-          threadFile = f;
-          break;
+        final content = await _storage.readString(entry.path);
+        if (content != null) {
+          final thread = _parseThreadMetadataFromContent(content, sectionId, entry.path, entry.name);
+          if (thread != null && thread.id == threadId) {
+            threadPath = entry.path;
+            break;
+          }
         }
       } catch (e) {
         continue;
       }
     }
 
-    if (threadFile == null) {
+    if (threadPath == null) {
       throw Exception('Thread not found');
     }
 
-    // Delete the thread file
-    await threadFile.delete();
+    await _storage.delete(threadPath);
   }
 }

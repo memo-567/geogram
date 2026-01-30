@@ -12,7 +12,6 @@ import 'package:path/path.dart' as p;
 import '../models/chat_message.dart';
 import '../models/dm_conversation.dart';
 import '../models/profile.dart';
-import '../platform/file_system_service.dart';
 import '../util/event_bus.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
@@ -25,6 +24,7 @@ import 'storage_config.dart';
 import 'devices_service.dart';
 import 'station_service.dart';
 import '../connection/connection_manager.dart';
+import 'profile_storage.dart';
 
 /// Exception thrown when trying to send a DM to an unreachable device
 class DMMustBeReachableException implements Exception {
@@ -67,10 +67,19 @@ class _MessageCache {
 }
 
 /// Service for managing 1:1 direct message conversations
+///
+/// NOTE: DirectMessageService operates on cross-profile data (chat/ directory)
+/// that is separate from per-profile encrypted storage. Full encrypted storage
+/// support requires architectural changes to handle shared DM data.
 class DirectMessageService {
   static final DirectMessageService _instance = DirectMessageService._internal();
   factory DirectMessageService() => _instance;
   DirectMessageService._internal();
+
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// NOTE: DMs use cross-profile chat/ directory, not profile-specific storage.
+  /// This field is set for consistency but DM operations use _chatBasePath directly.
+  ProfileStorage? _storage;
 
   /// Base path for device storage (legacy: devices/)
   String? _basePath;
@@ -80,6 +89,15 @@ class DirectMessageService {
 
   /// Cached conversations
   final Map<String, DMConversation> _conversations = {};
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage?.isEncrypted ?? false;
+
+  /// Set the profile storage for file operations
+  /// NOTE: DMs currently use filesystem directly due to cross-profile nature.
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Message cache: callsign -> cached messages
   /// Used to avoid repeated file I/O for message loading
@@ -100,31 +118,31 @@ class DirectMessageService {
   Future<void> initialize() async {
     if (_basePath != null) return;
 
-    if (kIsWeb) {
-      _basePath = '/geogram/devices';
-      _chatBasePath = '/geogram/chat';
-    } else {
-      // Use StorageConfig to get the correct directories
-      // This respects --data-dir and other configuration options
-      final storageConfig = StorageConfig();
-      if (!storageConfig.isInitialized) {
-        // StorageConfig should be initialized by main.dart, but fallback just in case
-        await storageConfig.init();
-      }
-      _basePath = storageConfig.devicesDir;
-      _chatBasePath = storageConfig.chatDir;
-
-      final devicesDir = Directory(_basePath!);
-      if (!await devicesDir.exists()) {
-        await devicesDir.create(recursive: true);
-      }
+    // Use StorageConfig to get the correct directories
+    // This respects --data-dir and other configuration options
+    final storageConfig = StorageConfig();
+    if (!storageConfig.isInitialized) {
+      // StorageConfig should be initialized by main.dart, but fallback just in case
+      await storageConfig.init();
     }
+    _basePath = storageConfig.devicesDir;
+    _chatBasePath = storageConfig.chatDir;
+
+    // Initialize default storage if not already set
+    // DMs use cross-profile chat/ directory with filesystem storage
+    _storage ??= FilesystemProfileStorage(_chatBasePath!);
+
+    // Ensure directories exist using storage
+    await _storage!.createDirectory('');
 
     LogService().log('DirectMessageService initialized at: $_basePath');
     LogService().log('DirectMessageService chat path: $_chatBasePath');
 
     // Migrate old DM paths from devices/ to chat/
-    await _migrateOldDMPaths();
+    // Note: Migration requires filesystem access
+    if (!_storage!.isEncrypted) {
+      await _migrateOldDMPaths();
+    }
 
     await _loadConversations();
   }
@@ -237,22 +255,13 @@ class DirectMessageService {
     }
 
     final path = getDMPath(normalizedCallsign);
+    final relativePath = normalizedCallsign;
 
-    // Create directory structure if needed
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(path)) {
-        await fs.createDirectory(path, recursive: true);
-        await fs.createDirectory('$path/files', recursive: true);
-        await _createConfig(path, normalizedCallsign);
-      }
-    } else {
-      final dir = Directory(path);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-        await Directory('$path/files').create();
-        await _createConfig(path, normalizedCallsign);
-      }
+    // Create directory structure if needed using storage
+    if (!await _storage!.exists(relativePath)) {
+      await _storage!.createDirectory(relativePath);
+      await _storage!.createDirectory('$relativePath/files');
+      await _createConfig(relativePath, normalizedCallsign);
     }
 
     final conversation = DMConversation(
@@ -268,7 +277,8 @@ class DirectMessageService {
   }
 
   /// Create config.json for a DM conversation
-  Future<void> _createConfig(String path, String otherCallsign, {String? otherNpub}) async {
+  /// [relativePath] is relative to the chat base path (e.g., "CALLSIGN")
+  Future<void> _createConfig(String relativePath, String otherCallsign, {String? otherNpub}) async {
     final config = {
       'id': otherCallsign,
       'name': 'Chat with $otherCallsign',
@@ -282,51 +292,25 @@ class DirectMessageService {
     };
 
     final content = const JsonEncoder.withIndent('  ').convert(config);
-
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      await fs.writeAsString('$path/config.json', content);
-    } else {
-      final file = File(p.join(path, 'config.json'));
-      await file.writeAsString(content);
-    }
+    await _storage!.writeString('$relativePath/config.json', content);
   }
 
   /// Update the stored npub for a conversation (called when first signed message is received)
-  Future<void> _updateConversationNpub(String path, String otherNpub) async {
-    final configPath = '$path/config.json';
+  /// [relativePath] is relative to the chat base path (e.g., "CALLSIGN")
+  Future<void> _updateConversationNpub(String relativePath, String otherNpub) async {
+    final configPath = '$relativePath/config.json';
 
     try {
-      Map<String, dynamic> config;
+      final configContent = await _storage!.readString(configPath);
+      if (configContent == null) return;
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(configPath)) {
-          final content = await fs.readAsString(configPath);
-          config = json.decode(content) as Map<String, dynamic>;
-        } else {
-          return;
-        }
-      } else {
-        final file = File(configPath);
-        if (await file.exists()) {
-          final content = await file.readAsString();
-          config = json.decode(content) as Map<String, dynamic>;
-        } else {
-          return;
-        }
-      }
+      final config = json.decode(configContent) as Map<String, dynamic>;
 
       // Only set if not already set (trust first seen npub)
       if (config['otherNpub'] == null) {
         config['otherNpub'] = otherNpub;
         final content = const JsonEncoder.withIndent('  ').convert(config);
-
-        if (kIsWeb) {
-          await FileSystemService.instance.writeAsString(configPath, content);
-        } else {
-          await File(configPath).writeAsString(content);
-        }
+        await _storage!.writeString(configPath, content);
 
         LogService().log('DirectMessageService: Bound conversation to npub ${otherNpub.substring(0, 20)}...');
       }
@@ -336,24 +320,15 @@ class DirectMessageService {
   }
 
   /// Load the stored npub for a conversation from config.json
-  Future<String?> _loadConversationNpub(String path) async {
-    final configPath = '$path/config.json';
+  /// [relativePath] is relative to the chat base path (e.g., "CALLSIGN")
+  Future<String?> _loadConversationNpub(String relativePath) async {
+    final configPath = '$relativePath/config.json';
 
     try {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(configPath)) {
-          final content = await fs.readAsString(configPath);
-          final config = json.decode(content) as Map<String, dynamic>;
-          return config['otherNpub'] as String?;
-        }
-      } else {
-        final file = File(configPath);
-        if (await file.exists()) {
-          final content = await file.readAsString();
-          final config = json.decode(content) as Map<String, dynamic>;
-          return config['otherNpub'] as String?;
-        }
+      final content = await _storage!.readString(configPath);
+      if (content != null) {
+        final config = json.decode(content) as Map<String, dynamic>;
+        return config['otherNpub'] as String?;
       }
     } catch (e) {
       LogService().log('DirectMessageService: Error loading conversation npub: $e');
@@ -384,24 +359,12 @@ class DirectMessageService {
     if (_chatBasePath == null) return;
 
     try {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(_chatBasePath!)) return;
+      if (!await _storage!.exists('')) return;
 
-        final entities = await fs.list(_chatBasePath!);
-        for (final entity in entities) {
-          if (entity.type == FsEntityType.directory) {
-            await _loadConversationFromPath(entity.path);
-          }
-        }
-      } else {
-        final chatDir = Directory(_chatBasePath!);
-        if (!await chatDir.exists()) return;
-
-        await for (final entity in chatDir.list()) {
-          if (entity is Directory) {
-            await _loadConversationFromPath(entity.path);
-          }
+      final entries = await _storage!.listDirectory('');
+      for (final entry in entries) {
+        if (entry.isDirectory) {
+          await _loadConversationFromPath(entry.name);
         }
       }
     } catch (e) {
@@ -414,11 +377,11 @@ class DirectMessageService {
     }
   }
 
-  /// Load a single conversation from its path
-  /// Path format: chat/{otherCallsign}/
+  /// Load a single conversation from its relative path
+  /// Path format: {otherCallsign}/ (relative to chat base path)
   /// Optimized to avoid full message loading during conversation list build
-  Future<void> _loadConversationFromPath(String chatPath) async {
-    final otherCallsign = p.basename(chatPath).toUpperCase();
+  Future<void> _loadConversationFromPath(String relativePath) async {
+    final otherCallsign = relativePath.toUpperCase();
 
     // Skip non-DM directories (like 'main', 'extra', etc.)
     // DM directories are named after callsigns (typically uppercase alphanumeric)
@@ -426,23 +389,11 @@ class DirectMessageService {
 
     // Check if this is a direct message channel by looking for config.json with type=direct
     bool isDMChannel = false;
-    final configPath = '$chatPath/config.json';
+    final configPath = '$relativePath/config.json';
     Map<String, dynamic>? config;
 
     try {
-      String? configContent;
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(configPath)) {
-          configContent = await fs.readAsString(configPath);
-        }
-      } else {
-        final configFile = File(configPath);
-        if (await configFile.exists()) {
-          configContent = await configFile.readAsString();
-        }
-      }
-
+      final configContent = await _storage!.readString(configPath);
       if (configContent != null) {
         config = json.decode(configContent) as Map<String, dynamic>;
         isDMChannel = config['type'] == 'direct';
@@ -457,10 +408,13 @@ class DirectMessageService {
     // Load stored npub from config.json for identity binding
     final storedNpub = config?['otherNpub'] as String?;
 
+    // Build absolute path for DMConversation
+    final absolutePath = getDMPath(otherCallsign);
+
     final conversation = DMConversation(
       otherCallsign: otherCallsign,
       myCallsign: _myCallsign,
-      path: chatPath,
+      path: absolutePath,
       otherNpub: storedNpub,
     );
 
@@ -478,7 +432,7 @@ class DirectMessageService {
 
     // If no cached metadata, load last message from file (slow path, but only happens once)
     if (conversation.lastMessageTime == null) {
-      final lastMsg = await _loadLastMessageQuick(chatPath);
+      final lastMsg = await _loadLastMessageQuick(relativePath);
       if (lastMsg != null) {
         conversation.lastMessageTime = lastMsg.dateTime;
         conversation.lastMessagePreview = lastMsg.content;
@@ -491,23 +445,12 @@ class DirectMessageService {
 
   /// Quickly load just the last message from a conversation (no signature verification)
   /// Used during conversation list loading to avoid expensive full message parsing
-  Future<ChatMessage?> _loadLastMessageQuick(String chatPath) async {
+  /// [relativePath] is relative to the chat base path (e.g., "CALLSIGN")
+  Future<ChatMessage?> _loadLastMessageQuick(String relativePath) async {
     try {
       // Find message files
-      final messagesPath = '$chatPath/messages.txt';
-      String? content;
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(messagesPath)) {
-          content = await fs.readAsString(messagesPath);
-        }
-      } else {
-        final file = File(messagesPath);
-        if (await file.exists()) {
-          content = await file.readAsString();
-        }
-      }
+      final messagesPath = '$relativePath/messages.txt';
+      final content = await _storage!.readString(messagesPath);
 
       if (content == null || content.isEmpty) return null;
 
@@ -905,17 +848,15 @@ class DirectMessageService {
       final originalName = p.basename(sourcePath);
       final storedFileName = '${sha1Hash}_$originalName';
 
-      // Create files directory
-      final storagePath = StorageConfig().baseDir;
-      final filesDir = Directory(p.join(storagePath, conversationPath, 'files'));
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      // Convert conversation path to relative path and create files directory
+      final relativePath = _pathToRelative(conversationPath);
+      final filesRelativePath = '$relativePath/files';
+      await _storage!.createDirectory(filesRelativePath);
 
-      final destPath = p.join(filesDir.path, storedFileName);
-      await File(destPath).writeAsBytes(bytes, flush: true);
+      // Write file using storage
+      await _storage!.writeBytes('$filesRelativePath/$storedFileName', bytes);
 
-      LogService().log('DM: Copied file to $destPath');
+      LogService().log('DM: Copied file to $filesRelativePath/$storedFileName');
       return (
         fileName: storedFileName,
         sha1Hash: sha1Hash,
@@ -930,11 +871,10 @@ class DirectMessageService {
   /// Delete a file from conversation storage
   Future<void> _deleteFile(String conversationPath, String fileName) async {
     try {
-      final storagePath = StorageConfig().baseDir;
-      final filePath = p.join(storagePath, conversationPath, 'files', fileName);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _pathToRelative(conversationPath);
+      final filePath = '$relativePath/files/$fileName';
+      if (await _storage!.exists(filePath)) {
+        await _storage!.delete(filePath);
       }
     } catch (e) {
       LogService().log('DM: Error deleting file: $e');
@@ -946,14 +886,11 @@ class DirectMessageService {
   Future<String?> getFilePath(String otherCallsign, String fileName) async {
     await initialize();
 
-    final conversation = getConversation(otherCallsign.toUpperCase());
-    if (conversation == null) return null;
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final relativePath = '$normalizedCallsign/files/$fileName';
 
-    final storagePath = StorageConfig().baseDir;
-    final filePath = p.join(storagePath, conversation.path, 'files', fileName);
-    final file = File(filePath);
-    if (await file.exists()) {
-      return filePath;
+    if (await _storage!.exists(relativePath)) {
+      return await _storage!.getAbsolutePath(relativePath);
     }
     return null;
   }
@@ -1190,12 +1127,10 @@ class DirectMessageService {
       // Calculate SHA1 hash for integrity verification
       final sha1Hash = sha1.convert(bytes).toString();
 
-      // Create files directory
-      final storagePath = StorageConfig().baseDir;
-      final filesDir = Directory(p.join(storagePath, conversationPath, 'files'));
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      // Convert conversation path to relative path and create files directory
+      final relativePath = _pathToRelative(conversationPath);
+      final filesRelativePath = '$relativePath/files';
+      await _storage!.createDirectory(filesRelativePath);
 
       // Generate unique filename: voice_YYYYMMDD_HHMMSS.webm
       final now = DateTime.now();
@@ -1204,10 +1139,10 @@ class DirectMessageService {
       final extension = p.extension(sourcePath);
       final fileName = 'voice_$timestamp$extension';
 
-      final destPath = p.join(filesDir.path, fileName);
-      await File(destPath).writeAsBytes(bytes);
+      // Write file using storage
+      await _storage!.writeBytes('$filesRelativePath/$fileName', bytes);
 
-      LogService().log('DM: Copied voice file to $destPath (sha1: $sha1Hash)');
+      LogService().log('DM: Copied voice file to $filesRelativePath/$fileName (sha1: $sha1Hash)');
       return (fileName: fileName, sha1Hash: sha1Hash);
     } catch (e) {
       LogService().log('DM: Failed to copy voice file: $e');
@@ -1218,11 +1153,10 @@ class DirectMessageService {
   /// Delete a voice file from conversation files folder
   Future<void> _deleteVoiceFile(String conversationPath, String fileName) async {
     try {
-      final storagePath = StorageConfig().baseDir;
-      final filePath = p.join(storagePath, conversationPath, 'files', fileName);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _pathToRelative(conversationPath);
+      final filePath = '$relativePath/files/$fileName';
+      if (await _storage!.exists(filePath)) {
+        await _storage!.delete(filePath);
         LogService().log('DM: Deleted voice file: $filePath');
       }
     } catch (e) {
@@ -1233,11 +1167,10 @@ class DirectMessageService {
   /// Get the full path to a voice file in a conversation
   Future<String?> getVoiceFilePath(String otherCallsign, String voiceFileName) async {
     final normalizedCallsign = otherCallsign.toUpperCase();
-    final storagePath = StorageConfig().baseDir;
-    final filePath = p.join(storagePath, 'chat', normalizedCallsign, 'files', voiceFileName);
-    final file = File(filePath);
-    if (await file.exists()) {
-      return filePath;
+    final relativePath = '$normalizedCallsign/files/$voiceFileName';
+
+    if (await _storage!.exists(relativePath)) {
+      return await _storage!.getAbsolutePath(relativePath);
     }
     return null;
   }
@@ -1245,7 +1178,7 @@ class DirectMessageService {
   /// Download a voice file from a remote device
   /// Returns the local file path on success, null on failure
   Future<String?> downloadVoiceFile(String otherCallsign, String voiceFileName) async {
-    if (kIsWeb) return null;
+    if (_storage!.isEncrypted) return null; // Downloads require filesystem access
 
     final normalizedCallsign = otherCallsign.toUpperCase();
 
@@ -1286,20 +1219,13 @@ class DirectMessageService {
         return null;
       }
 
-      // Create local files directory if needed
-      final storagePath = StorageConfig().baseDir;
-      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      // Create local files directory and save file using storage
+      final filesRelativePath = '$normalizedCallsign/files';
+      await _storage!.createDirectory(filesRelativePath);
+      await _storage!.writeBytes('$filesRelativePath/$voiceFileName', response.bodyBytes);
 
-      // Save the file
-      final filePath = p.join(filesDir.path, voiceFileName);
-      final file = File(filePath);
-      await file.writeAsBytes(response.bodyBytes);
-
-      LogService().log('DM: Voice file downloaded: $filePath');
-      return filePath;
+      LogService().log('DM: Voice file downloaded: $filesRelativePath/$voiceFileName');
+      return await _storage!.getAbsolutePath('$filesRelativePath/$voiceFileName');
     } catch (e) {
       LogService().log('DM: Voice download error: $e');
       return null;
@@ -1309,7 +1235,7 @@ class DirectMessageService {
   /// Download a file attachment from a remote device
   /// Returns local file path on success, null on failure
   Future<String?> downloadFile(String otherCallsign, String fileName) async {
-    if (kIsWeb) return null;
+    if (_storage!.isEncrypted) return null; // Downloads require filesystem access
 
     final normalizedCallsign = otherCallsign.toUpperCase();
 
@@ -1350,20 +1276,13 @@ class DirectMessageService {
         return null;
       }
 
-      // Create local files directory if needed
-      final storagePath = StorageConfig().baseDir;
-      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      // Create local files directory and save file using storage
+      final filesRelativePath = '$normalizedCallsign/files';
+      await _storage!.createDirectory(filesRelativePath);
+      await _storage!.writeBytes('$filesRelativePath/$fileName', response.bodyBytes);
 
-      // Save the file
-      final filePath = p.join(filesDir.path, fileName);
-      final file = File(filePath);
-      await file.writeAsBytes(response.bodyBytes);
-
-      LogService().log('DM: File downloaded: $filePath');
-      return filePath;
+      LogService().log('DM: File downloaded: $filesRelativePath/$fileName');
+      return await _storage!.getAbsolutePath('$filesRelativePath/$fileName');
     } catch (e) {
       LogService().log('DM: File download error: $e');
       return null;
@@ -1381,7 +1300,7 @@ class DirectMessageService {
     int resumeFrom = 0,
     void Function(int bytesReceived)? onProgress,
   }) async {
-    if (kIsWeb) return null;
+    if (_storage!.isEncrypted) return null; // Downloads require filesystem access
 
     final normalizedCallsign = otherCallsign.toUpperCase();
 
@@ -1431,46 +1350,33 @@ class DirectMessageService {
       final bytes = response.bodyBytes;
       final totalBytes = bytes.length;
 
-      // Create local files directory if needed
-      final storagePath = StorageConfig().baseDir;
-      final filesDir = Directory(p.join(storagePath, 'chat', normalizedCallsign, 'files'));
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      // Create local files directory using storage
+      final filesRelativePath = '$normalizedCallsign/files';
+      await _storage!.createDirectory(filesRelativePath);
 
-      // Save the file with progress simulation
-      // Note: Since we're receiving all bytes at once, we simulate progress
-      final filePath = p.join(filesDir.path, fileName);
-      final file = File(filePath);
-
-      // Write bytes in chunks to report progress
+      // Report progress in chunks (simulated since we receive all at once)
       const chunkSize = 32 * 1024; // 32 KB chunks
-      final sink = file.openWrite();
-      try {
-        int bytesWritten = 0;
-        for (var offset = 0; offset < totalBytes; offset += chunkSize) {
-          final end = (offset + chunkSize < totalBytes) ? offset + chunkSize : totalBytes;
-          sink.add(bytes.sublist(offset, end));
-          bytesWritten = end;
+      int bytesReported = 0;
+      for (var offset = 0; offset < totalBytes; offset += chunkSize) {
+        final end = (offset + chunkSize < totalBytes) ? offset + chunkSize : totalBytes;
+        bytesReported = end;
+        onProgress?.call(bytesReported);
 
-          // Report progress
-          onProgress?.call(bytesWritten);
-
-          // Small delay to allow UI to update (prevents blocking)
-          if (bytesWritten < totalBytes) {
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
+        // Small delay to allow UI to update (prevents blocking)
+        if (bytesReported < totalBytes) {
+          await Future.delayed(const Duration(milliseconds: 10));
         }
-        await sink.flush();
-      } finally {
-        await sink.close();
       }
+
+      // Write the complete file using storage
+      await _storage!.writeBytes('$filesRelativePath/$fileName', bytes);
 
       // Final progress callback
       onProgress?.call(totalBytes);
 
-      LogService().log('DM: File downloaded with progress: $filePath ($totalBytes bytes)');
-      return filePath;
+      final resultPath = await _storage!.getAbsolutePath('$filesRelativePath/$fileName');
+      LogService().log('DM: File downloaded with progress: $resultPath ($totalBytes bytes)');
+      return resultPath;
     } catch (e) {
       LogService().log('DM: File download with progress error: $e');
       return null;
@@ -1609,49 +1515,45 @@ class DirectMessageService {
   }
 
   /// Save a message to the appropriate messages file based on npub
+  /// [path] is the absolute path for DMConversation compatibility
   Future<void> _saveMessage(String path, ChatMessage message, {String? otherNpub}) async {
     // For outgoing messages, use the other party's npub for the filename
     // For incoming messages, the npub comes from the message itself
     final npubForFilename = otherNpub ?? message.npub;
     final filename = _getMessagesFilename(npubForFilename);
-    final messagesPath = '$path/$filename';
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
+    // Convert absolute path to relative path for storage
+    final relativePath = _pathToRelative(path);
+    final messagesPath = '$relativePath/$filename';
 
-      // Check if file exists and needs header
-      final needsHeader = !await fs.exists(messagesPath);
+    // Check if file exists and needs header
+    final existingContent = await _storage!.readString(messagesPath);
+    final needsHeader = existingContent == null;
 
-      final buffer = StringBuffer();
-      if (needsHeader) {
-        buffer.write('# DM: Direct Chat from ${message.datePortion}\n');
-      } else {
-        final existing = await fs.readAsString(messagesPath);
-        buffer.write(existing);
-      }
-      buffer.write('\n');
-      buffer.write(message.exportAsText());
-      buffer.write('\n');
-
-      await fs.writeAsString(messagesPath, buffer.toString());
+    final buffer = StringBuffer();
+    if (needsHeader) {
+      buffer.write('# DM: Direct Chat from ${message.datePortion}\n');
     } else {
-      final messagesFile = File(p.join(path, filename));
-
-      final needsHeader = !await messagesFile.exists();
-      final sink = messagesFile.openWrite(mode: FileMode.append);
-
-      try {
-        if (needsHeader) {
-          sink.write('# DM: Direct Chat from ${message.datePortion}\n');
-        }
-        sink.write('\n');
-        sink.write(message.exportAsText());
-        sink.write('\n');
-        await sink.flush();
-      } finally {
-        await sink.close();
-      }
+      buffer.write(existingContent);
     }
+    buffer.write('\n');
+    buffer.write(message.exportAsText());
+    buffer.write('\n');
+
+    await _storage!.writeString(messagesPath, buffer.toString());
+  }
+
+  /// Convert absolute path to relative path for storage
+  String _pathToRelative(String absolutePath) {
+    if (_chatBasePath == null) return absolutePath;
+    if (absolutePath.startsWith(_chatBasePath!)) {
+      final relative = absolutePath.substring(_chatBasePath!.length);
+      if (relative.startsWith('/')) {
+        return relative.substring(1);
+      }
+      return relative;
+    }
+    return absolutePath;
   }
 
   // ============================================================
@@ -1665,47 +1567,19 @@ class DirectMessageService {
 
   /// Save message to queue file for later delivery
   Future<void> _saveToQueue(String callsign, ChatMessage message) async {
-    final queuePath = _getQueuePath(callsign);
+    final queueRelativePath = _getQueueRelativePath(callsign);
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      String existing = '';
-      if (await fs.exists(queuePath)) {
-        existing = await fs.readAsString(queuePath);
-      }
-      await fs.writeAsString(queuePath, '$existing\n${message.exportAsText()}\n');
-    } else {
-      final file = File(queuePath);
-      final sink = file.openWrite(mode: FileMode.append);
-      try {
-        sink.write('\n');
-        sink.write(message.exportAsText());
-        sink.write('\n');
-        await sink.flush();
-      } finally {
-        await sink.close();
-      }
-    }
+    final existingContent = await _storage!.readString(queueRelativePath);
+    final existing = existingContent ?? '';
+    await _storage!.writeString(queueRelativePath, '$existing\n${message.exportAsText()}\n');
   }
 
   /// Load queued messages for a callsign
   Future<List<ChatMessage>> loadQueuedMessages(String callsign) async {
-    final queuePath = _getQueuePath(callsign.toUpperCase());
+    final queueRelativePath = _getQueueRelativePath(callsign.toUpperCase());
 
     try {
-      String? content;
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(queuePath)) {
-          content = await fs.readAsString(queuePath);
-        }
-      } else {
-        final file = File(queuePath);
-        if (await file.exists()) {
-          content = await file.readAsString();
-        }
-      }
-
+      final content = await _storage!.readString(queueRelativePath);
       if (content == null || content.isEmpty) return [];
       return ChatService.parseMessageText(content);
     } catch (e) {
@@ -1730,24 +1604,16 @@ class DirectMessageService {
 
   /// Delete the queue file for a callsign
   Future<void> _deleteQueueFile(String callsign) async {
-    final queuePath = _getQueuePath(callsign.toUpperCase());
+    final queueRelativePath = _getQueueRelativePath(callsign.toUpperCase());
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (await fs.exists(queuePath)) {
-        await fs.delete(queuePath);
-      }
-    } else {
-      final file = File(queuePath);
-      if (await file.exists()) {
-        await file.delete();
-      }
+    if (await _storage!.exists(queueRelativePath)) {
+      await _storage!.delete(queueRelativePath);
     }
   }
 
   /// Rewrite queue file with remaining messages
   Future<void> _rewriteQueue(String callsign, List<ChatMessage> messages) async {
-    final queuePath = _getQueuePath(callsign.toUpperCase());
+    final queueRelativePath = _getQueueRelativePath(callsign.toUpperCase());
 
     final buffer = StringBuffer();
     for (final message in messages) {
@@ -1756,11 +1622,12 @@ class DirectMessageService {
       buffer.write('\n');
     }
 
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(queuePath, buffer.toString());
-    } else {
-      await File(queuePath).writeAsString(buffer.toString());
-    }
+    await _storage!.writeString(queueRelativePath, buffer.toString());
+  }
+
+  /// Get relative path for message queue file
+  String _getQueueRelativePath(String callsign) {
+    return '${callsign.toUpperCase()}/queue.txt';
   }
 
   /// Load messages from a DM conversation
@@ -1809,7 +1676,7 @@ class DirectMessageService {
   /// Load messages from disk (without cache)
   /// This is the expensive operation that reads files and verifies signatures
   Future<List<ChatMessage>> _loadMessagesFromDisk(String normalizedCallsign, {String? filterNpub}) async {
-    final path = getDMPath(normalizedCallsign);
+    final relativePath = normalizedCallsign;
 
     try {
       final List<ChatMessage> allMessages = [];
@@ -1817,26 +1684,12 @@ class DirectMessageService {
       // Find all message files (messages.txt and messages-{npub}.txt)
       List<String> messageFiles = [];
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(path)) {
-          final entities = await fs.list(path);
-          for (final entity in entities) {
-            final filename = p.basename(entity.path);
-            if (filename == 'messages.txt' || filename.startsWith('messages-')) {
-              messageFiles.add(entity.path);
-            }
-          }
-        }
-      } else {
-        final dir = Directory(path);
-        if (await dir.exists()) {
-          await for (final entity in dir.list()) {
-            if (entity is File) {
-              final filename = p.basename(entity.path);
-              if (filename == 'messages.txt' || filename.startsWith('messages-')) {
-                messageFiles.add(entity.path);
-              }
+      if (await _storage!.exists(relativePath)) {
+        final entries = await _storage!.listDirectory(relativePath);
+        for (final entry in entries) {
+          if (!entry.isDirectory) {
+            if (entry.name == 'messages.txt' || entry.name.startsWith('messages-')) {
+              messageFiles.add(entry.path);
             }
           }
         }
@@ -1846,13 +1699,8 @@ class DirectMessageService {
 
       // Load and parse each file
       for (final filePath in messageFiles) {
-        String? content;
-
-        if (kIsWeb) {
-          content = await FileSystemService.instance.readAsString(filePath);
-        } else {
-          content = await File(filePath).readAsString();
-        }
+        final content = await _storage!.readString(filePath);
+        if (content == null) continue;
 
         final messages = ChatService.parseMessageText(content);
 
@@ -1925,28 +1773,17 @@ class DirectMessageService {
     await initialize();
 
     final normalizedCallsign = otherCallsign.toUpperCase();
-    final path = getDMPath(normalizedCallsign);
+    final relativePath = normalizedCallsign;
     final reactionKey = ReactionUtils.normalizeReactionKey(reaction);
     final actorKey = actorCallsign.trim().toUpperCase();
     if (reactionKey.isEmpty || actorKey.isEmpty) {
       throw Exception('Invalid reaction or callsign');
     }
 
-    final messageFiles = await _listMessageFiles(path);
+    final messageFiles = await _listMessageFiles(relativePath);
     for (final filePath in messageFiles) {
-      String content;
-      if (kIsWeb) {
-        if (!await FileSystemService.instance.exists(filePath)) {
-          continue;
-        }
-        content = await FileSystemService.instance.readAsString(filePath);
-      } else {
-        final file = File(filePath);
-        if (!await file.exists()) {
-          continue;
-        }
-        content = await file.readAsString();
-      }
+      final content = await _storage!.readString(filePath);
+      if (content == null) continue;
 
       final messages = ChatService.parseMessageText(content);
       final index = messages.indexWhere((msg) => msg.timestamp == timestamp);
@@ -1963,29 +1800,15 @@ class DirectMessageService {
     return null;
   }
 
-  Future<List<String>> _listMessageFiles(String path) async {
+  Future<List<String>> _listMessageFiles(String relativePath) async {
     final messageFiles = <String>[];
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (await fs.exists(path)) {
-        final entities = await fs.list(path);
-        for (final entity in entities) {
-          final filename = p.basename(entity.path);
-          if (filename == 'messages.txt' || filename.startsWith('messages-')) {
-            messageFiles.add(entity.path);
-          }
-        }
-      }
-    } else {
-      final dir = Directory(path);
-      if (await dir.exists()) {
-        await for (final entity in dir.list()) {
-          if (entity is File) {
-            final filename = p.basename(entity.path);
-            if (filename == 'messages.txt' || filename.startsWith('messages-')) {
-              messageFiles.add(entity.path);
-            }
+    if (await _storage!.exists(relativePath)) {
+      final entries = await _storage!.listDirectory(relativePath);
+      for (final entry in entries) {
+        if (!entry.isDirectory) {
+          if (entry.name == 'messages.txt' || entry.name.startsWith('messages-')) {
+            messageFiles.add(entry.path);
           }
         }
       }
@@ -2017,12 +1840,7 @@ class DirectMessageService {
     }
     buffer.writeln();
 
-    if (kIsWeb) {
-      await FileSystemService.instance.writeAsString(filePath, buffer.toString());
-    } else {
-      final file = File(filePath);
-      await file.writeAsString(buffer.toString());
-    }
+    await _storage!.writeString(filePath, buffer.toString());
   }
 
   ChatMessage _toggleMessageReaction(
@@ -2361,19 +2179,11 @@ class DirectMessageService {
     await initialize();
 
     final normalizedCallsign = otherCallsign.toUpperCase();
-    final path = getDMPath(normalizedCallsign);
+    final relativePath = normalizedCallsign;
 
     try {
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(path)) {
-          await fs.delete(path, recursive: true);
-        }
-      } else {
-        final dir = Directory(path);
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-        }
+      if (await _storage!.exists(relativePath)) {
+        await _storage!.deleteDirectory(relativePath);
       }
 
       _conversations.remove(normalizedCallsign);

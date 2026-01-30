@@ -15,6 +15,8 @@ import '../widgets/add_firmware_wizard.dart';
 import '../widgets/firmware_tree_widget.dart';
 import '../widgets/flash_progress_widget.dart';
 import '../widgets/serial_monitor_widget.dart';
+import '../../services/collection_service.dart';
+import '../../services/profile_storage.dart';
 
 /// Main flasher page with Library and Flasher tabs
 class FlasherPage extends StatefulWidget {
@@ -73,7 +75,19 @@ class _FlasherPageState extends State<FlasherPage>
   @override
   void initState() {
     super.initState();
-    _flasherService = FlasherService.withPath(widget.basePath);
+
+    // Set up storage for FlasherService (encrypted or filesystem)
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.basePath,
+      );
+      _flasherService = FlasherService.withStorage(widget.basePath, scopedStorage);
+    } else {
+      _flasherService = FlasherService.withPath(widget.basePath);
+    }
+
     _tabController = TabController(
       length: 3,
       vsync: this,

@@ -3,7 +3,6 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import '../models/group.dart';
 import '../models/group_member.dart';
@@ -14,20 +13,35 @@ import '../models/station_node.dart';
 import '../util/nostr_key_generator.dart';
 import '../util/group_utils.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing groups
+///
+/// IMPORTANT: All file operations go through the ProfileStorage abstraction.
+/// Never use File() or Directory() directly in this service.
 class GroupsService {
   static final GroupsService _instance = GroupsService._internal();
   factory GroupsService() => _instance;
   GroupsService._internal();
 
-  String? _collectionPath;
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// MUST be set before using the service.
+  late ProfileStorage _storage;
+
   final List<String> _admins = [];
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize groups service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
     LogService().log('GroupsService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
 
     // Load admins
     await _loadAdmins();
@@ -37,39 +51,33 @@ class GroupsService {
 
   /// Load collection admins from individual files
   Future<void> _loadAdmins() async {
-    if (_collectionPath == null) return;
+    _admins.clear();
 
-    final adminsDir = Directory('$_collectionPath/admins');
-    if (!await adminsDir.exists()) {
-      // Try legacy admins.txt file
+    if (!await _storage.exists('admins')) {
       await _loadAdminsLegacy();
       return;
     }
 
     try {
-      _admins.clear();
-
-      final entities = await adminsDir.list().toList();
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.txt')) {
-          final content = await entity.readAsString();
-          final lines = content.split('\n');
-
-          String? npub;
-          for (var line in lines) {
-            final trimmed = line.trim();
-            if (trimmed.startsWith('npub: ')) {
-              npub = trimmed.substring(6).trim();
-              break;
+      final entries = await _storage.listDirectory('admins');
+      for (var entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.txt')) {
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final lines = content.split('\n');
+            for (var line in lines) {
+              final trimmed = line.trim();
+              if (trimmed.startsWith('npub: ')) {
+                final npub = trimmed.substring(6).trim();
+                if (npub.isNotEmpty) {
+                  _admins.add(npub);
+                }
+                break;
+              }
             }
-          }
-
-          if (npub != null && npub.isNotEmpty) {
-            _admins.add(npub);
           }
         }
       }
-
       LogService().log('GroupsService: Loaded ${_admins.length} admins from individual files');
     } catch (e) {
       LogService().log('GroupsService: Error loading admins: $e');
@@ -78,16 +86,11 @@ class GroupsService {
 
   /// Load admins from legacy admins.txt file
   Future<void> _loadAdminsLegacy() async {
-    if (_collectionPath == null) return;
-
-    final adminsFile = File('$_collectionPath/admins.txt');
-    if (!await adminsFile.exists()) return;
+    final content = await _storage.readString('admins.txt');
+    if (content == null) return;
 
     try {
-      final content = await adminsFile.readAsString();
       final lines = content.split('\n');
-
-      _admins.clear();
 
       String? currentCallsign;
       for (int i = 0; i < lines.length; i++) {
@@ -123,24 +126,19 @@ class GroupsService {
 
   /// Save admin to individual file
   Future<void> saveAdmin(String callsign, String npub, {String? signature}) async {
-    if (_collectionPath == null) return;
-
-    final adminsDir = Directory('$_collectionPath/admins');
-    if (!await adminsDir.exists()) {
-      await adminsDir.create(recursive: true);
-    }
-
-    final adminFile = File('$_collectionPath/admins/$callsign.txt');
     final buffer = StringBuffer();
-
     buffer.writeln('# ADMIN: $callsign');
     buffer.writeln('npub: $npub');
     buffer.writeln('added: ${_formatTimestamp(DateTime.now())}');
     if (signature != null && signature.isNotEmpty) {
       buffer.writeln('signature: $signature');
     }
+    final content = buffer.toString();
 
-    await adminFile.writeAsString(buffer.toString(), flush: true);
+    if (!await _storage.exists('admins')) {
+      await _storage.createDirectory('admins');
+    }
+    await _storage.writeString('admins/$callsign.txt', content);
 
     // Add to in-memory list
     if (!_admins.contains(npub)) {
@@ -152,11 +150,9 @@ class GroupsService {
 
   /// Remove admin file
   Future<void> removeAdmin(String callsign, String npub) async {
-    if (_collectionPath == null) return;
-
-    final adminFile = File('$_collectionPath/admins/$callsign.txt');
-    if (await adminFile.exists()) {
-      await adminFile.delete();
+    final relativePath = 'admins/$callsign.txt';
+    if (await _storage.exists(relativePath)) {
+      await _storage.delete(relativePath);
     }
 
     _admins.remove(npub);
@@ -165,34 +161,29 @@ class GroupsService {
 
   /// Save moderator to individual file (group-specific)
   Future<void> saveModerator(String groupName, String callsign, String npub, {String? signature}) async {
-    if (_collectionPath == null) return;
-
-    final moderatorsDir = Directory('$_collectionPath/$groupName/moderators');
-    if (!await moderatorsDir.exists()) {
-      await moderatorsDir.create(recursive: true);
-    }
-
-    final modFile = File('$_collectionPath/$groupName/moderators/$callsign.txt');
     final buffer = StringBuffer();
-
     buffer.writeln('# MODERATOR: $callsign');
     buffer.writeln('npub: $npub');
     buffer.writeln('added: ${_formatTimestamp(DateTime.now())}');
     if (signature != null && signature.isNotEmpty) {
       buffer.writeln('signature: $signature');
     }
+    final content = buffer.toString();
 
-    await modFile.writeAsString(buffer.toString(), flush: true);
+    final relativePath = '$groupName/moderators';
+    if (!await _storage.exists(relativePath)) {
+      await _storage.createDirectory(relativePath);
+    }
+    await _storage.writeString('$relativePath/$callsign.txt', content);
+
     LogService().log('GroupsService: Saved moderator $callsign for group $groupName');
   }
 
   /// Remove moderator file
   Future<void> removeModerator(String groupName, String callsign) async {
-    if (_collectionPath == null) return;
-
-    final modFile = File('$_collectionPath/$groupName/moderators/$callsign.txt');
-    if (await modFile.exists()) {
-      await modFile.delete();
+    final relativePath = '$groupName/moderators/$callsign.txt';
+    if (await _storage.exists(relativePath)) {
+      await _storage.delete(relativePath);
     }
 
     LogService().log('GroupsService: Removed moderator $callsign from group $groupName');
@@ -200,21 +191,18 @@ class GroupsService {
 
   /// Load all groups
   Future<List<Group>> loadGroups() async {
-    if (_collectionPath == null) return [];
-
     final groups = <Group>[];
-    final dir = Directory(_collectionPath!);
 
-    if (!await dir.exists()) return [];
+    final entries = await _storage.listDirectory('');
 
-    final entities = await dir.list().toList();
-
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final groupName = entity.path.split('/').last;
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final groupName = entry.name;
 
         // Skip special directories
-        if (groupName == 'extra' || groupName.startsWith('.')) continue;
+        if (groupName == 'extra' || groupName == 'admins' ||
+            groupName == 'reputation' || groupName == 'sync' ||
+            groupName == 'approvals' || groupName.startsWith('.')) continue;
 
         try {
           final group = await loadGroup(groupName);
@@ -236,22 +224,15 @@ class GroupsService {
 
   /// Load single group by name
   Future<Group?> loadGroup(String groupName) async {
-    if (_collectionPath == null) return null;
+    if (!await _storage.exists(groupName)) return null;
 
-    final groupPath = '$_collectionPath/$groupName';
-    final groupDir = Directory(groupPath);
-
-    if (!await groupDir.exists()) return null;
-
-    // Load group.json
-    final groupFile = File('$groupPath/group.json');
-    if (!await groupFile.exists()) {
+    final content = await _storage.readString('$groupName/group.json');
+    if (content == null) {
       LogService().log('GroupsService: group.json not found for $groupName');
       return null;
     }
 
     try {
-      final content = await groupFile.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       var group = Group.fromJson(json, groupName);
 
@@ -278,13 +259,10 @@ class GroupsService {
 
   /// Load members for a group
   Future<List<GroupMember>> loadMembers(String groupName) async {
-    if (_collectionPath == null) return [];
-
-    final membersFile = File('$_collectionPath/$groupName/members.txt');
-    if (!await membersFile.exists()) return [];
+    final content = await _storage.readString('$groupName/members.txt');
+    if (content == null) return [];
 
     try {
-      final content = await membersFile.readAsString();
       final lines = content.split('\n');
       final members = <GroupMember>[];
 
@@ -328,13 +306,10 @@ class GroupsService {
 
   /// Load areas for a group
   Future<List<GroupArea>> loadAreas(String groupName) async {
-    if (_collectionPath == null) return [];
-
-    final areasFile = File('$_collectionPath/$groupName/areas.json');
-    if (!await areasFile.exists()) return [];
+    final content = await _storage.readString('$groupName/areas.json');
+    if (content == null) return [];
 
     try {
-      final content = await areasFile.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       final areasData = json['areas'] as List<dynamic>;
 
@@ -352,13 +327,10 @@ class GroupsService {
 
   /// Load config for a group
   Future<Map<String, dynamic>?> loadConfig(String groupName) async {
-    if (_collectionPath == null) return null;
-
-    final configFile = File('$_collectionPath/$groupName/config.json');
-    if (!await configFile.exists()) return null;
+    final content = await _storage.readString('$groupName/config.json');
+    if (content == null) return null;
 
     try {
-      final content = await configFile.readAsString();
       return jsonDecode(content) as Map<String, dynamic>;
     } catch (e) {
       LogService().log('GroupsService: Error loading config for $groupName: $e');
@@ -371,8 +343,6 @@ class GroupsService {
     String groupName, {
     ApplicationStatus? filterStatus,
   }) async {
-    if (_collectionPath == null) return [];
-
     final applications = <GroupApplication>[];
 
     // Determine which subdirectories to scan
@@ -384,21 +354,20 @@ class GroupsService {
     }
 
     for (var subdir in subdirs) {
-      final dirPath = '$_collectionPath/$groupName/candidates/$subdir';
-      final dir = Directory(dirPath);
+      final dirPath = '$groupName/candidates/$subdir';
+      if (!await _storage.exists(dirPath)) continue;
 
-      if (!await dir.exists()) continue;
-
-      final entities = await dir.list().toList();
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('_application.txt')) {
+      final entries = await _storage.listDirectory(dirPath);
+      for (var entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('_application.txt')) {
           try {
-            final content = await entity.readAsString();
-            final filename = entity.path.split('/').last;
-            final application = GroupApplication.fromText(content, filename);
-            applications.add(application);
+            final content = await _storage.readString(entry.path);
+            if (content != null) {
+              final application = GroupApplication.fromText(content, entry.name);
+              applications.add(application);
+            }
           } catch (e) {
-            LogService().log('GroupsService: Error loading application ${entity.path}: $e');
+            LogService().log('GroupsService: Error loading application ${entry.path}: $e');
           }
         }
       }
@@ -413,22 +382,13 @@ class GroupsService {
 
   /// Save group
   Future<void> saveGroup(Group group) async {
-    if (_collectionPath == null) return;
+    final groupJson = const JsonEncoder.withIndent('  ').convert(group.toJson());
 
-    final groupPath = '$_collectionPath/${group.name}';
-    final groupDir = Directory(groupPath);
-
-    // Create group directory if needed
-    if (!await groupDir.exists()) {
-      await groupDir.create(recursive: true);
+    if (!await _storage.exists(group.name)) {
+      await _storage.createDirectory(group.name);
     }
 
-    // Save group.json
-    final groupFile = File('$groupPath/group.json');
-    await groupFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(group.toJson()),
-      flush: true,
-    );
+    await _storage.writeString('${group.name}/group.json', groupJson);
 
     // Save members.txt
     await saveMembers(group.name, group.members);
@@ -438,11 +398,8 @@ class GroupsService {
 
     // Save config.json
     if (group.config.isNotEmpty) {
-      final configFile = File('$groupPath/config.json');
-      await configFile.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(group.config),
-        flush: true,
-      );
+      final configJson = const JsonEncoder.withIndent('  ').convert(group.config);
+      await _storage.writeString('${group.name}/config.json', configJson);
     }
 
     LogService().log('GroupsService: Saved group ${group.name}');
@@ -450,9 +407,6 @@ class GroupsService {
 
   /// Save members
   Future<void> saveMembers(String groupName, List<GroupMember> members) async {
-    if (_collectionPath == null) return;
-
-    final membersFile = File('$_collectionPath/$groupName/members.txt');
     final buffer = StringBuffer();
 
     // Header (get from group data if available)
@@ -478,43 +432,33 @@ class GroupsService {
       buffer.writeln();
     }
 
-    await membersFile.writeAsString(buffer.toString(), flush: true);
+    await _storage.writeString('$groupName/members.txt', buffer.toString());
     LogService().log('GroupsService: Saved ${members.length} members for $groupName');
   }
 
   /// Save areas
   Future<void> saveAreas(String groupName, List<GroupArea> areas) async {
-    if (_collectionPath == null) return;
-
-    final areasFile = File('$_collectionPath/$groupName/areas.json');
-
     final json = {
       'areas': areas.map((a) => a.toJson()).toList(),
       'updated': _formatTimestamp(DateTime.now()),
     };
+    final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    await areasFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(json),
-      flush: true,
-    );
+    await _storage.writeString('$groupName/areas.json', content);
 
     LogService().log('GroupsService: Saved ${areas.length} areas for $groupName');
   }
 
   /// Save application
   Future<void> saveApplication(String groupName, GroupApplication application) async {
-    if (_collectionPath == null) return;
-
     final subdir = application.status.name;
-    final dirPath = '$_collectionPath/$groupName/candidates/$subdir';
-    final dir = Directory(dirPath);
+    final content = application.exportAsText();
 
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    final relativeDirPath = '$groupName/candidates/$subdir';
+    if (!await _storage.exists(relativeDirPath)) {
+      await _storage.createDirectory(relativeDirPath);
     }
-
-    final file = File('$dirPath/${application.filename}');
-    await file.writeAsString(application.exportAsText(), flush: true);
+    await _storage.writeString('$relativeDirPath/${application.filename}', content);
 
     LogService().log('GroupsService: Saved application ${application.filename} to $subdir');
   }
@@ -525,14 +469,11 @@ class GroupsService {
     GroupApplication application,
     ApplicationStatus newStatus,
   ) async {
-    if (_collectionPath == null) return;
-
     // Delete from old location
     final oldSubdir = application.status.name;
-    final oldPath = '$_collectionPath/$groupName/candidates/$oldSubdir/${application.filename}';
-    final oldFile = File(oldPath);
-    if (await oldFile.exists()) {
-      await oldFile.delete();
+    final oldPath = '$groupName/candidates/$oldSubdir/${application.filename}';
+    if (await _storage.exists(oldPath)) {
+      await _storage.delete(oldPath);
     }
 
     // Save to new location
@@ -552,8 +493,6 @@ class GroupsService {
     required String creatorNpub,
     required String creatorCallsign,
   }) async {
-    if (_collectionPath == null) return;
-
     final timestamp = _formatTimestamp(DateTime.now());
     final resolvedName = await _resolveGroupName(groupName ?? title);
 
@@ -586,47 +525,36 @@ class GroupsService {
     await saveGroup(group);
 
     // Save the nsec to security.json
-    final groupPath = '$_collectionPath/$resolvedName';
-    final securityFile = File('$groupPath/security.json');
-    await securityFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert({
-        'nsec': groupNsec,
-        'npub': groupNpub,
-        'created': timestamp,
-      }),
-      flush: true,
-    );
+    final securityJson = const JsonEncoder.withIndent('  ').convert({
+      'nsec': groupNsec,
+      'npub': groupNpub,
+      'created': timestamp,
+    });
+    await _storage.writeString('$resolvedName/security.json', securityJson);
 
     // Create candidate subdirectories
-    final candidatesPath = '$_collectionPath/$resolvedName/candidates';
     for (var subdir in ['pending', 'approved', 'rejected']) {
-      final dir = Directory('$candidatesPath/$subdir');
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
+      await _storage.createDirectory('$resolvedName/candidates/$subdir');
     }
 
     // Create feature directories if enabled
+    final year = DateTime.now().year;
+
     if (group.isFeatureEnabled('photos')) {
-      final photosDir = Directory('$_collectionPath/$resolvedName/photos/.reactions');
-      await photosDir.create(recursive: true);
+      await _storage.createDirectory('$resolvedName/photos/.reactions');
     }
 
     if (group.isFeatureEnabled('news')) {
-      final year = DateTime.now().year;
-      final newsDir = Directory('$_collectionPath/$resolvedName/news/$year/files');
-      await newsDir.create(recursive: true);
+      await _storage.createDirectory('$resolvedName/news/$year/files');
     }
 
     if (group.isFeatureEnabled('alerts')) {
-      await Directory('$_collectionPath/$resolvedName/alerts/active').create(recursive: true);
-      await Directory('$_collectionPath/$resolvedName/alerts/archived').create(recursive: true);
+      await _storage.createDirectory('$resolvedName/alerts/active');
+      await _storage.createDirectory('$resolvedName/alerts/archived');
     }
 
     if (group.isFeatureEnabled('chat')) {
-      final year = DateTime.now().year;
-      final chatDir = Directory('$_collectionPath/$resolvedName/chat/$year/files');
-      await chatDir.create(recursive: true);
+      await _storage.createDirectory('$resolvedName/chat/$year/files');
     }
 
     LogService().log('GroupsService: Created group $resolvedName');
@@ -668,15 +596,11 @@ class GroupsService {
   }
 
   Future<String> _resolveGroupName(String name) async {
-    if (_collectionPath == null) {
-      return GroupUtils.sanitizeGroupName(name);
-    }
-
     final baseName = GroupUtils.sanitizeGroupName(name);
     var candidate = baseName;
     var suffix = 2;
 
-    while (await Directory('$_collectionPath/$candidate').exists()) {
+    while (await _storage.exists(candidate)) {
       candidate = '$baseName-$suffix';
       suffix++;
     }
@@ -686,8 +610,6 @@ class GroupsService {
 
   /// Delete group (mark as inactive)
   Future<void> deleteGroup(String groupName) async {
-    if (_collectionPath == null) return;
-
     final group = await loadGroup(groupName);
     if (group == null) return;
 
@@ -759,17 +681,9 @@ class GroupsService {
     String reason,
     String signature,
   ) async {
-    if (_collectionPath == null) return;
-
-    final reputationDir = Directory('$_collectionPath/reputation/$callsign');
-    if (!await reputationDir.exists()) {
-      await reputationDir.create(recursive: true);
-    }
-
     // Create unique filename with timestamp
     final timestamp = _formatTimestamp(DateTime.now());
     final timestampFile = timestamp.replaceAll(' ', '_').replaceAll(':', '-');
-    final entryFile = File('$_collectionPath/reputation/$callsign/${timestampFile}_$givenBy.txt');
 
     final entry = ReputationEntry(
       callsign: callsign,
@@ -781,29 +695,34 @@ class GroupsService {
       reason: reason,
       signature: signature,
     );
+    final content = entry.exportAsText();
 
-    await entryFile.writeAsString(entry.exportAsText(), flush: true);
+    final relativeDirPath = 'reputation/$callsign';
+    if (!await _storage.exists(relativeDirPath)) {
+      await _storage.createDirectory(relativeDirPath);
+    }
+    await _storage.writeString('$relativeDirPath/${timestampFile}_$givenBy.txt', content);
+
     LogService().log('GroupsService: Saved reputation entry for $callsign');
   }
 
   /// Load all reputation entries for a callsign
   Future<List<ReputationEntry>> loadReputationEntries(String callsign) async {
-    if (_collectionPath == null) return [];
-
-    final reputationDir = Directory('$_collectionPath/reputation/$callsign');
-    if (!await reputationDir.exists()) return [];
-
     final entries = <ReputationEntry>[];
 
     try {
-      final files = await reputationDir.list().toList();
-      for (var file in files) {
-        if (file is File && file.path.endsWith('.txt')) {
-          final content = await file.readAsString();
-          final filename = file.path.split('/').last;
-          final entry = ReputationEntry.fromText(content, filename);
-          if (entry != null) {
-            entries.add(entry);
+      final relativeDirPath = 'reputation/$callsign';
+      if (!await _storage.exists(relativeDirPath)) return [];
+
+      final storageEntries = await _storage.listDirectory(relativeDirPath);
+      for (var storageEntry in storageEntries) {
+        if (!storageEntry.isDirectory && storageEntry.name.endsWith('.txt')) {
+          final content = await _storage.readString(storageEntry.path);
+          if (content != null) {
+            final entry = ReputationEntry.fromText(content, storageEntry.name);
+            if (entry != null) {
+              entries.add(entry);
+            }
           }
         }
       }
@@ -827,36 +746,26 @@ class GroupsService {
 
   /// Save station network topology to sync folder
   Future<void> saveNetworkTopology(List<StationNode> nodes) async {
-    if (_collectionPath == null) return;
-
-    final syncDir = Directory('$_collectionPath/sync');
-    if (!await syncDir.exists()) {
-      await syncDir.create(recursive: true);
-    }
-
-    final topologyFile = File('$_collectionPath/sync/network_topology.json');
     final json = {
       'updated': DateTime.now().toIso8601String(),
       'nodes': nodes.map((n) => n.toJson()).toList(),
     };
+    final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    await topologyFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(json),
-      flush: true,
-    );
+    if (!await _storage.exists('sync')) {
+      await _storage.createDirectory('sync');
+    }
+    await _storage.writeString('sync/network_topology.json', content);
 
     LogService().log('GroupsService: Saved network topology with ${nodes.length} nodes');
   }
 
   /// Load station network topology from sync folder
   Future<List<StationNode>> loadNetworkTopology() async {
-    if (_collectionPath == null) return [];
-
-    final topologyFile = File('$_collectionPath/sync/network_topology.json');
-    if (!await topologyFile.exists()) return [];
+    final content = await _storage.readString('sync/network_topology.json');
+    if (content == null) return [];
 
     try {
-      final content = await topologyFile.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       final nodesData = json['nodes'] as List<dynamic>;
 
@@ -879,14 +788,6 @@ class GroupsService {
     String status, // 'approved', 'rejected', 'pending'
     {String? reason}
   ) async {
-    if (_collectionPath == null) return;
-
-    final approvalsDir = Directory('$_collectionPath/approvals/$collectionType');
-    if (!await approvalsDir.exists()) {
-      await approvalsDir.create(recursive: true);
-    }
-
-    final approvalFile = File('$_collectionPath/approvals/$collectionType/$userNpub.json');
     final json = {
       'npub': userNpub,
       'collection_type': collectionType,
@@ -894,11 +795,13 @@ class GroupsService {
       if (reason != null) 'reason': reason,
       'updated': DateTime.now().toIso8601String(),
     };
+    final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    await approvalFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(json),
-      flush: true,
-    );
+    final relativeDirPath = 'approvals/$collectionType';
+    if (!await _storage.exists(relativeDirPath)) {
+      await _storage.createDirectory(relativeDirPath);
+    }
+    await _storage.writeString('$relativeDirPath/$userNpub.json', content);
 
     LogService().log('GroupsService: Saved collection approval: $userNpub/$collectionType = $status');
   }
@@ -908,13 +811,10 @@ class GroupsService {
     String userNpub,
     String collectionType,
   ) async {
-    if (_collectionPath == null) return null;
-
-    final approvalFile = File('$_collectionPath/approvals/$collectionType/$userNpub.json');
-    if (!await approvalFile.exists()) return null;
+    final content = await _storage.readString('approvals/$collectionType/$userNpub.json');
+    if (content == null) return null;
 
     try {
-      final content = await approvalFile.readAsString();
       return jsonDecode(content) as Map<String, dynamic>;
     } catch (e) {
       LogService().log('GroupsService: Error loading collection approval: $e');
@@ -930,20 +830,21 @@ class GroupsService {
 
   /// Get all pending approvals for a collection type
   Future<List<Map<String, dynamic>>> getPendingApprovals(String collectionType) async {
-    if (_collectionPath == null) return [];
-
     final approvals = <Map<String, dynamic>>[];
-    final approvalsDir = Directory('$_collectionPath/approvals/$collectionType');
-    if (!await approvalsDir.exists()) return [];
 
     try {
-      final entities = await approvalsDir.list().toList();
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final content = await entity.readAsString();
-          final data = jsonDecode(content) as Map<String, dynamic>;
-          if (data['status'] == 'pending') {
-            approvals.add(data);
+      final relativeDirPath = 'approvals/$collectionType';
+      if (!await _storage.exists(relativeDirPath)) return [];
+
+      final entries = await _storage.listDirectory(relativeDirPath);
+      for (var entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final data = jsonDecode(content) as Map<String, dynamic>;
+            if (data['status'] == 'pending') {
+              approvals.add(data);
+            }
           }
         }
       }

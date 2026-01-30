@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -14,6 +15,7 @@ import 'package:encrypted_archive/encrypted_archive.dart';
 
 import 'storage_config.dart';
 import 'log_service.dart';
+import 'profile_storage.dart' show StorageEntry;
 
 /// Callback for migration progress updates
 typedef MigrationProgressCallback = void Function(
@@ -77,6 +79,94 @@ class EncryptedStorageService {
 
   final StorageConfig _storageConfig = StorageConfig();
   final LogService _log = LogService();
+
+  /// Cache of open archive connections by callsign
+  final Map<String, EncryptedArchive> _openArchives = {};
+
+  /// Periodic flush timer (30 seconds)
+  Timer? _flushTimer;
+
+  /// Get or open archive for a callsign (reuses existing connection)
+  Future<EncryptedArchive?> _getArchive(String callsign, String nsec) async {
+    // Return cached archive if available
+    if (_openArchives.containsKey(callsign)) {
+      final archive = _openArchives[callsign]!;
+      if (!archive.isClosed) {
+        return archive;
+      }
+      // Archive was closed externally, remove from cache
+      _openArchives.remove(callsign);
+    }
+
+    final archivePath = _getArchivePath(callsign);
+    if (!await File(archivePath).exists()) {
+      return null;
+    }
+
+    try {
+      final password = _derivePassword(nsec);
+      final archive = await EncryptedArchive.open(archivePath, password);
+      _openArchives[callsign] = archive;
+      _log.log('EncryptedStorage: Opened persistent connection for $callsign');
+
+      // Start periodic flush if not already running
+      _startPeriodicFlush();
+
+      return archive;
+    } catch (e) {
+      _log.log('EncryptedStorage: Failed to open archive for $callsign: $e');
+      return null;
+    }
+  }
+
+  /// Start periodic flush timer to reduce data loss on crash
+  void _startPeriodicFlush() {
+    if (_flushTimer != null) return; // Already running
+
+    _flushTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _flushAllArchives();
+    });
+    _log.log('EncryptedStorage: Started periodic flush (30s interval)');
+  }
+
+  /// Flush all open archives (WAL checkpoint)
+  void _flushAllArchives() {
+    for (final entry in _openArchives.entries) {
+      final archive = entry.value;
+      if (!archive.isClosed) {
+        try {
+          archive.checkpoint();
+        } catch (e) {
+          _log.log('EncryptedStorage: Checkpoint failed for ${entry.key}: $e');
+        }
+      }
+    }
+  }
+
+  /// Close archive when profile switches or app exits
+  Future<void> closeArchive(String callsign) async {
+    final archive = _openArchives.remove(callsign);
+    if (archive != null && !archive.isClosed) {
+      await archive.close();
+      _log.log('EncryptedStorage: Closed archive for $callsign');
+    }
+
+    // Stop periodic flush if no more archives open
+    if (_openArchives.isEmpty) {
+      _flushTimer?.cancel();
+      _flushTimer = null;
+      _log.log('EncryptedStorage: Stopped periodic flush (no archives open)');
+    }
+  }
+
+  /// Close all open archives (for app shutdown)
+  Future<void> closeAllArchives() async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    for (final callsign in _openArchives.keys.toList()) {
+      await closeArchive(callsign);
+    }
+  }
 
   /// Derive encryption password from nsec
   /// Uses HKDF with SHA-256 to derive a stable password from the nsec
@@ -304,29 +394,15 @@ class EncryptedStorageService {
   /// Read a file from encrypted storage
   /// Returns null if file not found or encrypted storage not enabled
   Future<Uint8List?> readFile(String callsign, String nsec, String relativePath) async {
-    final archivePath = _getArchivePath(callsign);
-
-    if (!await File(archivePath).exists()) {
-      return null;
-    }
-
     try {
-      final password = _derivePassword(nsec);
-      final archive = await EncryptedArchive.open(archivePath, password);
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return null;
 
-      try {
-        if (!await archive.exists(relativePath)) {
-          await archive.close();
-          return null;
-        }
-
-        final content = await archive.readFileBytes(relativePath);
-        await archive.close();
-        return content;
-      } catch (e) {
-        await archive.close();
-        rethrow;
+      if (!await archive.exists(relativePath)) {
+        return null;
       }
+
+      return await archive.readFileBytes(relativePath);
     } catch (e) {
       _log.log('EncryptedStorage: Failed to read $relativePath: $e');
       return null;
@@ -335,29 +411,17 @@ class EncryptedStorageService {
 
   /// Write a file to encrypted storage
   Future<bool> writeFile(String callsign, String nsec, String relativePath, Uint8List content) async {
-    final archivePath = _getArchivePath(callsign);
-
-    if (!await File(archivePath).exists()) {
-      return false;
-    }
-
     try {
-      final password = _derivePassword(nsec);
-      final archive = await EncryptedArchive.open(archivePath, password);
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return false;
 
-      try {
-        // Delete existing file if present
-        if (await archive.exists(relativePath)) {
-          await archive.delete(relativePath);
-        }
-
-        await archive.addBytes(relativePath, content);
-        await archive.close();
-        return true;
-      } catch (e) {
-        await archive.close();
-        rethrow;
+      // Delete existing file if present
+      if (await archive.exists(relativePath)) {
+        await archive.delete(relativePath);
       }
+
+      await archive.addBytes(relativePath, content);
+      return true;
     } catch (e) {
       _log.log('EncryptedStorage: Failed to write $relativePath: $e');
       return false;
@@ -366,26 +430,14 @@ class EncryptedStorageService {
 
   /// Delete a file from encrypted storage
   Future<bool> deleteFile(String callsign, String nsec, String relativePath) async {
-    final archivePath = _getArchivePath(callsign);
-
-    if (!await File(archivePath).exists()) {
-      return false;
-    }
-
     try {
-      final password = _derivePassword(nsec);
-      final archive = await EncryptedArchive.open(archivePath, password);
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return false;
 
-      try {
-        if (await archive.exists(relativePath)) {
-          await archive.delete(relativePath);
-        }
-        await archive.close();
-        return true;
-      } catch (e) {
-        await archive.close();
-        rethrow;
+      if (await archive.exists(relativePath)) {
+        await archive.delete(relativePath);
       }
+      return true;
     } catch (e) {
       _log.log('EncryptedStorage: Failed to delete $relativePath: $e');
       return false;
@@ -394,26 +446,94 @@ class EncryptedStorageService {
 
   /// List files in encrypted storage
   Future<List<String>?> listFiles(String callsign, String nsec, {String? prefix}) async {
-    final archivePath = _getArchivePath(callsign);
-
-    if (!await File(archivePath).exists()) {
-      return null;
-    }
-
     try {
-      final password = _derivePassword(nsec);
-      final archive = await EncryptedArchive.open(archivePath, password);
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return null;
 
-      try {
-        final entries = await archive.listFiles(prefix: prefix);
-        await archive.close();
-        return entries.where((e) => e.isFile).map((e) => e.path).toList();
-      } catch (e) {
-        await archive.close();
-        rethrow;
-      }
+      final entries = await archive.listFiles(prefix: prefix);
+      return entries.where((e) => e.isFile).map((e) => e.path).toList();
     } catch (e) {
       _log.log('EncryptedStorage: Failed to list files: $e');
+      return null;
+    }
+  }
+
+  /// Check if a file exists in encrypted storage
+  Future<bool> fileExists(String callsign, String nsec, String relativePath) async {
+    try {
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return false;
+
+      return await archive.exists(relativePath);
+    } catch (e) {
+      _log.log('EncryptedStorage: Failed to check existence of $relativePath: $e');
+      return false;
+    }
+  }
+
+  /// List directory contents in encrypted storage
+  /// Returns a list of StorageEntry objects for compatibility with ProfileStorage
+  Future<List<StorageEntry>?> listDirectory(
+    String callsign,
+    String nsec,
+    String relativePath, {
+    bool recursive = false,
+  }) async {
+    try {
+      final archive = await _getArchive(callsign, nsec);
+      if (archive == null) return null;
+
+      // Normalize the path prefix
+      String prefix = relativePath;
+      if (prefix.isNotEmpty && !prefix.endsWith('/')) {
+        prefix = '$prefix/';
+      }
+
+      final entries = await archive.listFiles(prefix: prefix.isEmpty ? null : prefix);
+
+      final result = <StorageEntry>[];
+      final seenDirs = <String>{};
+
+      for (final entry in entries) {
+        // Get path relative to the requested directory
+        String entryPath = entry.path;
+        if (prefix.isNotEmpty && entryPath.startsWith(prefix)) {
+          entryPath = entryPath.substring(prefix.length);
+        }
+
+        if (entryPath.isEmpty) continue;
+
+        if (!recursive) {
+          // For non-recursive, only show immediate children
+          final slashIndex = entryPath.indexOf('/');
+          if (slashIndex != -1) {
+            // This is in a subdirectory - add the directory entry if not seen
+            final dirName = entryPath.substring(0, slashIndex);
+            final dirPath = prefix.isEmpty ? dirName : '$prefix$dirName';
+            if (!seenDirs.contains(dirPath)) {
+              seenDirs.add(dirPath);
+              result.add(StorageEntry(
+                name: dirName,
+                path: dirPath,
+                isDirectory: true,
+              ));
+            }
+            continue;
+          }
+        }
+
+        // Add the file entry
+        result.add(StorageEntry(
+          name: p.basename(entry.path),
+          path: entry.path,
+          isDirectory: !entry.isFile,
+          size: entry.size,
+        ));
+      }
+
+      return result;
+    } catch (e) {
+      _log.log('EncryptedStorage: Failed to list directory $relativePath: $e');
       return null;
     }
   }

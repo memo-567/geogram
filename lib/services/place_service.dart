@@ -10,6 +10,7 @@ import '../models/place.dart';
 import '../util/place_parser.dart';
 import 'location_service.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
 
 // ============================================================================
@@ -68,14 +69,25 @@ class PlaceService {
   factory PlaceService() => _instance;
   PlaceService._internal();
 
-  String? _collectionPath;
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  /// All file operations go through this abstraction.
+  late ProfileStorage _storage;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize the service with a collection path
   Future<void> initializeCollection(String collectionPath) async {
-    _collectionPath = collectionPath;
-    final placesDir = Directory('$collectionPath/places');
-    if (!await placesDir.exists()) {
-      await placesDir.create(recursive: true);
+    // Create places directory using storage abstraction
+    if (!await _storage.exists('places')) {
+      await _storage.createDirectory('places');
     }
 
     // Initialize LocationService for city lookup
@@ -87,63 +99,56 @@ class PlaceService {
 
   /// Load all places from the collection
   Future<List<Place>> loadAllPlaces() async {
-    if (_collectionPath == null) {
-      throw Exception('PlaceService not initialized');
-    }
-
     final places = <Place>[];
-    final placesDir = Directory('$_collectionPath/places');
 
-    if (!await placesDir.exists()) {
+    if (!await _storage.exists('places')) {
       return places;
     }
 
-    // Recursively find all place.txt files
-    await _scanDirectoryForPlaces(placesDir, places);
-
+    await _scanDirectoryForPlaces('places', places);
     return places;
   }
 
   /// Recursively scan a directory for place.txt files
-  Future<void> _scanDirectoryForPlaces(Directory dir, List<Place> places) async {
-    final entities = await dir.list().toList();
-    for (final entity in entities) {
-      if (entity is Directory) {
+  Future<void> _scanDirectoryForPlaces(String relativePath, List<Place> places) async {
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         // Check if this directory contains a place.txt file
-        final placeFile = File('${entity.path}/place.txt');
-        if (await placeFile.exists()) {
+        final placeFilePath = '${entry.path}/place.txt';
+        if (await _storage.exists(placeFilePath)) {
           // This is a place folder
-          final place = await _loadPlaceFromFolder(entity.path, '');
+          final place = await _loadPlaceFromFolder(entry.path, '');
           if (place != null) {
             places.add(place);
           }
         } else {
           // Recursively scan subdirectories
-          await _scanDirectoryForPlaces(entity, places);
+          await _scanDirectoryForPlaces(entry.path, places);
         }
       }
     }
   }
 
   /// Load a single place from its folder
-  Future<Place?> _loadPlaceFromFolder(String folderPath, String regionName) async {
-    final placeFile = File('$folderPath/place.txt');
+  Future<Place?> _loadPlaceFromFolder(String relativeFolderPath, String regionName) async {
+    final placeFilePath = '$relativeFolderPath/place.txt';
+    final content = await _storage.readString(placeFilePath);
 
-    if (!await placeFile.exists()) {
+    if (content == null) {
       return null;
     }
 
     try {
-      final content = await placeFile.readAsString();
       return PlaceParser.parsePlaceContent(
         content: content,
-        filePath: placeFile.path,
-        folderPath: folderPath,
+        filePath: placeFilePath,
+        folderPath: relativeFolderPath,
         regionName: regionName,
         log: (message) => LogService().log(message),
       );
     } catch (e) {
-      LogService().log('Error loading place from $folderPath: $e');
+      LogService().log('Error loading place from $relativeFolderPath: $e');
       return null;
     }
   }
@@ -259,10 +264,6 @@ class PlaceService {
 
   /// Save a place (create or update)
   Future<String?> savePlace(Place place) async {
-    if (_collectionPath == null) {
-      return 'PlaceService not initialized';
-    }
-
     try {
       // Find nearest city using LocationService
       final locationService = LocationService();
@@ -277,27 +278,18 @@ class PlaceService {
 
       // Build human-readable path: Country/Region/City
       final locationPath = nearestCity.folderPath;
-      final fullPath = '$_collectionPath/places/$locationPath';
-
-      // Create location folder structure if it doesn't exist
-      final locationDir = Directory(fullPath);
-      if (!await locationDir.exists()) {
-        await locationDir.create(recursive: true);
-      }
-
-      // Create place folder
       final placeFolderName = place.placeFolderName;
-      final placeFolderPath = '$fullPath/$placeFolderName';
-      final placeDir = Directory(placeFolderPath);
+      final relativeFolderPath = 'places/$locationPath/$placeFolderName';
+      final placeFilePath = '$relativeFolderPath/place.txt';
+      final content = formatPlaceFile(place);
 
-      if (!await placeDir.exists()) {
-        await placeDir.create(recursive: true);
+      // Create directory structure if it doesn't exist
+      if (!await _storage.exists(relativeFolderPath)) {
+        await _storage.createDirectory(relativeFolderPath);
       }
 
       // Write place.txt file
-      final placeFile = File('$placeFolderPath/place.txt');
-      final content = formatPlaceFile(place);
-      await placeFile.writeAsString(content);
+      await _storage.writeString(placeFilePath, content);
 
       return null; // Success
     } catch (e) {
@@ -306,11 +298,8 @@ class PlaceService {
   }
 
   /// Get the folder path for a place (used for saving photos)
+  /// Returns relative path
   Future<String?> getPlaceFolderPath(Place place) async {
-    if (_collectionPath == null) {
-      return null;
-    }
-
     try {
       final locationService = LocationService();
       final nearestCity = await locationService.findNearestCity(
@@ -323,9 +312,8 @@ class PlaceService {
       }
 
       final locationPath = nearestCity.folderPath;
-      final fullPath = '$_collectionPath/places/$locationPath';
       final placeFolderName = place.placeFolderName;
-      return '$fullPath/$placeFolderName';
+      return 'places/$locationPath/$placeFolderName';
     } catch (e) {
       LogService().log('Error getting place folder path: $e');
       return null;
@@ -340,9 +328,9 @@ class PlaceService {
     }
 
     try {
-      final placeDir = Directory(place.folderPath!);
-      if (await placeDir.exists()) {
-        await placeDir.delete(recursive: true);
+      // folderPath should be relative for storage abstraction
+      if (await _storage.exists(place.folderPath!)) {
+        await _storage.deleteDirectory(place.folderPath!, recursive: true);
         return true;
       }
       return false;
@@ -381,6 +369,7 @@ class PlaceService {
 
   // ==========================================================================
   // Static methods for proximity lookup with disk caching
+  // Note: These use direct filesystem for cross-profile cache (not per-profile)
   // ==========================================================================
 
   /// Cache file path: {baseDir}/places/cache.json

@@ -3,8 +3,8 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import '../models/postcard.dart';
+import 'profile_storage.dart';
 
 /// Service for managing postcards (sneakernet message delivery)
 class PostcardService {
@@ -12,35 +12,43 @@ class PostcardService {
   factory PostcardService() => _instance;
   PostcardService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize postcard service for a collection
   Future<void> initializeCollection(String collectionPath) async {
     print('PostcardService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure postcards directory exists
-    final postcardsDir = Directory('$collectionPath/postcards');
-    if (!await postcardsDir.exists()) {
-      await postcardsDir.create(recursive: true);
-      print('PostcardService: Created postcards directory');
-    }
+    // Ensure postcards directory exists using storage
+    await _storage.createDirectory('postcards');
+    print('PostcardService: Created postcards directory');
   }
 
   /// Get available years (folders in postcards directory)
   Future<List<int>> getYears() async {
     if (_collectionPath == null) return [];
 
-    final postcardsDir = Directory('$_collectionPath/postcards');
-    if (!await postcardsDir.exists()) return [];
+    if (!await _storage.exists('postcards')) return [];
 
     final years = <int>[];
-    final entities = await postcardsDir.list().toList();
+    final entries = await _storage.listDirectory('postcards');
 
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final name = entity.path.split('/').last;
-        final year = int.tryParse(name);
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final year = int.tryParse(entry.name);
         if (year != null) {
           years.add(year);
         }
@@ -62,19 +70,17 @@ class PostcardService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearDir = Directory('$_collectionPath/postcards/$y');
-      if (!await yearDir.exists()) continue;
+      final yearPath = 'postcards/$y';
+      if (!await _storage.exists(yearPath)) continue;
 
-      final entities = await yearDir.list().toList();
+      final entries = await _storage.listDirectory(yearPath);
 
-
-      for (var entity in entities) {
-        if (entity is Directory) {
+      for (var entry in entries) {
+        if (entry.isDirectory) {
           try {
-            final folderName = entity.path.split('/').last;
             // Postcard folders are like: YYYY-MM-DD_msg-{id}
-            if (RegExp(r'^\d{4}-\d{2}-\d{2}_msg-').hasMatch(folderName)) {
-              final postcard = await loadPostcard(folderName);
+            if (RegExp(r'^\d{4}-\d{2}-\d{2}_msg-').hasMatch(entry.name)) {
+              final postcard = await loadPostcard(entry.name);
               if (postcard != null) {
                 // Apply status filter if specified
                 if (filterByStatus == null || postcard.status == filterByStatus) {
@@ -83,7 +89,7 @@ class PostcardService {
               }
             }
           } catch (e) {
-            print('PostcardService: Error loading postcard ${entity.path}: $e');
+            print('PostcardService: Error loading postcard ${entry.path}: $e');
           }
         }
       }
@@ -101,24 +107,23 @@ class PostcardService {
 
     // Extract year from postcardId (format: YYYY-MM-DD_msg-{id})
     final year = postcardId.substring(0, 4);
-    final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+    final postcardPath = 'postcards/$year/$postcardId';
 
-    if (!await postcardDir.exists()) {
-      print('PostcardService: Postcard directory not found: ${postcardDir.path}');
+    if (!await _storage.exists(postcardPath)) {
+      print('PostcardService: Postcard directory not found: $postcardPath');
       return null;
     }
 
     // Load postcard.txt
-    final postcardFile = File('${postcardDir.path}/postcard.txt');
-    if (!await postcardFile.exists()) {
-      print('PostcardService: postcard.txt not found in ${postcardDir.path}');
+    final postcardFile = '$postcardPath/postcard.txt';
+    final content = await _storage.readString(postcardFile);
+    if (content == null) {
+      print('PostcardService: postcard.txt not found in $postcardPath');
       return null;
     }
 
     try {
-      final content = await postcardFile.readAsString();
       final postcard = Postcard.fromText(content, postcardId);
-
       return postcard;
     } catch (e) {
       print('PostcardService: Error loading postcard: $e');
@@ -156,7 +161,7 @@ class PostcardService {
     String folderName = baseFolderName;
     int suffix = 1;
 
-    while (await Directory('$_collectionPath/postcards/$year/$folderName').exists()) {
+    while (await _storage.exists('postcards/$year/$folderName')) {
       // Extract the base without the suffix
       final baseWithoutSuffix = baseFolderName.replaceAll(RegExp(r'-\d+$'), '');
       folderName = '$baseWithoutSuffix-$suffix';
@@ -208,19 +213,15 @@ class PostcardService {
       final baseFolderName = '${dateStr}_msg-$msgId';
       final folderName = await _ensureUniqueFolderName(baseFolderName, year);
 
-      // Ensure year directory exists
-      final yearDir = Directory('$_collectionPath/postcards/$year');
-      if (!await yearDir.exists()) {
-        await yearDir.create(recursive: true);
-      }
+      // Ensure year directory exists using storage
+      await _storage.createDirectory('postcards/$year');
 
       // Create postcard directory
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$folderName');
-      await postcardDir.create(recursive: true);
+      final postcardPath = 'postcards/$year/$folderName';
+      await _storage.createDirectory(postcardPath);
 
       // Create contributors directory
-      final contributorsDir = Directory('${postcardDir.path}/contributors');
-      await contributorsDir.create(recursive: true);
+      await _storage.createDirectory('$postcardPath/contributors');
 
       // Create postcard object
       final postcard = Postcard(
@@ -242,9 +243,8 @@ class PostcardService {
         returnStamps: [],
       );
 
-      // Write postcard.txt
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(postcard.exportAsText(), flush: true);
+      // Write postcard.txt using storage
+      await _storage.writeString('$postcardPath/postcard.txt', postcard.exportAsText());
 
       print('PostcardService: Created postcard: $folderName');
       return postcard;
@@ -270,9 +270,9 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+      final postcardPath = 'postcards/$year/$postcardId';
 
-      if (!await postcardDir.exists()) return false;
+      if (!await _storage.exists(postcardPath)) return false;
 
       // Load existing postcard
       final postcard = await loadPostcard(postcardId);
@@ -298,9 +298,8 @@ class PostcardService {
       final updatedStamps = [...postcard.stamps, stamp];
       final updatedPostcard = postcard.copyWith(stamps: updatedStamps);
 
-      // Write updated postcard
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(updatedPostcard.exportAsText(), flush: true);
+      // Write updated postcard using storage
+      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
 
       print('PostcardService: Added stamp #${stamp.number} to $postcardId');
       return true;
@@ -325,9 +324,9 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+      final postcardPath = 'postcards/$year/$postcardId';
 
-      if (!await postcardDir.exists()) return false;
+      if (!await _storage.exists(postcardPath)) return false;
 
       // Load existing postcard
       final postcard = await loadPostcard(postcardId);
@@ -353,9 +352,8 @@ class PostcardService {
         deliveryReceipt: deliveryReceipt,
       );
 
-      // Write updated postcard
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(updatedPostcard.exportAsText(), flush: true);
+      // Write updated postcard using storage
+      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
 
       print('PostcardService: Delivered postcard: $postcardId');
       return true;
@@ -381,9 +379,9 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+      final postcardPath = 'postcards/$year/$postcardId';
 
-      if (!await postcardDir.exists()) return false;
+      if (!await _storage.exists(postcardPath)) return false;
 
       // Load existing postcard
       final postcard = await loadPostcard(postcardId);
@@ -409,9 +407,8 @@ class PostcardService {
       final updatedReturnStamps = [...postcard.returnStamps, stamp];
       final updatedPostcard = postcard.copyWith(returnStamps: updatedReturnStamps);
 
-      // Write updated postcard
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(updatedPostcard.exportAsText(), flush: true);
+      // Write updated postcard using storage
+      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
 
       print('PostcardService: Added return stamp #${stamp.number} to $postcardId');
       return true;
@@ -432,9 +429,9 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+      final postcardPath = 'postcards/$year/$postcardId';
 
-      if (!await postcardDir.exists()) return false;
+      if (!await _storage.exists(postcardPath)) return false;
 
       // Load existing postcard
       final postcard = await loadPostcard(postcardId);
@@ -454,9 +451,8 @@ class PostcardService {
         acknowledgment: acknowledgment,
       );
 
-      // Write updated postcard
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(updatedPostcard.exportAsText(), flush: true);
+      // Write updated postcard using storage
+      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
 
       print('PostcardService: Acknowledged postcard: $postcardId');
       return true;
@@ -497,21 +493,18 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final contributorsDir = Directory(
-        '$_collectionPath/postcards/$year/$postcardId/contributors',
-      );
+      final contributorsPath = 'postcards/$year/$postcardId/contributors';
 
-      if (!await contributorsDir.exists()) return [];
+      if (!await _storage.exists(contributorsPath)) return [];
 
       final files = <String>[];
-      final entities = await contributorsDir.list().toList();
+      final entries = await _storage.listDirectory(contributorsPath);
 
-      for (var entity in entities) {
-        if (entity is File) {
-          final filename = entity.path.split('/').last;
+      for (var entry in entries) {
+        if (!entry.isDirectory) {
           // Skip hidden files
-          if (!filename.startsWith('.')) {
-            files.add(filename);
+          if (!entry.name.startsWith('.')) {
+            files.add(entry.name);
           }
         }
       }
@@ -540,9 +533,9 @@ class PostcardService {
 
     try {
       final year = postcardId.substring(0, 4);
-      final postcardDir = Directory('$_collectionPath/postcards/$year/$postcardId');
+      final postcardPath = 'postcards/$year/$postcardId';
 
-      if (!await postcardDir.exists()) return false;
+      if (!await _storage.exists(postcardPath)) return false;
 
       // Load existing postcard
       final postcard = await loadPostcard(postcardId);
@@ -551,9 +544,8 @@ class PostcardService {
       // Update status to expired
       final updatedPostcard = postcard.copyWith(status: 'expired');
 
-      // Write updated postcard
-      final postcardFile = File('${postcardDir.path}/postcard.txt');
-      await postcardFile.writeAsString(updatedPostcard.exportAsText(), flush: true);
+      // Write updated postcard using storage
+      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
 
       print('PostcardService: Marked postcard as expired: $postcardId');
       return true;

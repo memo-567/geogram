@@ -1,0 +1,31 @@
+name: encrypted_archive
+description: >
+  A high-performance encrypted archive format using SQLite for storage.
+  Supports streaming, incremental updates, and terabyte-scale archives
+  with per-chunk encryption and optional deduplication.
+version: 0.1.0
+homepage: https://github.com/geogram/encrypted_archive
+repository: https://github.com/geogram/encrypted_archive
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  sqlite3: ^2.4.0
+  cryptography: ^2.7.0
+  crypto: ^3.0.3          # For SHA-256 hashing
+  archive: ^3.4.0         # For compression algorithms
+  meta: ^1.9.0
+  path: ^1.8.0
+  
+dev_dependencies:
+  test: ^1.24.0
+  lints: ^3.0.0
+  benchmark_harness: ^2.2.0
+
+# Platform-specific notes:
+# - sqlite3 requires native libraries
+# - On Linux: apt install libsqlite3-dev
+# - On macOS: brew install sqlite3
+# - On Windows: sqlite3.dll bundled or in PATH
+# - For Android/iOS: use sqlite3_flutter_libs package instead

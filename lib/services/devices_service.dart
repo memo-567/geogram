@@ -385,6 +385,9 @@ class DevicesService {
       case DebugAction.openStationChat:
         // Station chat navigation is handled by main.dart
         break;
+      case DebugAction.openLocalChat:
+        // Local chat navigation is handled by main.dart
+        break;
       case DebugAction.selectChatRoom:
         // Chat room selection is handled by ChatBrowserPage
         break;
@@ -418,6 +421,11 @@ class DevicesService {
         break;
       case DebugAction.listDevices:
         // Handled directly by DebugController.executeAction()
+        break;
+      case DebugAction.encryptStorageStatus:
+      case DebugAction.encryptStorageEnable:
+      case DebugAction.encryptStorageDisable:
+        // Encrypted storage actions are handled directly by LogApiService
         break;
     }
   }

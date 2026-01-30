@@ -18,6 +18,7 @@ import '../models/place.dart';
 import '../services/collection_service.dart';
 import '../services/groups_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -582,6 +583,17 @@ class _NewEventPageState extends State<NewEventPage>
       final profile = ProfileService().getProfile();
 
       for (final collection in groupCollections) {
+        // Set profile storage for encrypted storage support
+        final profileStorage = CollectionService().profileStorage;
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            collection.storagePath!,
+          );
+          groupsService.setStorage(scopedStorage);
+        } else {
+          groupsService.setStorage(FilesystemProfileStorage(collection.storagePath!));
+        }
         await groupsService.initializeCollection(
           collection.storagePath!,
           creatorNpub: profile.npub,

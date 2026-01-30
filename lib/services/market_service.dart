@@ -3,7 +3,6 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import '../models/market_shop.dart';
@@ -14,6 +13,7 @@ import '../models/market_review.dart';
 import '../models/market_promotion.dart';
 import '../models/market_coupon.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing marketplace operations
 class MarketService {
@@ -21,20 +21,30 @@ class MarketService {
   factory MarketService() => _instance;
   MarketService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   MarketShop? _shop;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize market service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
     LogService().log('MarketService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure shop directory exists
-    final shopDir = Directory('$collectionPath/shop');
-    if (!await shopDir.exists()) {
-      await shopDir.create(recursive: true);
-      LogService().log('MarketService: Created shop directory');
-    }
+    // Ensure shop directory exists using storage
+    await _storage.createDirectory('shop');
+    LogService().log('MarketService: Created shop directory');
 
     // Load shop
     await _loadShop();
@@ -50,10 +60,9 @@ class MarketService {
   Future<void> _loadShop() async {
     if (_collectionPath == null) return;
 
-    final shopFile = File('$_collectionPath/shop/shop.txt');
-    if (await shopFile.exists()) {
+    final content = await _storage.readString('shop/shop.txt');
+    if (content != null) {
       try {
-        final content = await shopFile.readAsString();
         _shop = MarketShop.fromText(content);
         LogService().log('MarketService: Loaded shop: ${_shop!.shopName}');
       } catch (e) {
@@ -74,8 +83,7 @@ class MarketService {
 
     _shop = shop;
 
-    final shopFile = File('$_collectionPath/shop/shop.txt');
-    await shopFile.writeAsString(shop.exportAsText(), flush: true);
+    await _storage.writeString('shop/shop.txt', shop.exportAsText());
 
     LogService().log('MarketService: Saved shop: ${shop.shopName}');
   }
@@ -88,74 +96,84 @@ class MarketService {
   Future<List<String>> getCategories() async {
     if (_collectionPath == null) return [];
 
-    final itemsDir = Directory('$_collectionPath/shop/items');
-    if (!await itemsDir.exists()) return [];
+    if (!await _storage.exists('shop/items')) return [];
 
     final categories = <String>[];
-    // Use toList() to collect all entities first, then close the stream
-    final entities = await itemsDir.list(recursive: true).toList();
-
-    for (var entity in entities) {
-      if (entity is Directory) {
-        // Get relative path from items directory
-        final relativePath = entity.path.replaceFirst('${itemsDir.path}/', '');
-        // Skip item directories (they start with "item-")
-        if (!relativePath.contains('/item-') && !relativePath.startsWith('item-')) {
-          categories.add(relativePath);
-        }
-      }
-    }
+    await _collectCategoriesFromStorage('shop/items', '', categories);
 
     categories.sort();
     return categories;
+  }
+
+  /// Recursively collect categories from storage
+  Future<void> _collectCategoriesFromStorage(String basePath, String relativePath, List<String> categories) async {
+    final currentPath = relativePath.isEmpty ? basePath : '$basePath/$relativePath';
+    final entries = await _storage.listDirectory(currentPath);
+
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        // Skip item directories (they start with "item-")
+        if (!entry.name.startsWith('item-')) {
+          final categoryPath = relativePath.isEmpty ? entry.name : '$relativePath/${entry.name}';
+          categories.add(categoryPath);
+          await _collectCategoriesFromStorage(basePath, categoryPath, categories);
+        }
+      }
+    }
   }
 
   /// Load all items
   Future<List<MarketItem>> loadItems({String? category}) async {
     if (_collectionPath == null) return [];
 
-    final itemsDir = Directory('$_collectionPath/shop/items');
-    if (!await itemsDir.exists()) return [];
+    if (!await _storage.exists('shop/items')) return [];
 
     final items = <MarketItem>[];
 
     // If category specified, search within that category folder
-    final searchDir = category != null
-        ? Directory('${itemsDir.path}/$category')
-        : itemsDir;
+    final searchPath = category != null ? 'shop/items/$category' : 'shop/items';
 
-    if (!await searchDir.exists()) return [];
+    if (!await _storage.exists(searchPath)) return [];
 
-    // Use toList() to collect all entities first, then close the stream
-    final entities = await searchDir.list(recursive: true).toList();
-
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('/item.txt')) {
-        try {
-          final content = await entity.readAsString();
-          final itemDir = Directory(entity.parent.path);
-          final itemId = itemDir.path.split('/').last;
-
-          // Get category path (relative to items directory)
-          String? categoryPath;
-          final relativePath = itemDir.path.replaceFirst('${itemsDir.path}/', '');
-          final parts = relativePath.split('/');
-          if (parts.length > 1) {
-            categoryPath = parts.sublist(0, parts.length - 1).join('/');
-          }
-
-          final item = MarketItem.fromText(content, itemId, categoryPath: categoryPath);
-          items.add(item);
-        } catch (e) {
-          LogService().log('MarketService: Error loading item from ${entity.path}: $e');
-        }
-      }
-    }
+    await _loadItemsFromStorage(searchPath, items);
 
     // Sort by updated date (most recent first)
     items.sort((a, b) => b.updatedDate.compareTo(a.updatedDate));
 
     return items;
+  }
+
+  /// Recursively load items from storage
+  Future<void> _loadItemsFromStorage(String path, List<MarketItem> items) async {
+    final entries = await _storage.listDirectory(path);
+
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        // Check if this is an item directory (contains item.txt)
+        final itemFilePath = '${entry.path}/item.txt';
+        final content = await _storage.readString(itemFilePath);
+        if (content != null) {
+          try {
+            final itemId = entry.name;
+            // Get category path (relative to shop/items/)
+            String? categoryPath;
+            final relativePath = entry.path.replaceFirst('shop/items/', '');
+            final parts = relativePath.split('/');
+            if (parts.length > 1) {
+              categoryPath = parts.sublist(0, parts.length - 1).join('/');
+            }
+
+            final item = MarketItem.fromText(content, itemId, categoryPath: categoryPath);
+            items.add(item);
+          } catch (e) {
+            LogService().log('MarketService: Error loading item from ${entry.path}: $e');
+          }
+        } else {
+          // Not an item directory, recurse into it
+          await _loadItemsFromStorage(entry.path, items);
+        }
+      }
+    }
   }
 
   /// Load single item
@@ -165,17 +183,18 @@ class MarketService {
     // Search for item in all categories if not specified
     if (categoryPath == null) {
       final allItems = await loadItems();
-      return allItems.firstWhere(
-        (item) => item.itemId == itemId,
-        orElse: () => throw Exception('Item not found'),
-      );
+      try {
+        return allItems.firstWhere((item) => item.itemId == itemId);
+      } catch (e) {
+        return null;
+      }
     }
 
-    final itemFile = File('$_collectionPath/shop/items/$categoryPath/$itemId/item.txt');
-    if (!await itemFile.exists()) return null;
+    final itemFilePath = 'shop/items/$categoryPath/$itemId/item.txt';
+    final content = await _storage.readString(itemFilePath);
+    if (content == null) return null;
 
     try {
-      final content = await itemFile.readAsString();
       return MarketItem.fromText(content, itemId, categoryPath: categoryPath);
     } catch (e) {
       LogService().log('MarketService: Error loading item $itemId: $e');
@@ -188,14 +207,10 @@ class MarketService {
     if (_collectionPath == null) return;
 
     final categoryPath = item.categoryPath ?? 'uncategorized';
-    final itemDir = Directory('$_collectionPath/shop/items/$categoryPath/${item.itemId}');
+    final itemDirPath = 'shop/items/$categoryPath/${item.itemId}';
 
-    if (!await itemDir.exists()) {
-      await itemDir.create(recursive: true);
-    }
-
-    final itemFile = File('${itemDir.path}/item.txt');
-    await itemFile.writeAsString(item.exportAsText(), flush: true);
+    await _storage.createDirectory(itemDirPath);
+    await _storage.writeString('$itemDirPath/item.txt', item.exportAsText());
 
     LogService().log('MarketService: Saved item: ${item.itemId}');
   }
@@ -214,9 +229,9 @@ class MarketService {
       categoryPath = item.categoryPath ?? 'uncategorized';
     }
 
-    final itemDir = Directory('$_collectionPath/shop/items/$categoryPath/$itemId');
-    if (await itemDir.exists()) {
-      await itemDir.delete(recursive: true);
+    final itemDirPath = 'shop/items/$categoryPath/$itemId';
+    if (await _storage.exists(itemDirPath)) {
+      await _storage.deleteDirectory(itemDirPath, recursive: true);
       LogService().log('MarketService: Deleted item: $itemId');
     }
   }
@@ -238,22 +253,22 @@ class MarketService {
       categoryPath = item.categoryPath ?? 'uncategorized';
     }
 
-    final reviewsDir = Directory('$_collectionPath/shop/items/$categoryPath/$itemId/reviews');
-    if (!await reviewsDir.exists()) return [];
+    final reviewsPath = 'shop/items/$categoryPath/$itemId/reviews';
+    if (!await _storage.exists(reviewsPath)) return [];
 
     final reviews = <MarketReview>[];
+    final entries = await _storage.listDirectory(reviewsPath);
 
-    // Use toList() to collect all entities first, then close the stream
-    final entities = await reviewsDir.list().toList();
-
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
         try {
-          final content = await entity.readAsString();
-          final review = MarketReview.fromText(content);
-          reviews.add(review);
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final review = MarketReview.fromText(content);
+            reviews.add(review);
+          }
         } catch (e) {
-          LogService().log('MarketService: Error loading review from ${entity.path}: $e');
+          LogService().log('MarketService: Error loading review from ${entry.path}: $e');
         }
       }
     }
@@ -277,13 +292,9 @@ class MarketService {
       categoryPath = item.categoryPath ?? 'uncategorized';
     }
 
-    final reviewsDir = Directory('$_collectionPath/shop/items/$categoryPath/${review.itemId}/reviews');
-    if (!await reviewsDir.exists()) {
-      await reviewsDir.create(recursive: true);
-    }
-
-    final reviewFile = File('${reviewsDir.path}/review-${review.reviewer}.txt');
-    await reviewFile.writeAsString(review.exportAsText(), flush: true);
+    final reviewsPath = 'shop/items/$categoryPath/${review.itemId}/reviews';
+    await _storage.createDirectory(reviewsPath);
+    await _storage.writeString('$reviewsPath/review-${review.reviewer}.txt', review.exportAsText());
 
     LogService().log('MarketService: Saved review for item ${review.itemId}');
   }
@@ -296,16 +307,17 @@ class MarketService {
   Future<MarketCart?> loadCart(String buyerCallsign) async {
     if (_collectionPath == null) return null;
 
-    final cartsDir = Directory('$_collectionPath/carts');
-    if (!await cartsDir.exists()) return null;
+    if (!await _storage.exists('carts')) return null;
 
     // Find cart file for buyer
-    final entities = await cartsDir.list().toList();
-    for (var entity in entities) {
-      if (entity is File && entity.path.contains('cart-$buyerCallsign')) {
+    final entries = await _storage.listDirectory('carts');
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.contains('cart-$buyerCallsign')) {
         try {
-          final content = await entity.readAsString();
-          return MarketCart.fromText(content);
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            return MarketCart.fromText(content);
+          }
         } catch (e) {
           LogService().log('MarketService: Error loading cart: $e');
           return null;
@@ -320,13 +332,8 @@ class MarketService {
   Future<void> saveCart(MarketCart cart) async {
     if (_collectionPath == null) return;
 
-    final cartsDir = Directory('$_collectionPath/carts');
-    if (!await cartsDir.exists()) {
-      await cartsDir.create(recursive: true);
-    }
-
-    final cartFile = File('${cartsDir.path}/${cart.cartId}.txt');
-    await cartFile.writeAsString(cart.exportAsText(), flush: true);
+    await _storage.createDirectory('carts');
+    await _storage.writeString('carts/${cart.cartId}.txt', cart.exportAsText());
 
     LogService().log('MarketService: Saved cart: ${cart.cartId}');
   }
@@ -339,23 +346,21 @@ class MarketService {
   Future<List<MarketOrder>> loadOrders({int? year}) async {
     if (_collectionPath == null) return [];
 
-    final ordersDir = Directory('$_collectionPath/orders');
-    if (!await ordersDir.exists()) return [];
+    if (!await _storage.exists('orders')) return [];
 
     final orders = <MarketOrder>[];
 
     if (year != null) {
       // Load orders from specific year
-      final yearDir = Directory('${ordersDir.path}/$year');
-      if (await yearDir.exists()) {
-        await _loadOrdersFromDir(yearDir, orders);
+      if (await _storage.exists('orders/$year')) {
+        await _loadOrdersFromStorage('orders/$year', orders);
       }
     } else {
       // Load orders from all years
-      final entities = await ordersDir.list().toList();
-      for (var entity in entities) {
-        if (entity is Directory) {
-          await _loadOrdersFromDir(Directory(entity.path), orders);
+      final entries = await _storage.listDirectory('orders');
+      for (var entry in entries) {
+        if (entry.isDirectory) {
+          await _loadOrdersFromStorage(entry.path, orders);
         }
       }
     }
@@ -366,16 +371,18 @@ class MarketService {
     return orders;
   }
 
-  Future<void> _loadOrdersFromDir(Directory dir, List<MarketOrder> orders) async {
-    final entities = await dir.list().toList();
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
+  Future<void> _loadOrdersFromStorage(String path, List<MarketOrder> orders) async {
+    final entries = await _storage.listDirectory(path);
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
         try {
-          final content = await entity.readAsString();
-          final order = MarketOrder.fromText(content);
-          orders.add(order);
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final order = MarketOrder.fromText(content);
+            orders.add(order);
+          }
         } catch (e) {
-          LogService().log('MarketService: Error loading order from ${entity.path}: $e');
+          LogService().log('MarketService: Error loading order from ${entry.path}: $e');
         }
       }
     }
@@ -396,14 +403,10 @@ class MarketService {
     if (_collectionPath == null) return;
 
     final year = order.createdDate.year;
-    final yearDir = Directory('$_collectionPath/orders/$year');
+    final yearPath = 'orders/$year';
 
-    if (!await yearDir.exists()) {
-      await yearDir.create(recursive: true);
-    }
-
-    final orderFile = File('${yearDir.path}/${order.orderId}.txt');
-    await orderFile.writeAsString(order.exportAsText(), flush: true);
+    await _storage.createDirectory(yearPath);
+    await _storage.writeString('$yearPath/${order.orderId}.txt', order.exportAsText());
 
     LogService().log('MarketService: Saved order: ${order.orderId}');
   }
@@ -416,20 +419,21 @@ class MarketService {
   Future<List<MarketPromotion>> loadPromotions() async {
     if (_collectionPath == null) return [];
 
-    final promosDir = Directory('$_collectionPath/shop/promotions');
-    if (!await promosDir.exists()) return [];
+    if (!await _storage.exists('shop/promotions')) return [];
 
     final promotions = <MarketPromotion>[];
 
-    final entities = await promosDir.list().toList();
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
+    final entries = await _storage.listDirectory('shop/promotions');
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
         try {
-          final content = await entity.readAsString();
-          final promo = MarketPromotion.fromText(content);
-          promotions.add(promo);
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final promo = MarketPromotion.fromText(content);
+            promotions.add(promo);
+          }
         } catch (e) {
-          LogService().log('MarketService: Error loading promotion from ${entity.path}: $e');
+          LogService().log('MarketService: Error loading promotion from ${entry.path}: $e');
         }
       }
     }
@@ -450,13 +454,8 @@ class MarketService {
   Future<void> savePromotion(MarketPromotion promotion) async {
     if (_collectionPath == null) return;
 
-    final promosDir = Directory('$_collectionPath/shop/promotions');
-    if (!await promosDir.exists()) {
-      await promosDir.create(recursive: true);
-    }
-
-    final promoFile = File('${promosDir.path}/${promotion.promoId}.txt');
-    await promoFile.writeAsString(promotion.exportAsText(), flush: true);
+    await _storage.createDirectory('shop/promotions');
+    await _storage.writeString('shop/promotions/${promotion.promoId}.txt', promotion.exportAsText());
 
     LogService().log('MarketService: Saved promotion: ${promotion.promoId}');
   }
@@ -469,20 +468,21 @@ class MarketService {
   Future<List<MarketCoupon>> loadCoupons() async {
     if (_collectionPath == null) return [];
 
-    final couponsDir = Directory('$_collectionPath/coupons');
-    if (!await couponsDir.exists()) return [];
+    if (!await _storage.exists('coupons')) return [];
 
     final coupons = <MarketCoupon>[];
 
-    final entities = await couponsDir.list().toList();
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
+    final entries = await _storage.listDirectory('coupons');
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
         try {
-          final content = await entity.readAsString();
-          final coupon = MarketCoupon.fromText(content);
-          coupons.add(coupon);
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final coupon = MarketCoupon.fromText(content);
+            coupons.add(coupon);
+          }
         } catch (e) {
-          LogService().log('MarketService: Error loading coupon from ${entity.path}: $e');
+          LogService().log('MarketService: Error loading coupon from ${entry.path}: $e');
         }
       }
     }
@@ -514,13 +514,8 @@ class MarketService {
   Future<void> saveCoupon(MarketCoupon coupon) async {
     if (_collectionPath == null) return;
 
-    final couponsDir = Directory('$_collectionPath/coupons');
-    if (!await couponsDir.exists()) {
-      await couponsDir.create(recursive: true);
-    }
-
-    final couponFile = File('${couponsDir.path}/coupon-${coupon.couponCode}.txt');
-    await couponFile.writeAsString(coupon.exportAsText(), flush: true);
+    await _storage.createDirectory('coupons');
+    await _storage.writeString('coupons/coupon-${coupon.couponCode}.txt', coupon.exportAsText());
 
     LogService().log('MarketService: Saved coupon: ${coupon.couponCode}');
   }

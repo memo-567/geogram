@@ -67,6 +67,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.flash_on;
     case 'work':
       return Icons.work;
+    case 'usenet':
+      return Icons.forum;
     default:
       return Icons.folder;
   }
@@ -274,6 +276,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFF1565C0), const Color(0xFF0D47A1)]
             : [const Color(0xFF42A5F5), const Color(0xFF1E88E5)],
+      );
+    case 'usenet':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF6A1B9A), const Color(0xFF4A148C)]
+            : [const Color(0xFFAB47BC), const Color(0xFF8E24AA)],
       );
     default:
       return LinearGradient(

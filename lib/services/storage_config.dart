@@ -76,6 +76,14 @@ class StorageConfig {
     return path.join(devicesDir, sanitized, 'email');
   }
 
+  /// Get the usenet directory for a specific profile/callsign
+  ///
+  /// Returns path like: {devicesDir}/{CALLSIGN}/usenet
+  String usenetDirForProfile(String callsign) {
+    final sanitized = _sanitizeCallsign(callsign);
+    return path.join(devicesDir, sanitized, 'usenet');
+  }
+
   /// Get the file browser cache directory path
   String get fileBrowserCacheDir => path.join(baseDir, 'file_browser_cache');
 

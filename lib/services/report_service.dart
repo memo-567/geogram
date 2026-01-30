@@ -6,12 +6,10 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/report.dart';
 import '../models/report_update.dart';
 import '../models/report_comment.dart';
 import '../models/report_settings.dart';
-import '../platform/file_system_service.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
@@ -21,6 +19,7 @@ import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
 import 'alert_sharing_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing reports
 class ReportService {
@@ -28,42 +27,36 @@ class ReportService {
   factory ReportService() => _instance;
   ReportService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   ReportSettings _settings = ReportSettings();
   final ProfileService _profileService = ProfileService();
   final SigningService _signingService = SigningService();
   bool _signingInitialized = false;
 
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
+
   /// Initialize report service for a collection
   Future<void> initializeCollection(String collectionPath) async {
     LogService().log('ReportService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    if (kIsWeb) {
-      // Use virtual file system for web
-      final fs = FileSystemService.instance;
-      if (!await fs.exists('$collectionPath/active')) {
-        await fs.createDirectory('$collectionPath/active', recursive: true);
-        LogService().log('ReportService: Created active directory (web)');
-      }
-      if (!await fs.exists('$collectionPath/expired')) {
-        await fs.createDirectory('$collectionPath/expired', recursive: true);
-        LogService().log('ReportService: Created expired directory (web)');
-      }
-    } else {
-      // Native file system
-      final activeDir = Directory('$collectionPath/active');
-      if (!await activeDir.exists()) {
-        await activeDir.create(recursive: true);
-        LogService().log('ReportService: Created active directory');
-      }
+    // Ensure directories exist using storage
+    await _storage.createDirectory('active');
+    LogService().log('ReportService: Created active directory');
 
-      final expiredDir = Directory('$collectionPath/expired');
-      if (!await expiredDir.exists()) {
-        await expiredDir.create(recursive: true);
-        LogService().log('ReportService: Created expired directory');
-      }
-    }
+    await _storage.createDirectory('expired');
+    LogService().log('ReportService: Created expired directory');
 
     // Load settings
     await _loadSettings();
@@ -73,31 +66,14 @@ class ReportService {
   Future<void> _loadSettings() async {
     if (_collectionPath == null) return;
 
-    final settingsPath = '$_collectionPath/extra/settings.json';
-
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (await fs.exists(settingsPath)) {
-        try {
-          final content = await fs.readAsString(settingsPath);
-          final json = jsonDecode(content) as Map<String, dynamic>;
-          _settings = ReportSettings.fromJson(json);
-          LogService().log('ReportService: Loaded settings (web)');
-        } catch (e) {
-          LogService().log('ReportService: Error loading settings: $e');
-        }
-      }
-    } else {
-      final settingsFile = File(settingsPath);
-      if (await settingsFile.exists()) {
-        try {
-          final content = await settingsFile.readAsString();
-          final json = jsonDecode(content) as Map<String, dynamic>;
-          _settings = ReportSettings.fromJson(json);
-          LogService().log('ReportService: Loaded settings');
-        } catch (e) {
-          LogService().log('ReportService: Error loading settings: $e');
-        }
+    final content = await _storage.readString('extra/settings.json');
+    if (content != null) {
+      try {
+        final json = jsonDecode(content) as Map<String, dynamic>;
+        _settings = ReportSettings.fromJson(json);
+        LogService().log('ReportService: Loaded settings');
+      } catch (e) {
+        LogService().log('ReportService: Error loading settings: $e');
       }
     }
   }
@@ -110,24 +86,10 @@ class ReportService {
     if (_collectionPath == null) return;
 
     _settings = settings;
-    final extraPath = '$_collectionPath/extra';
-    final settingsPath = '$extraPath/settings.json';
     final content = const JsonEncoder.withIndent('  ').convert(_settings.toJson());
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(settingsPath, content);
-    } else {
-      final extraDir = Directory(extraPath);
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final settingsFile = File(settingsPath);
-      await settingsFile.writeAsString(content, flush: true);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/settings.json', content);
 
     LogService().log('ReportService: Saved settings');
   }
@@ -139,11 +101,11 @@ class ReportService {
     final reports = <Report>[];
 
     // Load active reports
-    await _loadReportsFromDirectory('$_collectionPath/active', reports);
+    await _loadReportsFromDirectory('active', reports);
 
     // Load expired reports if requested
     if (includeExpired || _settings.showExpired) {
-      await _loadReportsFromDirectory('$_collectionPath/expired', reports);
+      await _loadReportsFromDirectory('expired', reports);
     }
 
     // Sort by creation date (most recent first)
@@ -152,98 +114,58 @@ class ReportService {
     return reports;
   }
 
-  /// Load reports from a directory
+  /// Load reports from a directory (relative path from collection root)
   Future<void> _loadReportsFromDirectory(String dirPath, List<Report> reports) async {
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(dirPath)) return;
+    if (!await _storage.exists(dirPath)) return;
 
-      final entities = await fs.list(dirPath);
-      for (var entity in entities) {
-        if (entity.isDirectory) {
-          final regionName = entity.path.split('/').last;
-          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(regionName)) {
-            await _loadReportsFromRegion(entity.path, reports);
-          }
-        }
-      }
-    } else {
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return;
-
-      final entities = await dir.list().toList();
-      for (var entity in entities) {
-        if (entity is Directory) {
-          final regionName = entity.path.split('/').last;
-          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(regionName)) {
-            await _loadReportsFromRegion(entity.path, reports);
-          }
+    final entries = await _storage.listDirectory(dirPath);
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(entry.name)) {
+          await _loadReportsFromRegion(entry.path, reports);
         }
       }
     }
   }
 
-  /// Load reports from a region folder
+  /// Load reports from a region folder (relative path from collection root)
   Future<void> _loadReportsFromRegion(String regionPath, List<Report> reports) async {
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      final entities = await fs.list(regionPath);
+    final entries = await _storage.listDirectory(regionPath);
 
-      for (var entity in entities) {
-        if (entity.isDirectory) {
-          final folderName = entity.path.split('/').last;
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        if (RegExp(r'^\d{3}$').hasMatch(entry.name)) {
+          await _loadReportsFromRegion(entry.path, reports);
+        } else {
+          final reportFilePath = '${entry.path}/report.txt';
+          final content = await _storage.readString(reportFilePath);
+          if (content != null) {
+            try {
+              var report = Report.fromText(content, entry.name);
 
-          if (RegExp(r'^\d{3}$').hasMatch(folderName)) {
-            await _loadReportsFromRegion(entity.path, reports);
-          } else {
-            final reportPath = '${entity.path}/report.txt';
-            if (await fs.exists(reportPath)) {
-              try {
-                final content = await fs.readAsString(reportPath);
-                final report = Report.fromText(content, folderName);
-                reports.add(report);
-              } catch (e) {
-                LogService().log('ReportService: Error loading report from ${entity.path}: $e');
+              // Load feedback data if not using encrypted storage (feedback files require filesystem access)
+              if (!_storage.isEncrypted) {
+                final absolutePath = await _storage.getAbsolutePath(entry.path);
+                if (absolutePath != null) {
+                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath);
+                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath);
+                  final mergedVerifiedBy = {
+                    ...report.verifiedBy,
+                    ...verifiedByFeedback,
+                  }.toList();
+
+                  report = report.copyWith(
+                    pointedBy: pointedBy,
+                    pointCount: pointedBy.length,
+                    verifiedBy: mergedVerifiedBy,
+                    verificationCount: mergedVerifiedBy.length,
+                  );
+                }
               }
-            }
-          }
-        }
-      }
-    } else {
-      final regionDir = Directory(regionPath);
-      final entities = await regionDir.list().toList();
 
-      for (var entity in entities) {
-        if (entity is Directory) {
-          final folderName = entity.path.split('/').last;
-
-          if (RegExp(r'^\d{3}$').hasMatch(folderName)) {
-            await _loadReportsFromRegion(entity.path, reports);
-          } else {
-            final reportFile = File('${entity.path}/report.txt');
-            if (await reportFile.exists()) {
-              try {
-                final content = await reportFile.readAsString();
-                var report = Report.fromText(content, folderName);
-
-                final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
-                final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(entity.path);
-                final mergedVerifiedBy = {
-                  ...report.verifiedBy,
-                  ...verifiedByFeedback,
-                }.toList();
-
-                report = report.copyWith(
-                  pointedBy: pointedBy,
-                  pointCount: pointedBy.length,
-                  verifiedBy: mergedVerifiedBy,
-                  verificationCount: mergedVerifiedBy.length,
-                );
-
-                reports.add(report);
-              } catch (e) {
-                LogService().log('ReportService: Error loading report from ${entity.path}: $e');
-              }
+              reports.add(report);
+            } catch (e) {
+              LogService().log('ReportService: Error loading report from ${entry.path}: $e');
             }
           }
         }
@@ -256,84 +178,81 @@ class ReportService {
     if (_collectionPath == null) return null;
 
     // Try active first
-    var report = await _findReport('$_collectionPath/active', folderName);
+    var report = await _findReport('active', folderName);
     if (report != null) return report;
 
     // Try expired if requested
     if (checkExpired) {
-      report = await _findReport('$_collectionPath/expired', folderName);
+      report = await _findReport('expired', folderName);
       if (report != null) return report;
     }
 
     return null;
   }
 
-  /// Find report in directory (searches recursively)
+  /// Find report in directory (searches recursively, uses relative path from collection root)
   Future<Report?> _findReport(String basePath, String folderName) async {
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(basePath)) return null;
+    if (!await _storage.exists(basePath)) return null;
 
-      // Search recursively for the folder
-      final entities = await fs.list(basePath);
-      for (var entity in entities) {
-        if (entity.isDirectory) {
-          final dirName = entity.path.split('/').last;
-          // Check if this is a region folder
-          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(dirName)) {
-            // Search within region folder
-            final regionEntities = await fs.list(entity.path);
-            for (var regionEntity in regionEntities) {
-              if (regionEntity.isDirectory) {
-                final alertDirName = regionEntity.path.split('/').last;
-                if (alertDirName == folderName) {
-                  final reportPath = '${regionEntity.path}/report.txt';
-                  if (await fs.exists(reportPath)) {
-                    try {
-                      final content = await fs.readAsString(reportPath);
-                      return Report.fromText(content, folderName);
-                    } catch (e) {
-                      LogService().log('ReportService: Error loading report: $e');
-                    }
-                  }
-                }
-              }
-            }
-          }
+    // Search recursively for the folder
+    final entries = await _storage.listDirectory(basePath);
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        // Check if this is a region folder
+        if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(entry.name)) {
+          // Search within region folder recursively
+          final regionReport = await _findReportInRegion(entry.path, folderName);
+          if (regionReport != null) return regionReport;
         }
       }
-    } else {
-      final baseDir = Directory(basePath);
-      if (!await baseDir.exists()) return null;
+    }
 
-      // Search recursively for the folder
-      await for (final entity in baseDir.list(recursive: true)) {
-        if (entity is Directory && entity.path.endsWith('/$folderName')) {
-          final reportFile = File('${entity.path}/report.txt');
-          if (await reportFile.exists()) {
+    return null;
+  }
+
+  /// Find report within a region folder (recursive search)
+  Future<Report?> _findReportInRegion(String regionPath, String folderName) async {
+    final entries = await _storage.listDirectory(regionPath);
+
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        if (entry.name == folderName) {
+          // Found the target folder
+          final reportPath = '${entry.path}/report.txt';
+          final content = await _storage.readString(reportPath);
+          if (content != null) {
             try {
-              final content = await reportFile.readAsString();
               var report = Report.fromText(content, folderName);
 
-              final pointedBy = await AlertFolderUtils.readPointsFile(entity.path);
-              final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(entity.path);
-              final mergedVerifiedBy = {
-                ...report.verifiedBy,
-                ...verifiedByFeedback,
-              }.toList();
+              // Load feedback data if not using encrypted storage
+              if (!_storage.isEncrypted) {
+                final absolutePath = await _storage.getAbsolutePath(entry.path);
+                if (absolutePath != null) {
+                  final pointedBy = await AlertFolderUtils.readPointsFile(absolutePath);
+                  final verifiedByFeedback = await AlertFolderUtils.readVerificationsFile(absolutePath);
+                  final mergedVerifiedBy = {
+                    ...report.verifiedBy,
+                    ...verifiedByFeedback,
+                  }.toList();
 
-              report = report.copyWith(
-                pointedBy: pointedBy,
-                pointCount: pointedBy.length,
-                verifiedBy: mergedVerifiedBy,
-                verificationCount: mergedVerifiedBy.length,
-              );
+                  report = report.copyWith(
+                    pointedBy: pointedBy,
+                    pointCount: pointedBy.length,
+                    verifiedBy: mergedVerifiedBy,
+                    verificationCount: mergedVerifiedBy.length,
+                  );
+                }
+              }
 
               return report;
             } catch (e) {
               LogService().log('ReportService: Error loading report: $e');
             }
           }
+        } else if (RegExp(r'^\d{3}$').hasMatch(entry.name)) {
+          // Nested region subfolder - search recursively
+          final nestedReport = await _findReportInRegion(entry.path, folderName);
+          if (nestedReport != null) return nestedReport;
         }
       }
     }
@@ -364,24 +283,12 @@ class ReportService {
 
     final baseDir = isExpired ? 'expired' : 'active';
     final regionFolder = reportToSave.regionFolder;
-    final reportPath = '$_collectionPath/$baseDir/$regionFolder/${reportToSave.folderName}';
+    final reportPath = '$baseDir/$regionFolder/${reportToSave.folderName}';
     final reportFilePath = '$reportPath/report.txt';
     final content = reportToSave.exportAsText();
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(reportPath)) {
-        await fs.createDirectory(reportPath, recursive: true);
-      }
-      await fs.writeAsString(reportFilePath, content);
-    } else {
-      final reportDir = Directory(reportPath);
-      if (!await reportDir.exists()) {
-        await reportDir.create(recursive: true);
-      }
-      final reportFile = File(reportFilePath);
-      await reportFile.writeAsString(content, flush: true);
-    }
+    await _storage.createDirectory(reportPath);
+    await _storage.writeString(reportFilePath, content);
 
     LogService().log('ReportService: Saved report: ${reportToSave.folderName}');
 
@@ -516,42 +423,23 @@ class ReportService {
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final updatesPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/updates';
+    final updatesPath = '$baseDir/$regionFolder/$folderName/updates';
 
     final updates = <ReportUpdate>[];
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(updatesPath)) return [];
+    if (!await _storage.exists(updatesPath)) return [];
 
-      final entities = await fs.list(updatesPath);
-      for (var entity in entities) {
-        if (entity.isFile && entity.path.endsWith('.txt')) {
-          try {
-            final content = await fs.readAsString(entity.path);
-            final fileName = entity.path.split('/').last;
-            final update = ReportUpdate.fromText(content, fileName);
+    final entries = await _storage.listDirectory(updatesPath);
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
+        try {
+          final content = await _storage.readString(entry.path);
+          if (content != null) {
+            final update = ReportUpdate.fromText(content, entry.name);
             updates.add(update);
-          } catch (e) {
-            LogService().log('ReportService: Error loading update from ${entity.path}: $e');
           }
-        }
-      }
-    } else {
-      final updatesDir = Directory(updatesPath);
-      if (!await updatesDir.exists()) return [];
-
-      final entities = await updatesDir.list().toList();
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.txt')) {
-          try {
-            final content = await entity.readAsString();
-            final fileName = entity.path.split('/').last;
-            final update = ReportUpdate.fromText(content, fileName);
-            updates.add(update);
-          } catch (e) {
-            LogService().log('ReportService: Error loading update from ${entity.path}: $e');
-          }
+        } catch (e) {
+          LogService().log('ReportService: Error loading update from ${entry.path}: $e');
         }
       }
     }
@@ -572,24 +460,12 @@ class ReportService {
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final updatesPath = '$_collectionPath/$baseDir/$regionFolder/$folderName/updates';
+    final updatesPath = '$baseDir/$regionFolder/$folderName/updates';
     final updateFilePath = '$updatesPath/${update.fileName}';
     final content = update.exportAsText();
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(updatesPath)) {
-        await fs.createDirectory(updatesPath, recursive: true);
-      }
-      await fs.writeAsString(updateFilePath, content);
-    } else {
-      final updatesDir = Directory(updatesPath);
-      if (!await updatesDir.exists()) {
-        await updatesDir.create(recursive: true);
-      }
-      final updateFile = File(updateFilePath);
-      await updateFile.writeAsString(content, flush: true);
-    }
+    await _storage.createDirectory(updatesPath);
+    await _storage.writeString(updateFilePath, content);
 
     LogService().log('ReportService: Saved update: ${update.fileName}');
   }
@@ -662,9 +538,10 @@ class ReportService {
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
     final regionFolder = report.regionFolder;
-    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final alertRelativePath = '$baseDir/$regionFolder/$folderName';
 
-    if (kIsWeb) {
+    // For encrypted storage, just update the report directly
+    if (_storage.isEncrypted) {
       final updatedVerifiedBy = List<String>.from(report.verifiedBy)..add(npub);
       final updated = report.copyWith(
         verifiedBy: updatedVerifiedBy,
@@ -673,6 +550,10 @@ class ReportService {
       await saveReport(updated, isExpired: isExpired);
       return;
     }
+
+    // For filesystem storage, use feedback folder utils
+    final alertPath = await _storage.getAbsolutePath(alertRelativePath);
+    if (alertPath == null) return;
 
     final event = await _buildVerificationEvent(report.apiId);
     if (event == null) {
@@ -715,10 +596,10 @@ class ReportService {
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
     final regionFolder = report.regionFolder;
-    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final alertRelativePath = '$baseDir/$regionFolder/$folderName';
 
-    if (kIsWeb) {
-      // Web: Update report object and save (points stored in memory only)
+    // For encrypted storage, update report directly
+    if (_storage.isEncrypted) {
       final updatedPointedBy = List<String>.from(report.pointedBy)..add(npub);
       final updated = report.copyWith(
         pointedBy: updatedPointedBy,
@@ -727,6 +608,10 @@ class ReportService {
       await saveReport(updated, isExpired: isExpired);
       return;
     }
+
+    // For filesystem storage, use feedback folder utils
+    final alertPath = await _storage.getAbsolutePath(alertRelativePath);
+    if (alertPath == null) return;
 
     final event = await _buildReactionEvent(
       report.apiId,
@@ -774,10 +659,10 @@ class ReportService {
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
     final regionFolder = report.regionFolder;
-    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final alertRelativePath = '$baseDir/$regionFolder/$folderName';
 
-    if (kIsWeb) {
-      // Web: Update report object and save (points stored in memory only)
+    // For encrypted storage, update report directly
+    if (_storage.isEncrypted) {
       final updatedPointedBy = List<String>.from(report.pointedBy)..remove(npub);
       final updated = report.copyWith(
         pointedBy: updatedPointedBy,
@@ -786,6 +671,10 @@ class ReportService {
       await saveReport(updated, isExpired: isExpired);
       return;
     }
+
+    // For filesystem storage, use feedback folder utils
+    final alertPath = await _storage.getAbsolutePath(alertRelativePath);
+    if (alertPath == null) return;
 
     final removed = await FeedbackFolderUtils.removeFeedbackEvent(
       alertPath,
@@ -816,39 +705,44 @@ class ReportService {
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
-    final commentsPath = FeedbackFolderUtils.buildCommentsPath(alertPath);
+    final alertRelativePath = '$baseDir/$regionFolder/$folderName';
 
     final comments = <ReportComment>[];
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (await fs.exists(commentsPath)) {
-        final entities = await fs.list(commentsPath);
-        for (var entity in entities) {
-          if (entity.isFile && entity.path.endsWith('.txt')) {
+    // For encrypted storage, load comments directly
+    if (_storage.isEncrypted) {
+      final commentsPath = '$alertRelativePath/feedback/comments';
+      if (await _storage.exists(commentsPath)) {
+        final entries = await _storage.listDirectory(commentsPath);
+        for (var entry in entries) {
+          if (!entry.isDirectory && entry.name.endsWith('.txt')) {
             try {
-              final content = await fs.readAsString(entity.path);
-              final fileName = entity.path.split('/').last;
-              final comment = ReportComment.fromText(content, fileName);
-              comments.add(comment);
+              final content = await _storage.readString(entry.path);
+              if (content != null) {
+                final comment = ReportComment.fromText(content, entry.name);
+                comments.add(comment);
+              }
             } catch (e) {
-              LogService().log('ReportService: Error loading comment from ${entity.path}: $e');
+              LogService().log('ReportService: Error loading comment from ${entry.path}: $e');
             }
           }
         }
       }
     } else {
-      final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
-      comments.addAll(feedbackComments.map((comment) {
-        return ReportComment(
-          id: comment.id,
-          author: comment.author,
-          content: comment.content,
-          created: comment.created,
-          npub: comment.npub,
-        );
-      }));
+      // For filesystem storage, use feedback comment utils
+      final alertPath = await _storage.getAbsolutePath(alertRelativePath);
+      if (alertPath != null) {
+        final feedbackComments = await FeedbackCommentUtils.loadComments(alertPath);
+        comments.addAll(feedbackComments.map((comment) {
+          return ReportComment(
+            id: comment.id,
+            author: comment.author,
+            content: comment.content,
+            created: comment.created,
+            npub: comment.npub,
+          );
+        }));
+      }
     }
 
     // Sort by timestamp (oldest first for comments)
@@ -871,14 +765,15 @@ class ReportService {
     final regionFolder = report.regionFolder;
     final isExpired = await _isReportExpired(folderName);
     final baseDir = isExpired ? 'expired' : 'active';
-    final alertPath = '$_collectionPath/$baseDir/$regionFolder/$folderName';
+    final alertRelativePath = '$baseDir/$regionFolder/$folderName';
     final profile = _profileService.getProfile();
     final resolvedNpub = (npub != null && npub.isNotEmpty) ? npub : profile.npub;
     final signature = await _signComment(report.apiId, commentContent);
 
     ReportComment comment;
 
-    if (kIsWeb) {
+    // For encrypted storage, write comments directly
+    if (_storage.isEncrypted) {
       final now = DateTime.now();
       final created = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
           '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
@@ -891,13 +786,9 @@ class ReportService {
         signature: signature,
       );
 
-      final commentsPath = FeedbackFolderUtils.buildCommentsPath(alertPath);
-      final commentFilePath = '$commentsPath/$fileName';
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(commentsPath)) {
-        await fs.createDirectory(commentsPath, recursive: true);
-      }
-      await fs.writeAsString(commentFilePath, commentContentText);
+      final commentsPath = '$alertRelativePath/feedback/comments';
+      await _storage.createDirectory(commentsPath);
+      await _storage.writeString('$commentsPath/$fileName', commentContentText);
 
       comment = ReportComment(
         id: fileName.replaceAll('.txt', ''),
@@ -907,6 +798,12 @@ class ReportService {
         npub: resolvedNpub,
       );
     } else {
+      // For filesystem storage, use feedback comment utils
+      final alertPath = await _storage.getAbsolutePath(alertRelativePath);
+      if (alertPath == null) {
+        throw Exception('Unable to resolve alert path');
+      }
+
       final commentId = await FeedbackCommentUtils.writeComment(
         contentPath: alertPath,
         author: author,
@@ -934,27 +831,32 @@ class ReportService {
     if (report == null) return;
 
     final regionFolder = report.regionFolder;
-    final activePath = '$_collectionPath/active/$regionFolder/$folderName';
-    final expiredPath = '$_collectionPath/expired/$regionFolder/$folderName';
+    final activePath = 'active/$regionFolder/$folderName';
+    final expiredPath = 'expired/$regionFolder/$folderName';
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (await fs.exists(activePath)) {
-        if (await fs.exists(expiredPath)) {
-          await fs.delete(expiredPath, recursive: true);
+    if (await _storage.exists(activePath)) {
+      // Copy contents from active to expired, then delete active
+      // ProfileStorage doesn't support rename/move, so we copy and delete
+      await _copyDirectoryContents(activePath, expiredPath);
+      await _storage.deleteDirectory(activePath);
+      LogService().log('ReportService: Moved report to expired: $folderName');
+    }
+  }
+
+  /// Copy directory contents recursively (for moving reports)
+  Future<void> _copyDirectoryContents(String sourcePath, String destPath) async {
+    await _storage.createDirectory(destPath);
+
+    final entries = await _storage.listDirectory(sourcePath);
+    for (var entry in entries) {
+      final destEntryPath = '$destPath/${entry.name}';
+      if (entry.isDirectory) {
+        await _copyDirectoryContents(entry.path, destEntryPath);
+      } else {
+        final content = await _storage.readBytes(entry.path);
+        if (content != null) {
+          await _storage.writeBytes(destEntryPath, content);
         }
-        await fs.move(activePath, expiredPath);
-        LogService().log('ReportService: Moved report to expired (web): $folderName');
-      }
-    } else {
-      final activeDir = Directory(activePath);
-      if (await activeDir.exists()) {
-        final expiredDir = Directory(expiredPath);
-        if (await expiredDir.exists()) {
-          await expiredDir.delete(recursive: true);
-        }
-        await activeDir.rename(expiredPath);
-        LogService().log('ReportService: Moved report to expired: $folderName');
       }
     }
   }
@@ -963,42 +865,23 @@ class ReportService {
   Future<bool> _isReportExpired(String folderName) async {
     if (_collectionPath == null) return false;
 
-    final expiredBasePath = '$_collectionPath/expired';
+    if (!await _storage.exists('expired')) return false;
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(expiredBasePath)) return false;
-
-      // Search recursively for the folder in expired
-      final entities = await fs.list(expiredBasePath);
-      for (var entity in entities) {
-        if (entity.isDirectory) {
-          final dirName = entity.path.split('/').last;
-          if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(dirName)) {
-            final regionEntities = await fs.list(entity.path);
-            for (var regionEntity in regionEntities) {
-              if (regionEntity.isDirectory) {
-                final alertDirName = regionEntity.path.split('/').last;
-                if (alertDirName == folderName) {
-                  return true;
-                }
-              }
+    // Search recursively for the folder in expired
+    final entries = await _storage.listDirectory('expired');
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        if (RegExp(r'^-?\d+\.\d+_-?\d+\.\d+$').hasMatch(entry.name)) {
+          final regionEntries = await _storage.listDirectory(entry.path);
+          for (var regionEntry in regionEntries) {
+            if (regionEntry.isDirectory && regionEntry.name == folderName) {
+              return true;
             }
           }
         }
       }
-      return false;
-    } else {
-      final expiredDir = Directory(expiredBasePath);
-      if (!await expiredDir.exists()) return false;
-
-      await for (final entity in expiredDir.list(recursive: true)) {
-        if (entity is Directory && entity.path.endsWith('/$folderName')) {
-          return true;
-        }
-      }
-      return false;
     }
+    return false;
   }
 
   Future<bool> _ensureSigningInitialized() async {

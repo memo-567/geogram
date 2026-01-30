@@ -8,6 +8,7 @@ import '../models/contact.dart';
 import '../services/collection_service.dart';
 import '../services/contact_service.dart';
 import '../services/i18n_service.dart';
+import '../services/profile_storage.dart';
 
 /// Result returned when a contact is selected
 class ContactPickerResult {
@@ -94,15 +95,28 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
 
   Future<void> _loadContacts() async {
     try {
-      final collections = await CollectionService().loadCollections();
+      final collectionService = CollectionService();
+      final collections = await collectionService.loadCollections();
       final contactCollections = collections
           .where((c) => c.type == 'contacts' && c.storagePath != null)
           .toList();
 
       _contacts.clear();
       final contactService = ContactService();
+      final profileStorage = collectionService.profileStorage;
 
       for (final collection in contactCollections) {
+        // Set up storage for this collection
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            collection.storagePath!,
+          );
+          contactService.setStorage(scopedStorage);
+        } else {
+          contactService.setStorage(FilesystemProfileStorage(collection.storagePath!));
+        }
+
         await contactService.initializeCollection(collection.storagePath!);
 
         // Load favorites (instant from cache)

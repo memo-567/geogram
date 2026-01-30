@@ -4,7 +4,6 @@
  */
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
-import 'dart:convert';
 import '../models/event.dart';
 import '../models/event_comment.dart';
 import '../models/event_reaction.dart';
@@ -15,42 +14,53 @@ import '../models/event_link.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import 'contact_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing events, files, and reactions
+///
+/// IMPORTANT: All file operations go through the ProfileStorage abstraction.
+/// Never use File() or Directory() directly in this service.
 class EventService {
   static final EventService _instance = EventService._internal();
   factory EventService() => _instance;
   EventService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  /// All file operations go through this abstraction.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize event service for a collection
   Future<void> initializeCollection(String collectionPath) async {
     print('EventService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure collection directory exists
-    final collectionDir = Directory(collectionPath);
-    if (!await collectionDir.exists()) {
-      await collectionDir.create(recursive: true);
-      print('EventService: Created collection directory');
-    }
+    // Ensure collection directory exists via storage abstraction
+    await _storage.createDirectory('');
+    print('EventService: Initialized with ProfileStorage');
   }
 
   /// Get available years (folders in collection directory)
   Future<List<int>> getYears() async {
     if (_collectionPath == null) return [];
 
-    final collectionDir = Directory(_collectionPath!);
-    if (!await collectionDir.exists()) return [];
-
     final years = <int>[];
-    final entities = await collectionDir.list().toList();
 
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final name = entity.path.split('/').last;
-        final year = int.tryParse(name);
+    final entries = await _storage.listDirectory('');
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final year = int.tryParse(entry.name);
         if (year != null) {
           years.add(year);
         }
@@ -73,25 +83,19 @@ class EventService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearDir = Directory('$_collectionPath/$y');
-      if (!await yearDir.exists()) continue;
-
-      final entities = await yearDir.list().toList();
-
-
-      for (var entity in entities) {
-        if (entity is Directory) {
+      final entries = await _storage.listDirectory('$y');
+      for (var entry in entries) {
+        if (entry.isDirectory) {
           try {
-            final folderName = entity.path.split('/').last;
             // Event folders are like: 2025-07-15_summer-festival
-            if (RegExp(r'^\d{4}-\d{2}-\d{2}_').hasMatch(folderName)) {
-              final event = await loadEvent(folderName);
+            if (RegExp(r'^\d{4}-\d{2}-\d{2}_').hasMatch(entry.name)) {
+              final event = await loadEvent(entry.name);
               if (event != null) {
                 events.add(event);
               }
             }
           } catch (e) {
-            print('EventService: Error loading event ${entity.path}: $e');
+            print('EventService: Error loading event ${entry.name}: $e');
           }
         }
       }
@@ -109,36 +113,38 @@ class EventService {
 
     // Extract year from eventId (format: YYYY-MM-DD_title)
     final year = eventId.substring(0, 4);
-    final eventDir = Directory('$_collectionPath/$year/$eventId');
+    final eventRelativePath = '$year/$eventId';
+    final eventDirPath = '$_collectionPath/$year/$eventId';
 
-    if (!await eventDir.exists()) {
-      print('EventService: Event directory not found: ${eventDir.path}');
+    if (!await _storage.directoryExists(eventRelativePath)) {
+      print('EventService: Event directory not found: $eventRelativePath');
       return null;
     }
 
-    // Load event.txt
-    final eventFile = File('${eventDir.path}/event.txt');
-    if (!await eventFile.exists()) {
-      print('EventService: event.txt not found in ${eventDir.path}');
+    final content = await _storage.readString('$eventRelativePath/event.txt');
+    if (content == null) {
+      print('EventService: event.txt not found in $eventRelativePath');
       return null;
     }
 
     try {
-      final content = await eventFile.readAsString();
       final event = Event.fromText(content, eventId);
 
       // Load event-level reactions (legacy) or centralized feedback (preferred)
-      final eventReaction = await _loadReaction(eventDir.path, 'event.txt');
-      final feedbackDir = Directory(FeedbackFolderUtils.buildFeedbackPath(eventDir.path));
+      // Note: Helper methods still use filesystem paths - full migration pending
+      final eventReaction = await _loadReactionStorage(eventRelativePath, 'event.txt');
+      final hasFeedbackDir = await _storage.directoryExists('$eventRelativePath/.feedback');
       List<String> eventLikes = [];
       List<EventComment> eventComments = [];
 
-      if (await feedbackDir.exists()) {
+      if (hasFeedbackDir) {
+        // Note: FeedbackFolderUtils/FeedbackCommentUtils still use filesystem paths
+        // Full migration pending - for now use filesystem path for these utils
         final feedbackLikes = await FeedbackFolderUtils.readFeedbackFile(
-          eventDir.path,
+          eventDirPath,
           FeedbackFolderUtils.feedbackTypeLikes,
         );
-        final feedbackComments = await FeedbackCommentUtils.loadComments(eventDir.path);
+        final feedbackComments = await FeedbackCommentUtils.loadComments(eventDirPath);
 
         eventLikes = feedbackLikes;
         eventComments = feedbackComments.map((comment) {
@@ -163,12 +169,12 @@ class EventService {
         eventComments = eventReaction?.comments ?? event.comments;
       }
 
-      // Load v1.2 features
-      final flyers = await _loadFlyers(eventDir.path);
-      final trailer = await _loadTrailer(eventDir.path);
-      final updates = await _loadUpdates(eventDir.path);
-      final registration = await _loadRegistration(eventDir.path);
-      final links = await _loadLinks(eventDir.path);
+      // Load v1.2 features via storage abstraction
+      final flyers = await _loadFlyersStorage(eventRelativePath);
+      final trailer = await _loadTrailerStorage(eventRelativePath);
+      final updates = await _loadUpdatesStorage(eventRelativePath);
+      final registration = await _loadRegistrationStorage(eventRelativePath);
+      final links = await _loadLinksStorage(eventRelativePath);
 
       return event.copyWith(
         likes: eventLikes,
@@ -185,21 +191,17 @@ class EventService {
     }
   }
 
-  /// Load reaction file for a specific item
-  Future<EventReaction?> _loadReaction(String eventPath, String targetItem) async {
+  /// Load reaction file for a specific item (storage-based)
+  Future<EventReaction?> _loadReactionStorage(String eventRelativePath, String targetItem) async {
     // Remove .txt extension from targetItem if present for the reaction filename
     final reactionTarget = targetItem.endsWith('.txt')
         ? targetItem
         : '$targetItem.txt';
 
-    final reactionFile = File('$eventPath/.reactions/$reactionTarget');
-
-    if (!await reactionFile.exists()) {
-      return null;
-    }
+    final content = await _storage.readString('$eventRelativePath/.reactions/$reactionTarget');
+    if (content == null) return null;
 
     try {
-      final content = await reactionFile.readAsString();
       return EventReaction.fromText(content, targetItem);
     } catch (e) {
       print('EventService: Error loading reaction: $e');
@@ -234,7 +236,7 @@ class EventService {
     String folderName = baseFolderName;
     int suffix = 1;
 
-    while (await Directory('$_collectionPath/$year/$folderName').exists()) {
+    while (await _storage.directoryExists('$year/$folderName')) {
       folderName = '$baseFolderName-$suffix';
       suffix++;
     }
@@ -272,22 +274,14 @@ class EventService {
       final baseFolderName = sanitizeFolderName(title, dateToUse);
       final folderName = await _ensureUniqueFolderName(baseFolderName, year);
 
-      // Ensure year directory exists
-      final yearDir = Directory('$_collectionPath/$year');
-      if (!await yearDir.exists()) {
-        await yearDir.create(recursive: true);
-      }
+      // Event paths
+      final eventRelativePath = '$year/$folderName';
 
-      // Create event directory
-      final eventDir = Directory('$_collectionPath/$year/$folderName');
-      await eventDir.create(recursive: true);
-
-      // Create .reactions directory
-      final reactionsDir = Directory('${eventDir.path}/.reactions');
-      await reactionsDir.create(recursive: true);
-
-      // Create feedback directory for centralized reactions/comments
-      await FeedbackFolderUtils.ensureFeedbackFolder(eventDir.path);
+      // Create year and event directories via storage abstraction
+      await _storage.createDirectory('$year');
+      await _storage.createDirectory(eventRelativePath);
+      await _storage.createDirectory('$eventRelativePath/.reactions');
+      // Note: FeedbackFolderUtils still uses filesystem - needs future migration
 
       // Create day folders if multi-day event
       if (startDate != null && endDate != null && startDate != endDate) {
@@ -296,10 +290,8 @@ class EventService {
         final days = end.difference(start).inDays + 1;
 
         for (int i = 1; i <= days; i++) {
-          final dayDir = Directory('${eventDir.path}/day$i');
-          await dayDir.create();
-          final dayReactionsDir = Directory('${dayDir.path}/.reactions');
-          await dayReactionsDir.create();
+          await _storage.createDirectory('$eventRelativePath/day$i');
+          await _storage.createDirectory('$eventRelativePath/day$i/.reactions');
         }
       }
 
@@ -326,9 +318,8 @@ class EventService {
         },
       );
 
-      // Write event.txt
-      final eventFile = File('${eventDir.path}/event.txt');
-      await eventFile.writeAsString(event.exportAsText(), flush: true);
+      // Write event.txt via storage abstraction
+      await _storage.writeString('$eventRelativePath/event.txt', event.exportAsText());
 
       // Record event associations in contact metrics
       if (contacts != null && contacts.isNotEmpty) {
@@ -364,18 +355,18 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
       // Determine reaction file path
       final target = targetItem ?? 'event.txt';
-      final reactionFile = File('${eventDir.path}/.reactions/$target');
+      final reactionPath = '$eventRelativePath/.reactions/$target';
 
       // Load or create reaction
       EventReaction reaction;
-      if (await reactionFile.exists()) {
-        final content = await reactionFile.readAsString();
+      final content = await _storage.readString(reactionPath);
+      if (content != null) {
         reaction = EventReaction.fromText(content, target);
       } else {
         reaction = EventReaction(target: target);
@@ -391,13 +382,10 @@ class EventService {
       final updatedReaction = reaction.copyWith(likes: updatedLikes);
 
       // Ensure .reactions directory exists
-      final reactionsDir = Directory('${eventDir.path}/.reactions');
-      if (!await reactionsDir.exists()) {
-        await reactionsDir.create(recursive: true);
-      }
+      await _storage.createDirectory('$eventRelativePath/.reactions');
 
       // Write updated reaction
-      await reactionFile.writeAsString(updatedReaction.exportAsText(), flush: true);
+      await _storage.writeString(reactionPath, updatedReaction.exportAsText());
 
       print('EventService: Added like from $callsign to $target');
       return true;
@@ -417,17 +405,17 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
       final target = targetItem ?? 'event.txt';
-      final reactionFile = File('${eventDir.path}/.reactions/$target');
+      final reactionPath = '$eventRelativePath/.reactions/$target';
 
-      if (!await reactionFile.exists()) return false;
+      final content = await _storage.readString(reactionPath);
+      if (content == null) return false;
 
       // Load reaction
-      final content = await reactionFile.readAsString();
       final reaction = EventReaction.fromText(content, target);
 
       // Remove like
@@ -436,9 +424,9 @@ class EventService {
 
       // If no likes and no comments, delete the file
       if (updatedReaction.likes.isEmpty && updatedReaction.comments.isEmpty) {
-        await reactionFile.delete();
+        await _storage.delete(reactionPath);
       } else {
-        await reactionFile.writeAsString(updatedReaction.exportAsText(), flush: true);
+        await _storage.writeString(reactionPath, updatedReaction.exportAsText());
       }
 
       print('EventService: Removed like from $callsign on $target');
@@ -461,17 +449,17 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
       final target = targetItem ?? 'event.txt';
-      final reactionFile = File('${eventDir.path}/.reactions/$target');
+      final reactionPath = '$eventRelativePath/.reactions/$target';
 
       // Load or create reaction
       EventReaction reaction;
-      if (await reactionFile.exists()) {
-        final fileContent = await reactionFile.readAsString();
+      final fileContent = await _storage.readString(reactionPath);
+      if (fileContent != null) {
         reaction = EventReaction.fromText(fileContent, target);
       } else {
         reaction = EventReaction(target: target);
@@ -489,13 +477,10 @@ class EventService {
       final updatedReaction = reaction.copyWith(comments: updatedComments);
 
       // Ensure .reactions directory exists
-      final reactionsDir = Directory('${eventDir.path}/.reactions');
-      if (!await reactionsDir.exists()) {
-        await reactionsDir.create(recursive: true);
-      }
+      await _storage.createDirectory('$eventRelativePath/.reactions');
 
       // Write updated reaction
-      await reactionFile.writeAsString(updatedReaction.exportAsText(), flush: true);
+      await _storage.writeString(reactionPath, updatedReaction.exportAsText());
 
       print('EventService: Added comment from $author to $target');
       return true;
@@ -511,52 +496,49 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
+      final eventDirPath = '$_collectionPath/$year/$eventId';
 
-      if (!await eventDir.exists()) return [];
+      if (!await _storage.directoryExists(eventRelativePath)) return [];
 
       final items = <EventItem>[];
+      final entries = await _storage.listDirectory(eventRelativePath);
 
-      final entities = await eventDir.list().toList();
-
-
-      for (var entity in entities) {
-        final name = entity.path.split('/').last;
-
+      for (var entry in entries) {
         // Skip special files and directories
-        if (name == 'event.txt' ||
-            name.startsWith('.') ||
-            name == 'contributors') {
+        if (entry.name == 'event.txt' ||
+            entry.name.startsWith('.') ||
+            entry.name == 'contributors') {
           continue;
         }
 
-        if (entity is Directory) {
+        if (entry.isDirectory) {
           // Check if it's a day folder
-          if (RegExp(r'^day\d+$').hasMatch(name)) {
-            final reaction = await _loadReaction(eventDir.path, name);
+          if (RegExp(r'^day\d+$').hasMatch(entry.name)) {
+            final reaction = await _loadReactionStorage(eventRelativePath, entry.name);
             items.add(EventItem(
-              name: name,
-              path: entity.path,
+              name: entry.name,
+              path: '$eventDirPath/${entry.name}',
               type: EventItemType.dayFolder,
               reaction: reaction,
             ));
           } else {
             // Regular subfolder
-            final reaction = await _loadReaction(eventDir.path, name);
+            final reaction = await _loadReactionStorage(eventRelativePath, entry.name);
             items.add(EventItem(
-              name: name,
-              path: entity.path,
+              name: entry.name,
+              path: '$eventDirPath/${entry.name}',
               type: EventItemType.folder,
               reaction: reaction,
             ));
           }
-        } else if (entity is File) {
+        } else {
           // Regular file
-          final type = EventItem.getTypeFromExtension(name);
-          final reaction = await _loadReaction(eventDir.path, name);
+          final type = EventItem.getTypeFromExtension(entry.name);
+          final reaction = await _loadReactionStorage(eventRelativePath, entry.name);
           items.add(EventItem(
-            name: name,
-            path: entity.path,
+            name: entry.name,
+            path: '$eventDirPath/${entry.name}',
             type: type,
             reaction: reaction,
           ));
@@ -570,26 +552,18 @@ class EventService {
     }
   }
 
-  // ==================== v1.2 Feature Methods ====================
+  // ==================== v1.2 Feature Methods (Storage-based) ====================
 
-  /// Load flyers from event directory
-  Future<List<String>> _loadFlyers(String eventPath) async {
+  /// Load flyers from event directory (storage-based)
+  Future<List<String>> _loadFlyersStorage(String eventRelativePath) async {
     try {
-      final eventDir = Directory(eventPath);
-      if (!await eventDir.exists()) return [];
-
+      final entries = await _storage.listDirectory(eventRelativePath);
       final flyers = <String>[];
       final flyerPattern = RegExp(r'^flyer.*\.(jpg|jpeg|png|gif|webp)$', caseSensitive: false);
 
-      final entities = await eventDir.list().toList();
-
-
-      for (var entity in entities) {
-        if (entity is File) {
-          final name = entity.path.split('/').last;
-          if (flyerPattern.hasMatch(name)) {
-            flyers.add(name);
-          }
+      for (var entry in entries) {
+        if (!entry.isDirectory && flyerPattern.hasMatch(entry.name)) {
+          flyers.add(entry.name);
         }
       }
 
@@ -602,24 +576,17 @@ class EventService {
     }
   }
 
-  /// Load trailer filename if it exists
-  Future<String?> _loadTrailer(String eventPath) async {
+  /// Load trailer filename if it exists (storage-based)
+  Future<String?> _loadTrailerStorage(String eventRelativePath) async {
     try {
-      final eventDir = Directory(eventPath);
-      if (!await eventDir.exists()) return null;
+      final entries = await _storage.listDirectory(eventRelativePath);
 
       // Look for any file named trailer.* (mp4, mov, avi, etc.)
       final trailerPattern = RegExp(r'^trailer\.(mp4|mov|avi|mkv|webm|flv|wmv)$', caseSensitive: false);
 
-      final entities = await eventDir.list().toList();
-
-
-      for (var entity in entities) {
-        if (entity is File) {
-          final name = entity.path.split('/').last;
-          if (trailerPattern.hasMatch(name)) {
-            return name;
-          }
+      for (var entry in entries) {
+        if (!entry.isDirectory && trailerPattern.hasMatch(entry.name)) {
+          return entry.name;
         }
       }
 
@@ -630,28 +597,26 @@ class EventService {
     }
   }
 
-  /// Load updates from updates directory
-  Future<List<EventUpdate>> _loadUpdates(String eventPath) async {
+  /// Load updates from updates directory (storage-based)
+  Future<List<EventUpdate>> _loadUpdatesStorage(String eventRelativePath) async {
     try {
-      final updatesDir = Directory('$eventPath/updates');
-      if (!await updatesDir.exists()) return [];
+      final updatesRelativePath = '$eventRelativePath/updates';
+      if (!await _storage.directoryExists(updatesRelativePath)) return [];
 
       final updates = <EventUpdate>[];
+      final entries = await _storage.listDirectory(updatesRelativePath);
 
-      final entities = await updatesDir.list().toList();
-
-
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.md')) {
+      for (var entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.md')) {
           try {
-            final content = await entity.readAsString();
-            final filename = entity.path.split('/').last;
-            final updateId = filename.substring(0, filename.length - 3); // Remove .md
+            final content = await _storage.readString('$updatesRelativePath/${entry.name}');
+            if (content == null) continue;
 
+            final updateId = entry.name.substring(0, entry.name.length - 3); // Remove .md
             final update = EventUpdate.fromText(content, updateId);
 
             // Load update reactions
-            final updateReaction = await _loadReaction(updatesDir.path, filename);
+            final updateReaction = await _loadReactionStorage(updatesRelativePath, entry.name);
             if (updateReaction != null) {
               updates.add(update.copyWith(
                 likes: updateReaction.likes,
@@ -661,7 +626,7 @@ class EventService {
               updates.add(update);
             }
           } catch (e) {
-            print('EventService: Error loading update ${entity.path}: $e');
+            print('EventService: Error loading update ${entry.name}: $e');
           }
         }
       }
@@ -675,13 +640,12 @@ class EventService {
     }
   }
 
-  /// Load registration from registration.txt
-  Future<EventRegistration?> _loadRegistration(String eventPath) async {
+  /// Load registration from registration.txt (storage-based)
+  Future<EventRegistration?> _loadRegistrationStorage(String eventRelativePath) async {
     try {
-      final registrationFile = File('$eventPath/registration.txt');
-      if (!await registrationFile.exists()) return null;
+      final content = await _storage.readString('$eventRelativePath/registration.txt');
+      if (content == null) return null;
 
-      final content = await registrationFile.readAsString();
       return EventRegistration.fromText(content);
     } catch (e) {
       print('EventService: Error loading registration: $e');
@@ -689,13 +653,12 @@ class EventService {
     }
   }
 
-  /// Load links from links.txt
-  Future<List<EventLink>> _loadLinks(String eventPath) async {
+  /// Load links from links.txt (storage-based)
+  Future<List<EventLink>> _loadLinksStorage(String eventRelativePath) async {
     try {
-      final linksFile = File('$eventPath/links.txt');
-      if (!await linksFile.exists()) return [];
+      final content = await _storage.readString('$eventRelativePath/links.txt');
+      if (content == null) return [];
 
-      final content = await linksFile.readAsString();
       return EventLinksParser.fromText(content);
     } catch (e) {
       print('EventService: Error loading links: $e');
@@ -715,21 +678,16 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return null;
+      if (!await _storage.directoryExists(eventRelativePath)) return null;
 
       // Create updates directory if it doesn't exist
-      final updatesDir = Directory('${eventDir.path}/updates');
-      if (!await updatesDir.exists()) {
-        await updatesDir.create(recursive: true);
-      }
+      final updatesRelativePath = '$eventRelativePath/updates';
+      await _storage.createDirectory(updatesRelativePath);
 
       // Create .reactions directory inside updates
-      final reactionsDir = Directory('${updatesDir.path}/.reactions');
-      if (!await reactionsDir.exists()) {
-        await reactionsDir.create(recursive: true);
-      }
+      await _storage.createDirectory('$updatesRelativePath/.reactions');
 
       // Generate update filename (timestamp-based)
       final now = DateTime.now();
@@ -750,9 +708,8 @@ class EventService {
         metadata: npub != null ? {'npub': npub} : {},
       );
 
-      // Write update file
-      final updateFile = File('${updatesDir.path}/$filename');
-      await updateFile.writeAsString(update.exportAsText(), flush: true);
+      // Write update file via storage abstraction
+      await _storage.writeString('$updatesRelativePath/$filename', update.exportAsText());
 
       print('EventService: Created update: $filename');
       return update;
@@ -773,16 +730,16 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
-      final registrationFile = File('${eventDir.path}/registration.txt');
+      final registrationPath = '$eventRelativePath/registration.txt';
 
       // Load or create registration
       EventRegistration registration;
-      if (await registrationFile.exists()) {
-        final content = await registrationFile.readAsString();
+      final content = await _storage.readString(registrationPath);
+      if (content != null) {
         registration = EventRegistration.fromText(content);
       } else {
         registration = EventRegistration();
@@ -806,11 +763,8 @@ class EventService {
         interested: interested,
       );
 
-      // Write updated registration
-      await registrationFile.writeAsString(
-        updatedRegistration.exportAsText(),
-        flush: true,
-      );
+      // Write updated registration via storage abstraction
+      await _storage.writeString(registrationPath, updatedRegistration.exportAsText());
 
       print('EventService: Registered $callsign as ${type.name}');
       return true;
@@ -829,14 +783,14 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
-      final registrationFile = File('${eventDir.path}/registration.txt');
-      if (!await registrationFile.exists()) return false;
+      final registrationPath = '$eventRelativePath/registration.txt';
+      final content = await _storage.readString(registrationPath);
+      if (content == null) return false;
 
-      final content = await registrationFile.readAsString();
       final registration = EventRegistration.fromText(content);
 
       // Remove from both lists
@@ -845,16 +799,13 @@ class EventService {
 
       // If no registrations left, delete file
       if (going.isEmpty && interested.isEmpty) {
-        await registrationFile.delete();
+        await _storage.delete(registrationPath);
       } else {
         final updatedRegistration = EventRegistration(
           going: going,
           interested: interested,
         );
-        await registrationFile.writeAsString(
-          updatedRegistration.exportAsText(),
-          flush: true,
-        );
+        await _storage.writeString(registrationPath, updatedRegistration.exportAsText());
       }
 
       print('EventService: Unregistered $callsign');
@@ -877,16 +828,16 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
-      final linksFile = File('${eventDir.path}/links.txt');
+      final linksPath = '$eventRelativePath/links.txt';
 
       // Load existing links or create empty list
       List<EventLink> links;
-      if (await linksFile.exists()) {
-        final content = await linksFile.readAsString();
+      final content = await _storage.readString(linksPath);
+      if (content != null) {
         links = EventLinksParser.fromText(content);
       } else {
         links = [];
@@ -901,11 +852,8 @@ class EventService {
       );
       links.add(newLink);
 
-      // Write updated links
-      await linksFile.writeAsString(
-        EventLinksParser.toText(links),
-        flush: true,
-      );
+      // Write updated links via storage abstraction
+      await _storage.writeString(linksPath, EventLinksParser.toText(links));
 
       print('EventService: Added link: $url');
       return true;
@@ -924,14 +872,14 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return false;
+      if (!await _storage.directoryExists(eventRelativePath)) return false;
 
-      final linksFile = File('${eventDir.path}/links.txt');
-      if (!await linksFile.exists()) return false;
+      final linksPath = '$eventRelativePath/links.txt';
+      final content = await _storage.readString(linksPath);
+      if (content == null) return false;
 
-      final content = await linksFile.readAsString();
       final links = EventLinksParser.fromText(content);
 
       // Remove link with matching URL
@@ -939,12 +887,9 @@ class EventService {
 
       // If no links left, delete file
       if (updatedLinks.isEmpty) {
-        await linksFile.delete();
+        await _storage.delete(linksPath);
       } else {
-        await linksFile.writeAsString(
-          EventLinksParser.toText(updatedLinks),
-          flush: true,
-        );
+        await _storage.writeString(linksPath, EventLinksParser.toText(updatedLinks));
       }
 
       print('EventService: Removed link: $url');
@@ -958,6 +903,11 @@ class EventService {
   /// Update event
   /// Returns the new event ID if the folder was renamed, otherwise returns the original ID
   /// Returns null if the update failed
+  ///
+  /// NOTE: This method still uses some direct filesystem operations for:
+  /// - Directory renaming (ProfileStorage doesn't support rename/move)
+  /// These are marked with TODO comments for future migration when ProfileStorage
+  /// gains rename support.
   Future<String?> updateEvent({
     required String eventId,
     required String title,
@@ -982,15 +932,14 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) return null;
+      if (!await _storage.directoryExists(eventRelativePath)) return null;
 
       // Load existing event
-      final eventFile = File('${eventDir.path}/event.txt');
-      if (!await eventFile.exists()) return null;
+      final existingContent = await _storage.readString('$eventRelativePath/event.txt');
+      if (existingContent == null) return null;
 
-      final existingContent = await eventFile.readAsString();
       final existingEvent = Event.fromText(existingContent, eventId);
 
       // Prepare date update
@@ -1037,9 +986,8 @@ class EventService {
         metadata: mergedMetadata,
       );
 
-      // Determine the working directory (might be renamed)
-      Directory workingDir = eventDir;
-      String workingYear = year;
+      // Track working path (might change if renamed)
+      String workingRelativePath = eventRelativePath;
       String finalEventId = eventId;
 
       // Check if folder needs to be renamed (date or title changed)
@@ -1053,28 +1001,25 @@ class EventService {
         // Only rename if the ID actually changed
         if (newFolderName != eventId || newYear != year) {
           finalEventId = newFolderName;
-          workingYear = newYear;
+          final newRelativePath = '$newYear/$newFolderName';
 
-          // Create new year directory if needed
+          // TODO: ProfileStorage doesn't support rename/move - using direct filesystem
+          // This needs to be addressed when ProfileStorage gains rename support
+          final eventDir = Directory('$_collectionPath/$year/$eventId');
           final newYearDir = Directory('$_collectionPath/$newYear');
           if (!await newYearDir.exists()) {
             await newYearDir.create(recursive: true);
           }
-
-          // New event directory path
           final newEventDir = Directory('${newYearDir.path}/$newFolderName');
-
-          // Rename/move the directory
           await eventDir.rename(newEventDir.path);
-          workingDir = newEventDir;
 
+          workingRelativePath = newRelativePath;
           print('EventService: Renamed event folder from $eventId to $newFolderName');
         }
       }
 
-      // Write updated event file
-      final finalEventFile = File('${workingDir.path}/event.txt');
-      await finalEventFile.writeAsString(updatedEvent.exportAsText(), flush: true);
+      // Write updated event file via storage abstraction
+      await _storage.writeString('$workingRelativePath/event.txt', updatedEvent.exportAsText());
 
       // Record event associations for any new contacts
       if (contacts != null && contacts.isNotEmpty) {
@@ -1091,54 +1036,45 @@ class EventService {
       // Empty string means "remove trailer", null means "don't change", non-empty means "use this file"
       if (trailerFileName == '') {
         // User explicitly removed trailer - delete any existing trailer file
-        final existingTrailer = await _loadTrailer(workingDir.path);
+        final existingTrailer = await _loadTrailerStorage(workingRelativePath);
         if (existingTrailer != null) {
-          final trailerFile = File('${workingDir.path}/$existingTrailer');
-          if (await trailerFile.exists()) {
-            await trailerFile.delete();
-            print('EventService: Deleted trailer file: $existingTrailer');
-          }
+          await _storage.delete('$workingRelativePath/$existingTrailer');
+          print('EventService: Deleted trailer file: $existingTrailer');
         }
       }
       // Note: If trailerFileName is a non-empty string, the file should already be copied by settings page
       // If trailerFileName is null, we don't touch the trailer
 
-      // Handle links
+      // Handle links via storage abstraction
       if (links != null) {
-        final linksFile = File('${workingDir.path}/links.txt');
+        final linksPath = '$workingRelativePath/links.txt';
         if (links.isEmpty) {
           // Delete links file if empty
-          if (await linksFile.exists()) {
-            await linksFile.delete();
+          if (await _storage.exists(linksPath)) {
+            await _storage.delete(linksPath);
             print('EventService: Deleted empty links.txt');
           }
         } else {
           // Write links
-          await linksFile.writeAsString(
-            EventLinksParser.toText(links),
-            flush: true,
-          );
+          await _storage.writeString(linksPath, EventLinksParser.toText(links));
           print('EventService: Saved ${links.length} links');
         }
       }
 
-      // Handle registration
+      // Handle registration via storage abstraction
       if (registrationEnabled != null) {
-        final registrationFile = File('${workingDir.path}/registration.txt');
+        final registrationPath = '$workingRelativePath/registration.txt';
         if (!registrationEnabled) {
           // Delete registration file if disabled
-          if (await registrationFile.exists()) {
-            await registrationFile.delete();
+          if (await _storage.exists(registrationPath)) {
+            await _storage.delete(registrationPath);
             print('EventService: Deleted registration.txt (disabled)');
           }
         } else {
           // Create empty registration file if enabled but doesn't exist
-          if (!await registrationFile.exists()) {
+          if (!await _storage.exists(registrationPath)) {
             final emptyRegistration = EventRegistration();
-            await registrationFile.writeAsString(
-              emptyRegistration.exportAsText(),
-              flush: true,
-            );
+            await _storage.writeString(registrationPath, emptyRegistration.exportAsText());
             print('EventService: Created empty registration.txt');
           }
         }
@@ -1160,17 +1096,15 @@ class EventService {
 
     try {
       final year = eventId.substring(0, 4);
-      final eventDir = Directory('$_collectionPath/$year/$eventId');
+      final eventRelativePath = '$year/$eventId';
 
-      if (!await eventDir.exists()) {
-        print('EventService: Event directory not found: ${eventDir.path}');
+      if (!await _storage.directoryExists(eventRelativePath)) {
+        print('EventService: Event directory not found: $eventRelativePath');
         return false;
       }
+      await _storage.deleteDirectory(eventRelativePath, recursive: true);
 
-      // Delete the entire event directory
-      await eventDir.delete(recursive: true);
       print('EventService: Deleted event: $eventId');
-
       return true;
     } catch (e) {
       print('EventService: Error deleting event: $e');
@@ -1179,6 +1113,11 @@ class EventService {
   }
 
   // ==================== API Helper Methods ====================
+  //
+  // NOTE: The methods below intentionally use direct filesystem operations because
+  // they scan across multiple profiles/collections (outside the current profile's
+  // storage). These are cross-profile discovery operations that cannot use the
+  // per-profile ProfileStorage abstraction.
 
   /// Find event by ID across all events apps
   ///

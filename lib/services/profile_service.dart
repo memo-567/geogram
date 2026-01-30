@@ -9,6 +9,7 @@ import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/collection_service.dart';
+import '../services/encrypted_storage_service.dart';
 import '../services/signing_service.dart';
 import '../services/app_args.dart';
 import '../util/event_bus.dart';
@@ -393,11 +394,22 @@ class ProfileService {
     if (!_profiles.any((p) => p.id == profileId && _hasUsableNsec(p))) {
       throw Exception('Profile not found: $profileId');
     }
+
+    // Close encrypted storage for old profile before switching
+    final oldProfile = _activeProfileId != null ? getProfile() : null;
+    if (oldProfile != null) {
+      await EncryptedStorageService().closeArchive(oldProfile.callsign);
+    }
+
     _activeProfileId = profileId;
     _saveAllProfiles();
 
     // Update CollectionService to use the new profile's storage path BEFORE notifying listeners
     final newProfile = getProfile();
+    // Set nsec for encrypted storage access (must be before setActiveCallsign)
+    if (newProfile.nsec.isNotEmpty) {
+      CollectionService().setNsec(newProfile.nsec);
+    }
     await CollectionService().setActiveCallsign(newProfile.callsign);
 
     // Ensure default collections exist for this profile
@@ -641,6 +653,10 @@ class ProfileService {
 
   Future<void> _applyActiveIdentityChanges(Profile profile) async {
     try {
+      // Set nsec for encrypted storage access (must be before setActiveCallsign)
+      if (profile.nsec.isNotEmpty) {
+        CollectionService().setNsec(profile.nsec);
+      }
       await CollectionService().setActiveCallsign(profile.callsign);
       await CollectionService().ensureDefaultCollections();
     } catch (e) {

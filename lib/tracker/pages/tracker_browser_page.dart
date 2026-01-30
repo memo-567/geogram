@@ -23,6 +23,8 @@ import '../../services/i18n_service.dart';
 import '../../services/config_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/log_service.dart';
+import '../../services/collection_service.dart';
+import '../../services/profile_storage.dart';
 
 /// Tab type for the tracker browser
 enum TrackerTab {
@@ -285,6 +287,18 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
         widget.ownerCallsign != null && widget.ownerCallsign!.isNotEmpty
             ? widget.ownerCallsign!
             : profileCallsign;
+
+    // Set up storage for the service (encrypted or filesystem)
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _service.setStorage(scopedStorage);
+    } else {
+      _service.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
 
     await _service.initializeCollection(
       widget.collectionPath,

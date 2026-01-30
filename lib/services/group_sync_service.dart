@@ -12,6 +12,7 @@ import '../services/devices_service.dart';
 import '../services/chat_service.dart';
 import '../services/collection_service.dart';
 import '../services/profile_service.dart';
+import '../services/profile_storage.dart';
 import '../util/group_utils.dart';
 import '../util/nostr_key_generator.dart';
 import 'log_service.dart';
@@ -43,6 +44,17 @@ class GroupSyncService {
     bool includeChatChannels = true,
   }) async {
     final groupsService = GroupsService();
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        groupsCollectionPath,
+      );
+      groupsService.setStorage(scopedStorage);
+    } else {
+      groupsService.setStorage(FilesystemProfileStorage(groupsCollectionPath));
+    }
     await groupsService.initializeCollection(groupsCollectionPath);
 
     if (includeDeviceFolders) {
@@ -147,6 +159,17 @@ class GroupSyncService {
   ) async {
     final chatService = ChatService();
     if (chatService.collectionPath != chatCollectionPath) {
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          chatCollectionPath,
+        );
+        chatService.setStorage(scopedStorage);
+      } else {
+        chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+      }
       await chatService.initializeCollection(chatCollectionPath);
     } else {
       await chatService.refreshChannels();
@@ -444,12 +467,34 @@ class GroupSyncService {
 
     final chatService = ChatService();
     if (chatService.collectionPath != chatCollectionPath) {
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          chatCollectionPath,
+        );
+        chatService.setStorage(scopedStorage);
+      } else {
+        chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+      }
       await chatService.initializeCollection(chatCollectionPath);
     }
 
     GroupsService? groupsService;
     if (groupsCollectionPath != null) {
       groupsService = GroupsService();
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          groupsCollectionPath,
+        );
+        groupsService.setStorage(scopedStorage);
+      } else {
+        groupsService.setStorage(FilesystemProfileStorage(groupsCollectionPath));
+      }
       await groupsService.initializeCollection(groupsCollectionPath);
     }
 

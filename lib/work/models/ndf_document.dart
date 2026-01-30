@@ -12,6 +12,7 @@ enum NdfDocumentType {
   presentation,
   form,
   todo,
+  voicememo,
 }
 
 /// Metadata for an NDF document (from ndf.json inside the archive)
@@ -145,6 +146,8 @@ class NdfDocument {
         return 'assignment';
       case NdfDocumentType.todo:
         return 'checklist';
+      case NdfDocumentType.voicememo:
+        return 'mic';
     }
   }
 }

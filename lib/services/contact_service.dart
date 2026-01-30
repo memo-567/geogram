@@ -8,6 +8,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import '../models/contact.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 
 /// Minimal contact info for fast loading
 class ContactSummary {
@@ -112,36 +113,47 @@ class ContactService {
   factory ContactService() => _instance;
   ContactService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
 
   /// Get the current collection path
   String? get collectionPath => _collectionPath;
 
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
+
+  /// Get the relative path from collection path
+  String _getRelativePath(String fullPath) {
+    if (_collectionPath == null) return fullPath;
+    if (fullPath.startsWith(_collectionPath!)) {
+      final rel = fullPath.substring(_collectionPath!.length);
+      return rel.startsWith('/') ? rel.substring(1) : rel;
+    }
+    return fullPath;
+  }
+
   /// Cache for contact summaries (loaded from fast.json)
   List<ContactSummary>? _summaryCache;
   DateTime? _summaryCacheTime;
-
-  /// Get fast.json path
-  String get _fastJsonPath => '$_collectionPath/fast.json';
 
   /// Initialize contact service for a collection
   Future<void> initializeCollection(String collectionPath) async {
     LogService().log('ContactService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure collection directory exists
-    final collectionDir = Directory(collectionPath);
-    if (!await collectionDir.exists()) {
-      await collectionDir.create(recursive: true);
-      LogService().log('ContactService: Created collection directory');
-    }
-
-    // Ensure media directory exists (for profile pictures)
-    final mediaDir = Directory('$collectionPath/media');
-    if (!await mediaDir.exists()) {
-      await mediaDir.create(recursive: true);
-      LogService().log('ContactService: Created media directory');
-    }
+    // Using ProfileStorage - directories are created implicitly
+    await _storage.createDirectory('');
+    await _storage.createDirectory('media');
+    LogService().log('ContactService: Initialized with storage abstraction');
   }
 
   /// Load all contacts (with optional group filter)
@@ -149,29 +161,22 @@ class ContactService {
     if (_collectionPath == null) return [];
 
     final contacts = <Contact>[];
-    final searchPath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/$groupPath'
-        : '$_collectionPath';
+    final relativePath = groupPath ?? '';
 
-    final searchDir = Directory(searchPath);
-    if (!await searchDir.exists()) return [];
-
-    final entities = await searchDir.list().toList();
-
-
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
+    // Use ProfileStorage abstraction
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
         // Skip group.txt and hidden files
-        final filename = entity.path.split('/').last;
-        if (filename == 'group.txt' || filename.startsWith('.')) continue;
+        if (entry.name == 'group.txt' || entry.name.startsWith('.')) continue;
 
         try {
-          final contact = await loadContactFromFile(entity.path);
+          final contact = await _loadContactFromStorage(entry.path);
           if (contact != null) {
             contacts.add(contact);
           }
         } catch (e) {
-          LogService().log('ContactService: Error loading contact ${entity.path}: $e');
+          LogService().log('ContactService: Error loading contact ${entry.path}: $e');
         }
       }
     }
@@ -182,15 +187,23 @@ class ContactService {
     return contacts;
   }
 
+  /// Load a contact from storage using relative path
+  Future<Contact?> _loadContactFromStorage(String relativePath) async {
+    final content = await _storage.readString(relativePath);
+    if (content == null) return null;
+
+    final fullPath = _storage.getAbsolutePath(relativePath);
+    return parseContactFile(content, fullPath);
+  }
+
   /// Load all contacts recursively (including subgroups)
   Future<List<Contact>> loadAllContactsRecursively() async {
     if (_collectionPath == null) return [];
 
     final contacts = <Contact>[];
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return [];
 
-    await _loadContactsRecursive(contactsDir, '', contacts);
+    // Use ProfileStorage abstraction with recursive listing
+    await _loadContactsRecursiveFromStorage('', contacts);
 
     // Sort by display name
     contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
@@ -198,35 +211,71 @@ class ContactService {
     return contacts;
   }
 
+  /// Load contacts recursively from storage
+  Future<void> _loadContactsRecursiveFromStorage(
+    String relativePath,
+    List<Contact> contacts,
+  ) async {
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        // Skip media directory and hidden directories
+        if (entry.name == 'media' || entry.name.startsWith('.')) continue;
+        await _loadContactsRecursiveFromStorage(entry.path, contacts);
+      } else if (entry.name.endsWith('.txt')) {
+        // Skip group.txt, fast.json and hidden files
+        if (entry.name == 'group.txt' || entry.name.startsWith('.')) continue;
+
+        try {
+          final contact = await _loadContactFromStorage(entry.path);
+          if (contact != null) {
+            contacts.add(contact);
+          }
+        } catch (e) {
+          LogService().log('ContactService: Error loading contact ${entry.path}: $e');
+        }
+      }
+    }
+  }
+
   /// Stream contacts incrementally, prioritizing popular contacts first.
   /// This provides a better UX by showing contacts as they load.
   Stream<Contact> loadAllContactsStream() async* {
     if (_collectionPath == null) return;
 
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return;
-
-    // First, load metrics to identify popular contacts
-    final metrics = await loadMetrics();
-
-    // Get all contact file paths first (fast directory scan)
+    // Use ProfileStorage - collect all paths then yield
     final allFilePaths = <String>[];
-    await _collectContactFilePaths(contactsDir, allFilePaths);
+    await _collectContactFilePathsFromStorage('', allFilePaths);
 
     if (allFilePaths.isEmpty) return;
 
-    // Sort file paths by popularity score (popular contacts first)
+    final metrics = await loadMetrics();
     final sortedPaths = _sortPathsByPopularity(allFilePaths, metrics);
 
-    // Yield contacts as we load them
     for (final filePath in sortedPaths) {
       try {
-        final contact = await loadContactFromFile(filePath);
+        final contact = await _loadContactFromStorage(filePath);
         if (contact != null) {
           yield contact;
         }
       } catch (e) {
         LogService().log('ContactService: Error loading contact $filePath: $e');
+      }
+    }
+  }
+
+  /// Collect contact file paths from storage recursively
+  Future<void> _collectContactFilePathsFromStorage(
+    String relativePath,
+    List<String> paths,
+  ) async {
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        if (entry.name == 'media' || entry.name.startsWith('.')) continue;
+        await _collectContactFilePathsFromStorage(entry.path, paths);
+      } else if (entry.name.endsWith('.txt') && entry.name != 'group.txt') {
+        paths.add(entry.path);
       }
     }
   }
@@ -244,15 +293,15 @@ class ContactService {
       return _summaryCache;
     }
 
-    final file = File(_fastJsonPath);
-    if (!await file.exists()) {
+    final content = await _storage.readString('fast.json');
+    if (content == null) {
       LogService().log('ContactService: fast.json not found, need to rebuild');
       return null;
     }
 
     try {
-      final content = _sanitizeUtf16(await file.readAsString());
-      final List<dynamic> jsonList = json.decode(content);
+      final sanitizedContent = _sanitizeUtf16(content);
+      final List<dynamic> jsonList = json.decode(sanitizedContent);
       final summaries = jsonList
           .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))
           .toList();
@@ -281,9 +330,8 @@ class ContactService {
     if (_collectionPath == null) return;
 
     try {
-      final file = File(_fastJsonPath);
       final jsonList = summaries.map((s) => s.toJson()).toList();
-      await file.writeAsString(json.encode(jsonList));
+      await _storage.writeString('fast.json', json.encode(jsonList));
       _summaryCache = summaries;
       _summaryCacheTime = DateTime.now();
       LogService().log('ContactService: Saved ${summaries.length} contact summaries to fast.json');
@@ -299,26 +347,23 @@ class ContactService {
 
     LogService().log('ContactService: Rebuilding fast.json...');
 
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return;
-
     // Load metrics for popularity scores
     final metrics = await loadMetrics();
 
-    // Collect all contact file paths
+    // Collect all contact file paths using storage
     final allFilePaths = <String>[];
-    await _collectContactFilePaths(contactsDir, allFilePaths);
+    await _collectContactFilePathsFromStorage('', allFilePaths);
 
     // Build summaries by quickly parsing just the header info from each file
     final summaries = <ContactSummary>[];
-    for (final filePath in allFilePaths) {
+    for (final relativePath in allFilePaths) {
       try {
-        final summary = await _parseContactSummary(filePath, metrics);
+        final summary = await _parseContactSummaryFromStorage(relativePath, metrics);
         if (summary != null) {
           summaries.add(summary);
         }
       } catch (e) {
-        LogService().log('ContactService: Error parsing summary for $filePath: $e');
+        LogService().log('ContactService: Error parsing summary for $relativePath: $e');
       }
     }
 
@@ -326,14 +371,14 @@ class ContactService {
     LogService().log('ContactService: Rebuilt fast.json with ${summaries.length} contacts');
   }
 
-  /// Parse just the essential fields from a contact file (very fast)
-  Future<ContactSummary?> _parseContactSummary(String filePath, ContactMetrics metrics) async {
-    final file = File(filePath);
-    if (!await file.exists()) return null;
+  /// Parse just the essential fields from a contact file using storage (very fast)
+  Future<ContactSummary?> _parseContactSummaryFromStorage(String relativePath, ContactMetrics metrics) async {
+    final content = await _storage.readString(relativePath);
+    if (content == null) return null;
 
     try {
-      final content = _sanitizeUtf16(await file.readAsString());
-      final lines = content.split('\n');
+      final sanitizedContent = _sanitizeUtf16(content);
+      final lines = sanitizedContent.split('\n');
 
       String? displayName;
       String? callsign;
@@ -375,19 +420,15 @@ class ContactService {
       // Determine secondary info (priority: phone > email > website > address > radio callsign)
       final secondaryInfo = firstPhone ?? firstEmail ?? firstWebsite ?? firstAddress ?? firstRadioCallsign;
 
-      // Determine group path from file path
+      // Determine group path from relative path
       String? groupPath;
-      final contactsMarker = '/contacts/';
-      final lastContactsIndex = filePath.lastIndexOf(contactsMarker);
-      if (lastContactsIndex != -1) {
-        final afterContacts = filePath.substring(lastContactsIndex + contactsMarker.length);
-        final parts = afterContacts.split('/');
-        if (parts.length > 1) {
-          parts.removeLast();
-          groupPath = parts.join('/');
-        }
+      final parts = relativePath.split('/');
+      if (parts.length > 1) {
+        parts.removeLast(); // Remove filename
+        groupPath = parts.join('/');
       }
 
+      final fullPath = _storage.getAbsolutePath(relativePath);
       final popularityScore = metrics.contacts[callsign]?.totalScore ?? 0;
 
       return ContactSummary(
@@ -395,12 +436,12 @@ class ContactService {
         displayName: displayName,
         profilePicture: profilePicture,
         groupPath: groupPath,
-        filePath: filePath,
+        filePath: fullPath,
         popularityScore: popularityScore,
         secondaryInfo: secondaryInfo,
       );
     } catch (e) {
-      LogService().log('ContactService: Error parsing summary $filePath: $e');
+      LogService().log('ContactService: Error parsing summary $relativePath: $e');
       return null;
     }
   }
@@ -554,22 +595,21 @@ class ContactService {
 
     int deletedCount = 0;
     final filesToDelete = [
-      _fastJsonPath,
-      '$_collectionPath/.contact_metrics.txt',
-      '$_collectionPath/.click_stats.txt',
-      '$_collectionPath/.favorites.json',
+      'fast.json',
+      '.contact_metrics.txt',
+      '.click_stats.txt',
+      '.favorites.json',
     ];
 
-    for (final path in filesToDelete) {
+    for (final relativePath in filesToDelete) {
       try {
-        final file = File(path);
-        if (await file.exists()) {
-          await file.delete();
+        if (await _storage.exists(relativePath)) {
+          await _storage.delete(relativePath);
           deletedCount++;
-          LogService().log('ContactService: Deleted cache file: $path');
+          LogService().log('ContactService: Deleted cache file: $relativePath');
         }
       } catch (e) {
-        LogService().log('ContactService: Error deleting $path: $e');
+        LogService().log('ContactService: Error deleting $relativePath: $e');
       }
     }
 
@@ -578,29 +618,6 @@ class ContactService {
 
     LogService().log('ContactService: Deleted $deletedCount cache files');
     return deletedCount;
-  }
-
-  /// Collect all contact file paths without loading contacts (fast scan)
-  Future<void> _collectContactFilePaths(Directory dir, List<String> paths, [bool isRoot = true]) async {
-    final entities = await dir.list().toList();
-
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
-        final filename = entity.path.split('/').last;
-        if (filename == 'group.txt' || filename.startsWith('.')) continue;
-        paths.add(entity.path);
-      } else if (entity is Directory) {
-        final dirname = entity.path.split('/').last;
-
-        // Skip hidden directories
-        if (dirname.startsWith('.')) continue;
-
-        // Skip system folders at root level only
-        if (isRoot && _ignoredRootFolders.contains(dirname.toLowerCase())) continue;
-
-        await _collectContactFilePaths(entity, paths, false);
-      }
-    }
   }
 
   /// Sort file paths by popularity score, with popular contacts first
@@ -628,54 +645,18 @@ class ContactService {
     return paths;
   }
 
-  /// Recursively load contacts from directory
-  Future<void> _loadContactsRecursive(
-    Directory dir,
-    String relativePath,
-    List<Contact> contacts,
-  ) async {
-    final entities = await dir.list().toList();
-    final isRootLevel = relativePath.isEmpty;
-
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
-        // Skip group.txt and hidden files
-        final filename = entity.path.split('/').last;
-        if (filename == 'group.txt' || filename.startsWith('.')) continue;
-
-        try {
-          final contact = await loadContactFromFile(entity.path);
-          if (contact != null) {
-            contacts.add(contact);
-          }
-        } catch (e) {
-          LogService().log('ContactService: Error loading contact ${entity.path}: $e');
-        }
-      } else if (entity is Directory) {
-        final dirname = entity.path.split('/').last;
-
-        // Skip hidden directories
-        if (dirname.startsWith('.')) continue;
-
-        // Skip system folders at root level only
-        if (isRootLevel && _ignoredRootFolders.contains(dirname.toLowerCase())) continue;
-
-        final newRelativePath = relativePath.isEmpty
-            ? dirname
-            : '$relativePath/$dirname';
-        await _loadContactsRecursive(entity, newRelativePath, contacts);
-      }
-    }
-  }
-
-  /// Load single contact from file path
+  /// Load single contact from file path (accepts both absolute and relative paths)
   Future<Contact?> loadContactFromFile(String filePath) async {
-    final file = File(filePath);
-    if (!await file.exists()) return null;
+    // Convert absolute path to relative if needed
+    final relativePath = _getRelativePath(filePath);
+
+    final content = await _storage.readString(relativePath);
+    if (content == null) return null;
 
     try {
-      final content = _sanitizeUtf16(await file.readAsString());
-      final contact = await parseContactFile(content, filePath);
+      final sanitizedContent = _sanitizeUtf16(content);
+      final fullPath = _storage.getAbsolutePath(relativePath);
+      final contact = await parseContactFile(sanitizedContent, fullPath);
       return contact;
     } catch (e) {
       LogService().log('ContactService: Error reading contact file $filePath: $e');
@@ -687,14 +668,13 @@ class ContactService {
   Future<Contact?> loadContact(String callsign, {String? groupPath}) async {
     if (_collectionPath == null) return null;
 
-    final searchPath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/$groupPath'
-        : '$_collectionPath';
+    final relativePath = groupPath != null && groupPath.isNotEmpty
+        ? '$groupPath/$callsign.txt'
+        : '$callsign.txt';
 
-    final file = File('$searchPath/$callsign.txt');
-    if (!await file.exists()) return null;
+    if (!await _storage.exists(relativePath)) return null;
 
-    return await loadContactFromFile(file.path);
+    return await _loadContactFromStorage(relativePath);
   }
 
   /// Parse contact file content
@@ -1156,28 +1136,25 @@ class ContactService {
       }
     }
 
-    final savePath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/$groupPath'
-        : '$_collectionPath';
-
-    // Ensure directory exists
-    final dir = Directory(savePath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-
-    final file = File('$savePath/${contact.callsign}.txt');
     final fileContent = formatContactFile(contact);
+    final relativePath = groupPath != null && groupPath.isNotEmpty
+        ? '$groupPath/${contact.callsign}.txt'
+        : '${contact.callsign}.txt';
 
     try {
-      await file.writeAsString(fileContent);
-      LogService().log('ContactService: Saved contact ${contact.callsign} to ${file.path}');
+      // Use ProfileStorage abstraction
+      if (groupPath != null && groupPath.isNotEmpty) {
+        await _storage.createDirectory(groupPath);
+      }
+      await _storage.writeString(relativePath, fileContent);
+      final newFilePath = _storage.getAbsolutePath(relativePath);
+      LogService().log('ContactService: Saved contact ${contact.callsign} to $newFilePath');
 
       // Delete old file if it exists at a different location (contact was moved)
-      if (contact.filePath != null && contact.filePath != file.path) {
-        final oldFile = File(contact.filePath!);
-        if (await oldFile.exists()) {
-          await oldFile.delete();
+      if (contact.filePath != null && contact.filePath != newFilePath) {
+        final oldRelativePath = _getRelativePath(contact.filePath!);
+        if (await _storage.exists(oldRelativePath)) {
+          await _storage.delete(oldRelativePath);
           LogService().log('ContactService: Deleted old file at ${contact.filePath}');
         }
       }
@@ -1256,7 +1233,7 @@ class ContactService {
 
       // Safety limit
       if (suffix > 999) {
-        candidate = '${base}${DateTime.now().millisecondsSinceEpoch % 10000}';
+        candidate = '$base${DateTime.now().millisecondsSinceEpoch % 10000}';
         break;
       }
     }
@@ -1270,15 +1247,15 @@ class ContactService {
   Future<bool> deleteContact(String callsign, {String? groupPath, bool skipFastJsonRebuild = false}) async {
     if (_collectionPath == null) return false;
 
-    final deletePath = groupPath != null && groupPath.isNotEmpty
-        ? '$_collectionPath/$groupPath'
-        : '$_collectionPath';
-
-    final file = File('$deletePath/$callsign.txt');
-    if (!await file.exists()) return false;
+    final relativePath = groupPath != null && groupPath.isNotEmpty
+        ? '$groupPath/$callsign.txt'
+        : '$callsign.txt';
 
     try {
-      await file.delete();
+      // Use ProfileStorage abstraction
+      if (!await _storage.exists(relativePath)) return false;
+      await _storage.delete(relativePath);
+
       LogService().log('ContactService: Deleted contact $callsign');
 
       // Also delete profile picture if exists
@@ -1302,38 +1279,34 @@ class ContactService {
     if (_collectionPath == null) return false;
 
     // Find the contact file
-    final contactFile = await _findContactFile(callsign);
-    if (contactFile == null) return false;
+    final oldRelativePath = await _findContactFileInStorage(callsign);
+    if (oldRelativePath == null) return false;
 
     // Load the contact
-    final contact = await loadContactFromFile(contactFile.path);
+    final contact = await _loadContactFromStorage(oldRelativePath);
     if (contact == null) return false;
 
-    // Determine new path
-    final newBasePath = newGroupPath != null && newGroupPath.isNotEmpty
-        ? '$_collectionPath/$newGroupPath'
-        : '$_collectionPath';
-
-    // Create new group directory if needed
-    final newDir = Directory(newBasePath);
-    if (!await newDir.exists()) {
-      await newDir.create(recursive: true);
-    }
-
-    final newFilePath = '$newBasePath/$callsign.txt';
+    // Determine new relative path
+    final newRelativePath = newGroupPath != null && newGroupPath.isNotEmpty
+        ? '$newGroupPath/$callsign.txt'
+        : '$callsign.txt';
 
     // If already in the target location, do nothing
-    if (contactFile.path == newFilePath) return true;
+    if (oldRelativePath == newRelativePath) return true;
 
     try {
-      // Move the file (try rename first, fall back to copy+delete for cross-filesystem moves)
-      try {
-        await contactFile.rename(newFilePath);
-      } catch (e) {
-        // Rename failed (possibly cross-filesystem), use copy+delete
-        await contactFile.copy(newFilePath);
-        await contactFile.delete();
+      // Create new group directory if needed
+      if (newGroupPath != null && newGroupPath.isNotEmpty) {
+        await _storage.createDirectory(newGroupPath);
       }
+
+      // Read content and write to new location
+      final content = await _storage.readString(oldRelativePath);
+      if (content == null) return false;
+
+      await _storage.writeString(newRelativePath, content);
+      await _storage.delete(oldRelativePath);
+
       LogService().log('ContactService: Moved contact $callsign to ${newGroupPath ?? 'root'}');
 
       // Invalidate and rebuild fast.json cache (await to ensure UI sees updated data)
@@ -1347,24 +1320,22 @@ class ContactService {
     }
   }
 
-  /// Find a contact file by callsign across all directories
-  Future<File?> _findContactFile(String callsign) async {
+  /// Find a contact file by callsign across all directories using storage
+  /// Returns the relative path if found, null otherwise
+  Future<String?> _findContactFileInStorage(String callsign) async {
     if (_collectionPath == null) return null;
 
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return null;
-
-    return await _findContactFileRecursive(contactsDir, callsign);
+    return await _findContactFileInStorageRecursive('', callsign);
   }
 
-  Future<File?> _findContactFileRecursive(Directory dir, String callsign) async {
-    final entities = await dir.list().toList();
+  Future<String?> _findContactFileInStorageRecursive(String relativePath, String callsign) async {
+    final entries = await _storage.listDirectory(relativePath);
 
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('/$callsign.txt')) {
-        return entity;
-      } else if (entity is Directory && !entity.path.split('/').last.startsWith('.')) {
-        final found = await _findContactFileRecursive(entity, callsign);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name == '$callsign.txt') {
+        return entry.path;
+      } else if (entry.isDirectory && !entry.name.startsWith('.')) {
+        final found = await _findContactFileInStorageRecursive(entry.path, callsign);
         if (found != null) return found;
       }
     }
@@ -1375,15 +1346,12 @@ class ContactService {
   Future<void> _deleteProfilePicture(String callsign) async {
     if (_collectionPath == null) return;
 
-    final mediaDir = Directory('$_collectionPath/media');
-    if (!await mediaDir.exists()) return;
-
     // Check for common image extensions
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
-      final file = File('${mediaDir.path}/$callsign.$ext');
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = 'media/$callsign.$ext';
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
         LogService().log('ContactService: Deleted profile picture for $callsign');
         break;
       }
@@ -1395,10 +1363,7 @@ class ContactService {
     if (_collectionPath == null) return [];
 
     final groups = <ContactGroup>[];
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return [];
-
-    await _loadGroupsRecursive(contactsDir, '', groups);
+    await _loadGroupsRecursiveFromStorage('', groups);
 
     return groups;
   }
@@ -1406,18 +1371,17 @@ class ContactService {
   /// System folders to ignore at root level (not contact groups)
   static const _ignoredRootFolders = {'media', 'extra', 'profile-pictures'};
 
-  /// Recursively load groups from directory
-  Future<void> _loadGroupsRecursive(
-    Directory dir,
+  /// Recursively load groups from storage
+  Future<void> _loadGroupsRecursiveFromStorage(
     String relativePath,
     List<ContactGroup> groups,
   ) async {
-    final entities = await dir.list().toList();
+    final entries = await _storage.listDirectory(relativePath);
     final isRootLevel = relativePath.isEmpty;
 
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final dirname = entity.path.split('/').last;
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final dirname = entry.name;
 
         // Skip hidden directories
         if (dirname.startsWith('.')) continue;
@@ -1429,25 +1393,24 @@ class ContactService {
 
         // Count contacts in this group (non-recursive)
         int contactCount = 0;
-        final entities = await entity.list().toList();
+        final groupEntries = await _storage.listDirectory(groupPath);
 
-        for (var file in entities) {
-          if (file is File && file.path.endsWith('.txt')) {
-            final filename = file.path.split('/').last;
-            if (filename != 'group.txt' && !filename.startsWith('.')) {
+        for (var file in groupEntries) {
+          if (!file.isDirectory && file.name.endsWith('.txt')) {
+            if (file.name != 'group.txt' && !file.name.startsWith('.')) {
               contactCount++;
             }
           }
         }
 
         // Load group metadata if exists
-        final groupFile = File('${entity.path}/group.txt');
+        final groupFilePath = '$groupPath/group.txt';
         String? description;
         String? created;
         String? author;
 
-        if (await groupFile.exists()) {
-          final metadata = await _parseGroupFile(groupFile.path);
+        if (await _storage.exists(groupFilePath)) {
+          final metadata = await _parseGroupFileFromStorage(groupFilePath);
           description = metadata['description'];
           created = metadata['created'];
           author = metadata['author'];
@@ -1463,17 +1426,16 @@ class ContactService {
         ));
 
         // Recurse into subdirectories
-        await _loadGroupsRecursive(entity, groupPath, groups);
+        await _loadGroupsRecursiveFromStorage(groupPath, groups);
       }
     }
   }
 
-  /// Parse group.txt file
-  Future<Map<String, String?>> _parseGroupFile(String filePath) async {
-    final file = File(filePath);
-    if (!await file.exists()) return {};
+  /// Parse group.txt file from storage
+  Future<Map<String, String?>> _parseGroupFileFromStorage(String relativePath) async {
+    final content = await _storage.readString(relativePath);
+    if (content == null) return {};
 
-    final content = await file.readAsString();
     final lines = content.split('\n');
 
     String? description;
@@ -1515,18 +1477,16 @@ class ContactService {
   }) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/$groupPath');
-    if (await dir.exists()) {
+    if (await _storage.exists(groupPath)) {
       LogService().log('ContactService: Group already exists: $groupPath');
       return false;
     }
 
     try {
-      await dir.create(recursive: true);
+      await _storage.createDirectory(groupPath);
 
       // Create group.txt if description or author provided
       if (description != null || author != null) {
-        final groupFile = File('${dir.path}/group.txt');
         final buffer = StringBuffer();
 
         buffer.writeln('# GROUP: ${groupPath.split('/').last}');
@@ -1551,7 +1511,7 @@ class ContactService {
           buffer.writeln();
         }
 
-        await groupFile.writeAsString(buffer.toString());
+        await _storage.writeString('$groupPath/group.txt', buffer.toString());
       }
 
       LogService().log('ContactService: Created group $groupPath');
@@ -1566,32 +1526,26 @@ class ContactService {
   Future<bool> deleteGroup(String groupPath) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/$groupPath');
-    if (!await dir.exists()) return false;
+    if (!await _storage.exists(groupPath)) return false;
 
-    // Check if group has any contacts
-    int contactCount = 0;
-    final entities = await dir.list().toList();
+    // Check if group has any contacts or subdirectories
+    final entries = await _storage.listDirectory(groupPath);
 
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
-        final filename = entity.path.split('/').last;
-        if (filename != 'group.txt' && !filename.startsWith('.')) {
-          contactCount++;
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
+        if (entry.name != 'group.txt' && !entry.name.startsWith('.')) {
+          // Has contacts
+          LogService().log('ContactService: Cannot delete non-empty group $groupPath');
+          return false;
         }
-      } else if (entity is Directory && !entity.path.split('/').last.startsWith('.')) {
+      } else if (entry.isDirectory && !entry.name.startsWith('.')) {
         // Has subdirectories
         return false;
       }
     }
 
-    if (contactCount > 0) {
-      LogService().log('ContactService: Cannot delete non-empty group $groupPath');
-      return false;
-    }
-
     try {
-      await dir.delete(recursive: true);
+      await _storage.deleteDirectory(groupPath, recursive: true);
       LogService().log('ContactService: Deleted group $groupPath');
       return true;
     } catch (e) {
@@ -1604,15 +1558,14 @@ class ContactService {
   Future<bool> deleteGroupWithContacts(String groupPath) async {
     if (_collectionPath == null) return false;
 
-    final dir = Directory('$_collectionPath/$groupPath');
-    if (!await dir.exists()) return false;
+    if (!await _storage.exists(groupPath)) return false;
 
     try {
       // First, delete profile pictures for all contacts in this group
-      await _deleteGroupContactMedia(dir);
+      await _deleteGroupContactMediaFromStorage(groupPath);
 
       // Then delete the entire group directory
-      await dir.delete(recursive: true);
+      await _storage.deleteDirectory(groupPath, recursive: true);
       LogService().log('ContactService: Deleted group with contacts: $groupPath');
       return true;
     } catch (e) {
@@ -1621,34 +1574,33 @@ class ContactService {
     }
   }
 
-  /// Helper to delete profile pictures for contacts in a directory
-  Future<void> _deleteGroupContactMedia(Directory dir) async {
-    final entities = await dir.list().toList();
+  /// Helper to delete profile pictures for contacts in a directory using storage
+  Future<void> _deleteGroupContactMediaFromStorage(String relativePath) async {
+    final entries = await _storage.listDirectory(relativePath);
 
-    for (var entity in entities) {
-      if (entity is File && entity.path.endsWith('.txt')) {
-        final filename = entity.path.split('/').last;
-        if (filename != 'group.txt' && !filename.startsWith('.')) {
+    for (var entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.txt')) {
+        if (entry.name != 'group.txt' && !entry.name.startsWith('.')) {
           // Extract callsign and delete profile picture
-          final callsign = filename.replaceAll('.txt', '');
+          final callsign = entry.name.replaceAll('.txt', '');
           await _deleteContactMedia(callsign);
         }
-      } else if (entity is Directory && !entity.path.split('/').last.startsWith('.')) {
+      } else if (entry.isDirectory && !entry.name.startsWith('.')) {
         // Recurse into subdirectories
-        await _deleteGroupContactMedia(entity);
+        await _deleteGroupContactMediaFromStorage(entry.path);
       }
     }
   }
 
-  /// Helper to delete media files for a contact
+  /// Helper to delete media files for a contact using storage
   Future<void> _deleteContactMedia(String callsign) async {
     if (_collectionPath == null) return;
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
-      final file = File('$_collectionPath/media/$callsign.$ext');
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = 'media/$callsign.$ext';
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
         LogService().log('ContactService: Deleted media for $callsign');
       }
     }
@@ -1658,25 +1610,24 @@ class ContactService {
   Future<bool> deleteAllContactsAndGroups() async {
     if (_collectionPath == null) return false;
 
-    final contactsDir = Directory('$_collectionPath');
-    if (!await contactsDir.exists()) return false;
-
     try {
       // Delete all profile pictures in media folder
-      final mediaDir = Directory('$_collectionPath/media');
-      if (await mediaDir.exists()) {
-        await mediaDir.delete(recursive: true);
-        await mediaDir.create(recursive: true);
+      if (await _storage.exists('media')) {
+        await _storage.deleteDirectory('media', recursive: true);
+        await _storage.createDirectory('media');
         LogService().log('ContactService: Cleared media folder');
       }
 
-      // Delete all contacts and groups but keep the contacts folder
-      final entities = await contactsDir.list().toList();
-      for (var entity in entities) {
-        final name = entity.path.split('/').last;
+      // Delete all contacts and groups but keep hidden files
+      final entries = await _storage.listDirectory('');
+      for (var entry in entries) {
         // Keep hidden files/folders like .contact_metrics.txt
-        if (!name.startsWith('.')) {
-          await entity.delete(recursive: true);
+        if (!entry.name.startsWith('.')) {
+          if (entry.isDirectory) {
+            await _storage.deleteDirectory(entry.path, recursive: true);
+          } else {
+            await _storage.delete(entry.path);
+          }
         }
       }
 
@@ -1700,9 +1651,13 @@ class ContactService {
     return groups.length;
   }
 
-  /// Get profile picture file for a contact
+  /// Get profile picture file for a contact (synchronous)
+  /// Returns File if profile picture exists, null otherwise.
+  /// NOTE: Only works for filesystem storage (not encrypted).
   File? getProfilePictureFile(String callsign) {
     if (_collectionPath == null) return null;
+    // Encrypted storage doesn't support direct file access
+    if (_storage.isEncrypted) return null;
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
@@ -1714,27 +1669,41 @@ class ContactService {
     return null;
   }
 
-  /// Get profile picture path for a contact (cross-platform safe)
+  /// Get profile picture path for a contact (synchronous, cross-platform safe)
+  /// Returns path if profile picture exists, null otherwise.
+  /// NOTE: Only works for filesystem storage (not encrypted).
   String? getProfilePicturePath(String callsign) {
     final file = getProfilePictureFile(callsign);
     return file?.path;
+  }
+
+  /// Get profile picture path for a contact (async version)
+  /// Works with both filesystem and encrypted storage.
+  Future<String?> getProfilePicturePathAsync(String callsign) async {
+    if (_collectionPath == null) return null;
+
+    final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    for (var ext in extensions) {
+      final relativePath = 'media/$callsign.$ext';
+      if (await _storage.exists(relativePath)) {
+        return _storage.getAbsolutePath(relativePath);
+      }
+    }
+    return null;
   }
 
   /// Save profile picture for a contact
   Future<String?> saveProfilePicture(String callsign, File sourceFile) async {
     if (_collectionPath == null) return null;
 
-    final mediaDir = Directory('$_collectionPath/media');
-    if (!await mediaDir.exists()) {
-      await mediaDir.create(recursive: true);
-    }
+    await _storage.createDirectory('media');
 
     // Get file extension
     final extension = sourceFile.path.split('.').last.toLowerCase();
-    final targetFile = File('${mediaDir.path}/$callsign.$extension');
+    final relativePath = 'media/$callsign.$extension';
 
     try {
-      await sourceFile.copy(targetFile.path);
+      await _storage.copyFromExternal(sourceFile.path, relativePath);
       LogService().log('ContactService: Saved profile picture for $callsign');
       return '$callsign.$extension'; // Return filename for PROFILE_PICTURE field
     } catch (e) {
@@ -1747,15 +1716,11 @@ class ContactService {
   Future<String?> saveProfilePictureFromBytes(String callsign, Uint8List bytes, String extension) async {
     if (_collectionPath == null) return null;
 
-    final mediaDir = Directory('$_collectionPath/media');
-    if (!await mediaDir.exists()) {
-      await mediaDir.create(recursive: true);
-    }
-
-    final targetFile = File('${mediaDir.path}/$callsign.$extension');
+    await _storage.createDirectory('media');
+    final relativePath = 'media/$callsign.$extension';
 
     try {
-      await targetFile.writeAsBytes(bytes);
+      await _storage.writeBytes(relativePath, bytes);
       LogService().log('ContactService: Saved profile picture for $callsign from bytes');
       return '$callsign.$extension'; // Return filename for PROFILE_PICTURE field
     } catch (e) {
@@ -1766,20 +1731,16 @@ class ContactService {
 
   // ============ Click Tracking ============
 
-  /// Get click stats file path
-  String get _clickStatsPath => '$_collectionPath/.click_stats.txt';
-
   /// Load click statistics
   Future<Map<String, int>> loadClickStats() async {
     if (_collectionPath == null) return {};
 
-    final file = File(_clickStatsPath);
-    if (!await file.exists()) return {};
+    final content = await _storage.readString('.click_stats.txt');
+    if (content == null) return {};
 
     final stats = <String, int>{};
 
     try {
-      final content = await file.readAsString();
       final lines = content.split('\n');
 
       for (var line in lines) {
@@ -1835,8 +1796,7 @@ class ContactService {
     }
 
     try {
-      final file = File(_clickStatsPath);
-      await file.writeAsString(buffer.toString());
+      await _storage.writeString('.click_stats.txt', buffer.toString());
     } catch (e) {
       LogService().log('ContactService: Error saving click stats: $e');
     }
@@ -1867,9 +1827,6 @@ class ContactService {
 
   // ============ Favorites Cache ============
 
-  /// Get favorites cache file path
-  String get _favoritesPath => '$_collectionPath/.favorites.json';
-
   /// In-memory favorites cache
   List<ContactSummary>? _favoritesCache;
 
@@ -1882,14 +1839,14 @@ class ContactService {
       return _favoritesCache!;
     }
 
-    final file = File(_favoritesPath);
-    if (!await file.exists()) {
+    final content = await _storage.readString('.favorites.json');
+    if (content == null) {
       return [];
     }
 
     try {
-      final content = _sanitizeUtf16(await file.readAsString());
-      final List<dynamic> jsonList = json.decode(content);
+      final sanitizedContent = _sanitizeUtf16(content);
+      final List<dynamic> jsonList = json.decode(sanitizedContent);
       _favoritesCache = jsonList
           .map((item) => ContactSummary.fromJson(item as Map<String, dynamic>))
           .toList();
@@ -1970,9 +1927,8 @@ class ContactService {
     if (_collectionPath == null) return;
 
     try {
-      final file = File(_favoritesPath);
       final jsonList = favorites.map((s) => s.toJson()).toList();
-      await file.writeAsString(json.encode(jsonList));
+      await _storage.writeString('.favorites.json', json.encode(jsonList));
       LogService().log('ContactService: Saved ${favorites.length} favorites to cache');
     } catch (e) {
       LogService().log('ContactService: Error saving favorites: $e');
@@ -1985,9 +1941,6 @@ class ContactService {
   }
 
   // ============ Contact Metrics ============
-
-  /// Get metrics file path
-  String get _metricsPath => '$_collectionPath/.contact_metrics.txt';
 
   /// Model for contact metrics
   ContactMetrics? _metricsCache;
@@ -2006,15 +1959,14 @@ class ContactService {
       return _metricsCache!;
     }
 
-    final file = File(_metricsPath);
-    if (!await file.exists()) {
+    final content = await _storage.readString('.contact_metrics.txt');
+    if (content == null) {
       _metricsCache = ContactMetrics();
       _metricsCacheTime = now;
       return _metricsCache!;
     }
 
     try {
-      final content = await file.readAsString();
       final metrics = ContactMetrics.parse(content);
       _metricsCache = metrics;
       _metricsCacheTime = now;
@@ -2035,8 +1987,7 @@ class ContactService {
     _metricsCacheTime = DateTime.now();
 
     try {
-      final file = File(_metricsPath);
-      await file.writeAsString(metrics.serialize());
+      await _storage.writeString('.contact_metrics.txt', metrics.serialize());
 
       // Rebuild favorites cache in background (don't await)
       invalidateFavoritesCache();
@@ -2140,30 +2091,56 @@ class ContactService {
   // ============ Folder Management ============
 
   /// Rename a group/folder
+  /// Note: ProfileStorage doesn't support rename, so this copies all files and deletes old folder
   Future<bool> renameGroup(String oldPath, String newName) async {
     if (_collectionPath == null) return false;
 
-    final oldDir = Directory('$_collectionPath/$oldPath');
-    if (!await oldDir.exists()) return false;
+    if (!await _storage.exists(oldPath)) return false;
 
     // Build new path (same parent, new name)
     final pathParts = oldPath.split('/');
     pathParts[pathParts.length - 1] = newName;
     final newPath = pathParts.join('/');
 
-    final newDir = Directory('$_collectionPath/$newPath');
-    if (await newDir.exists()) {
+    if (await _storage.exists(newPath)) {
       LogService().log('ContactService: Cannot rename - destination already exists: $newPath');
       return false;
     }
 
     try {
-      await oldDir.rename(newDir.path);
+      // Copy all files from old to new location
+      await _copyDirectoryContents(oldPath, newPath);
+
+      // Delete old folder
+      await _storage.deleteDirectory(oldPath, recursive: true);
+
       LogService().log('ContactService: Renamed group $oldPath to $newPath');
       return true;
     } catch (e) {
       LogService().log('ContactService: Error renaming group: $e');
       return false;
+    }
+  }
+
+  /// Helper to copy directory contents recursively
+  Future<void> _copyDirectoryContents(String sourcePath, String destPath) async {
+    await _storage.createDirectory(destPath);
+
+    final entries = await _storage.listDirectory(sourcePath);
+    for (final entry in entries) {
+      final sourceEntryPath = entry.path;
+      final destEntryPath = destPath.isEmpty
+          ? entry.name
+          : '$destPath/${entry.name}';
+
+      if (entry.isDirectory) {
+        await _copyDirectoryContents(sourceEntryPath, destEntryPath);
+      } else {
+        final content = await _storage.readBytes(sourceEntryPath);
+        if (content != null) {
+          await _storage.writeBytes(destEntryPath, content);
+        }
+      }
     }
   }
 

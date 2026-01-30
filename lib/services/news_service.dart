@@ -3,11 +3,11 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import '../models/news_article.dart';
 import '../models/blog_comment.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 
 /// Model for chat security (reused for news)
 class ChatSecurity {
@@ -62,27 +62,37 @@ class NewsService {
   factory NewsService() => _instance;
   NewsService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   ChatSecurity _security = ChatSecurity();
 
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
+
   /// Initialize news service for a collection
   Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    print('NewsService: Initializing with collection path: $collectionPath');
+    LogService().log('NewsService: Initializing with collection path: $collectionPath');
     _collectionPath = collectionPath;
 
-    // Ensure news directory exists
-    final newsDir = Directory('$collectionPath/news');
-    if (!await newsDir.exists()) {
-      await newsDir.create(recursive: true);
-      print('NewsService: Created news directory');
-    }
+    // Ensure news directory exists using storage
+    await _storage.createDirectory('news');
+    LogService().log('NewsService: Created news directory');
 
     // Load security
     await _loadSecurity();
 
     // If no admin set and creator provided, set as admin
     if (_security.adminNpub == null && creatorNpub != null && creatorNpub.isNotEmpty) {
-      print('NewsService: Setting creator as admin: $creatorNpub');
+      LogService().log('NewsService: Setting creator as admin: $creatorNpub');
       final newSecurity = ChatSecurity(adminNpub: creatorNpub);
       await saveSecurity(newSecurity);
     }
@@ -92,15 +102,14 @@ class NewsService {
   Future<void> _loadSecurity() async {
     if (_collectionPath == null) return;
 
-    final securityFile = File('$_collectionPath/extra/security.json');
-    if (await securityFile.exists()) {
+    final content = await _storage.readString('extra/security.json');
+    if (content != null) {
       try {
-        final content = await securityFile.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
         _security = ChatSecurity.fromJson(json);
-        print('NewsService: Loaded security settings');
+        LogService().log('NewsService: Loaded security settings');
       } catch (e) {
-        print('NewsService: Error loading security: $e');
+        LogService().log('NewsService: Error loading security: $e');
         _security = ChatSecurity();
       }
     } else {
@@ -114,34 +123,24 @@ class NewsService {
 
     _security = security;
 
-    final extraDir = Directory('$_collectionPath/extra');
-    if (!await extraDir.exists()) {
-      await extraDir.create(recursive: true);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/security.json', jsonEncode(security.toJson()));
 
-    final securityFile = File('$_collectionPath/extra/security.json');
-    await securityFile.writeAsString(
-      jsonEncode(security.toJson()),
-      flush: true,
-    );
-
-    print('NewsService: Saved security settings');
+    LogService().log('NewsService: Saved security settings');
   }
 
   /// Get available years (folders in news directory)
   Future<List<int>> getYears() async {
     if (_collectionPath == null) return [];
 
-    final newsDir = Directory('$_collectionPath/news');
-    if (!await newsDir.exists()) return [];
+    if (!await _storage.exists('news')) return [];
 
     final years = <int>[];
-    final entities = await newsDir.list().toList();
+    final entries = await _storage.listDirectory('news');
 
-    for (var entity in entities) {
-      if (entity is Directory) {
-        final name = entity.path.split('/').last;
-        final year = int.tryParse(name);
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final year = int.tryParse(entry.name);
         if (year != null) {
           years.add(year);
         }
@@ -164,19 +163,19 @@ class NewsService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearDir = Directory('$_collectionPath/news/$y');
-      if (!await yearDir.exists()) continue;
+      final yearPath = 'news/$y';
+      if (!await _storage.exists(yearPath)) continue;
 
-      final entities = await yearDir.list().toList();
+      final entries = await _storage.listDirectory(yearPath);
 
-
-      for (var entity in entities) {
-        if (entity is File && entity.path.endsWith('.md')) {
+      for (var entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.md')) {
           try {
-            final fileName = entity.path.split('/').last;
-            final articleId = fileName.substring(0, fileName.length - 3); // Remove .md
+            final articleId = entry.name.substring(0, entry.name.length - 3); // Remove .md
 
-            final content = await entity.readAsString();
+            final content = await _storage.readString(entry.path);
+            if (content == null) continue;
+
             final article = NewsArticle.fromText(content, articleId);
 
             // Filter by expiry status
@@ -186,7 +185,7 @@ class NewsService {
 
             articles.add(article);
           } catch (e) {
-            print('NewsService: Error loading article ${entity.path}: $e');
+            LogService().log('NewsService: Error loading article ${entry.path}: $e');
           }
         }
       }
@@ -204,18 +203,18 @@ class NewsService {
 
     // Extract year from articleId (format: YYYY-MM-DD_title)
     final year = articleId.substring(0, 4);
-    final articleFile = File('$_collectionPath/news/$year/$articleId.md');
+    final articlePath = 'news/$year/$articleId.md';
 
-    if (!await articleFile.exists()) {
-      print('NewsService: Article file not found: ${articleFile.path}');
+    final content = await _storage.readString(articlePath);
+    if (content == null) {
+      LogService().log('NewsService: Article file not found: $articlePath');
       return null;
     }
 
     try {
-      final content = await articleFile.readAsString();
       return NewsArticle.fromText(content, articleId);
     } catch (e) {
-      print('NewsService: Error loading full article: $e');
+      LogService().log('NewsService: Error loading full article: $e');
       return null;
     }
   }
@@ -257,7 +256,7 @@ class NewsService {
     String filename = baseFilename;
     int suffix = 1;
 
-    while (await File('$_collectionPath/news/$year/$filename.md').exists()) {
+    while (await _storage.exists('news/$year/$filename.md')) {
       filename = '$baseFilename-$suffix';
       suffix++;
     }
@@ -335,11 +334,8 @@ class NewsService {
       final baseFilename = sanitizeFilename(firstHeadline, now);
       final filename = await _ensureUniqueFilename(baseFilename, year);
 
-      // Ensure year directory exists
-      final yearDir = Directory('$_collectionPath/news/$year');
-      if (!await yearDir.exists()) {
-        await yearDir.create(recursive: true);
-      }
+      // Ensure year directory exists using storage
+      await _storage.createDirectory('news/$year');
 
       // Create news article
       final article = NewsArticle(
@@ -362,14 +358,13 @@ class NewsService {
         },
       );
 
-      // Write to file
-      final articleFile = File('$_collectionPath/news/$year/$filename.md');
-      await articleFile.writeAsString(article.exportAsText(), flush: true);
+      // Write to file using storage
+      await _storage.writeString('news/$year/$filename.md', article.exportAsText());
 
-      print('NewsService: Created article: $filename');
+      LogService().log('NewsService: Created article: $filename');
       return article;
     } catch (e) {
-      print('NewsService: Error creating article: $e');
+      LogService().log('NewsService: Error creating article: $e');
       return null;
     }
   }
@@ -428,10 +423,9 @@ class NewsService {
         metadata: metadata ?? article.metadata,
       );
 
-      // Write to file
+      // Write to file using storage
       final year = article.year;
-      final articleFile = File('$_collectionPath/news/$year/$articleId.md');
-      await articleFile.writeAsString(updatedArticle.exportAsText(), flush: true);
+      await _storage.writeString('news/$year/$articleId.md', updatedArticle.exportAsText());
 
       print('NewsService: Updated article: $articleId');
       return true;
@@ -457,10 +451,10 @@ class NewsService {
 
     try {
       final year = article.year;
-      final articleFile = File('$_collectionPath/news/$year/$articleId.md');
+      final articlePath = 'news/$year/$articleId.md';
 
-      if (await articleFile.exists()) {
-        await articleFile.delete();
+      if (await _storage.exists(articlePath)) {
+        await _storage.delete(articlePath);
         print('NewsService: Deleted article: $articleId');
         return true;
       }
@@ -494,10 +488,9 @@ class NewsService {
       // Update article with new likes
       final updatedArticle = article.copyWith(likes: likes);
 
-      // Write to file
+      // Write to file using storage
       final year = article.year;
-      final articleFile = File('$_collectionPath/news/$year/$articleId.md');
-      await articleFile.writeAsString(updatedArticle.exportAsText(), flush: true);
+      await _storage.writeString('news/$year/$articleId.md', updatedArticle.exportAsText());
 
       print('NewsService: Toggled like for $callsign on article $articleId');
       return true;
@@ -542,10 +535,9 @@ class NewsService {
       // Update article
       final updatedArticle = article.copyWith(comments: comments);
 
-      // Write to file
+      // Write to file using storage
       final year = article.year;
-      final articleFile = File('$_collectionPath/news/$year/$articleId.md');
-      await articleFile.writeAsString(updatedArticle.exportAsText(), flush: true);
+      await _storage.writeString('news/$year/$articleId.md', updatedArticle.exportAsText());
 
       print('NewsService: Added comment to article $articleId');
       return true;
@@ -588,10 +580,9 @@ class NewsService {
       // Update article
       final updatedArticle = article.copyWith(comments: comments);
 
-      // Write to file
+      // Write to file using storage
       final year = article.year;
-      final articleFile = File('$_collectionPath/news/$year/$articleId.md');
-      await articleFile.writeAsString(updatedArticle.exportAsText(), flush: true);
+      await _storage.writeString('news/$year/$articleId.md', updatedArticle.exportAsText());
 
       print('NewsService: Deleted comment from article $articleId');
       return true;

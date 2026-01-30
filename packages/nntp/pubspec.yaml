@@ -1,0 +1,16 @@
+name: nntp
+description: >
+  A pure Dart implementation of the NNTP (Network News Transfer Protocol)
+  client following RFC 3977. Provides full support for reading and posting
+  to Usenet newsgroups.
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  meta: ^1.9.0
+
+dev_dependencies:
+  test: ^1.24.0
+  lints: ^3.0.0

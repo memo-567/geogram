@@ -15,6 +15,7 @@ import '../util/feedback_comment_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing local video operations
 ///
@@ -24,14 +25,32 @@ import 'log_service.dart';
 /// - Updating video metadata
 /// - Deleting videos
 /// - Managing feedback (likes, comments)
+///
+/// NOTE: Video operations currently require filesystem access due to:
+/// - FFmpeg metadata extraction
+/// - External utility classes (VideoFolderUtils, FeedbackFolderUtils)
+/// Encrypted storage mode is not yet fully supported.
 class VideoService {
   static final VideoService _instance = VideoService._internal();
   factory VideoService() => _instance;
   VideoService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   String? _callsign;
   String? _creatorNpub;
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize video service for a collection
   ///
@@ -44,20 +63,15 @@ class VideoService {
     _callsign = callsign;
     _creatorNpub = creatorNpub;
 
-    // Ensure videos directory exists
-    final videosDir = Directory(collectionPath);
-    if (!await videosDir.exists()) {
-      await videosDir.create(recursive: true);
-      LogService().log('VideoService: Created videos directory');
-    }
+    // Ensure videos directory exists using storage
+    // Note: For actual video operations, we need filesystem access
+    await _storage.createDirectory('');
+    LogService().log('VideoService: Created videos directory');
 
     // Create callsign subdirectory if provided
     if (callsign != null && callsign.isNotEmpty) {
-      final callsignDir = Directory('$collectionPath/$callsign');
-      if (!await callsignDir.exists()) {
-        await callsignDir.create(recursive: true);
-        LogService().log('VideoService: Created callsign directory');
-      }
+      await _storage.createDirectory(callsign);
+      LogService().log('VideoService: Created callsign directory');
     }
   }
 

@@ -16,7 +16,9 @@ import '../util/tlsh.dart';
 import '../util/web_navigation.dart';
 import 'config_service.dart';
 import 'chat_service.dart';
+import 'encrypted_storage_service.dart';
 import 'profile_service.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
 import 'web_theme_service.dart';
 import 'blog_service.dart' hide ChatSecurity;
@@ -32,7 +34,11 @@ class CollectionService {
   Directory? _devicesDir;
   Directory? _collectionsDir;
   String? _currentCallsign;
+  String? _currentNsec;
+  bool _useEncryptedStorage = false;
   final ConfigService _configService = ConfigService();
+  final EncryptedStorageService _encryptedStorageService = EncryptedStorageService();
+  ProfileStorage? _profileStorage;
 
   /// In-memory collection store for web platform
   final Map<String, Collection> _webCollections = {};
@@ -67,6 +73,28 @@ class CollectionService {
 
   /// Get the current active callsign
   String? get currentCallsign => _currentCallsign;
+
+  /// Whether the current profile uses encrypted storage
+  bool get useEncryptedStorage => _useEncryptedStorage;
+
+  /// Get the profile storage instance for the current profile
+  /// This can be passed to other services that need file access
+  ProfileStorage? get profileStorage => _profileStorage;
+
+  /// Set the nsec for encrypted storage access
+  /// Must be called before accessing encrypted profiles
+  void setNsec(String nsec) {
+    _currentNsec = nsec;
+    // Recreate storage if we have a callsign and are using encrypted storage
+    if (_currentCallsign != null && _useEncryptedStorage && _collectionsDir != null) {
+      _profileStorage = EncryptedProfileStorage(
+        callsign: _currentCallsign!,
+        nsec: nsec,
+        basePath: _collectionsDir!.path,
+        encryptedService: _encryptedStorageService,
+      );
+    }
+  }
 
   /// Initialize the collection service (basic setup)
   ///
@@ -135,12 +163,33 @@ class CollectionService {
 
     _collectionsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
 
-    if (!await _collectionsDir!.exists()) {
-      await _collectionsDir!.create(recursive: true);
-    }
+    // Check if this profile uses encrypted storage
+    _useEncryptedStorage = _encryptedStorageService.isEncryptedStorageEnabled(sanitizedCallsign);
 
-    stderr.writeln('CollectionService active callsign: $sanitizedCallsign');
-    stderr.writeln('Collections directory: ${_collectionsDir!.path}');
+    if (_useEncryptedStorage) {
+      // Don't create folder - data is in encrypted archive
+      stderr.writeln('CollectionService active callsign: $sanitizedCallsign (encrypted storage)');
+      stderr.writeln('Collections directory: ${_collectionsDir!.path} (virtual - data in encrypted archive)');
+
+      // Create encrypted storage if we have nsec
+      if (_currentNsec != null) {
+        _profileStorage = EncryptedProfileStorage(
+          callsign: sanitizedCallsign,
+          nsec: _currentNsec!,
+          basePath: _collectionsDir!.path,
+          encryptedService: _encryptedStorageService,
+        );
+      }
+    } else {
+      if (!await _collectionsDir!.exists()) {
+        await _collectionsDir!.create(recursive: true);
+      }
+      stderr.writeln('CollectionService active callsign: $sanitizedCallsign');
+      stderr.writeln('Collections directory: ${_collectionsDir!.path}');
+
+      // Create filesystem storage
+      _profileStorage = FilesystemProfileStorage(_collectionsDir!.path);
+    }
 
     // Notify listeners that callsign changed
     callsignNotifier.value++;
@@ -168,6 +217,12 @@ class CollectionService {
   Future<void> ensureDefaultCollections() async {
     if (_currentCallsign == null) {
       stderr.writeln('ensureDefaultCollections: No active callsign set');
+      return;
+    }
+
+    // Skip if using encrypted storage - collections are already in the archive
+    if (_useEncryptedStorage) {
+      stderr.writeln('ensureDefaultCollections: Skipping - using encrypted storage');
       return;
     }
 
@@ -584,6 +639,16 @@ class CollectionService {
       // Get chat rooms
       final chatService = ChatService();
       if (chatService.collectionPath == null) {
+        // Set profile storage for encrypted storage support
+        if (_profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            _profileStorage!,
+            chatCollectionPath,
+          );
+          chatService.setStorage(scopedStorage);
+        } else {
+          chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+        }
         await chatService.initializeCollection(chatCollectionPath, creatorNpub: ProfileService().getProfile().npub);
       }
 
@@ -764,7 +829,13 @@ class CollectionService {
       throw Exception('CollectionService not initialized. Call init() first.');
     }
 
-    // Load from default collections directory
+    // Use encrypted storage if enabled
+    if (_useEncryptedStorage && _profileStorage != null) {
+      yield* _loadEncryptedCollectionsStream();
+      return;
+    }
+
+    // Load from default collections directory (filesystem)
     if (await _collectionsDir!.exists()) {
       await for (final entity in _collectionsDir!.list()) {
         if (entity is Directory) {
@@ -781,6 +852,193 @@ class CollectionService {
     }
 
     // TODO: Load from custom locations stored in config
+  }
+
+  /// Load collections from encrypted storage
+  Stream<Collection> _loadEncryptedCollectionsStream() async* {
+    if (_profileStorage == null) return;
+
+    try {
+      // List top-level directories (collections)
+      final entries = await _profileStorage!.listDirectory('');
+
+      for (final entry in entries) {
+        if (entry.isDirectory) {
+          try {
+            final collection = await _loadCollectionFromStorage(entry.name);
+            if (collection != null) {
+              yield collection;
+            }
+          } catch (e) {
+            stderr.writeln('Error loading encrypted collection ${entry.name}: $e');
+          }
+        }
+      }
+    } catch (e) {
+      stderr.writeln('Error listing encrypted collections: $e');
+    }
+  }
+
+  /// Load a collection from ProfileStorage (encrypted or filesystem)
+  Future<Collection?> _loadCollectionFromStorage(String folderName) async {
+    if (_profileStorage == null) return null;
+
+    final collectionJsPath = '$folderName/collection.js';
+
+    // Check if collection.js exists
+    if (!await _profileStorage!.exists(collectionJsPath)) {
+      // Check if this is a chat folder created by CLI
+      final channelsExists = await _profileStorage!.exists('$folderName/extra/channels.json');
+      final mainExists = await _profileStorage!.directoryExists('$folderName/main');
+
+      if (channelsExists || mainExists) {
+        stderr.writeln('Auto-creating collection.js for encrypted chat folder: $folderName');
+        await _autoCreateChatCollectionForStorage(folderName);
+        if (!await _profileStorage!.exists(collectionJsPath)) {
+          return null;
+        }
+      } else if (folderName == 'contacts') {
+        stderr.writeln('Auto-creating collection.js for encrypted contacts folder: $folderName');
+        await _autoCreateContactsCollectionForStorage(folderName);
+        if (!await _profileStorage!.exists(collectionJsPath)) {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
+
+    try {
+      final content = await _profileStorage!.readString(collectionJsPath);
+      if (content == null) return null;
+
+      // Extract JSON from JavaScript file
+      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      if (startIndex == -1) return null;
+
+      final jsonStart = content.indexOf('{', startIndex);
+      final jsonEnd = content.lastIndexOf('};');
+      if (jsonStart == -1 || jsonEnd == -1) return null;
+
+      final jsonContent = content.substring(jsonStart, jsonEnd + 1);
+      final data = json.decode(jsonContent) as Map<String, dynamic>;
+
+      final collectionData = data['collection'] as Map<String, dynamic>?;
+      if (collectionData == null) return null;
+
+      // Check for cached stats
+      final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
+      final hasCachedStats = cachedStats != null &&
+          cachedStats['fileCount'] != null &&
+          cachedStats['totalSize'] != null;
+
+      final storagePath = _profileStorage!.getAbsolutePath(folderName);
+
+      final collection = Collection(
+        id: collectionData['id'] as String? ?? '',
+        title: collectionData['title'] as String? ?? 'Untitled',
+        description: collectionData['description'] as String? ?? '',
+        type: collectionData['type'] as String? ?? 'files',
+        updated: collectionData['updated'] as String? ?? DateTime.now().toIso8601String(),
+        storagePath: storagePath,
+        isOwned: true,
+        visibility: 'public',
+        allowedReaders: const [],
+        encryption: 'none',
+        filesCount: hasCachedStats ? (cachedStats['fileCount'] as int? ?? 0) : 0,
+        totalSize: hasCachedStats ? (cachedStats['totalSize'] as int? ?? 0) : 0,
+      );
+
+      // Set favorite status from config
+      collection.isFavorite = _configService.isFavorite(collection.id);
+
+      // Load security settings from storage
+      await _loadSecuritySettingsFromStorage(collection, folderName);
+
+      return collection;
+    } catch (e) {
+      stderr.writeln('Error parsing encrypted collection.js for $folderName: $e');
+      return null;
+    }
+  }
+
+  /// Load security settings from ProfileStorage
+  Future<void> _loadSecuritySettingsFromStorage(Collection collection, String folderName) async {
+    if (_profileStorage == null) return;
+
+    final securityPath = '$folderName/extra/security.json';
+    final content = await _profileStorage!.readString(securityPath);
+    if (content == null) return;
+
+    try {
+      final data = json.decode(content) as Map<String, dynamic>;
+      collection.visibility = data['visibility'] as String? ?? 'public';
+      collection.encryption = data['encryption'] as String? ?? 'none';
+      final readers = data['allowedReaders'] as List<dynamic>?;
+      collection.allowedReaders = readers?.map((e) => e.toString()).toList() ?? [];
+    } catch (e) {
+      stderr.writeln('Error loading security settings for $folderName: $e');
+    }
+  }
+
+  /// Auto-create chat collection.js for encrypted storage
+  Future<void> _autoCreateChatCollectionForStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    try {
+      final keys = NostrKeyGenerator.generateKeyPair();
+      _configService.storeCollectionKeys(keys);
+
+      final collection = Collection(
+        id: keys.npub,
+        title: 'Chat',
+        description: '',
+        type: 'chat',
+        updated: DateTime.now().toIso8601String(),
+        storagePath: _profileStorage!.getAbsolutePath(folderName),
+        isOwned: true,
+        isFavorite: false,
+        filesCount: 0,
+        totalSize: 0,
+      );
+
+      await _profileStorage!.writeString(
+        '$folderName/collection.js',
+        collection.generateCollectionJs(),
+      );
+    } catch (e) {
+      stderr.writeln('Error auto-creating chat collection.js for storage: $e');
+    }
+  }
+
+  /// Auto-create contacts collection.js for encrypted storage
+  Future<void> _autoCreateContactsCollectionForStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    try {
+      final keys = NostrKeyGenerator.generateKeyPair();
+      _configService.storeCollectionKeys(keys);
+
+      final collection = Collection(
+        id: keys.npub,
+        title: 'Contacts',
+        description: '',
+        type: 'contacts',
+        updated: DateTime.now().toIso8601String(),
+        storagePath: _profileStorage!.getAbsolutePath(folderName),
+        isOwned: true,
+        isFavorite: false,
+        filesCount: 0,
+        totalSize: 0,
+      );
+
+      await _profileStorage!.writeString(
+        '$folderName/collection.js',
+        collection.generateCollectionJs(),
+      );
+    } catch (e) {
+      stderr.writeln('Error auto-creating contacts collection.js for storage: $e');
+    }
   }
 
   /// Load web collections from virtual file system
@@ -1212,32 +1470,27 @@ class CollectionService {
         return await _createWebCollection(id: id, title: title, description: description, type: type);
       }
 
-      if (_collectionsDir == null) {
+      if (_collectionsDir == null || _profileStorage == null) {
         throw Exception('CollectionService not initialized. Call init() first.');
       }
 
       // Determine folder name based on type
       String folderName;
-      String rootPath;
 
       if (type != 'files') {
         // For non-files types (forum, chat, www), use the type as folder name
-        // and always use default collections directory
         folderName = type;
-        rootPath = _collectionsDir!.path;
 
         stderr.writeln('Using fixed folder name for $type: $folderName');
 
         // Check if this type already exists
-        final collectionFolder = Directory('$rootPath/$folderName');
-        if (await collectionFolder.exists()) {
+        if (await _profileStorage!.directoryExists(folderName)) {
           // Check if the folder is essentially empty (only hidden/system files)
           // This can happen if the collection was "deleted" but folder remained
-          final entities = await collectionFolder.list().toList();
-          final hasUserContent = entities.any((e) {
-            final name = e.path.split('/').last;
+          final entries = await _profileStorage!.listDirectory(folderName);
+          final hasUserContent = entries.any((e) {
             // Hidden files/folders (starting with .) and system folders are not user content
-            return !name.startsWith('.') && name != 'extra' && name != 'media';
+            return !e.name.startsWith('.') && e.name != 'extra' && e.name != 'media';
           });
 
           if (hasUserContent) {
@@ -1246,7 +1499,7 @@ class CollectionService {
 
           // Folder exists but is empty - delete it and recreate fresh
           stderr.writeln('Found empty $type folder, recreating...');
-          await collectionFolder.delete(recursive: true);
+          await _profileStorage!.deleteDirectory(folderName, recursive: true);
         }
       } else {
         // For files type, sanitize the title as folder name
@@ -1270,34 +1523,44 @@ class CollectionService {
 
         stderr.writeln('Sanitized folder name: $folderName');
 
-        // Use custom root path if provided, otherwise default
-        rootPath = customRootPath ?? _collectionsDir!.path;
-        stderr.writeln('Using root path: $rootPath');
+        // Custom root paths are only supported for filesystem storage
+        if (customRootPath != null && !_useEncryptedStorage) {
+          // Fall back to filesystem for custom paths
+          return await _createFilesystemCollection(
+            id: id,
+            title: title,
+            description: description,
+            type: type,
+            customRootPath: customRootPath,
+          );
+        }
       }
 
-      // Create folder (with uniqueness check for files type only)
-      var collectionFolder = Directory('$rootPath/$folderName');
-
+      // Find unique folder name for files type
       if (type == 'files') {
-        // Find unique folder name for files type
         int counter = 1;
-        while (await collectionFolder.exists()) {
-          collectionFolder = Directory('$rootPath/${folderName}_$counter');
+        while (await _profileStorage!.directoryExists(folderName)) {
+          folderName = '${title.replaceAll(' ', '_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9_-]'), '_')}_$counter';
+          if (folderName.length > 50) {
+            folderName = folderName.substring(0, 50);
+          }
           counter++;
         }
       }
 
-      stderr.writeln('Creating folder: ${collectionFolder.path}');
+      stderr.writeln('Creating folder: $folderName');
 
-      // Create folder structure
-      await collectionFolder.create(recursive: true);
-      final extraDir = Directory('${collectionFolder.path}/extra');
-      await extraDir.create();
+      // Create folder structure using storage abstraction
+      await _profileStorage!.createDirectory(folderName);
+      await _profileStorage!.createDirectory('$folderName/extra');
 
       stderr.writeln('Folders created successfully');
 
       // Create skeleton template files based on type
-      await _createSkeletonFiles(type, collectionFolder);
+      await _createSkeletonFilesWithStorage(type, folderName);
+
+      // Get the storage path (virtual for encrypted, real for filesystem)
+      final storagePath = _profileStorage!.getAbsolutePath(folderName);
 
       // Create collection object
       final collection = Collection(
@@ -1306,7 +1569,7 @@ class CollectionService {
         description: description,
         type: type,
         updated: DateTime.now().toIso8601String(),
-        storagePath: collectionFolder.path,
+        storagePath: storagePath,
         isOwned: true,
         isFavorite: false,
         filesCount: 0,
@@ -1315,8 +1578,8 @@ class CollectionService {
 
       stderr.writeln('Writing collection files...');
 
-      // Write collection files
-      await _writeCollectionFiles(collection, collectionFolder);
+      // Write collection files using storage abstraction
+      await _writeCollectionFilesWithStorage(collection, folderName);
 
       stderr.writeln('Collection created successfully');
 
@@ -1329,6 +1592,59 @@ class CollectionService {
       stderr.writeln('Stack trace: $stackTrace');
       rethrow;
     }
+  }
+
+  /// Create a collection using direct filesystem (for custom root paths)
+  Future<Collection> _createFilesystemCollection({
+    required String id,
+    required String title,
+    required String description,
+    required String type,
+    required String customRootPath,
+  }) async {
+    // Sanitize folder name
+    var folderName = title
+        .replaceAll(' ', '_')
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
+    if (folderName.length > 50) folderName = folderName.substring(0, 50);
+    folderName = folderName.replaceAll(RegExp(r'_+$'), '');
+    if (folderName.isEmpty) folderName = 'collection';
+
+    // Create folder with uniqueness check
+    var collectionFolder = Directory('$customRootPath/$folderName');
+    int counter = 1;
+    while (await collectionFolder.exists()) {
+      collectionFolder = Directory('$customRootPath/${folderName}_$counter');
+      counter++;
+    }
+
+    // Create folder structure
+    await collectionFolder.create(recursive: true);
+    await Directory('${collectionFolder.path}/extra').create();
+
+    // Create skeleton files
+    await _createSkeletonFiles(type, collectionFolder);
+
+    // Create collection object
+    final collection = Collection(
+      id: id,
+      title: title,
+      description: description,
+      type: type,
+      updated: DateTime.now().toIso8601String(),
+      storagePath: collectionFolder.path,
+      isOwned: true,
+      isFavorite: false,
+      filesCount: 0,
+      totalSize: 0,
+    );
+
+    // Write collection files
+    await _writeCollectionFiles(collection, collectionFolder);
+
+    collectionsNotifier.value++;
+    return collection;
   }
 
   /// Create a collection for web platform with persistence to IndexedDB
@@ -1532,12 +1848,79 @@ class CollectionService {
     }
   }
 
+  /// Create skeleton template files using storage abstraction
+  Future<void> _createSkeletonFilesWithStorage(String type, String folderName) async {
+    if (_profileStorage == null) return;
+
+    try {
+      if (type == 'www') {
+        // Create default index.html for website type
+        final indexContent = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        p {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Welcome to Your Website</h1>
+    <p>This is the default homepage. Edit this file to create your website.</p>
+    <p>You can add more HTML files, CSS stylesheets, JavaScript files, and images to build your site.</p>
+</body>
+</html>
+''';
+        await _profileStorage!.writeString('$folderName/index.html', indexContent);
+        stderr.writeln('Created skeleton index.html for www type');
+      } else if (type == 'chat') {
+        await _initializeChatCollectionWithStorage(folderName);
+        stderr.writeln('Created chat collection skeleton');
+      } else if (type == 'forum') {
+        await _initializeForumCollectionWithStorage(folderName);
+        stderr.writeln('Created forum collection skeleton');
+      } else if (type == 'postcards') {
+        await _initializePostcardsCollectionWithStorage(folderName);
+        stderr.writeln('Created postcards collection skeleton');
+      } else if (type == 'contacts') {
+        await _initializeContactsCollectionWithStorage(folderName);
+        stderr.writeln('Created contacts collection skeleton');
+      } else if (type == 'places') {
+        await _initializePlacesCollectionWithStorage(folderName);
+        stderr.writeln('Created places collection skeleton');
+      } else if (type == 'groups') {
+        await _initializeGroupsCollectionWithStorage(folderName);
+        stderr.writeln('Created groups collection skeleton');
+      } else if (type == 'station') {
+        await _initializeRelayCollectionWithStorage(folderName);
+        stderr.writeln('Created station collection skeleton');
+      } else if (type == 'console') {
+        await _initializeConsoleCollectionWithStorage(folderName);
+        stderr.writeln('Created console collection skeleton');
+      }
+    } catch (e) {
+      stderr.writeln('Error creating skeleton files: $e');
+    }
+  }
+
   /// Auto-create collection.js for a chat folder created by CLI
   /// This allows the desktop to recognize chat collections created via CLI
   Future<void> _autoCreateChatCollection(Directory folder) async {
     try {
-      // Generate a collection ID based on folder name
-      final folderName = folder.path.split('/').last;
+      // Generate a collection ID
       final keys = NostrKeyGenerator.generateKeyPair();
       final id = keys.npub;
 
@@ -1937,6 +2320,288 @@ ${currentProfile.callsign}
     stderr.writeln('Console collection initialized');
   }
 
+  // ============ Storage-based initialization methods ============
+
+  /// Initialize chat collection using storage abstraction
+  Future<void> _initializeChatCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    final year = DateTime.now().year;
+
+    // Create directory structure
+    await _profileStorage!.createDirectory('$folderName/main');
+    await _profileStorage!.createDirectory('$folderName/main/$year');
+    await _profileStorage!.createDirectory('$folderName/main/$year/files');
+    await _profileStorage!.createDirectory('$folderName/main/files');
+
+    // Create main channel config.json
+    final mainConfig = ChatChannelConfig.defaults(
+      id: 'main',
+      name: 'Main Chat',
+      description: 'Public group chat for everyone',
+    );
+    await _profileStorage!.writeJson('$folderName/main/config.json', mainConfig.toJson());
+
+    // Create channels.json in extra/
+    final channelsData = {
+      'version': '1.0',
+      'channels': [
+        {
+          'id': 'main',
+          'type': 'group',
+          'name': 'Main Chat',
+          'folder': 'main',
+          'participants': ['*'],
+          'created': DateTime.now().toIso8601String(),
+        }
+      ]
+    };
+    await _profileStorage!.writeJson('$folderName/extra/channels.json', channelsData);
+
+    // Create participants.json in extra/
+    final participantsData = {
+      'version': '1.0',
+      'participants': <String, dynamic>{},
+    };
+    await _profileStorage!.writeJson('$folderName/extra/participants.json', participantsData);
+
+    // Create security.json with current user as admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final security = ChatSecurity(
+      adminNpub: currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+    );
+    final securityData = {
+      'version': '1.0',
+      ...security.toJson(),
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    // Create settings.json with signing enabled by default
+    final settings = ChatSettings(signMessages: true);
+    await _profileStorage!.writeJson('$folderName/extra/settings.json', settings.toJson());
+
+    stderr.writeln('Chat collection initialized with main channel');
+  }
+
+  /// Initialize forum collection using storage abstraction
+  Future<void> _initializeForumCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    final defaultSections = [
+      {'id': 'announcements', 'name': 'Announcements', 'folder': 'announcements', 'description': 'Important announcements and updates', 'order': 1, 'readonly': false},
+      {'id': 'general', 'name': 'General Discussion', 'folder': 'general', 'description': 'General discussions and community chat', 'order': 2, 'readonly': false},
+      {'id': 'help', 'name': 'Help & Support', 'folder': 'help', 'description': 'Ask questions and get help', 'order': 3, 'readonly': false},
+    ];
+
+    // Create section directories and config files
+    for (final section in defaultSections) {
+      final sectionFolder = section['folder'] as String;
+      await _profileStorage!.createDirectory('$folderName/$sectionFolder');
+      await _profileStorage!.writeJson('$folderName/$sectionFolder/config.json', section);
+    }
+
+    // Create sections.json in extra/
+    final sectionsData = {
+      'version': '1.0',
+      'sections': defaultSections,
+    };
+    await _profileStorage!.writeJson('$folderName/extra/sections.json', sectionsData);
+
+    // Create security.json with current user as admin
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Forum collection initialized');
+  }
+
+  /// Initialize postcards collection using storage abstraction
+  Future<void> _initializePostcardsCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    await _profileStorage!.createDirectory('$folderName/postcards');
+    await _profileStorage!.createDirectory('$folderName/media');
+
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Postcards collection initialized');
+  }
+
+  /// Initialize contacts collection using storage abstraction
+  Future<void> _initializeContactsCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // Create contacts.json
+    final contactsData = {
+      'version': '1.0',
+      'contacts': <Map<String, dynamic>>[],
+    };
+    await _profileStorage!.writeJson('$folderName/contacts.json', contactsData);
+
+    // Create security.json
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Contacts collection initialized');
+  }
+
+  /// Initialize places collection using storage abstraction
+  Future<void> _initializePlacesCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // Create places.json
+    final placesData = {
+      'version': '1.0',
+      'places': <Map<String, dynamic>>[],
+    };
+    await _profileStorage!.writeJson('$folderName/places.json', placesData);
+
+    // Create security.json
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Places collection initialized');
+  }
+
+  /// Initialize groups collection using storage abstraction
+  Future<void> _initializeGroupsCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // Create groups.json
+    final groupsData = {
+      'version': '1.0',
+      'groups': <Map<String, dynamic>>[],
+    };
+    await _profileStorage!.writeJson('$folderName/groups.json', groupsData);
+
+    // Create security.json
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Groups collection initialized');
+  }
+
+  /// Initialize station/relay collection using storage abstraction
+  Future<void> _initializeRelayCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // Create config.json
+    final configData = {
+      'version': '1.0',
+      'enabled': false,
+      'port': 8080,
+    };
+    await _profileStorage!.writeJson('$folderName/config.json', configData);
+
+    // Create security.json
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Station collection initialized');
+  }
+
+  /// Initialize console collection using storage abstraction
+  Future<void> _initializeConsoleCollectionWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    await _profileStorage!.createDirectory('$folderName/sessions');
+
+    final profileService = ProfileService();
+    final currentProfile = profileService.getProfile();
+    final securityData = {
+      'version': '1.0',
+      'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
+      'moderators': <String>[],
+      'bannedNpubs': <String>[],
+    };
+    await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
+
+    stderr.writeln('Console collection initialized');
+  }
+
+  /// Generate and save tree.json using storage abstraction
+  Future<void> _generateAndSaveTreeJsonWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // For new collections, just create an empty tree
+    final treeData = {
+      'version': '1.0',
+      'generated': DateTime.now().toIso8601String(),
+      'files': <Map<String, dynamic>>[],
+    };
+    await _profileStorage!.writeJson('$folderName/tree.json', treeData);
+  }
+
+  /// Generate and save data.js using storage abstraction
+  Future<void> _generateAndSaveDataJsWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    // For new collections, create minimal data.js
+    final dataJs = '''const collectionData = {
+  version: "1.0",
+  generated: "${DateTime.now().toIso8601String()}",
+  files: []
+};
+''';
+    await _profileStorage!.writeString('$folderName/data.js', dataJs);
+  }
+
+  /// Generate and save index.html using storage abstraction
+  Future<void> _generateAndSaveIndexHtmlWithStorage(String folderName) async {
+    if (_profileStorage == null) return;
+
+    final indexHtml = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collection</title>
+</head>
+<body>
+    <h1>Collection Files</h1>
+    <p>No files yet.</p>
+</body>
+</html>
+''';
+    await _profileStorage!.writeString('$folderName/index.html', indexHtml);
+  }
+
   /// Write collection metadata files to disk
   Future<void> _writeCollectionFiles(
     Collection collection,
@@ -1965,15 +2630,76 @@ ${currentProfile.callsign}
     }
   }
 
+  /// Write collection metadata files using storage abstraction
+  Future<void> _writeCollectionFilesWithStorage(
+    Collection collection,
+    String folderName,
+  ) async {
+    if (_profileStorage == null) return;
+
+    // Write collection.js
+    await _profileStorage!.writeString(
+      '$folderName/collection.js',
+      collection.generateCollectionJs(),
+    );
+
+    // Write extra/security.json
+    await _profileStorage!.writeString(
+      '$folderName/extra/security.json',
+      collection.generateSecurityJson(),
+    );
+
+    // Only generate tree.json, data.js, and index.html for files and www types
+    if (collection.type == 'files' || collection.type == 'www') {
+      stderr.writeln('Generating tree.json, data.js, and index.html...');
+      await _generateAndSaveTreeJsonWithStorage(folderName);
+      await _generateAndSaveDataJsWithStorage(folderName);
+      await _generateAndSaveIndexHtmlWithStorage(folderName);
+      stderr.writeln('Collection files generated successfully');
+    } else {
+      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${collection.type} type');
+    }
+  }
+
   /// Delete a collection
   Future<void> deleteCollection(Collection collection) async {
     if (collection.storagePath == null) {
       throw Exception('Collection has no storage path');
     }
 
-    final folder = Directory(collection.storagePath!);
-    if (await folder.exists()) {
-      await folder.delete(recursive: true);
+    // Use storage abstraction if available
+    if (_profileStorage != null) {
+      // Get relative path from storage path
+      final basePath = _profileStorage!.basePath;
+      final storagePath = collection.storagePath!;
+      String relativePath;
+
+      if (storagePath.startsWith(basePath)) {
+        relativePath = storagePath.substring(basePath.length);
+        if (relativePath.startsWith('/')) {
+          relativePath = relativePath.substring(1);
+        }
+      } else {
+        // Path is outside profile storage, use direct filesystem
+        final folder = Directory(storagePath);
+        if (await folder.exists()) {
+          await folder.delete(recursive: true);
+        }
+        if (collection.isFavorite) {
+          _configService.toggleFavorite(collection.id);
+        }
+        return;
+      }
+
+      if (relativePath.isNotEmpty) {
+        await _profileStorage!.deleteDirectory(relativePath, recursive: true);
+      }
+    } else {
+      // Fall back to direct filesystem
+      final folder = Directory(collection.storagePath!);
+      if (await folder.exists()) {
+        await folder.delete(recursive: true);
+      }
     }
 
     // Remove from favorites if present
@@ -2010,6 +2736,50 @@ ${currentProfile.callsign}
       throw Exception('Collection has no storage path');
     }
 
+    // Update timestamp
+    collection.updated = DateTime.now().toIso8601String();
+
+    // Use storage abstraction if available
+    if (_profileStorage != null) {
+      final basePath = _profileStorage!.basePath;
+      final storagePath = collection.storagePath!;
+      String? relativePath;
+
+      if (storagePath.startsWith(basePath)) {
+        relativePath = storagePath.substring(basePath.length);
+        if (relativePath.startsWith('/')) {
+          relativePath = relativePath.substring(1);
+        }
+      }
+
+      if (relativePath != null && relativePath.isNotEmpty) {
+        // Check if folder exists in storage
+        if (!await _profileStorage!.directoryExists(relativePath)) {
+          throw Exception('Collection folder does not exist');
+        }
+
+        // Note: folder renaming is not supported for encrypted storage
+        // Title changes only update metadata, not folder name
+        if (oldTitle != null && oldTitle != collection.title && !_useEncryptedStorage) {
+          await _renameCollectionFolder(collection, oldTitle);
+          // Update relativePath after rename
+          final newStoragePath = collection.storagePath!;
+          if (newStoragePath.startsWith(basePath)) {
+            relativePath = newStoragePath.substring(basePath.length);
+            if (relativePath.startsWith('/')) {
+              relativePath = relativePath.substring(1);
+            }
+          }
+        }
+
+        // Write updated metadata files
+        await _writeCollectionFilesWithStorage(collection, relativePath);
+        stderr.writeln('Updated collection: ${collection.title}');
+        return;
+      }
+    }
+
+    // Fall back to direct filesystem operations
     final folder = Directory(collection.storagePath!);
     if (!await folder.exists()) {
       throw Exception('Collection folder does not exist');
@@ -2019,9 +2789,6 @@ ${currentProfile.callsign}
     if (oldTitle != null && oldTitle != collection.title) {
       await _renameCollectionFolder(collection, oldTitle);
     }
-
-    // Update timestamp
-    collection.updated = DateTime.now().toIso8601String();
 
     // Write updated metadata files
     final updatedFolder = Directory(collection.storagePath!);
@@ -3928,6 +4695,16 @@ window.COLLECTION_DATA_FULL = $jsonData;
             if (content.contains('"type": "chat"')) {
               // This is a chat collection - load channels
               final chatService = ChatService();
+              // Set profile storage for encrypted storage support
+              if (_profileStorage != null) {
+                final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+                  _profileStorage!,
+                  entity.path,
+                );
+                chatService.setStorage(scopedStorage);
+              } else {
+                chatService.setStorage(FilesystemProfileStorage(entity.path));
+              }
               await chatService.initializeCollection(entity.path);
 
               for (final channel in chatService.channels) {

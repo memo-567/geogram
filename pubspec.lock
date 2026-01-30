@@ -184,6 +184,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
+  cryptography:
+    dependency: "direct main"
+    description:
+      name: cryptography
+      sha256: "3eda3029d34ec9095a27a198ac9785630fe525c0eb6a49f3d575272f8e792ef0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.9.0"
   csslib:
     dependency: transitive
     description:
@@ -256,6 +264,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.15"
+  encrypted_archive:
+    dependency: "direct main"
+    description:
+      path: "packages/encrypted_archive"
+      relative: true
+    source: path
+    version: "0.1.0"
   ensemble_date:
     dependency: transitive
     description:
@@ -1083,6 +1098,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.0"
+  nntp:
+    dependency: "direct main"
+    description:
+      path: "packages/nntp"
+      relative: true
+    source: path
+    version: "0.1.0"
   objectbox:
     dependency: transitive
     description:

@@ -50,6 +50,7 @@ class AudioService {
   final _playerStateController = StreamController<PlayerState>.broadcast();
   final _positionController = StreamController<Duration>.broadcast();
   final _playingController = StreamController<bool>.broadcast();
+  final _amplitudeController = StreamController<double>.broadcast();
 
   // Constants
   static const maxRecordingDuration = Duration(seconds: 30);
@@ -67,6 +68,9 @@ class AudioService {
 
   /// Stream of playing state changes (true = playing, false = paused/stopped)
   Stream<bool> get playingStream => _playingController.stream;
+
+  /// Stream of recording amplitude (0.0 to 1.0) for visual feedback
+  Stream<double> get amplitudeStream => _amplitudeController.stream;
 
   /// Current recording duration
   Duration get recordingDuration => _recordingDuration;
@@ -256,6 +260,21 @@ class AudioService {
       final frames = _alsaRecorder!.readFrames(framesPerRead);
       if (frames != null) {
         _alsaSamples.addAll(frames);
+
+        // Compute amplitude from the latest frames for visual feedback
+        if (frames.isNotEmpty) {
+          // Calculate RMS (root mean square) amplitude
+          double sumSquares = 0;
+          for (final sample in frames) {
+            sumSquares += sample * sample;
+          }
+          final rms = sumSquares / frames.length;
+          // Normalize to 0-1 range (16-bit audio max is 32767^2)
+          final normalized = (rms / (32767 * 32767)).clamp(0.0, 1.0);
+          // Apply some smoothing/scaling for better visual feedback
+          final amplitude = (normalized * 10).clamp(0.0, 1.0);
+          _amplitudeController.add(amplitude);
+        }
       }
       await Future.delayed(const Duration(milliseconds: 50));
     }
@@ -930,6 +949,7 @@ class AudioService {
     await _playerStateController.close();
     await _positionController.close();
     await _playingController.close();
+    await _amplitudeController.close();
   }
 }
 

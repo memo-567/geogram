@@ -8,9 +8,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/contact.dart' as geogram;
+import '../services/collection_service.dart';
 import '../services/contact_import_service.dart';
 import '../services/contact_service.dart';
 import '../services/i18n_service.dart';
+import '../services/profile_storage.dart';
 
 /// Page for importing contacts from device address book
 class ContactImportPage extends StatefulWidget {
@@ -102,6 +104,18 @@ class _ContactImportPageState extends State<ContactImportPage> {
     });
 
     try {
+      // Set up storage before initializing collection
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          widget.collectionPath,
+        );
+        _contactService.setStorage(scopedStorage);
+      } else {
+        _contactService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      }
+
       // Initialize contact service to load existing contacts
       await _contactService.initializeCollection(widget.collectionPath);
 

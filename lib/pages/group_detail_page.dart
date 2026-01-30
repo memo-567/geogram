@@ -15,6 +15,8 @@ import '../models/group_application.dart';
 import '../services/groups_service.dart';
 import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
+import '../services/collection_service.dart';
+import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import 'location_picker_page.dart';
 
@@ -58,6 +60,17 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
   }
 
   Future<void> _initialize() async {
+    // Set profile storage for encrypted storage support
+    final profileStorage = CollectionService().profileStorage;
+    if (profileStorage != null) {
+      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+        profileStorage,
+        widget.collectionPath,
+      );
+      _groupsService.setStorage(scopedStorage);
+    } else {
+      _groupsService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+    }
     await _groupsService.initializeCollection(widget.collectionPath);
     await _loadGroup();
   }

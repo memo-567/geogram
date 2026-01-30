@@ -80,6 +80,10 @@ class Console {
 
       // Set active callsign
       final profile = ProfileService().getProfile();
+      // Set nsec for encrypted storage access (must be before setActiveCallsign)
+      if (profile.nsec.isNotEmpty) {
+        CollectionService().setNsec(profile.nsec);
+      }
       await CollectionService().setActiveCallsign(profile.callsign);
 
       // Initialize station server service

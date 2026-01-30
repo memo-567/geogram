@@ -97,6 +97,7 @@ import 'pages/dm_chat_page.dart';
 import 'reader/pages/reader_home_page.dart';
 import 'flasher/pages/flasher_page.dart';
 import 'work/pages/work_page.dart';
+import 'usenet/pages/usenet_app_page.dart';
 import 'pages/profile_management_page.dart';
 import 'pages/create_collection_page.dart';
 import 'pages/onboarding_page.dart';
@@ -520,6 +521,17 @@ void main() async {
 
           if (collectionPath is String && collectionPath.isNotEmpty) {
             final profileCallsign = ProfileService().getProfile().callsign;
+            // Set up storage for TrackerService (encrypted or filesystem)
+            final profileStorage = CollectionService().profileStorage;
+            if (profileStorage != null) {
+              final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+                profileStorage,
+                collectionPath,
+              );
+              TrackerService().setStorage(scopedStorage);
+            } else {
+              TrackerService().setStorage(FilesystemProfileStorage(collectionPath));
+            }
             await TrackerService().initializeCollection(
               collectionPath,
               callsign: profileCallsign,
@@ -962,6 +974,8 @@ class _HomePageState extends State<HomePage> {
   void _onDebugAction(DebugActionEvent event) {
     if (event.action == DebugAction.openStationChat) {
       _handleOpenStationChat();
+    } else if (event.action == DebugAction.openLocalChat) {
+      _handleOpenLocalChat();
     } else if (event.action == DebugAction.openDM) {
       final callsign = event.params['callsign'] as String?;
       if (callsign != null) {
@@ -1087,6 +1101,54 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Handle opening a local chat collection (for testing encrypted storage)
+  void _handleOpenLocalChat() async {
+    print('HomePage: Opening local chat collection via debug action');
+
+    // Find a chat collection
+    final collections = await CollectionService().loadCollections();
+    final chatCollection = collections.where((c) => c.type == 'chat').firstOrNull;
+
+    if (chatCollection == null) {
+      print('HomePage: No chat collection found, creating one');
+      // Create a chat collection if none exists
+      try {
+        final newCollection = await CollectionService().createCollection(
+          title: 'Chat',
+          type: 'chat',
+        );
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatBrowserPage(
+                collection: newCollection,
+              ),
+            ),
+          );
+        }
+      } catch (e) {
+        print('HomePage: Failed to create chat collection: $e');
+      }
+      return;
+    }
+
+    print('HomePage: Found chat collection: ${chatCollection.title} at ${chatCollection.storagePath}');
+
+    // Navigate to ChatBrowserPage with the local collection
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatBrowserPage(
+            collection: chatCollection,
+          ),
+        ),
+      );
+      print('HomePage: Navigation pushed for local chat collection');
+    }
+  }
+
   /// Check if this is the first launch and show welcome dialog or onboarding
   void _checkFirstLaunch() {
     final config = ConfigService().getAll();
@@ -1165,6 +1227,17 @@ class _HomePageState extends State<HomePage> {
 
       if (collectionPath is String && collectionPath.isNotEmpty) {
         final profileCallsign = ProfileService().getProfile().callsign;
+        // Set up storage for TrackerService (encrypted or filesystem)
+        final profileStorage = CollectionService().profileStorage;
+        if (profileStorage != null) {
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            collectionPath,
+          );
+          TrackerService().setStorage(scopedStorage);
+        } else {
+          TrackerService().setStorage(FilesystemProfileStorage(collectionPath));
+        }
         await TrackerService().initializeCollection(collectionPath, callsign: profileCallsign);
         await ProximityDetectionService().start(TrackerService());
         LogService().log('[PROXIMITY] Started after onboarding - collection: $collectionPath');
@@ -2452,6 +2525,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                               )
                                             : collection.type == 'work'
                                             ? _buildWorkPage(collection)
+                                            : collection.type == 'usenet'
+                                            ? const UsenetAppPage()
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );
@@ -2670,6 +2745,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                               )
                                             : collection.type == 'work'
                                             ? _buildWorkPage(collection)
+                                            : collection.type == 'usenet'
+                                            ? const UsenetAppPage()
                                             : CollectionBrowserPage(
                                                 collection: collection,
                                               );

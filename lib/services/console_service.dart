@@ -6,11 +6,11 @@
  */
 
 import 'dart:convert';
-import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import '../models/console_session.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
+import 'profile_storage.dart';
 
 /// Service for managing console sessions
 class ConsoleService {
@@ -18,9 +18,22 @@ class ConsoleService {
   factory ConsoleService() => _instance;
   ConsoleService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   final List<ConsoleSession> _sessions = [];
   final _random = Random();
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Get collection path
   String? get collectionPath => _collectionPath;
@@ -37,10 +50,8 @@ class ConsoleService {
     _collectionPath = collectionPath;
     _sessions.clear();
 
-    final sessionsDir = Directory('$collectionPath/sessions');
-    if (!await sessionsDir.exists()) {
-      await sessionsDir.create(recursive: true);
-    }
+    // Create sessions directory using storage
+    await _storage.createDirectory('sessions');
 
     // Load existing sessions
     await _loadSessions();
@@ -50,13 +61,10 @@ class ConsoleService {
   Future<void> _loadSessions() async {
     if (_collectionPath == null) return;
 
-    final sessionsDir = Directory('$_collectionPath/sessions');
-    if (!await sessionsDir.exists()) return;
-
-    final entities = await sessionsDir.list().toList();
-    for (final entity in entities) {
-      if (entity is Directory) {
-        final session = await _loadSessionFromFolder(entity.path);
+    final entries = await _storage.listDirectory('sessions');
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        final session = await _loadSessionFromStorage(entry.path);
         if (session != null) {
           _sessions.add(session);
         }
@@ -67,20 +75,21 @@ class ConsoleService {
     _sessions.sort((a, b) => b.createdDateTime.compareTo(a.createdDateTime));
   }
 
-  /// Load a single session from its folder
-  Future<ConsoleSession?> _loadSessionFromFolder(String folderPath) async {
-    final sessionFile = File('$folderPath/session.txt');
-    if (!await sessionFile.exists()) return null;
+  /// Load a single session from storage using relative path
+  Future<ConsoleSession?> _loadSessionFromStorage(String relativePath) async {
+    final sessionPath = '$relativePath/session.txt';
+    final content = await _storage.readString(sessionPath);
+    if (content == null) return null;
 
     try {
-      final content = await sessionFile.readAsString();
-      final session = _parseSessionContent(content, folderPath);
+      final fullPath = _storage.getAbsolutePath(relativePath);
+      final session = _parseSessionContent(content, fullPath);
 
       // Load mounts if available
       if (session != null) {
-        final mountsFile = File('$folderPath/mounts.json');
-        if (await mountsFile.exists()) {
-          final mountsContent = await mountsFile.readAsString();
+        final mountsPath = '$relativePath/mounts.json';
+        final mountsContent = await _storage.readString(mountsPath);
+        if (mountsContent != null) {
           final mountsJson = jsonDecode(mountsContent) as Map<String, dynamic>;
           final mounts =
               (mountsJson['mounts'] as List<dynamic>?)
@@ -93,7 +102,7 @@ class ConsoleService {
 
       return session;
     } catch (e) {
-      LogService().log('Error loading session from $folderPath: $e');
+      LogService().log('Error loading session from $relativePath: $e');
       return null;
     }
   }
@@ -239,12 +248,13 @@ class ConsoleService {
 
     final author = ProfileService().getProfile().callsign;
 
-    final sessionPath = '$_collectionPath/sessions/$id';
-    final savedPath = '$sessionPath/saved';
+    final sessionRelativePath = 'sessions/$id';
+    final savedRelativePath = '$sessionRelativePath/saved';
+    final sessionPath = _storage.getAbsolutePath(sessionRelativePath);
 
-    // Create directories
-    await Directory(sessionPath).create(recursive: true);
-    await Directory(savedPath).create(recursive: true);
+    // Create directories using storage
+    await _storage.createDirectory(sessionRelativePath);
+    await _storage.createDirectory(savedRelativePath);
 
     final session = ConsoleSession(
       id: id,
@@ -283,31 +293,29 @@ class ConsoleService {
   Future<void> _saveSessionFile(ConsoleSession session) async {
     if (session.sessionPath == null) return;
 
-    final file = File('${session.sessionPath}/session.txt');
-    await file.writeAsString(session.toSessionTxt());
+    final relativePath = 'sessions/${session.id}/session.txt';
+    await _storage.writeString(relativePath, session.toSessionTxt());
   }
 
   /// Save mounts.json file
   Future<void> _saveMountsFile(ConsoleSession session) async {
     if (session.sessionPath == null) return;
 
-    final file = File('${session.sessionPath}/mounts.json');
+    final relativePath = 'sessions/${session.id}/mounts.json';
     final json = jsonEncode(session.mountsToJson());
-    await file.writeAsString(json);
+    await _storage.writeString(relativePath, json);
   }
 
   /// Delete a session
   Future<void> deleteSession(String sessionId) async {
-    final session = _sessions.firstWhere(
-      (s) => s.id == sessionId,
-      orElse: () => throw Exception('Session not found'),
-    );
+    // Verify session exists in memory
+    if (!_sessions.any((s) => s.id == sessionId)) {
+      throw Exception('Session not found');
+    }
 
-    if (session.sessionPath != null) {
-      final dir = Directory(session.sessionPath!);
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
-      }
+    final relativePath = 'sessions/$sessionId';
+    if (await _storage.exists(relativePath)) {
+      await _storage.deleteDirectory(relativePath, recursive: true);
     }
 
     _sessions.removeWhere((s) => s.id == sessionId);
@@ -337,16 +345,16 @@ class ConsoleService {
   /// List saved state files for a session
   Future<List<String>> listSavedStates(String sessionId) async {
     final session = getSession(sessionId);
-    if (session?.savedStatesPath == null) return [];
+    if (session == null) return [];
 
-    final dir = Directory(session!.savedStatesPath!);
-    if (!await dir.exists()) return [];
+    final relativePath = 'sessions/$sessionId/saved';
+    if (!await _storage.exists(relativePath)) return [];
 
     final states = <String>[];
-    final entities = await dir.list().toList();
-    for (final entity in entities) {
-      if (entity is File && entity.path.endsWith('.state')) {
-        states.add(entity.path.split('/').last.replaceAll('.state', ''));
+    final entries = await _storage.listDirectory(relativePath);
+    for (final entry in entries) {
+      if (!entry.isDirectory && entry.name.endsWith('.state')) {
+        states.add(entry.name.replaceAll('.state', ''));
       }
     }
 
@@ -358,9 +366,10 @@ class ConsoleService {
   /// Check if current state exists
   Future<bool> hasCurrentState(String sessionId) async {
     final session = getSession(sessionId);
-    if (session?.currentStatePath == null) return false;
+    if (session == null) return false;
 
-    return await File(session!.currentStatePath!).exists();
+    final relativePath = 'sessions/$sessionId/current.state';
+    return await _storage.exists(relativePath);
   }
 
   /// Add a mount point to a session

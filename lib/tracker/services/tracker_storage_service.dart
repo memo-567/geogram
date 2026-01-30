@@ -1,16 +1,27 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../models/tracker_models.dart';
 import '../models/tracker_proximity_track.dart';
 import '../utils/tracker_path_utils.dart';
 import '../../services/log_service.dart';
+import '../../services/profile_storage.dart';
 
 /// Service for handling tracker file I/O operations
 class TrackerStorageService {
   final String basePath;
+  final ProfileStorage _storage;
 
-  TrackerStorageService(this.basePath);
+  TrackerStorageService(this.basePath, this._storage);
+
+  /// Helper to get relative path from absolute path
+  String _relativePath(String absolutePath) {
+    if (absolutePath.startsWith(basePath)) {
+      var rel = absolutePath.substring(basePath.length);
+      if (rel.startsWith('/')) rel = rel.substring(1);
+      return rel;
+    }
+    return absolutePath;
+  }
 
   // ============ Path Operations ============
 
@@ -18,10 +29,10 @@ class TrackerStorageService {
   Future<TrackerPath?> readPath(int year, String pathId) async {
     try {
       final filePath = TrackerPathUtils.pathMetadataFile(basePath, year, pathId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerPath.fromJson(json);
     } catch (e) {
@@ -34,9 +45,15 @@ class TrackerStorageService {
   Future<bool> writePath(int year, TrackerPath path) async {
     try {
       final filePath = TrackerPathUtils.pathMetadataFile(basePath, year, path.id);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(path.toJson()),
       );
       return true;
@@ -50,10 +67,10 @@ class TrackerStorageService {
   Future<TrackerPathPoints?> readPathPoints(int year, String pathId) async {
     try {
       final filePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerPathPoints.fromJson(json);
     } catch (e) {
@@ -66,9 +83,15 @@ class TrackerStorageService {
   Future<bool> writePathPoints(int year, String pathId, TrackerPathPoints points) async {
     try {
       final filePath = TrackerPathUtils.pathPointsFile(basePath, year, pathId);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(points.toJson()),
       );
       return true;
@@ -82,9 +105,9 @@ class TrackerStorageService {
   Future<bool> deletePath(int year, String pathId) async {
     try {
       final dirPath = TrackerPathUtils.pathDir(basePath, year, pathId);
-      final dir = Directory(dirPath);
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
+      final relativePath = _relativePath(dirPath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.deleteDirectory(relativePath);
       }
       return true;
     } catch (e) {
@@ -97,13 +120,14 @@ class TrackerStorageService {
   Future<List<TrackerPath>> listPaths(int year) async {
     try {
       final dirPath = TrackerPathUtils.pathsDir(basePath, year);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final paths = <TrackerPath>[];
-      await for (final entity in dir.list()) {
-        if (entity is Directory) {
-          final pathId = entity.path.split('/').last;
+      for (final entry in entries) {
+        if (entry.isDirectory) {
+          final pathId = entry.name;
           final path = await readPath(year, pathId);
           if (path != null) {
             paths.add(path);
@@ -123,10 +147,10 @@ class TrackerStorageService {
   Future<TrackerExpenses?> readPathExpenses(int year, String pathId) async {
     try {
       final filePath = TrackerPathUtils.pathExpensesFile(basePath, year, pathId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerExpenses.fromJson(json);
     } catch (e) {
@@ -139,9 +163,15 @@ class TrackerStorageService {
   Future<bool> writePathExpenses(int year, String pathId, TrackerExpenses expenses) async {
     try {
       final filePath = TrackerPathUtils.pathExpensesFile(basePath, year, pathId);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(expenses.toJson()),
       );
       return true;
@@ -157,10 +187,10 @@ class TrackerStorageService {
   Future<MeasurementData?> readMeasurement(int year, String typeId) async {
     try {
       final filePath = TrackerPathUtils.measurementFile(basePath, year, typeId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return MeasurementData.fromJson(json);
     } catch (e) {
@@ -173,9 +203,15 @@ class TrackerStorageService {
   Future<bool> writeMeasurement(int year, MeasurementData data) async {
     try {
       final filePath = TrackerPathUtils.measurementFile(basePath, year, data.typeId);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -189,10 +225,10 @@ class TrackerStorageService {
   Future<BloodPressureData?> readBloodPressure(int year) async {
     try {
       final filePath = TrackerPathUtils.measurementFile(basePath, year, 'blood_pressure');
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return BloodPressureData.fromJson(json);
     } catch (e) {
@@ -205,9 +241,15 @@ class TrackerStorageService {
   Future<bool> writeBloodPressure(int year, BloodPressureData data) async {
     try {
       final filePath = TrackerPathUtils.measurementFile(basePath, year, 'blood_pressure');
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -221,14 +263,14 @@ class TrackerStorageService {
   Future<List<String>> listMeasurementTypes(int year) async {
     try {
       final dirPath = TrackerPathUtils.measurementsDir(basePath, year);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final types = <String>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          types.add(name.replaceAll('.json', ''));
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          types.add(entry.name.replaceAll('.json', ''));
         }
       }
       return types;
@@ -244,10 +286,10 @@ class TrackerStorageService {
   Future<ExerciseData?> readExercise(int year, String exerciseId) async {
     try {
       final filePath = TrackerPathUtils.exerciseFile(basePath, year, exerciseId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return ExerciseData.fromJson(json);
     } catch (e) {
@@ -260,9 +302,15 @@ class TrackerStorageService {
   Future<bool> writeExercise(int year, ExerciseData data) async {
     try {
       final filePath = TrackerPathUtils.exerciseFile(basePath, year, data.exerciseId);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -276,10 +324,10 @@ class TrackerStorageService {
   Future<CustomExercisesData?> readCustomExercises(int year) async {
     try {
       final filePath = TrackerPathUtils.customExercisesFile(basePath, year);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return CustomExercisesData.fromJson(json);
     } catch (e) {
@@ -292,9 +340,15 @@ class TrackerStorageService {
   Future<bool> writeCustomExercises(int year, CustomExercisesData data) async {
     try {
       final filePath = TrackerPathUtils.customExercisesFile(basePath, year);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -308,14 +362,14 @@ class TrackerStorageService {
   Future<List<String>> listExerciseTypes(int year) async {
     try {
       final dirPath = TrackerPathUtils.exercisesDir(basePath, year);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final types = <String>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          types.add(name.replaceAll('.json', ''));
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          types.add(entry.name.replaceAll('.json', ''));
         }
       }
       return types;
@@ -331,10 +385,10 @@ class TrackerStorageService {
   Future<TrackerPlan?> readActivePlan(String planId) async {
     try {
       final filePath = TrackerPathUtils.activePlanFile(basePath, planId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerPlan.fromJson(json);
     } catch (e) {
@@ -347,9 +401,15 @@ class TrackerStorageService {
   Future<bool> writeActivePlan(TrackerPlan plan) async {
     try {
       final filePath = TrackerPathUtils.activePlanFile(basePath, plan.id);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(plan.toJson()),
       );
       return true;
@@ -363,10 +423,10 @@ class TrackerStorageService {
   Future<ArchivedPlan?> readArchivedPlan(String planId) async {
     try {
       final filePath = TrackerPathUtils.archivedPlanFile(basePath, planId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return ArchivedPlan.fromJson(json);
     } catch (e) {
@@ -379,9 +439,15 @@ class TrackerStorageService {
   Future<bool> writeArchivedPlan(ArchivedPlan plan) async {
     try {
       final filePath = TrackerPathUtils.archivedPlanFile(basePath, plan.id);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(plan.toJson()),
       );
       return true;
@@ -395,9 +461,9 @@ class TrackerStorageService {
   Future<bool> deleteActivePlan(String planId) async {
     try {
       final filePath = TrackerPathUtils.activePlanFile(basePath, planId);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _relativePath(filePath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
       }
       return true;
     } catch (e) {
@@ -410,14 +476,14 @@ class TrackerStorageService {
   Future<List<TrackerPlan>> listActivePlans() async {
     try {
       final dirPath = TrackerPathUtils.activePlansDir(basePath);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final plans = <TrackerPlan>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final planId = name.replaceAll('plan_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final planId = entry.name.replaceAll('plan_', '').replaceAll('.json', '');
           final plan = await readActivePlan(planId);
           if (plan != null) {
             plans.add(plan);
@@ -435,14 +501,14 @@ class TrackerStorageService {
   Future<List<ArchivedPlan>> listArchivedPlans() async {
     try {
       final dirPath = TrackerPathUtils.archivedPlansDir(basePath);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final plans = <ArchivedPlan>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final planId = name.replaceAll('plan_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final planId = entry.name.replaceAll('plan_', '').replaceAll('.json', '');
           final plan = await readArchivedPlan(planId);
           if (plan != null) {
             plans.add(plan);
@@ -462,10 +528,10 @@ class TrackerStorageService {
   Future<GroupShare?> readGroupShare(String shareId) async {
     try {
       final filePath = TrackerPathUtils.groupShareFile(basePath, shareId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return GroupShare.fromJson(json);
     } catch (e) {
@@ -478,9 +544,15 @@ class TrackerStorageService {
   Future<bool> writeGroupShare(GroupShare share) async {
     try {
       final filePath = TrackerPathUtils.groupShareFile(basePath, share.id);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(share.toJson()),
       );
       return true;
@@ -494,9 +566,9 @@ class TrackerStorageService {
   Future<bool> deleteGroupShare(String shareId) async {
     try {
       final filePath = TrackerPathUtils.groupShareFile(basePath, shareId);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _relativePath(filePath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
       }
       return true;
     } catch (e) {
@@ -509,14 +581,14 @@ class TrackerStorageService {
   Future<List<GroupShare>> listGroupShares() async {
     try {
       final dirPath = TrackerPathUtils.sharingGroupsDir(basePath);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final shares = <GroupShare>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final shareId = name.replaceAll('share_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final shareId = entry.name.replaceAll('share_', '').replaceAll('.json', '');
           final share = await readGroupShare(shareId);
           if (share != null) {
             shares.add(share);
@@ -534,10 +606,10 @@ class TrackerStorageService {
   Future<TemporaryShare?> readTemporaryShare(String shareId) async {
     try {
       final filePath = TrackerPathUtils.temporaryShareFile(basePath, shareId);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TemporaryShare.fromJson(json);
     } catch (e) {
@@ -550,9 +622,15 @@ class TrackerStorageService {
   Future<bool> writeTemporaryShare(TemporaryShare share) async {
     try {
       final filePath = TrackerPathUtils.temporaryShareFile(basePath, share.id);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(share.toJson()),
       );
       return true;
@@ -566,9 +644,9 @@ class TrackerStorageService {
   Future<bool> deleteTemporaryShare(String shareId) async {
     try {
       final filePath = TrackerPathUtils.temporaryShareFile(basePath, shareId);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _relativePath(filePath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
       }
       return true;
     } catch (e) {
@@ -581,14 +659,14 @@ class TrackerStorageService {
   Future<List<TemporaryShare>> listTemporaryShares() async {
     try {
       final dirPath = TrackerPathUtils.sharingTemporaryDir(basePath);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final shares = <TemporaryShare>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final shareId = name.replaceAll('share_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final shareId = entry.name.replaceAll('share_', '').replaceAll('.json', '');
           final share = await readTemporaryShare(shareId);
           if (share != null) {
             shares.add(share);
@@ -608,10 +686,10 @@ class TrackerStorageService {
   Future<ReceivedLocation?> readReceivedLocation(String callsign) async {
     try {
       final filePath = TrackerPathUtils.receivedLocationFile(basePath, callsign);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return ReceivedLocation.fromJson(json);
     } catch (e) {
@@ -624,9 +702,15 @@ class TrackerStorageService {
   Future<bool> writeReceivedLocation(ReceivedLocation location) async {
     try {
       final filePath = TrackerPathUtils.receivedLocationFile(basePath, location.callsign);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(location.toJson()),
       );
       return true;
@@ -640,9 +724,9 @@ class TrackerStorageService {
   Future<bool> deleteReceivedLocation(String callsign) async {
     try {
       final filePath = TrackerPathUtils.receivedLocationFile(basePath, callsign);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _relativePath(filePath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
       }
       return true;
     } catch (e) {
@@ -655,14 +739,14 @@ class TrackerStorageService {
   Future<List<ReceivedLocation>> listReceivedLocations() async {
     try {
       final dirPath = TrackerPathUtils.locationsDir(basePath);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final locations = <ReceivedLocation>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('_location.json')) {
-          final name = entity.path.split('/').last;
-          final callsign = name.replaceAll('_location.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('_location.json')) {
+          final callsign = entry.name.replaceAll('_location.json', '');
           final location = await readReceivedLocation(callsign);
           if (location != null) {
             locations.add(location);
@@ -683,10 +767,10 @@ class TrackerStorageService {
     try {
       final dateStr = TrackerPathUtils.formatDateYYYYMMDD(date);
       final filePath = TrackerPathUtils.proximityFile(basePath, date.year, dateStr);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return DailyProximityData.fromJson(json);
     } catch (e) {
@@ -704,9 +788,15 @@ class TrackerStorageService {
       final dateStr = data.date.replaceAll('-', '');
 
       final filePath = TrackerPathUtils.proximityFile(basePath, year, dateStr);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -720,14 +810,14 @@ class TrackerStorageService {
   Future<List<DateTime>> listProximityDates(int year) async {
     try {
       final dirPath = TrackerPathUtils.proximityDir(basePath, year);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final dates = <DateTime>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final dateStr = name.replaceAll('proximity_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final dateStr = entry.name.replaceAll('proximity_', '').replaceAll('.json', '');
           final date = TrackerPathUtils.parseDateYYYYMMDD(dateStr);
           if (date != null) {
             dates.add(date);
@@ -749,10 +839,10 @@ class TrackerStorageService {
     try {
       final dateStr = TrackerPathUtils.formatDateYYYYMMDD(date);
       final filePath = TrackerPathUtils.visitsFile(basePath, date.year, dateStr);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return DailyVisitsData.fromJson(json);
     } catch (e) {
@@ -770,9 +860,15 @@ class TrackerStorageService {
       final dateStr = data.date.replaceAll('-', '');
 
       final filePath = TrackerPathUtils.visitsFile(basePath, year, dateStr);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -786,10 +882,10 @@ class TrackerStorageService {
   Future<PlaceStatsData?> readPlaceStats() async {
     try {
       final filePath = TrackerPathUtils.visitsStatsFile(basePath);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return PlaceStatsData.fromJson(json);
     } catch (e) {
@@ -802,9 +898,15 @@ class TrackerStorageService {
   Future<bool> writePlaceStats(PlaceStatsData data) async {
     try {
       final filePath = TrackerPathUtils.visitsStatsFile(basePath);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      final parentDir = relativePath.contains('/')
+          ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+          : '';
+      if (parentDir.isNotEmpty) {
+        await _storage.createDirectory(parentDir);
+      }
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(data.toJson()),
       );
       return true;
@@ -818,14 +920,14 @@ class TrackerStorageService {
   Future<List<DateTime>> listVisitDates(int year) async {
     try {
       final dirPath = TrackerPathUtils.visitsDir(basePath, year);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _relativePath(dirPath);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final dates = <DateTime>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          final name = entity.path.split('/').last;
-          final dateStr = name.replaceAll('visits_', '').replaceAll('.json', '');
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('.json')) {
+          final dateStr = entry.name.replaceAll('visits_', '').replaceAll('.json', '');
           final date = TrackerPathUtils.parseDateYYYYMMDD(dateStr);
           if (date != null) {
             dates.add(date);
@@ -842,21 +944,19 @@ class TrackerStorageService {
 
   // ============ Unified Proximity Track Operations (Year/Week) ============
 
-  /// Get the directory path for proximity tracks of a specific week
-  String _proximityWeekDir(int year, int week) {
+  /// Get the relative directory path for proximity tracks of a specific week
+  String _proximityWeekRelativeDir(int year, int week) {
     final weekFolder = 'W${week.toString().padLeft(2, '0')}';
-    return '$basePath/proximity/$year/$weekFolder';
+    return 'proximity/$year/$weekFolder';
   }
 
   /// Read a proximity track file
   Future<ProximityTrack?> readProximityTrack(int year, int week, String id) async {
     try {
-      final dirPath = _proximityWeekDir(year, week);
-      final filePath = '$dirPath/$id-track.json';
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = '${_proximityWeekRelativeDir(year, week)}/$id-track.json';
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return ProximityTrack.fromJson(json);
     } catch (e) {
@@ -868,11 +968,11 @@ class TrackerStorageService {
   /// Write a proximity track file
   Future<bool> writeProximityTrack(int year, int week, ProximityTrack track) async {
     try {
-      final dirPath = _proximityWeekDir(year, week);
-      final filePath = '$dirPath/${track.id}-track.json';
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final dirPath = _proximityWeekRelativeDir(year, week);
+      await _storage.createDirectory(dirPath);
+      final relativePath = '$dirPath/${track.id}-track.json';
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(track.toJson()),
       );
       return true;
@@ -885,17 +985,19 @@ class TrackerStorageService {
   /// List all proximity tracks for a specific week
   Future<List<ProximityTrack>> listProximityTracks(int year, int week) async {
     try {
-      final dirPath = _proximityWeekDir(year, week);
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = _proximityWeekRelativeDir(year, week);
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final tracks = <ProximityTrack>[];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('-track.json')) {
+      for (final entry in entries) {
+        if (!entry.isDirectory && entry.name.endsWith('-track.json')) {
           try {
-            final content = await entity.readAsString();
-            final json = jsonDecode(content) as Map<String, dynamic>;
-            tracks.add(ProximityTrack.fromJson(json));
+            final content = await _storage.readString('$relativePath/${entry.name}');
+            if (content != null) {
+              final json = jsonDecode(content) as Map<String, dynamic>;
+              tracks.add(ProximityTrack.fromJson(json));
+            }
           } catch (_) {
             // Skip invalid files
           }
@@ -915,19 +1017,16 @@ class TrackerStorageService {
   /// List weeks with proximity data for a year
   Future<List<int>> listProximityWeeks(int year) async {
     try {
-      final dirPath = '$basePath/proximity/$year';
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      final relativePath = 'proximity/$year';
+      if (!await _storage.exists(relativePath)) return [];
 
+      final entries = await _storage.listDirectory(relativePath);
       final weeks = <int>[];
-      await for (final entity in dir.list()) {
-        if (entity is Directory) {
-          final name = entity.path.split('/').last;
-          if (name.startsWith('W')) {
-            final week = int.tryParse(name.substring(1));
-            if (week != null && week >= 1 && week <= 53) {
-              weeks.add(week);
-            }
+      for (final entry in entries) {
+        if (entry.isDirectory && entry.name.startsWith('W')) {
+          final week = int.tryParse(entry.name.substring(1));
+          if (week != null && week >= 1 && week <= 53) {
+            weeks.add(week);
           }
         }
       }
@@ -945,10 +1044,10 @@ class TrackerStorageService {
   Future<TrackerCollectionMetadata?> readMetadata() async {
     try {
       final filePath = TrackerPathUtils.metadataFile(basePath);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerCollectionMetadata.fromJson(json);
     } catch (e) {
@@ -961,9 +1060,9 @@ class TrackerStorageService {
   Future<bool> writeMetadata(TrackerCollectionMetadata metadata) async {
     try {
       final filePath = TrackerPathUtils.metadataFile(basePath);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(metadata.toJson()),
       );
       return true;
@@ -979,10 +1078,10 @@ class TrackerStorageService {
   Future<TrackerRecordingState?> readRecordingState() async {
     try {
       final filePath = TrackerPathUtils.recordingStateFile(basePath);
-      final file = File(filePath);
-      if (!await file.exists()) return null;
+      final relativePath = _relativePath(filePath);
+      final content = await _storage.readString(relativePath);
+      if (content == null) return null;
 
-      final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return TrackerRecordingState.fromJson(json);
     } catch (e) {
@@ -995,9 +1094,9 @@ class TrackerStorageService {
   Future<bool> writeRecordingState(TrackerRecordingState state) async {
     try {
       final filePath = TrackerPathUtils.recordingStateFile(basePath);
-      final file = File(filePath);
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final relativePath = _relativePath(filePath);
+      await _storage.writeString(
+        relativePath,
         const JsonEncoder.withIndent('  ').convert(state.toJson()),
       );
       return true;
@@ -1011,9 +1110,9 @@ class TrackerStorageService {
   Future<bool> deleteRecordingState() async {
     try {
       final filePath = TrackerPathUtils.recordingStateFile(basePath);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      final relativePath = _relativePath(filePath);
+      if (await _storage.exists(relativePath)) {
+        await _storage.delete(relativePath);
       }
       return true;
     } catch (e) {
@@ -1027,21 +1126,18 @@ class TrackerStorageService {
   /// Initialize the tracker directory structure
   Future<bool> initialize() async {
     try {
-      final baseDir = Directory(basePath);
-      await baseDir.create(recursive: true);
-
-      // Create subdirectories
-      await Directory('$basePath/paths').create(recursive: true);
-      await Directory('$basePath/measurements').create(recursive: true);
-      await Directory('$basePath/exercises').create(recursive: true);
-      await Directory('$basePath/plans/active').create(recursive: true);
-      await Directory('$basePath/plans/archived').create(recursive: true);
-      await Directory('$basePath/sharing/groups').create(recursive: true);
-      await Directory('$basePath/sharing/temporary').create(recursive: true);
-      await Directory('$basePath/locations').create(recursive: true);
-      await Directory('$basePath/proximity').create(recursive: true);
-      await Directory('$basePath/visits').create(recursive: true);
-      await Directory('$basePath/extra').create(recursive: true);
+      // Create subdirectories using storage abstraction
+      await _storage.createDirectory('paths');
+      await _storage.createDirectory('measurements');
+      await _storage.createDirectory('exercises');
+      await _storage.createDirectory('plans/active');
+      await _storage.createDirectory('plans/archived');
+      await _storage.createDirectory('sharing/groups');
+      await _storage.createDirectory('sharing/temporary');
+      await _storage.createDirectory('locations');
+      await _storage.createDirectory('proximity');
+      await _storage.createDirectory('visits');
+      await _storage.createDirectory('extra');
 
       return true;
     } catch (e) {
@@ -1053,8 +1149,8 @@ class TrackerStorageService {
   /// Check if the tracker has been initialized
   Future<bool> isInitialized() async {
     try {
-      final baseDir = Directory(basePath);
-      return await baseDir.exists();
+      // Check if base directory exists (empty path = root of storage)
+      return await _storage.exists('');
     } catch (e) {
       return false;
     }
@@ -1063,15 +1159,13 @@ class TrackerStorageService {
   /// List available years for a data type
   Future<List<int>> listYears(String subPath) async {
     try {
-      final dirPath = '$basePath/$subPath';
-      final dir = Directory(dirPath);
-      if (!await dir.exists()) return [];
+      if (!await _storage.exists(subPath)) return [];
 
+      final entries = await _storage.listDirectory(subPath);
       final years = <int>[];
-      await for (final entity in dir.list()) {
-        if (entity is Directory) {
-          final name = entity.path.split('/').last;
-          final year = int.tryParse(name);
+      for (final entry in entries) {
+        if (entry.isDirectory) {
+          final year = int.tryParse(entry.name);
           if (year != null) {
             years.add(year);
           }

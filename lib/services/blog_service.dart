@@ -6,15 +6,14 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/blog_post.dart';
-import '../platform/file_system_service.dart';
 import '../util/blog_folder_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
 import 'collection_service.dart';
+import 'profile_storage.dart';
 
 /// Model for chat security (reused for blog)
 class ChatSecurity {
@@ -64,13 +63,30 @@ class ChatSecurity {
 }
 
 /// Service for managing blog posts and comments
+///
+/// IMPORTANT: All file operations go through the ProfileStorage abstraction.
+/// Never use File() or Directory() directly in this service.
 class BlogService {
   static final BlogService _instance = BlogService._internal();
   factory BlogService() => _instance;
   BlogService._internal();
 
+  /// Profile storage for file operations (encrypted or filesystem)
+  /// IMPORTANT: This MUST be set before using the service.
+  /// All file operations go through this abstraction.
+  late ProfileStorage _storage;
+
   String? _collectionPath;
   ChatSecurity _security = ChatSecurity();
+
+  /// Whether using encrypted storage
+  bool get useEncryptedStorage => _storage.isEncrypted;
+
+  /// Set the profile storage for file operations
+  /// MUST be called before initializeCollection
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
+  }
 
   /// Initialize blog service for a collection
   ///
@@ -81,19 +97,9 @@ class BlogService {
     _collectionPath = collectionPath;
 
     // Ensure blog directory exists (collectionPath is already the blog root)
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(collectionPath)) {
-        await fs.createDirectory(collectionPath, recursive: true);
-        LogService().log('BlogService: Created blog directory');
-      }
-    } else {
-      final blogDir = Directory(collectionPath);
-      if (!await blogDir.exists()) {
-        await blogDir.create(recursive: true);
-        LogService().log('BlogService: Created blog directory');
-      }
-    }
+    // ProfileStorage handles directory creation automatically
+    await _storage.createDirectory('');
+    LogService().log('BlogService: Initialized with ProfileStorage');
 
     // Load security
     await _loadSecurity();
@@ -110,27 +116,10 @@ class BlogService {
   Future<void> _loadSecurity() async {
     if (_collectionPath == null) return;
 
-    final securityPath = '$_collectionPath/extra/security.json';
-
     try {
-      String? content;
-      bool exists = false;
+      final content = await _storage.readString('extra/security.json');
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        exists = await fs.exists(securityPath);
-        if (exists) {
-          content = await fs.readAsString(securityPath);
-        }
-      } else {
-        final securityFile = File(securityPath);
-        exists = await securityFile.exists();
-        if (exists) {
-          content = await securityFile.readAsString();
-        }
-      }
-
-      if (exists && content != null) {
+      if (content != null) {
         final json = jsonDecode(content) as Map<String, dynamic>;
         _security = ChatSecurity.fromJson(json);
         LogService().log('BlogService: Loaded security settings');
@@ -148,25 +137,10 @@ class BlogService {
     if (_collectionPath == null) return;
 
     _security = security;
-
-    final extraPath = '$_collectionPath/extra';
-    final securityPath = '$extraPath/security.json';
     final content = jsonEncode(security.toJson());
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(extraPath)) {
-        await fs.createDirectory(extraPath, recursive: true);
-      }
-      await fs.writeAsString(securityPath, content);
-    } else {
-      final extraDir = Directory(extraPath);
-      if (!await extraDir.exists()) {
-        await extraDir.create(recursive: true);
-      }
-      final securityFile = File(securityPath);
-      await securityFile.writeAsString(content, flush: true);
-    }
+    await _storage.createDirectory('extra');
+    await _storage.writeString('extra/security.json', content);
 
     LogService().log('BlogService: Saved security settings');
   }
@@ -177,32 +151,12 @@ class BlogService {
 
     final years = <int>[];
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      if (!await fs.exists(_collectionPath!)) return [];
-
-      final entities = await fs.list(_collectionPath!);
-      for (var entity in entities) {
-        if (entity.type == FsEntityType.directory) {
-          final name = entity.path.split('/').last;
-          final year = int.tryParse(name);
-          if (year != null) {
-            years.add(year);
-          }
-        }
-      }
-    } else {
-      final blogDir = Directory(_collectionPath!);
-      if (!await blogDir.exists()) return [];
-
-      final entities = await blogDir.list().toList();
-      for (var entity in entities) {
-        if (entity is Directory) {
-          final name = entity.path.split('/').last;
-          final year = int.tryParse(name);
-          if (year != null) {
-            years.add(year);
-          }
+    final entries = await _storage.listDirectory('');
+    for (var entry in entries) {
+      if (entry.isDirectory) {
+        final year = int.tryParse(entry.name);
+        if (year != null) {
+          years.add(year);
         }
       }
     }
@@ -225,66 +179,26 @@ class BlogService {
     final years = year != null ? [year] : await getYears();
 
     for (var y in years) {
-      final yearPath = '$_collectionPath/$y';
+      final entries = await _storage.listDirectory('$y');
+      for (var entry in entries) {
+        if (entry.isDirectory) {
+          final postId = entry.name;
+          final content = await _storage.readString('$y/$postId/post.md');
+          if (content == null) continue;
 
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(yearPath)) continue;
+          try {
+            final post = BlogPost.fromText(content, postId);
 
-        final entities = await fs.list(yearPath);
-        for (var entity in entities) {
-          // Look for directories (post folders)
-          if (entity.type == FsEntityType.directory) {
-            final postId = entity.path.split('/').last;
-            final postFilePath = '${entity.path}/post.md';
-
-            if (!await fs.exists(postFilePath)) continue;
-
-            try {
-              final content = await fs.readAsString(postFilePath);
-              final post = BlogPost.fromText(content, postId);
-
-              // Filter by published status
-              if (publishedOnly && !post.isPublished) {
-                if (!post.isOwnPost(currentUserNpub)) {
-                  continue;
-                }
+            // Filter by published status
+            if (publishedOnly && !post.isPublished) {
+              if (!post.isOwnPost(currentUserNpub)) {
+                continue;
               }
-
-              posts.add(post);
-            } catch (e) {
-              LogService().log('BlogService: Error loading post $postId: $e');
             }
-          }
-        }
-      } else {
-        final yearDir = Directory(yearPath);
-        if (!await yearDir.exists()) continue;
 
-        final entities = await yearDir.list().toList();
-        for (var entity in entities) {
-          // Look for directories (post folders)
-          if (entity is Directory) {
-            final postId = entity.path.split('/').last;
-            final postFile = File('${entity.path}/post.md');
-
-            if (!await postFile.exists()) continue;
-
-            try {
-              final content = await postFile.readAsString();
-              final post = BlogPost.fromText(content, postId);
-
-              // Filter by published status
-              if (publishedOnly && !post.isPublished) {
-                if (!post.isOwnPost(currentUserNpub)) {
-                  continue;
-                }
-              }
-
-              posts.add(post);
-            } catch (e) {
-              LogService().log('BlogService: Error loading post $postId: $e');
-            }
+            posts.add(post);
+          } catch (e) {
+            LogService().log('BlogService: Error loading post $postId: $e');
           }
         }
       }
@@ -319,32 +233,21 @@ class BlogService {
 
     // Extract year from postId (format: YYYY-MM-DD_title)
     final year = postId.substring(0, 4);
+    final postRelativePath = '$year/$postId';
     final postFolderPath = '$_collectionPath/$year/$postId';
-    final postFilePath = '$postFolderPath/post.md';
 
     try {
-      String? content;
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(postFilePath)) {
-          LogService().log('BlogService: Post file not found: $postFilePath');
-          return null;
-        }
-        content = await fs.readAsString(postFilePath);
-      } else {
-        final postFile = File(postFilePath);
-        if (!await postFile.exists()) {
-          LogService().log('BlogService: Post file not found: $postFilePath');
-          return null;
-        }
-        content = await postFile.readAsString();
+      final content = await _storage.readString('$postRelativePath/post.md');
+      if (content == null) {
+        LogService().log('BlogService: Post file not found: $postRelativePath/post.md');
+        return null;
       }
 
       // Parse post (without comments, since they're in separate files)
       final post = BlogPost.fromText(content, postId);
 
       // Load comments from comments/ directory
+      // Note: BlogFolderUtils still uses filesystem paths - needs future migration
       final comments = await BlogFolderUtils.loadComments(postFolderPath);
 
       // Return post with comments
@@ -392,19 +295,10 @@ class BlogService {
     String filename = baseFilename;
     int suffix = 1;
 
-    if (kIsWeb) {
-      final fs = FileSystemService.instance;
-      // Check for folder existence (new structure)
-      while (await fs.exists('$_collectionPath/$year/$filename')) {
-        filename = '$baseFilename-$suffix';
-        suffix++;
-      }
-    } else {
-      // Check for folder existence (new structure)
-      while (await Directory('$_collectionPath/$year/$filename').exists()) {
-        filename = '$baseFilename-$suffix';
-        suffix++;
-      }
+    // Check for folder existence via storage abstraction
+    while (await _storage.directoryExists('$year/$filename')) {
+      filename = '$baseFilename-$suffix';
+      suffix++;
     }
 
     return filename;
@@ -438,18 +332,8 @@ class BlogService {
       final postId = await _ensureUniqueFilename(baseFilename, year);
 
       // Create post folder structure
-      final postFolderPath = '$_collectionPath/$year/$postId';
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (!await fs.exists(postFolderPath)) {
-          await fs.createDirectory(postFolderPath, recursive: true);
-        }
-      } else {
-        final postDir = Directory(postFolderPath);
-        if (!await postDir.exists()) {
-          await postDir.create(recursive: true);
-        }
-      }
+      final postRelativePath = '$year/$postId';
+      await _storage.createDirectory(postRelativePath);
 
       // Build metadata
       final postMetadata = <String, String>{
@@ -461,7 +345,7 @@ class BlogService {
       if (imagePaths != null && imagePaths.isNotEmpty) {
         final imageNames = <String>[];
         for (final imagePath in imagePaths) {
-          final destFileName = await _copyFileToPostFolder(imagePath, postFolderPath);
+          final destFileName = await _copyFileToPostFolder(imagePath, postRelativePath);
           if (destFileName != null) {
             imageNames.add(destFileName);
           }
@@ -508,16 +392,8 @@ class BlogService {
       );
 
       // Write to post.md inside folder
-      final postFilePath = '$postFolderPath/post.md';
       final postContent = signedPost.exportAsText();
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        await fs.writeAsString(postFilePath, postContent);
-      } else {
-        final postFile = File(postFilePath);
-        await postFile.writeAsString(postContent, flush: true);
-      }
+      await _storage.writeString('$postRelativePath/post.md', postContent);
 
       LogService().log('BlogService: Created post: $postId');
 
@@ -534,14 +410,12 @@ class BlogService {
   }
 
   /// Copy file to post's files directory with SHA1-based naming
-  Future<String?> _copyFileToPostFolder(String sourcePath, String postFolderPath) async {
-    // File copying is not fully supported on web yet
-    if (kIsWeb) {
-      LogService().log('BlogService: File copy not supported on web');
-      return null;
-    }
-
+  ///
+  /// [sourcePath] is the external file path
+  /// [postRelativePath] is the relative path to the post folder (e.g., "2025/2025-01-15_title")
+  Future<String?> _copyFileToPostFolder(String sourcePath, String postRelativePath) async {
     try {
+      // Read source file to calculate hash
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
         LogService().log('BlogService: Source file does not exist: $sourcePath');
@@ -571,14 +445,10 @@ class BlogService {
       final destFileName = '${hash}_$truncatedName';
 
       // Ensure files directory exists inside post folder
-      final filesDir = Directory('$postFolderPath/files');
-      if (!await filesDir.exists()) {
-        await filesDir.create(recursive: true);
-      }
+      await _storage.createDirectory('$postRelativePath/files');
 
-      // Copy file
-      final destFile = File('${filesDir.path}/$destFileName');
-      await sourceFile.copy(destFile.path);
+      // Copy file using storage abstraction
+      await _storage.copyFromExternal(sourcePath, '$postRelativePath/files/$destFileName');
 
       LogService().log('BlogService: Copied file: $destFileName');
       return destFileName;
@@ -638,16 +508,8 @@ class BlogService {
 
       // Write to post.md inside folder
       final year = post.year;
-      final postFilePath = '$_collectionPath/$year/$postId/post.md';
       final postContent = updatedPost.exportAsText();
-
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        await fs.writeAsString(postFilePath, postContent);
-      } else {
-        final postFile = File(postFilePath);
-        await postFile.writeAsString(postContent, flush: true);
-      }
+      await _storage.writeString('$year/$postId/post.md', postContent);
 
       LogService().log('BlogService: Updated post: $postId');
 
@@ -688,31 +550,17 @@ class BlogService {
 
     try {
       final year = post.year;
-      final postFolderPath = '$_collectionPath/$year/$postId';
+      final postRelativePath = '$year/$postId';
 
-      bool deleted = false;
-      if (kIsWeb) {
-        final fs = FileSystemService.instance;
-        if (await fs.exists(postFolderPath)) {
-          await fs.delete(postFolderPath, recursive: true);
-          LogService().log('BlogService: Deleted post folder: $postId');
-          deleted = true;
-        }
-      } else {
-        final postDir = Directory(postFolderPath);
-        if (await postDir.exists()) {
-          await postDir.delete(recursive: true);
-          LogService().log('BlogService: Deleted post folder: $postId');
-          deleted = true;
-        }
-      }
+      await _storage.deleteDirectory(postRelativePath, recursive: true);
+      LogService().log('BlogService: Deleted post folder: $postId');
 
-      // Regenerate blog cache if post was deleted
-      if (deleted && _collectionPath != null) {
+      // Regenerate blog cache
+      if (_collectionPath != null) {
         await CollectionService().generateBlogCache(_collectionPath!);
       }
 
-      return deleted;
+      return true;
     } catch (e) {
       LogService().log('BlogService: Error deleting post: $e');
       return false;

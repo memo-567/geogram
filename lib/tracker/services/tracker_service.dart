@@ -6,6 +6,7 @@ import '../models/tracker_proximity_track.dart';
 import '../utils/tracker_path_utils.dart';
 import 'tracker_storage_service.dart';
 import '../../services/log_service.dart';
+import '../../services/profile_storage.dart';
 
 /// Represents a change in the tracker
 class TrackerChange {
@@ -31,6 +32,7 @@ class TrackerService {
   TrackerStorageService? _storage;
   String? _currentPath;
   String? _ownerCallsign;
+  ProfileStorage? _profileStorage;
 
   /// Stream controller for tracker changes
   final _changesController = StreamController<TrackerChange>.broadcast();
@@ -47,10 +49,20 @@ class TrackerService {
   /// Get the owner callsign
   String? get ownerCallsign => _ownerCallsign;
 
+  /// Set the storage to use for file operations.
+  /// This must be called before initializeCollection().
+  void setStorage(ProfileStorage storage) {
+    _profileStorage = storage;
+  }
+
   /// Initialize the service with a collection path
   Future<void> initializeCollection(String path, {String? callsign}) async {
     _currentPath = path;
-    _storage = TrackerStorageService(path);
+
+    // Use provided ProfileStorage or fall back to filesystem storage
+    final storage = _profileStorage ?? FilesystemProfileStorage(path);
+    _storage = TrackerStorageService(path, storage);
+
     _ownerCallsign = callsign;
     await _storage!.initialize();
     LogService().log('TrackerService: Initialized with path $path');
@@ -61,6 +73,7 @@ class TrackerService {
     _storage = null;
     _currentPath = null;
     _ownerCallsign = null;
+    _profileStorage = null;
   }
 
   // ============ Metadata Operations ============

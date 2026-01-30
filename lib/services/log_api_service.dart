@@ -18,6 +18,7 @@ import 'security_service.dart';
 import 'storage_config.dart';
 import 'user_location_service.dart';
 import 'chat_service.dart';
+import 'profile_storage.dart';
 import 'direct_message_service.dart';
 import 'devices_service.dart';
 import 'device_apps_service.dart';
@@ -41,6 +42,7 @@ import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
+import 'encrypted_storage_service.dart';
 import 'place_feedback_service.dart';
 import 'station_alert_service.dart';
 import '../api/handlers/blog_handler.dart';
@@ -152,6 +154,18 @@ class LogApiService {
       // Get active profile's npub for admin
       final activeProfile = ProfileService().getProfile();
       final npub = activeProfile.npub;
+
+      // Set profile storage for encrypted storage support
+      final profileStorage = CollectionService().profileStorage;
+      if (profileStorage != null) {
+        final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+          profileStorage,
+          chatDir.path,
+        );
+        chatService.setStorage(scopedStorage);
+      } else {
+        chatService.setStorage(FilesystemProfileStorage(chatDir.path));
+      }
 
       // Initialize ChatService with the chat collection
       await chatService.initializeCollection(chatDir.path, creatorNpub: npub);
@@ -1291,6 +1305,11 @@ class LogApiService {
       // Handle P2P transfer debug actions
       if (action.toLowerCase().startsWith('p2p_')) {
         return await _handleP2PAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle encrypted storage debug actions
+      if (action.toLowerCase().startsWith('encrypt_storage_')) {
+        return await _handleEncryptStorageAction(action.toLowerCase(), params, headers);
       }
 
       final debugController = DebugController();
@@ -14445,6 +14464,130 @@ ul, ol { margin-left: 30px; padding: 0; }
       }
     } catch (e, stack) {
       LogService().log('LogApiService: P2P action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - Encrypted Storage Actions
+  // ============================================================
+
+  /// Handle encrypted storage debug actions
+  Future<shelf.Response> _handleEncryptStorageAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final encryptedService = EncryptedStorageService();
+      final profileService = ProfileService();
+      final profile = profileService.getProfile();
+
+      // Get nsec from params or profile
+      final nsec = params['nsec'] as String? ?? profile.nsec;
+
+      switch (action) {
+        case 'encrypt_storage_status':
+          final status = await encryptedService.getStatus(profile.callsign);
+          return shelf.Response.ok(
+            jsonEncode({
+              ...status.toJson(),
+              'has_nsec': nsec != null && nsec.isNotEmpty,
+            }),
+            headers: headers,
+          );
+
+        case 'encrypt_storage_enable':
+          // Check if nsec is available
+          if (nsec == null || nsec.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Encryption requires nsec (NOSTR secret key)',
+                'code': 'NSEC_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if already using encrypted storage
+          if (encryptedService.isEncryptedStorageEnabled(profile.callsign)) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Profile is already using encrypted storage',
+                'code': 'ALREADY_ENCRYPTED',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Migrate to encrypted storage
+          LogService().log('LogApiService: Starting encrypted migration for ${profile.callsign}');
+          final result = await encryptedService.migrateToEncrypted(profile.callsign, nsec);
+
+          return shelf.Response.ok(
+            jsonEncode(result.toJson()),
+            headers: headers,
+          );
+
+        case 'encrypt_storage_disable':
+          // Check if nsec is available
+          if (nsec == null || nsec.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Decryption requires nsec (NOSTR secret key)',
+                'code': 'NSEC_REQUIRED',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Check if using encrypted storage
+          if (!encryptedService.isEncryptedStorageEnabled(profile.callsign)) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Profile is not using encrypted storage',
+                'code': 'NOT_ENCRYPTED',
+              }),
+              headers: headers,
+            );
+          }
+
+          // Migrate to folders
+          LogService().log('LogApiService: Starting decryption for ${profile.callsign}');
+          final result = await encryptedService.migrateToFolders(profile.callsign, nsec);
+
+          return shelf.Response.ok(
+            jsonEncode(result.toJson()),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown encrypted storage action: $action',
+              'available': [
+                'encrypt_storage_status',
+                'encrypt_storage_enable',
+                'encrypt_storage_disable',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Encrypted storage action error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({
