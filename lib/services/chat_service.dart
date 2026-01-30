@@ -6,7 +6,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:path/path.dart' as p;
 import '../models/chat_message.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
@@ -77,6 +79,20 @@ class ChatService {
   /// MUST be called before initializeCollection
   void setStorage(ProfileStorage storage) {
     _storage = storage;
+  }
+
+  /// Get attachment file bytes for display.
+  ///
+  /// This method reads attachment files through ProfileStorage, enabling
+  /// transparent access to files in both filesystem and encrypted storage.
+  ///
+  /// [channelFolder] is the channel's folder name (e.g., "main/2025" or "GROUP1")
+  /// [filename] is the attachment filename
+  ///
+  /// Returns the file bytes, or null if not found.
+  Future<Uint8List?> getAttachmentBytes(String channelFolder, String filename) async {
+    final relativePath = '$channelFolder/files/$filename';
+    return await _storage.readBytes(relativePath);
   }
 
   /// Get the relative path from collection path
@@ -186,6 +202,12 @@ class ChatService {
 
     // File watching is not supported on web
     if (kIsWeb) {
+      return;
+    }
+
+    // File watching requires real filesystem - not supported with encrypted storage
+    // Other mechanisms handle updates: Station WebSocket, polling, and EventBus
+    if (_storage.isEncrypted) {
       return;
     }
 
