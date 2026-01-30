@@ -10,12 +10,16 @@ environment:
 
 dependencies:
   sqlite3: ^2.4.0
-  sqlite3_flutter_libs: ^0.5.24  # Native SQLite libs for Flutter platforms
   cryptography: ^2.7.0
   crypto: ^3.0.3
   archive: ^3.4.0
   meta: ^1.9.0
   path: ^1.8.0
+
+# Note: sqlite3_flutter_libs is required for Flutter apps but not listed here
+# because it's a Flutter plugin. Instead, the main app's pubspec.yaml must include
+# sqlite3_flutter_libs as a dependency for Flutter builds. For CLI/pure Dart builds,
+# the native SQLite library must be available on the system or bundled in libs/.
 
 dev_dependencies:
   test: ^1.24.0
