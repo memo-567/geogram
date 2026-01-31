@@ -103,7 +103,19 @@ class WorkStorageService {
     required String ownerNpub,
     String? description,
   }) async {
+    // Generate unique folder ID from name
+    final baseId = Workspace.generateId(name);
+    var id = baseId;
+    var counter = 1;
+
+    // Check for collisions
+    while (await _storage.directoryExists(workspacePath(id))) {
+      counter++;
+      id = '$baseId ($counter)';
+    }
+
     final workspace = Workspace.create(
+      id: id,
       name: name,
       ownerNpub: ownerNpub,
       description: description,

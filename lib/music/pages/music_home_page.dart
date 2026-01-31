@@ -14,7 +14,6 @@ import '../models/music_models.dart';
 import '../services/music_services.dart';
 import '../widgets/music_widgets.dart';
 import 'album_detail_page.dart';
-import 'artist_detail_page.dart';
 import 'music_settings_page.dart';
 
 /// Main music app home page
@@ -219,22 +218,6 @@ class _MusicHomePageState extends State<MusicHomePage>
     );
   }
 
-  void _openArtist(MusicArtist artist) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => ArtistDetailPage(
-          artist: artist,
-          library: _library,
-          playback: _playbackService,
-          i18n: widget.i18n,
-          onFetchArtwork: _settings.online.autoFetchCovers
-              ? (a) => _libraryService.fetchAlbumArtwork(a)
-              : null,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -271,8 +254,8 @@ class _MusicHomePageState extends State<MusicHomePage>
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(text: 'Artists'),
-            Tab(text: 'Albums'),
+            Tab(text: 'Home'),
+            Tab(text: 'Folders'),
             Tab(text: 'Playlists'),
           ],
         ),
@@ -301,8 +284,8 @@ class _MusicHomePageState extends State<MusicHomePage>
                       : TabBarView(
                           controller: _tabController,
                           children: [
-                            _buildArtistsTab(),
-                            _buildAlbumsTab(),
+                            _buildHomeTab(),
+                            _buildFoldersTab(),
                             _buildPlaylistsTab(),
                           ],
                         ),
@@ -359,58 +342,23 @@ class _MusicHomePageState extends State<MusicHomePage>
     );
   }
 
-  Widget _buildArtistsTab() {
-    final artists = _library.artists;
-
-    if (artists.isEmpty) {
-      return const Center(child: Text('No artists found'));
-    }
-
-    return GridView.builder(
-      padding: const EdgeInsets.all(8),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 180,
-        childAspectRatio: 0.8,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: artists.length,
-      itemBuilder: (context, index) {
-        final artist = artists[index];
-        return ArtistCardWidget(
-          artist: artist,
-          onTap: () => _openArtist(artist),
-        );
-      },
+  Widget _buildHomeTab() {
+    return HomeTabWidget(
+      library: _library,
+      playback: _playbackService,
     );
   }
 
-  Widget _buildAlbumsTab() {
-    final albums = _library.albums;
-
-    if (albums.isEmpty) {
-      return const Center(child: Text('No albums found'));
-    }
-
-    return GridView.builder(
-      padding: const EdgeInsets.all(8),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 180,
-        childAspectRatio: 0.75,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: albums.length,
-      itemBuilder: (context, index) {
-        final album = albums[index];
-        return AlbumCardWidget(
-          album: album,
-          onTap: () => _openAlbum(album),
-          onFetchArtwork: _settings.online.autoFetchCovers
-              ? (a) => _libraryService.fetchAlbumArtwork(a)
-              : null,
-        );
-      },
+  Widget _buildFoldersTab() {
+    return FolderBrowserWidget(
+      library: _library,
+      playback: _playbackService,
+      sourceFolders: _settings.sourceFolders,
+      onFetchArtwork: _settings.online.autoFetchCovers
+          ? (a) => _libraryService.fetchAlbumArtwork(a)
+          : null,
+      onAddFolder: _addFolderAndScan,
+      onOpenAlbum: _openAlbum,
     );
   }
 

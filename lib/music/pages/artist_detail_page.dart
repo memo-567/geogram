@@ -234,15 +234,33 @@ class ArtistDetailPage extends StatelessWidget {
                 final track = allTracks[index];
                 return StreamBuilder<MusicTrack?>(
                   stream: playback.trackStream,
-                  builder: (context, snapshot) {
-                    final isPlaying = (snapshot.data?.id ?? playback.currentTrack?.id) == track.id;
-                    return TrackTileWidget(
-                      track: track,
-                      showAlbum: true,
-                      showTrackNumber: false,
-                      isPlaying: isPlaying,
-                      onTap: () {
-                        playback.playTracks(allTracks, startIndex: index);
+                  builder: (context, trackSnapshot) {
+                    final isCurrentTrack = (trackSnapshot.data?.id ?? playback.currentTrack?.id) == track.id;
+                    return StreamBuilder<MusicPlaybackState>(
+                      stream: playback.stateStream,
+                      initialData: playback.state,
+                      builder: (context, stateSnapshot) {
+                        final isActuallyPlaying = isCurrentTrack &&
+                            stateSnapshot.data == MusicPlaybackState.playing;
+                        return TrackTileWidget(
+                          track: track,
+                          showAlbum: true,
+                          showTrackNumber: false,
+                          isPlaying: isCurrentTrack,
+                          isActuallyPlaying: isActuallyPlaying,
+                          onTap: () {
+                            if (isCurrentTrack) {
+                              // Toggle play/pause for current track
+                              if (isActuallyPlaying) {
+                                playback.pause();
+                              } else {
+                                playback.play();
+                              }
+                            } else {
+                              playback.playTracks(allTracks, startIndex: index);
+                            }
+                          },
+                        );
                       },
                     );
                   },

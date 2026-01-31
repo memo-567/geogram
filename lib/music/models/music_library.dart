@@ -3,9 +3,42 @@
  * License: Apache-2.0
  */
 
+import 'dart:io';
+
 import 'music_track.dart';
 import 'music_album.dart';
 import 'music_artist.dart';
+
+/// A node in the music folder tree
+class MusicFolderNode {
+  final String path;
+  final String name;
+  final List<MusicFolderNode> subfolders;
+  final List<String> albumIds;
+  final int totalTrackCount;
+  String? artwork;
+
+  MusicFolderNode({
+    required this.path,
+    required this.name,
+    List<MusicFolderNode>? subfolders,
+    List<String>? albumIds,
+    this.totalTrackCount = 0,
+    this.artwork,
+  })  : subfolders = subfolders ?? [],
+        albumIds = albumIds ?? [];
+}
+
+/// Contents of a folder (lazy-loaded)
+class MusicFolderContents {
+  final List<MusicFolderNode> subfolders;
+  final List<MusicAlbum> albums;
+
+  MusicFolderContents({
+    required this.subfolders,
+    required this.albums,
+  });
+}
 
 /// Library statistics
 class LibraryStats {
@@ -195,6 +228,227 @@ class MusicLibrary {
     if (lastScan == null) return true;
     // Rescan if older than 24 hours
     return DateTime.now().difference(lastScan!).inHours > 24;
+  }
+
+  /// Build a folder tree from the music library based on source folders
+  List<MusicFolderNode> buildFolderTree(List<String> sourceFolders) {
+    final rootNodes = <MusicFolderNode>[];
+
+    // Group albums by folder path
+    final albumsByFolder = <String, List<MusicAlbum>>{};
+    for (final album in albums) {
+      albumsByFolder.putIfAbsent(album.folderPath, () => []).add(album);
+    }
+
+    // Track count per folder (including subfolders)
+    final trackCountByFolder = <String, int>{};
+    for (final album in albums) {
+      trackCountByFolder[album.folderPath] =
+          (trackCountByFolder[album.folderPath] ?? 0) + album.trackCount;
+    }
+
+    for (final sourceFolder in sourceFolders) {
+      final rootNode = _buildFolderNode(
+        sourceFolder,
+        albumsByFolder,
+        trackCountByFolder,
+        sourceFolders,
+      );
+      if (rootNode != null) {
+        rootNodes.add(rootNode);
+      }
+    }
+
+    return rootNodes;
+  }
+
+  /// Recursively build a folder node
+  MusicFolderNode? _buildFolderNode(
+    String folderPath,
+    Map<String, List<MusicAlbum>> albumsByFolder,
+    Map<String, int> trackCountByFolder,
+    List<String> sourceFolders,
+  ) {
+    final dir = Directory(folderPath);
+    if (!dir.existsSync()) return null;
+
+    final name = folderPath.split('/').last;
+
+    // Find albums directly in this folder
+    final directAlbums = albumsByFolder[folderPath] ?? [];
+    final albumIds = directAlbums.map((a) => a.id).toList();
+
+    // Find subfolders that contain music (directly or in descendants)
+    final subfolders = <MusicFolderNode>[];
+    final relevantPaths = <String>{};
+
+    // Find all folder paths that are direct children of this folder
+    for (final albumFolder in albumsByFolder.keys) {
+      if (albumFolder != folderPath && albumFolder.startsWith('$folderPath/')) {
+        // Get the immediate child folder
+        final remaining = albumFolder.substring(folderPath.length + 1);
+        final childName = remaining.split('/').first;
+        final childPath = '$folderPath/$childName';
+
+        // Skip if this child is itself a source folder (handled separately)
+        if (!sourceFolders.contains(childPath)) {
+          relevantPaths.add(childPath);
+        }
+      }
+    }
+
+    // Build child nodes
+    for (final childPath in relevantPaths) {
+      final childNode = _buildFolderNode(
+        childPath,
+        albumsByFolder,
+        trackCountByFolder,
+        sourceFolders,
+      );
+      if (childNode != null) {
+        subfolders.add(childNode);
+      }
+    }
+
+    // Sort subfolders by name
+    subfolders.sort((a, b) => a.name.compareTo(b.name));
+
+    // Calculate total track count (this folder + all descendants)
+    var totalTrackCount = trackCountByFolder[folderPath] ?? 0;
+    for (final subfolder in subfolders) {
+      totalTrackCount += subfolder.totalTrackCount;
+    }
+
+    // Find artwork: first check folder artwork, then use first album's artwork
+    String? artwork;
+    final artworkFiles = [
+      '$folderPath/cover.jpg',
+      '$folderPath/cover.png',
+      '$folderPath/artwork.jpg',
+      '$folderPath/artwork.png',
+      '$folderPath/folder.jpg',
+      '$folderPath/folder.png',
+    ];
+    for (final artworkPath in artworkFiles) {
+      if (File(artworkPath).existsSync()) {
+        artwork = artworkPath;
+        break;
+      }
+    }
+    // If no folder artwork, use first album's artwork
+    if (artwork == null && directAlbums.isNotEmpty) {
+      artwork = directAlbums.first.artwork;
+    }
+
+    // Only return node if it has albums or subfolders with music
+    if (albumIds.isEmpty && subfolders.isEmpty) {
+      return null;
+    }
+
+    return MusicFolderNode(
+      path: folderPath,
+      name: name,
+      subfolders: subfolders,
+      albumIds: albumIds,
+      totalTrackCount: totalTrackCount,
+      artwork: artwork,
+    );
+  }
+
+  /// Get all tracks in a folder recursively
+  List<MusicTrack> getTracksInFolder(String folderPath) {
+    final result = <MusicTrack>[];
+    for (final album in albums) {
+      if (album.folderPath == folderPath ||
+          album.folderPath.startsWith('$folderPath/')) {
+        result.addAll(getAlbumTracks(album.id));
+      }
+    }
+    return result;
+  }
+
+  /// Get folder contents lazily (only immediate children, no deep recursion)
+  /// Returns a tuple of (subfolders, albums in this folder)
+  MusicFolderContents getFolderContents(String folderPath) {
+    // Find albums directly in this folder
+    final directAlbums = albums.where((a) => a.folderPath == folderPath).toList();
+
+    // Find immediate child folders that contain music (at any depth)
+    final childFolders = <String>{};
+    for (final album in albums) {
+      if (album.folderPath != folderPath &&
+          album.folderPath.startsWith('$folderPath/')) {
+        // Get the immediate child folder name
+        final remaining = album.folderPath.substring(folderPath.length + 1);
+        final childName = remaining.split('/').first;
+        childFolders.add('$folderPath/$childName');
+      }
+    }
+
+    // Build folder nodes for immediate children only
+    final subfolderNodes = <MusicFolderNode>[];
+    for (final childPath in childFolders) {
+      final name = childPath.split('/').last;
+
+      // Count tracks in this subfolder and its descendants
+      var trackCount = 0;
+      for (final album in albums) {
+        if (album.folderPath == childPath ||
+            album.folderPath.startsWith('$childPath/')) {
+          trackCount += album.trackCount;
+        }
+      }
+
+      // Find artwork (check folder first, then first album in folder)
+      String? artwork = _findFolderArtwork(childPath);
+      if (artwork == null) {
+        // Use first album's artwork from this folder or subfolders
+        for (final album in albums) {
+          if (album.folderPath == childPath ||
+              album.folderPath.startsWith('$childPath/')) {
+            if (album.artwork != null) {
+              artwork = album.artwork;
+              break;
+            }
+          }
+        }
+      }
+
+      subfolderNodes.add(MusicFolderNode(
+        path: childPath,
+        name: name,
+        totalTrackCount: trackCount,
+        artwork: artwork,
+      ));
+    }
+
+    // Sort by name
+    subfolderNodes.sort((a, b) => a.name.compareTo(b.name));
+    directAlbums.sort((a, b) => a.title.compareTo(b.title));
+
+    return MusicFolderContents(
+      subfolders: subfolderNodes,
+      albums: directAlbums,
+    );
+  }
+
+  /// Find artwork file in a folder
+  String? _findFolderArtwork(String folderPath) {
+    const artworkFiles = [
+      'cover.jpg',
+      'cover.png',
+      'artwork.jpg',
+      'artwork.png',
+      'folder.jpg',
+      'folder.png',
+    ];
+    for (final filename in artworkFiles) {
+      final file = File('$folderPath/$filename');
+      if (file.existsSync()) {
+        return file.path;
+      }
+    }
+    return null;
   }
 
   /// Create updated library with new stats

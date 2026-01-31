@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../models/music_models.dart';
 import '../services/music_playback_service.dart';
+import 'animated_equalizer_widget.dart';
 
 /// Full-screen now playing view
 class NowPlayingWidget extends StatelessWidget {
@@ -61,83 +62,93 @@ class NowPlayingWidget extends StatelessWidget {
 
           final album = library?.getAlbum(track.albumId ?? '');
 
+          // Calculate artwork size based on available space
+          final artworkSize = screenSize.width * 0.6;
+
           return SafeArea(
-            child: Column(
-              children: [
-                const Spacer(flex: 1),
-                // Album artwork
-                Container(
-                  width: screenSize.width * 0.75,
-                  height: screenSize.width * 0.75,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: _buildArtwork(album, colorScheme),
-                  ),
-                ),
-                const Spacer(flex: 1),
-                // Track info
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    children: [
-                      Text(
-                        track.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        track.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      if (album != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          album.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: colorScheme.onSurfaceVariant.withOpacity(0.7),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Column(
+                  children: [
+                    // Album artwork
+                    Container(
+                      width: artworkSize,
+                      height: artworkSize,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                        ),
-                      ],
-                    ],
-                  ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildArtwork(album, colorScheme),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // Track info
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 32),
+                      child: Column(
+                        children: [
+                          Text(
+                            track.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            track.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          if (album != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              album.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: colorScheme.onSurfaceVariant.withOpacity(0.7),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // Progress bar
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 32),
+                      child: _buildProgressBar(context),
+                    ),
+                    const SizedBox(height: 16),
+                    // Playback controls
+                    _buildControls(context),
+                    const SizedBox(height: 16),
+                    // Volume control
+                    _buildVolumeControl(context),
+                    const SizedBox(height: 16),
+                  ],
                 ),
-                const SizedBox(height: 32),
-                // Progress bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: _buildProgressBar(context),
-                ),
-                const SizedBox(height: 16),
-                // Playback controls
-                _buildControls(context),
-                const Spacer(flex: 2),
-              ],
+              ),
             ),
           );
         },
@@ -320,14 +331,47 @@ class NowPlayingWidget extends StatelessWidget {
                     ? Icons.repeat_one
                     : Icons.repeat,
                 color: queue.repeat != RepeatMode.off
-                    ? colorScheme.primary
+                    ? Colors.red
                     : colorScheme.onSurfaceVariant,
               ),
-              onPressed: playback.cycleRepeat,
+              onPressed: () => _cycleRepeat(context),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildVolumeControl(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        children: [
+          Icon(
+            Icons.volume_down,
+            color: colorScheme.onSurfaceVariant,
+          ),
+          Expanded(
+            child: StreamBuilder<double>(
+              stream: playback.volumeStream,
+              initialData: playback.volume,
+              builder: (context, snapshot) {
+                final volume = snapshot.data ?? 1.0;
+                return Slider(
+                  value: volume,
+                  onChanged: (value) => playback.setVolume(value),
+                );
+              },
+            ),
+          ),
+          Icon(
+            Icons.volume_up,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ],
+      ),
     );
   }
 
@@ -355,6 +399,34 @@ class NowPlayingWidget extends StatelessWidget {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  void _cycleRepeat(BuildContext context) {
+    final currentMode = playback.queue.repeat;
+    playback.cycleRepeat();
+
+    // Show snackbar with next mode
+    final nextMode = RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
+    final String message;
+    switch (nextMode) {
+      case RepeatMode.off:
+        message = 'Repeat disabled';
+        break;
+      case RepeatMode.one:
+        message = 'Repeating current track';
+        break;
+      case RepeatMode.all:
+        message = 'Repeating all tracks';
+        break;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 }
 
@@ -419,59 +491,80 @@ class _QueueSheet extends StatelessWidget {
             const Divider(),
             // Queue list
             Expanded(
-              child: ListView.builder(
-                controller: scrollController,
-                itemCount: queue.trackIds.length,
-                itemBuilder: (context, index) {
-                  final trackId = queue.trackIds[index];
-                  final track = library?.getTrack(trackId);
-                  final isCurrent = index == queue.currentIndex;
+              child: StreamBuilder<MusicPlaybackState>(
+                stream: playback.stateStream,
+                initialData: playback.state,
+                builder: (context, stateSnapshot) {
+                  final isActuallyPlaying =
+                      stateSnapshot.data == MusicPlaybackState.playing;
 
-                  if (track == null) {
-                    return ListTile(
-                      title: Text('Unknown track: $trackId'),
-                    );
-                  }
+                  return ListView.builder(
+                    controller: scrollController,
+                    itemCount: queue.trackIds.length,
+                    itemBuilder: (context, index) {
+                      final trackId = queue.trackIds[index];
+                      final track = library?.getTrack(trackId);
+                      final isCurrent = index == queue.currentIndex;
 
-                  return ListTile(
-                    leading: isCurrent
-                        ? Icon(Icons.equalizer, color: colorScheme.primary)
-                        : Text(
-                            '${index + 1}',
-                            style: TextStyle(
-                              color: colorScheme.onSurfaceVariant,
-                            ),
+                      if (track == null) {
+                        return ListTile(
+                          title: Text('Unknown track: $trackId'),
+                        );
+                      }
+
+                      return ListTile(
+                        leading: isCurrent
+                            ? AnimatedEqualizerWidget(
+                                size: 24,
+                                color: colorScheme.primary,
+                                isPlaying: isActuallyPlaying,
+                              )
+                            : Text(
+                                '${index + 1}',
+                                style: TextStyle(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                        title: Text(
+                          track.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: isCurrent ? FontWeight.bold : null,
+                            color: isCurrent ? colorScheme.primary : null,
                           ),
-                    title: Text(
-                      track.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: isCurrent ? FontWeight.bold : null,
-                        color: isCurrent ? colorScheme.primary : null,
-                      ),
-                    ),
-                    subtitle: Text(
-                      track.artist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isCurrent
-                            ? colorScheme.primary.withOpacity(0.7)
-                            : colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    trailing: Text(
-                      track.formattedDuration,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    onTap: () {
-                      // Play this track
-                      playback.playTrack(trackId);
+                        ),
+                        subtitle: Text(
+                          track.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isCurrent
+                                ? colorScheme.primary.withOpacity(0.7)
+                                : colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        trailing: Text(
+                          track.formattedDuration,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        onTap: () {
+                          if (isCurrent) {
+                            // Toggle play/pause for current track
+                            if (isActuallyPlaying) {
+                              playback.pause();
+                            } else {
+                              playback.play();
+                            }
+                          } else {
+                            playback.playTrack(trackId);
+                          }
+                        },
+                      );
                     },
                   );
                 },

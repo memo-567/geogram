@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/music_track.dart';
+import '../models/playback_queue.dart';
 import '../services/music_playback_service.dart';
 
 /// Mini player bar shown at bottom of screen
@@ -102,6 +103,60 @@ class MiniPlayerWidget extends StatelessWidget {
                             ),
                           ),
                         ),
+                        // Volume slider (moved to left of controls)
+                        StreamBuilder<double>(
+                          stream: playback.volumeStream,
+                          initialData: playback.volume,
+                          builder: (context, snapshot) {
+                            final volume = snapshot.data ?? 1.0;
+                            return SizedBox(
+                              width: 100,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    volume == 0
+                                        ? Icons.volume_off
+                                        : volume < 0.5
+                                            ? Icons.volume_down
+                                            : Icons.volume_up,
+                                    size: 20,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                  Expanded(
+                                    child: SliderTheme(
+                                      data: SliderThemeData(
+                                        trackHeight: 2,
+                                        thumbShape: const RoundSliderThumbShape(
+                                          enabledThumbRadius: 6,
+                                        ),
+                                        overlayShape: const RoundSliderOverlayShape(
+                                          overlayRadius: 12,
+                                        ),
+                                      ),
+                                      child: Slider(
+                                        value: volume,
+                                        onChanged: (value) => playback.setVolume(value),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                        // Repeat button
+                        StreamBuilder<PlaybackQueue>(
+                          stream: playback.queueStream,
+                          builder: (context, queueSnapshot) {
+                            final queue = queueSnapshot.data ?? playback.queue;
+                            return IconButton(
+                              icon: _buildRepeatIcon(queue.repeat, colorScheme),
+                              onPressed: () => _cycleRepeat(context),
+                              tooltip: _getRepeatTooltip(queue.repeat),
+                            );
+                          },
+                        ),
                         // Play/pause button
                         StreamBuilder<MusicPlaybackState>(
                           stream: playback.stateStream,
@@ -129,7 +184,7 @@ class MiniPlayerWidget extends StatelessWidget {
                           icon: const Icon(Icons.skip_next),
                           onPressed: playback.hasNext ? playback.next : null,
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
                       ],
                     ),
                   ),
@@ -157,5 +212,66 @@ class MiniPlayerWidget extends StatelessWidget {
     // For now, just show placeholder
     // TODO: Load album artwork from track.albumId
     return placeholder;
+  }
+
+  Widget _buildRepeatIcon(RepeatMode mode, ColorScheme colorScheme) {
+    final Color iconColor;
+    final IconData iconData;
+
+    switch (mode) {
+      case RepeatMode.off:
+        iconColor = colorScheme.onSurfaceVariant;
+        iconData = Icons.repeat;
+        break;
+      case RepeatMode.one:
+        iconColor = Colors.red;
+        iconData = Icons.repeat_one;
+        break;
+      case RepeatMode.all:
+        iconColor = Colors.red;
+        iconData = Icons.repeat;
+        break;
+    }
+
+    return Icon(iconData, color: iconColor, size: 20);
+  }
+
+  void _cycleRepeat(BuildContext context) {
+    final currentMode = playback.queue.repeat;
+    playback.cycleRepeat();
+
+    // Show snackbar with next mode
+    final nextMode = RepeatMode.values[(currentMode.index + 1) % RepeatMode.values.length];
+    final String message;
+    switch (nextMode) {
+      case RepeatMode.off:
+        message = 'Repeat disabled';
+        break;
+      case RepeatMode.one:
+        message = 'Repeating current track';
+        break;
+      case RepeatMode.all:
+        message = 'Repeating all tracks';
+        break;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  String _getRepeatTooltip(RepeatMode mode) {
+    switch (mode) {
+      case RepeatMode.off:
+        return 'Repeat off';
+      case RepeatMode.one:
+        return 'Repeat one';
+      case RepeatMode.all:
+        return 'Repeat all';
+    }
   }
 }

@@ -149,6 +149,19 @@ class _WebSnapshotEditorPageState extends State<WebSnapshotEditorPage> {
       _hasChanges = true;
     }
 
+    // Auto-update title from URL if it's a generic default
+    if (_content != null && _metadata != null) {
+      final currentTitle = _content!.title;
+      if (currentTitle == 'Web Snapshot' ||
+          currentTitle.startsWith('Web Snapshot ') ||
+          currentTitle == 'Untitled Web Snapshot') {
+        final newTitle = titleFromUrl(url);
+        _content!.title = newTitle;
+        _metadata!.title = newTitle;
+        _hasChanges = true;
+      }
+    }
+
     // Create new snapshot
     final snapshot = WebSnapshot.create(
       url: url,

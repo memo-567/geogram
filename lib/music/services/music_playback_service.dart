@@ -50,6 +50,7 @@ class MusicPlaybackService {
   final _durationController = StreamController<Duration>.broadcast();
   final _trackController = StreamController<MusicTrack?>.broadcast();
   final _queueController = StreamController<PlaybackQueue>.broadcast();
+  final _volumeController = StreamController<double>.broadcast();
 
   MusicPlaybackService({required this.storage});
 
@@ -73,6 +74,7 @@ class MusicPlaybackService {
   Stream<Duration> get durationStream => _durationController.stream;
   Stream<MusicTrack?> get trackStream => _trackController.stream;
   Stream<PlaybackQueue> get queueStream => _queueController.stream;
+  Stream<double> get volumeStream => _volumeController.stream;
 
   /// Initialize the playback service
   Future<void> initialize(MusicLibrary library) async {
@@ -387,6 +389,7 @@ class MusicPlaybackService {
   /// Set volume (0.0 to 1.0)
   Future<void> setVolume(double volume) async {
     _volume = volume.clamp(0.0, 1.0);
+    _volumeController.add(_volume);
     if (_player != null) {
       await _player!.setVolume(_volume * 100);
     }
@@ -455,5 +458,6 @@ class MusicPlaybackService {
     await _durationController.close();
     await _trackController.close();
     await _queueController.close();
+    await _volumeController.close();
   }
 }

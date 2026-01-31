@@ -217,14 +217,30 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 final track = tracks[index];
                 return StreamBuilder<MusicTrack?>(
                   stream: widget.playback.trackStream,
-                  builder: (context, snapshot) {
-                    final isPlaying = (snapshot.data?.id ?? currentTrackId) == track.id;
-                    return TrackTileWidget(
-                      track: track,
-                      isPlaying: isPlaying,
-                      onTap: () {
-                        widget.playback.playAlbum(widget.album.id, startIndex: index);
-                      },
+                  builder: (context, trackSnapshot) {
+                    final isCurrentTrack = (trackSnapshot.data?.id ?? currentTrackId) == track.id;
+                    return StreamBuilder<MusicPlaybackState>(
+                      stream: widget.playback.stateStream,
+                      initialData: widget.playback.state,
+                      builder: (context, stateSnapshot) {
+                        final isActuallyPlaying = isCurrentTrack &&
+                            stateSnapshot.data == MusicPlaybackState.playing;
+                        return TrackTileWidget(
+                          track: track,
+                          isPlaying: isCurrentTrack,
+                          isActuallyPlaying: isActuallyPlaying,
+                          onTap: () {
+                            if (isCurrentTrack) {
+                              // Toggle play/pause for current track
+                              if (isActuallyPlaying) {
+                                widget.playback.pause();
+                              } else {
+                                widget.playback.play();
+                              }
+                            } else {
+                              widget.playback.playAlbum(widget.album.id, startIndex: index);
+                            }
+                          },
                       trailing: PopupMenuButton<String>(
                         onSelected: (value) {
                           switch (value) {
@@ -260,6 +276,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           ),
                         ],
                       ),
+                        );
+                      },
                     );
                   },
                 );

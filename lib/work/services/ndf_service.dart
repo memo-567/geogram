@@ -487,7 +487,7 @@ class NdfService {
           'type': 'websnapshot',
           'id': 'websnapshot-${now.millisecondsSinceEpoch.toRadixString(36)}',
           'schema': 'ndf-websnapshot-1.0',
-          'title': 'Untitled Web Snapshot',
+          'title': 'Web Snapshot',
           'target_url': '',
           'version': 1,
           'created': now.toIso8601String(),

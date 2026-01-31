@@ -131,13 +131,13 @@ class Workspace {
        documentFolders = documentFolders ?? {};
 
   factory Workspace.create({
+    required String id,
     required String name,
     required String ownerNpub,
     String? description,
     String? logo,
   }) {
     final now = DateTime.now();
-    final id = _generateId(name);
     return Workspace(
       id: id,
       name: name,
@@ -280,13 +280,40 @@ class Workspace {
     }
   }
 
-  /// Generate a URL-safe ID from name
-  static String _generateId(String name) {
-    final slug = name
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-        .replaceAll(RegExp(r'^-+|-+$'), '');
-    final timestamp = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
-    return '$slug-$timestamp';
+  /// Rename document (update filename references)
+  void renameDocument(String oldFilename, String newFilename) {
+    final index = documents.indexOf(oldFilename);
+    if (index != -1) {
+      documents[index] = newFilename;
+      // Preserve folder assignment
+      final folderId = documentFolders[oldFilename];
+      documentFolders.remove(oldFilename);
+      documentFolders[newFilename] = folderId;
+      touch();
+    }
+  }
+
+  /// Generate a filesystem-safe ID from name
+  static String generateId(String name) {
+    // Sanitize for filesystem: replace forbidden chars with underscore
+    var id = name
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'[\x00-\x1F]'), '')
+        .trim();
+
+    // Remove leading/trailing dots
+    while (id.startsWith('.')) {
+      id = id.substring(1);
+    }
+    while (id.endsWith('.')) {
+      id = id.substring(0, id.length - 1);
+    }
+
+    // Limit length
+    if (id.length > 200) {
+      id = id.substring(0, 200);
+    }
+
+    return id.isEmpty ? 'workspace' : id.trim();
   }
 }

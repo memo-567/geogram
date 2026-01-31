@@ -5,6 +5,61 @@
 
 import 'dart:convert';
 
+/// Generate a title from a URL (domain and path)
+/// Example: "https://indieweb.org/POSSE#section" becomes "indieweb.org/POSSE"
+/// Note: This is for the document title in metadata, not for filenames
+String titleFromUrl(String url) {
+  try {
+    final uri = Uri.parse(url);
+    var title = uri.host;
+
+    // Add path if not empty or just "/"
+    if (uri.path.isNotEmpty && uri.path != '/') {
+      var path = uri.path;
+      // Remove trailing slash
+      if (path.endsWith('/')) {
+        path = path.substring(0, path.length - 1);
+      }
+      title += path;
+    }
+
+    // Limit length for display
+    if (title.length > 200) {
+      title = title.substring(0, 200);
+    }
+
+    return title.isEmpty ? 'Web Snapshot' : title;
+  } catch (e) {
+    return 'Web Snapshot';
+  }
+}
+
+/// Sanitize a string to be safe as a filename on Windows and Linux
+/// Characters forbidden on Windows: \ / : * ? " < > |
+String sanitizeFilename(String name) {
+  var sanitized = name
+      .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+      .replaceAll(RegExp(r'[\x00-\x1F]'), '') // Control characters
+      .trim();
+
+  // Remove leading dots (hidden files on Unix, problematic on Windows)
+  while (sanitized.startsWith('.')) {
+    sanitized = sanitized.substring(1);
+  }
+
+  // Remove trailing dots (problematic on Windows)
+  while (sanitized.endsWith('.')) {
+    sanitized = sanitized.substring(0, sanitized.length - 1);
+  }
+
+  // Limit length (leave room for extension and path)
+  if (sanitized.length > 200) {
+    sanitized = sanitized.substring(0, 200);
+  }
+
+  return sanitized.trim();
+}
+
 /// Crawl depth configuration
 enum CrawlDepth {
   single,  // Single page only
@@ -312,11 +367,18 @@ class WebSnapshotContent {
       settings = WebSnapshotSettings.fromJson(settingsJson);
     }
 
+    // Derive title from URL if not provided
+    final targetUrl = json['target_url'] as String? ?? '';
+    var title = json['title'] as String?;
+    if (title == null || title.isEmpty) {
+      title = targetUrl.isNotEmpty ? titleFromUrl(targetUrl) : 'Web Snapshot';
+    }
+
     return WebSnapshotContent(
       id: id,
       schema: json['schema'] as String? ?? 'ndf-websnapshot-1.0',
-      title: json['title'] as String? ?? 'Untitled Web Snapshot',
-      targetUrl: json['target_url'] as String? ?? '',
+      title: title,
+      targetUrl: targetUrl,
       version: json['version'] as int? ?? 1,
       created: created,
       modified: modified,

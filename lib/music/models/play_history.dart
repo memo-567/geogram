@@ -253,6 +253,27 @@ class PlayHistory {
         .toList();
   }
 
+  /// Get top tracks within a time period, sorted by play count
+  List<MapEntry<String, int>> getTopTracksInPeriod(
+    DateTime start,
+    DateTime end, {
+    int limit = 50,
+  }) {
+    final periodPlays = plays.where(
+      (p) =>
+          p.countsAsPlay &&
+          p.playedAt.isAfter(start) &&
+          p.playedAt.isBefore(end),
+    );
+    final counts = <String, int>{};
+    for (final play in periodPlays) {
+      counts[play.trackId] = (counts[play.trackId] ?? 0) + 1;
+    }
+    final sorted = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(limit).toList();
+  }
+
   /// Get total listening time for a period
   int getListeningTimeInPeriod(DateTime start, DateTime end) {
     return getPlaysInPeriod(start, end)

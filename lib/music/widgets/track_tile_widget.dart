@@ -6,13 +6,17 @@
 import 'package:flutter/material.dart';
 
 import '../models/music_track.dart';
+import 'animated_equalizer_widget.dart';
 
 /// A list tile for displaying a track
 class TrackTileWidget extends StatelessWidget {
   final MusicTrack track;
   final bool showTrackNumber;
   final bool showAlbum;
+  /// Whether this is the current track (shows equalizer icon)
   final bool isPlaying;
+  /// Whether playback is actually playing (animates the equalizer)
+  final bool isActuallyPlaying;
   final bool isSelected;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
@@ -24,6 +28,7 @@ class TrackTileWidget extends StatelessWidget {
     this.showTrackNumber = true,
     this.showAlbum = false,
     this.isPlaying = false,
+    this.isActuallyPlaying = false,
     this.isSelected = false,
     this.onTap,
     this.onLongPress,
@@ -80,9 +85,12 @@ class TrackTileWidget extends StatelessWidget {
           color: colorScheme.primaryContainer,
           borderRadius: BorderRadius.circular(4),
         ),
-        child: Icon(
-          Icons.equalizer,
-          color: colorScheme.primary,
+        child: Center(
+          child: AnimatedEqualizerWidget(
+            size: 24,
+            color: colorScheme.primary,
+            isPlaying: isActuallyPlaying,
+          ),
         ),
       );
     }
