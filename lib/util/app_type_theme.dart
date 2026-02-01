@@ -302,8 +302,8 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: isDark
-            ? [const Color(0xFF7B1FA2), const Color(0xFF6A1B9A)]
-            : [const Color(0xFFBA68C8), const Color(0xFF9C27B0)],
+            ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
+            : [const Color(0xFFEF5350), const Color(0xFFE53935)],
       );
     default:
       return LinearGradient(
