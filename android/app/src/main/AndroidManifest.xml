@@ -45,6 +45,13 @@
     <!-- Boot completed permission for auto-starting on device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Storage permissions for Music app -->
+    <!-- Android 12 and below -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Android 13+ (API 33+) - granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <!-- USB Host feature for ESP32 flashing via USB OTG -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 

@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../services/i18n_service.dart';
 import '../models/music_settings.dart';
 import '../services/music_storage_service.dart';
+import '../services/music_permission_service.dart';
 
 /// Music app settings page
 class MusicSettingsPage extends StatefulWidget {
@@ -54,6 +55,49 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
   }
 
   Future<void> _addSourceFolder() async {
+    // Request permission first
+    final hasPermission = await MusicPermissionService.requestAudioPermission();
+    if (!hasPermission) {
+      if (!mounted) return;
+
+      // Check if permanently denied
+      final isPermanentlyDenied =
+          await MusicPermissionService.isPermanentlyDenied();
+      if (isPermanentlyDenied) {
+        // Show dialog to open settings
+        final openSettings = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Permission Required'),
+            content: const Text(
+              'Storage permission is required to access music files. '
+              'Please enable it in app settings.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Open Settings'),
+              ),
+            ],
+          ),
+        );
+        if (openSettings == true) {
+          await MusicPermissionService.openSettings();
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Storage permission required to access music files'),
+          ),
+        );
+      }
+      return;
+    }
+
     final result = await FilePicker.platform.getDirectoryPath(
       dialogTitle: 'Select Music Folder',
     );
