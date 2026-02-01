@@ -39,6 +39,7 @@ class I18nService {
     'console',
     'tracker',
     'work',
+    'stories',
   ];
 
   // Notifier for UI updates when language changes
@@ -179,6 +180,12 @@ class I18nService {
   /// Shorthand for translate
   String t(String key, {List<String>? params}) {
     return translate(key, params: params);
+  }
+
+  /// Get translation by key with optional feature hint (for code clarity)
+  /// The feature parameter is not used for namespacing, just documentation
+  String get(String key, [String? feature]) {
+    return translate(key);
   }
 
   /// Check if a translation key exists

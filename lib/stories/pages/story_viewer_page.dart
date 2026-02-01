@@ -1,0 +1,283 @@
+/*
+ * Copyright (c) geogram
+ * License: Apache-2.0
+ */
+
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../services/i18n_service.dart';
+import '../models/story.dart';
+import '../models/story_content.dart';
+import '../models/story_scene.dart';
+import '../models/story_trigger.dart';
+import '../services/stories_storage_service.dart';
+import '../widgets/scene_viewer_widget.dart';
+
+/// Page for viewing/playing a story
+class StoryViewerPage extends StatefulWidget {
+  final Story story;
+  final StoriesStorageService storage;
+  final I18nService i18n;
+
+  const StoryViewerPage({
+    super.key,
+    required this.story,
+    required this.storage,
+    required this.i18n,
+  });
+
+  @override
+  State<StoryViewerPage> createState() => _StoryViewerPageState();
+}
+
+class _StoryViewerPageState extends State<StoryViewerPage> {
+  StoryContent? _content;
+  StoryScene? _currentScene;
+  final List<String> _sceneHistory = [];
+  bool _isLoading = true;
+
+  // Auto-advance timer
+  Timer? _autoAdvanceTimer;
+  int _countdownSeconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContent();
+  }
+
+  @override
+  void dispose() {
+    _autoAdvanceTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadContent() async {
+    setState(() => _isLoading = true);
+    try {
+      _content = await widget.storage.loadStoryContent(widget.story);
+      if (_content != null && _content!.startScene != null) {
+        _navigateToScene(_content!.startSceneId, addToHistory: false);
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _navigateToScene(String sceneId, {bool addToHistory = true}) {
+    final scene = _content?.getScene(sceneId);
+    if (scene == null) return;
+
+    // Cancel existing timer
+    _autoAdvanceTimer?.cancel();
+    _countdownSeconds = 0;
+
+    // Add current scene to history if requested
+    if (addToHistory && _currentScene != null) {
+      _sceneHistory.add(_currentScene!.id);
+    }
+
+    setState(() {
+      _currentScene = scene;
+    });
+
+    // Start auto-advance timer if configured
+    if (scene.autoAdvance != null) {
+      _startAutoAdvance(scene.autoAdvance!);
+    }
+  }
+
+  void _startAutoAdvance(AutoAdvance config) {
+    _countdownSeconds = config.delaySeconds;
+
+    _autoAdvanceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _countdownSeconds--;
+      });
+
+      if (_countdownSeconds <= 0) {
+        timer.cancel();
+        _navigateToScene(config.targetSceneId);
+      }
+    });
+  }
+
+  void _goBack() {
+    if (_sceneHistory.isEmpty) return;
+
+    final previousSceneId = _sceneHistory.removeLast();
+    _navigateToScene(previousSceneId, addToHistory: false);
+  }
+
+  bool get _canGoBack {
+    if (_content == null || _currentScene == null) return false;
+    if (_sceneHistory.isEmpty) return false;
+    return _content!.isBackAllowed(_currentScene!);
+  }
+
+  void _handleTrigger(StoryTrigger trigger) {
+    switch (trigger.type) {
+      case TriggerType.goToScene:
+        if (trigger.targetSceneId != null) {
+          _navigateToScene(trigger.targetSceneId!);
+        }
+        break;
+
+      case TriggerType.openUrl:
+        if (trigger.url != null) {
+          _openUrl(trigger.url!);
+        }
+        break;
+
+      case TriggerType.playSound:
+        if (trigger.soundAsset != null) {
+          _playSound(trigger.soundAsset!);
+        }
+        break;
+
+      case TriggerType.showPopup:
+        _showPopup(trigger.popupTitle ?? '', trigger.popupMessage ?? '');
+        break;
+    }
+  }
+
+  void _showPopup(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: title.isNotEmpty ? Text(title) : null,
+        content: message.isNotEmpty ? Text(message) : null,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> _playSound(String assetRef) async {
+    // TODO: Implement sound playback using extracted media file
+    // final path = await widget.storage.extractMedia(widget.story, assetRef);
+    // if (path != null) { play(path); }
+  }
+
+  void _exitStory() {
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_content == null || _currentScene == null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.story.title)),
+        body: const Center(child: Text('Failed to load story')),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // Scene viewer
+          SceneViewerWidget(
+            scene: _currentScene!,
+            story: widget.story,
+            storage: widget.storage,
+            onTrigger: _handleTrigger,
+          ),
+
+          // Top-right controls
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            right: 8,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Back button
+                if (_canGoBack)
+                  _buildControlButton(
+                    icon: Icons.arrow_back,
+                    onPressed: _goBack,
+                    tooltip: widget.i18n.get('back', 'stories'),
+                  ),
+
+                const SizedBox(width: 8),
+
+                // Exit button
+                _buildControlButton(
+                  icon: Icons.close,
+                  onPressed: _exitStory,
+                  tooltip: widget.i18n.get('exit_story', 'stories'),
+                ),
+              ],
+            ),
+          ),
+
+          // Bottom-right countdown
+          if (_countdownSeconds > 0 && (_currentScene?.autoAdvance?.showCountdown ?? true))
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '$_countdownSeconds',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required String tooltip,
+  }) {
+    return Material(
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(
+            icon,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+}
