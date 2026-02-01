@@ -93,6 +93,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     _CollectionTypeInfo('flasher', Icons.flash_on),
     _CollectionTypeInfo('work', Icons.work),
     _CollectionTypeInfo('music', Icons.library_music),
+    _CollectionTypeInfo('stories', Icons.auto_stories),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -840,6 +841,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Create and organize workspaces with NDF documents including spreadsheets, rich text documents, presentations, and forms. Sync-based collaboration with NOSTR signatures.';
       case 'music':
         return 'Local music player with folder-based album discovery. Scan your music folders, play tracks with shuffle and repeat, track listening history and statistics.';
+      case 'stories':
+        return 'Tell your story your way. Create stunning visual experiences with tap-through scenes, touch hotspots, and cinematic auto-play. Share moments, build tutorials, or craft adventures that captivate your audience.';
       default:
         return '';
     }
@@ -985,6 +988,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Shuffle and repeat modes',
           'Play queue management',
           'Listening statistics',
+        ];
+      case 'stories':
+        return [
+          'Tap-through scene flow',
+          'Interactive touch hotspots',
+          'Auto-play with countdown',
+          'Flexible text and image layouts',
+          'Link to URLs or sounds',
         ];
       default:
         return [];

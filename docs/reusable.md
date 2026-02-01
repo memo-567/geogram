@@ -141,6 +141,14 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Platform Helpers
 - [file_image_helper](#file_image_helper) - Platform-aware file and memory image loading
 
+### Stories App Components
+- [SceneEditorCanvas](#sceneeditorcanvas) - Interactive scene canvas for Story Studio
+- [ElementPropertiesPanel](#elementpropertiespanel) - Properties editor for story elements
+- [ScenePropertiesPanel](#scenepropertiespanel) - Scene-level settings editor
+- [AnchorSelectorWidget](#anchorselectorwidget) - 9-point anchor picker for positioning
+- [AddElementDialog](#addelementdialog) - Dialog for adding text/image/button elements
+- [SelectionFrame Pattern](#selectionframe-pattern) - Reusable selection frame with drag handles
+
 ---
 
 ## Picker Widgets
@@ -7152,4 +7160,134 @@ class CaptureProgress {
 
 - **SnapshotCardWidget** - Displays snapshot with metadata, status icon, stats
 - **CaptureProgressWidget** - Shows capture progress with phase indicator and cancel button
+
+---
+
+## Stories App Components
+
+### SceneEditorCanvas
+
+**File:** `lib/stories/widgets/scene_editor_canvas.dart`
+
+Interactive canvas widget for editing story scenes in Story Studio. Renders the scene background, elements, and touch areas with editing capabilities.
+
+**Parameters:**
+- `scene` - The StoryScene to edit
+- `story` - The parent Story (needed for media loading)
+- `storage` - StoriesStorageService instance
+- `selectedElementId` - Currently selected element ID
+- `onSelectionChanged` - Callback when selection changes
+- `onElementChanged` - Callback when element is modified
+- `onDeleteSelected` - Callback to delete selected element
+
+**Features:**
+- Renders background image (required for each scene)
+- Responsive BoxFit: cover in portrait, contain in landscape
+- Displays all positioned elements (text, buttons)
+- Shows selection frame around selected element
+- Touch areas displayed with cyan overlay
+- Keyboard support (Delete to remove, Escape to deselect)
+- Uses `_SelectionFrame` for drag/resize (reusable pattern)
+
+### ElementPropertiesPanel
+
+**File:** `lib/stories/widgets/element_properties_panel.dart`
+
+Panel for editing element properties (text, button). Adapts based on element type.
+
+**Parameters:**
+- `element` - StoryElement to edit
+- `scene` - Parent StoryScene
+- `allScenes` - All scenes (for trigger targets)
+- `i18n` - I18nService for translations
+- `onElementChanged` - Callback when element modified
+- `onTriggerChanged` - Callback when trigger modified
+
+**Sections:**
+- Position (anchor point, offset sliders)
+- Size (ElementSize chips)
+- Timing (appear delay slider)
+- Type-specific properties (text content, colors, etc.)
+- Trigger configuration (goToScene, openUrl)
+
+### ScenePropertiesPanel
+
+**File:** `lib/stories/widgets/scene_properties_panel.dart`
+
+Panel for editing scene-level properties like background and auto-advance.
+
+**Parameters:**
+- `scene` - StoryScene to edit
+- `allScenes` - All scenes (for auto-advance targets)
+- `i18n` - I18nService
+- `onSceneChanged` - Callback when scene modified
+- `onSelectBackgroundImage` - Callback to open image picker
+
+**Sections:**
+- Scene title
+- Background image (required) with placeholder/letterbox color
+- Navigation settings (allow back)
+- Auto-advance (enable, delay, target, countdown)
+
+### AnchorSelectorWidget
+
+**File:** `lib/stories/widgets/anchor_selector_widget.dart`
+
+Visual 9-point grid for selecting anchor positions.
+
+**Parameters:**
+- `selected` - Current AnchorPoint
+- `onChanged` - Callback when anchor changes
+- `size` - Widget size (default 80)
+
+**Also includes:** `CompactAnchorSelector` - dropdown variant for inline use.
+
+### AddElementDialog
+
+**File:** `lib/stories/widgets/add_element_dialog.dart`
+
+Dialog for adding new elements to a scene.
+
+**Usage:**
+```dart
+final element = await showAddElementDialog(
+  context,
+  elementType: ElementType.text,
+  i18n: widget.i18n,
+);
+if (element != null) {
+  // Add element to scene
+}
+```
+
+**Also includes:** `AddElementBottomSheet` - bottom sheet to select element type first.
+
+### SelectionFrame Pattern
+
+**File:** `lib/stories/widgets/scene_editor_canvas.dart` (private `_SelectionFrame`)
+
+Reusable PowerPoint-style selection frame with resize handles. Adapted from `lib/work/widgets/presentation/slide_canvas_widget.dart`.
+
+**Pattern usage:**
+```dart
+_SelectionFrame(
+  left: leftPx,
+  top: topPx,
+  width: widthPx,
+  height: heightPx,
+  canvasWidth: constraints.maxWidth,
+  canvasHeight: constraints.maxHeight,
+  onTap: () => onTap(),
+  onMove: (deltaXPercent, deltaYPercent) => updatePosition(),
+  onResize: (widthPercent, heightPercent) => updateSize(),
+  child: childWidget,
+)
+```
+
+**Features:**
+- 8 resize handles (4 corners + 4 edges)
+- Move cursor on content area
+- Appropriate cursors on handles
+- Minimum size enforcement
+- Reports changes as percentages of canvas
 

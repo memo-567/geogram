@@ -95,6 +95,9 @@
   "collection_type_music": "Music",
   "collection_type_desc_music": "Local music player with folder-based album discovery. Scan your music folders, play tracks with shuffle and repeat, track listening history and statistics.",
   "collection_type_features_music": "Folder-based album discovery|Cover art detection|Shuffle and repeat modes|Play queue management|Listening statistics",
+  "collection_type_stories": "Stories",
+  "collection_type_desc_stories": "Tell your story your way. Create stunning visual experiences with tap-through scenes, touch hotspots, and cinematic auto-play. Perfect for tutorials, games, or branching adventures.",
+  "collection_type_features_stories": "Tap-through scene flow|Timed element appearance|Touch hotspots|Auto-advance with countdown|Hidden areas|Anchor-based positioning",
   "collection_updates": "Collection Updates",
   "collection_updates_desc": "Notify when collections are updated or synced",
 

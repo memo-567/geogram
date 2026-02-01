@@ -95,6 +95,9 @@
   "collection_type_music": "Música",
   "collection_type_desc_music": "Leitor de música local com descoberta de álbuns por pasta. Analise as suas pastas de música, reproduza faixas com modo aleatório e repetir, acompanhe o histórico e estatísticas de reprodução.",
   "collection_type_features_music": "Descoberta de álbuns por pasta|Deteção de capas|Modos aleatório e repetir|Gestão de fila de reprodução|Estatísticas de reprodução",
+  "collection_type_stories": "Historias",
+  "collection_type_desc_stories": "Conta a tua história à tua maneira. Cria experiências visuais deslumbrantes com cenas em sequência, pontos de toque e reprodução automática cinematográfica. Perfeito para tutoriais, jogos ou aventuras ramificadas.",
+  "collection_type_features_stories": "Fluxo de cenas por toque|Aparecimento temporizado de elementos|Pontos de toque|Avanço automático com contagem|Áreas ocultas|Posicionamento por âncora",
   "collection_updates": "Atualizações de Coleções",
   "collection_updates_desc": "Notificar quando coleções são atualizadas ou sincronizadas",
 

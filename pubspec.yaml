@@ -93,6 +93,7 @@ dependencies:
   whisper_flutter_new: ^1.0.1    # Offline speech-to-text using Whisper (Android/iOS/macOS)
   share_plus: ^10.1.4            # Native share sheet for sharing images and files
   flutter_quill: ^11.5.0         # Rich text editor for Work documents
+  flutter_colorpicker: ^1.1.0    # Color picker widget for Story Studio
   flutter_widget_from_html_core: ^0.15.2  # Native HTML rendering (no WebView needed)
   maxminddb: ^1.1.0              # Offline IP geolocation using MMDB databases
   sqlite3: ^2.4.0                # SQLite database for NOSTR relay + Blossom storage
