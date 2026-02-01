@@ -22,12 +22,16 @@ class StorySettings {
   /// Whether to allow back navigation (global setting)
   final bool allowBackNavigation;
 
+  /// Background music track (relative path, e.g., "cinematic/epilogue.mp3")
+  final String? backgroundMusic;
+
   const StorySettings({
     this.defaultTransition = 'fade',
     this.transitionDuration = 300,
     this.showSceneTitle = false,
     this.enableSwipeNavigation = true,
     this.allowBackNavigation = true,
+    this.backgroundMusic,
   });
 
   factory StorySettings.fromJson(Map<String, dynamic> json) {
@@ -37,6 +41,7 @@ class StorySettings {
       showSceneTitle: json['showSceneTitle'] as bool? ?? false,
       enableSwipeNavigation: json['enableSwipeNavigation'] as bool? ?? true,
       allowBackNavigation: json['allowBackNavigation'] as bool? ?? true,
+      backgroundMusic: json['backgroundMusic'] as String?,
     );
   }
 
@@ -47,6 +52,7 @@ class StorySettings {
       'showSceneTitle': showSceneTitle,
       'enableSwipeNavigation': enableSwipeNavigation,
       'allowBackNavigation': allowBackNavigation,
+      if (backgroundMusic != null) 'backgroundMusic': backgroundMusic,
     };
   }
 
@@ -56,6 +62,8 @@ class StorySettings {
     bool? showSceneTitle,
     bool? enableSwipeNavigation,
     bool? allowBackNavigation,
+    String? backgroundMusic,
+    bool clearBackgroundMusic = false,
   }) {
     return StorySettings(
       defaultTransition: defaultTransition ?? this.defaultTransition,
@@ -64,6 +72,7 @@ class StorySettings {
       enableSwipeNavigation:
           enableSwipeNavigation ?? this.enableSwipeNavigation,
       allowBackNavigation: allowBackNavigation ?? this.allowBackNavigation,
+      backgroundMusic: clearBackgroundMusic ? null : (backgroundMusic ?? this.backgroundMusic),
     );
   }
 }

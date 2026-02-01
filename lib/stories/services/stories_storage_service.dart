@@ -72,12 +72,16 @@ class StoriesStorageService {
   Future<Story> createStory({
     required String title,
     String? description,
+    List<String>? categories,
     required String ownerNpub,
     String? ownerName,
   }) async {
     await initialize();
 
-    final story = Story.create(title: title, description: description);
+    var story = Story.create(title: title, description: description);
+    if (categories != null && categories.isNotEmpty) {
+      story = story.copyWith(tags: categories);
+    }
     final filePath = '$storiesDir/${story.filename}';
 
     // Check for filename collision and add number if needed
@@ -105,6 +109,46 @@ class StoriesStorageService {
     }
 
     return path;
+  }
+
+  /// Update story metadata (title, description, categories)
+  Future<Story> updateStoryMetadata(
+    Story story, {
+    String? title,
+    String? description,
+    List<String>? categories,
+  }) async {
+    if (story.filePath == null) {
+      throw Exception('Story has no file path');
+    }
+
+    var updated = story.copyWith(
+      title: title ?? story.title,
+      description: description,
+      tags: categories ?? story.tags,
+      modified: DateTime.now(),
+      revision: story.revision + 1,
+    );
+
+    // Save updated metadata
+    await _ndfService.saveStoryMetadata(story.filePath!, updated);
+
+    // Rename file if title changed
+    if (title != null && title != story.title) {
+      final newFilename = updated.filename;
+      final currentFilename = story.filePath!.split('/').last;
+
+      if (newFilename != currentFilename) {
+        final newPath = '$storiesDir/$newFilename';
+        final uniquePath = await _getUniqueFilePath(newPath);
+
+        await File(story.filePath!).rename(uniquePath);
+        _log.log('StoriesStorageService: Renamed ${story.filePath} to $uniquePath');
+        return updated.copyWith(filePath: uniquePath);
+      }
+    }
+
+    return updated.copyWith(filePath: story.filePath);
   }
 
   /// Rename a story (updates title and filename)
@@ -160,9 +204,38 @@ class StoriesStorageService {
     if (story.filePath == null) return;
     await _ndfService.saveStoryContent(story.filePath!, content);
 
-    // Update story metadata
+    // Update story metadata first
     final updated = story.touch();
     await _ndfService.saveStoryMetadata(story.filePath!, updated);
+
+    // Then auto-generate thumbnail from first scene's background image
+    // (setThumbnail will add thumbnail field to the saved metadata)
+    await _updateThumbnailFromFirstScene(story.filePath!, content);
+  }
+
+  /// Update thumbnail from the first scene's background image
+  Future<void> _updateThumbnailFromFirstScene(
+    String filePath,
+    StoryContent content,
+  ) async {
+    // Get the first scene (based on sceneIds order)
+    if (content.sceneIds.isEmpty) return;
+
+    final firstSceneId = content.sceneIds.first;
+    final firstScene = content.scenes[firstSceneId];
+    if (firstScene == null) return;
+
+    // Check if the scene has a background image asset
+    final backgroundAsset = firstScene.background.asset;
+    if (backgroundAsset == null) return;
+
+    // Read the background image bytes
+    final imageBytes = await _ndfService.readMedia(filePath, backgroundAsset);
+    if (imageBytes == null) return;
+
+    // Set as thumbnail
+    await _ndfService.setThumbnail(filePath, imageBytes);
+    _log.log('StoriesStorageService: Auto-set thumbnail from first scene background');
   }
 
   /// Save a single scene
@@ -204,8 +277,11 @@ class StoriesStorageService {
 
   /// Read story thumbnail
   Future<String?> extractThumbnail(Story story) async {
-    if (story.filePath == null || story.thumbnail == null) return null;
-    return _ndfService.extractMediaToTemp(story.filePath!, story.thumbnail!);
+    if (story.filePath == null) return null;
+
+    // Use thumbnail from metadata, or try default path
+    final thumbnailRef = story.thumbnail ?? 'asset://thumbnails/preview.png';
+    return _ndfService.extractMediaToTemp(story.filePath!, thumbnailRef);
   }
 
   /// Cleanup unused media in a story

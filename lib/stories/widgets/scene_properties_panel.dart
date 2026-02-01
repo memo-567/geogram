@@ -8,14 +8,18 @@ import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 
 import '../../services/i18n_service.dart';
 import '../models/story_scene.dart';
+import '../services/sound_clips_service.dart';
+import 'sound_picker_widget.dart';
 
 /// Panel for editing scene-level properties
-class ScenePropertiesPanel extends StatelessWidget {
+class ScenePropertiesPanel extends StatefulWidget {
   final StoryScene scene;
   final List<StoryScene> allScenes;
   final I18nService i18n;
   final ValueChanged<StoryScene> onSceneChanged;
   final VoidCallback? onSelectBackgroundImage;
+  final ValueChanged<String?>? onSceneTitleChanged;
+  final ValueChanged<String?>? onSceneDescriptionChanged;
 
   const ScenePropertiesPanel({
     super.key,
@@ -24,7 +28,33 @@ class ScenePropertiesPanel extends StatelessWidget {
     required this.i18n,
     required this.onSceneChanged,
     this.onSelectBackgroundImage,
+    this.onSceneTitleChanged,
+    this.onSceneDescriptionChanged,
   });
+
+  @override
+  State<ScenePropertiesPanel> createState() => _ScenePropertiesPanelState();
+}
+
+class _ScenePropertiesPanelState extends State<ScenePropertiesPanel> {
+  final _soundService = SoundClipsService();
+
+  @override
+  void initState() {
+    super.initState();
+    _initSoundService();
+  }
+
+  Future<void> _initSoundService() async {
+    await _soundService.init();
+    if (mounted) setState(() {});
+  }
+
+  I18nService get i18n => widget.i18n;
+  StoryScene get scene => widget.scene;
+  List<StoryScene> get allScenes => widget.allScenes;
+  void onSceneChanged(StoryScene s) => widget.onSceneChanged(s);
+  VoidCallback? get onSelectBackgroundImage => widget.onSelectBackgroundImage;
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +67,11 @@ class ScenePropertiesPanel extends StatelessWidget {
           const SizedBox(height: 16),
           _buildTitleSection(context),
           const SizedBox(height: 16),
+          _buildDescriptionSection(context),
+          const SizedBox(height: 16),
           _buildBackgroundSection(context),
+          const SizedBox(height: 16),
+          _buildBackgroundMusicSection(context),
           const SizedBox(height: 16),
           _buildNavigationSection(context),
           const SizedBox(height: 16),
@@ -62,16 +96,52 @@ class ScenePropertiesPanel extends StatelessWidget {
   }
 
   Widget _buildTitleSection(BuildContext context) {
+    final defaultTitle = '${i18n.get('scene', 'stories')} ${scene.index + 1}';
     return _Section(
       title: i18n.get('scene_title', 'stories'),
       child: TextField(
         controller: TextEditingController(text: scene.title ?? ''),
         decoration: InputDecoration(
-          hintText: '${i18n.get('scene', 'stories')} ${scene.index + 1}',
+          hintText: defaultTitle,
           border: const OutlineInputBorder(),
         ),
         onChanged: (value) {
-          onSceneChanged(scene.copyWith(title: value.isEmpty ? null : value));
+          final newTitle = value.isEmpty ? null : value;
+          onSceneChanged(scene.copyWith(title: newTitle));
+          // Notify about title change for auto-managed element
+          widget.onSceneTitleChanged?.call(
+            _isDefaultTitle(value, scene.index) ? null : value,
+          );
+        },
+      ),
+    );
+  }
+
+  /// Check if title matches the default "Scene N" pattern
+  bool _isDefaultTitle(String title, int index) {
+    if (title.isEmpty) return true;
+    final defaultPattern = '${i18n.get('scene', 'stories')} ${index + 1}';
+    return title == defaultPattern;
+  }
+
+  Widget _buildDescriptionSection(BuildContext context) {
+    return _Section(
+      title: i18n.get('scene_description', 'stories'),
+      child: TextField(
+        controller: TextEditingController(text: scene.description ?? ''),
+        decoration: InputDecoration(
+          hintText: i18n.get('scene_description_hint', 'stories'),
+          border: const OutlineInputBorder(),
+        ),
+        maxLines: 3,
+        onChanged: (value) {
+          final newDescription = value.isEmpty ? null : value;
+          onSceneChanged(scene.copyWith(
+            description: newDescription,
+            clearDescription: value.isEmpty,
+          ));
+          // Notify about description change for auto-managed element
+          widget.onSceneDescriptionChanged?.call(newDescription);
         },
       ),
     );
@@ -142,6 +212,96 @@ class ScenePropertiesPanel extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildBackgroundMusicSection(BuildContext context) {
+    // null = use story music, "" = silence, "path" = override
+    final hasOverride = scene.backgroundMusic != null;
+    final isSilence = scene.backgroundMusic == '';
+    final track = hasOverride && !isSilence
+        ? _soundService.findTrack(scene.backgroundMusic!)
+        : null;
+
+    return _Section(
+      title: i18n.get('background_music', 'stories'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Toggle for override
+          SwitchListTile(
+            title: Text(i18n.get('scene_music_override', 'stories')),
+            subtitle: Text(
+              i18n.get('scene_music_override_hint', 'stories'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: hasOverride,
+            onChanged: (value) {
+              if (value) {
+                // Enable override with silence by default
+                onSceneChanged(scene.copyWith(backgroundMusic: ''));
+              } else {
+                // Disable override - use story music
+                onSceneChanged(scene.copyWith(clearBackgroundMusic: true));
+              }
+            },
+            contentPadding: EdgeInsets.zero,
+          ),
+
+          if (hasOverride) ...[
+            const SizedBox(height: 8),
+
+            // Silence option
+            CheckboxListTile(
+              title: Text(i18n.get('scene_music_silence', 'stories')),
+              value: isSilence,
+              onChanged: (value) {
+                if (value == true) {
+                  onSceneChanged(scene.copyWith(backgroundMusic: ''));
+                } else {
+                  // Clear to null temporarily, user will select a track
+                  onSceneChanged(scene.copyWith(clearBackgroundMusic: true));
+                }
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+
+            if (!isSilence) ...[
+              const SizedBox(height: 8),
+
+              // Track selector
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  track != null ? Icons.music_note : Icons.music_off,
+                  color: track != null ? Theme.of(context).colorScheme.primary : null,
+                ),
+                title: Text(
+                  track?.displayTitle ?? i18n.get('select_music', 'stories'),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: track != null
+                    ? Text('${track.mood} - ${track.durationApprox}')
+                    : null,
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _selectSceneMusic(context),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectSceneMusic(BuildContext context) async {
+    final selected = await SoundPickerWidget.show(
+      context,
+      i18n: i18n,
+      currentTrack: scene.backgroundMusic,
+    );
+
+    if (mounted && selected != null) {
+      onSceneChanged(scene.copyWith(backgroundMusic: selected.file));
+    }
   }
 
   Widget _buildNavigationSection(BuildContext context) {

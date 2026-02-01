@@ -251,32 +251,57 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
     return widget.scene.elements.map((element) {
       final isVisible = _visibleElements[element.id] ?? false;
 
-      // Calculate position
       final position = element.position;
-      final (left, top) = position.calculatePosition();
-      final leftPx = (left / 100) * w;
-      final topPx = (top / 100) * h;
-      final widthPx = position.widthPercent > 0 ? (position.widthPercent / 100) * w : null;
-      final heightPx = position.heightPercent != null ? (position.heightPercent! / 100) * h : null;
+      final isTextOrTitle = element.type == ElementType.text || element.type == ElementType.title;
 
-      return Positioned(
-        left: leftPx,
-        top: topPx,
-        width: widthPx,
-        height: heightPx,
-        child: AnimatedOpacity(
-          opacity: isVisible ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 300),
-          child: StoryElementWidget(
-            element: element,
-            story: widget.story,
-            storage: widget.storage,
-            constraints: constraints,
-            onTap: isVisible ? () => _handleElementTap(element) : null,
-            isEditing: widget.isEditing,
-          ),
-        ),
+      final child = StoryElementWidget(
+        element: element,
+        story: widget.story,
+        storage: widget.storage,
+        constraints: constraints,
+        onTap: isVisible ? () => _handleElementTap(element) : null,
+        isEditing: widget.isEditing,
       );
+
+      if (isTextOrTitle) {
+        // For text/title elements, use anchor-based centering with intrinsic sizing
+        // Position at anchor point, then translate to center horizontally
+        final (anchorX, anchorY) = position.anchorPercent;
+        final leftPx = (anchorX / 100) * w + (position.offsetX / 100) * w;
+        final topPx = (anchorY / 100) * h + (position.offsetY / 100) * h;
+
+        return Positioned(
+          left: leftPx,
+          top: topPx,
+          child: FractionalTranslation(
+            translation: const Offset(-0.5, 0), // Center horizontally on anchor
+            child: AnimatedOpacity(
+              opacity: isVisible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 300),
+              child: child,
+            ),
+          ),
+        );
+      } else {
+        // For buttons, use percentage-based sizing
+        final (left, top) = position.calculatePosition();
+        final leftPx = (left / 100) * w;
+        final topPx = (top / 100) * h;
+        final widthPx = position.widthPercent > 0 ? (position.widthPercent / 100) * w : null;
+        final heightPx = position.heightPercent != null ? (position.heightPercent! / 100) * h : null;
+
+        return Positioned(
+          left: leftPx,
+          top: topPx,
+          width: widthPx,
+          height: heightPx,
+          child: AnimatedOpacity(
+            opacity: isVisible ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 300),
+            child: child,
+          ),
+        );
+      }
     }).toList();
   }
 

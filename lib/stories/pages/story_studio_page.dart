@@ -3,8 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
+import '../models/element_position.dart';
 
 import '../../services/i18n_service.dart';
 import '../models/story.dart';
@@ -17,6 +21,7 @@ import '../widgets/add_element_dialog.dart';
 import '../widgets/element_properties_panel.dart';
 import '../widgets/scene_editor_canvas.dart';
 import '../widgets/scene_properties_panel.dart';
+import '../widgets/story_settings_dialog.dart';
 import 'story_viewer_page.dart';
 
 /// Story Studio - editor for creating and modifying stories
@@ -37,23 +42,36 @@ class StoryStudioPage extends StatefulWidget {
 }
 
 class _StoryStudioPageState extends State<StoryStudioPage> {
+  // Auto-managed element IDs
+  static const _sceneTitleElementId = '_scene_title';
+  static const _sceneDescriptionElementId = '_scene_description';
+
+  late Story _story;
   StoryContent? _content;
   StoryScene? _selectedScene;
   String? _selectedElementId;
   bool _isLoading = true;
   bool _hasChanges = false;
-  bool _showSceneProperties = false;
+  bool _showSceneProperties = true;
+  Timer? _autoSaveTimer;
 
   @override
   void initState() {
     super.initState();
+    _story = widget.story;
     _loadContent();
+  }
+
+  @override
+  void dispose() {
+    _autoSaveTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadContent() async {
     setState(() => _isLoading = true);
     try {
-      _content = await widget.storage.loadStoryContent(widget.story);
+      _content = await widget.storage.loadStoryContent(_story);
       if (_content != null && _content!.orderedScenes.isNotEmpty) {
         _selectedScene = _content!.orderedScenes.first;
       }
@@ -62,17 +80,63 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
     }
   }
 
-  Future<void> _saveContent() async {
+  Future<void> _openSettings() async {
+    final result = await StorySettingsDialog.show(
+      context,
+      story: _story,
+      i18n: widget.i18n,
+      currentBackgroundMusic: _content?.settings.backgroundMusic,
+    );
+
+    if (result != null) {
+      final updatedStory = await widget.storage.updateStoryMetadata(
+        _story,
+        title: result.title,
+        description: result.description,
+        categories: result.categories,
+      );
+      setState(() {
+        _story = updatedStory;
+      });
+
+      // Update background music in content settings if changed
+      if (result.backgroundMusicChanged && _content != null) {
+        final newSettings = _content!.settings.copyWith(
+          backgroundMusic: result.backgroundMusic,
+          clearBackgroundMusic: result.backgroundMusic == null,
+        );
+        _content = _content!.copyWith(settings: newSettings);
+        _hasChanges = true;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Settings saved'), duration: Duration(seconds: 1)),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveContent({bool silent = false}) async {
     if (_content == null) return;
 
-    await widget.storage.saveStoryContent(widget.story, _content!);
+    await widget.storage.saveStoryContent(_story, _content!);
     setState(() => _hasChanges = false);
 
-    if (mounted) {
+    if (mounted && !silent) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Saved'), duration: Duration(seconds: 1)),
       );
     }
+  }
+
+  void _triggerAutoSave() {
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(seconds: 3), () {
+      if (_hasChanges && mounted) {
+        _saveContent(silent: true);
+      }
+    });
   }
 
   Future<void> _addScene() async {
@@ -87,7 +151,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
     final sceneId = 'scene-${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
 
     // Add image to story assets
-    final assetRef = await widget.storage.addMedia(widget.story, image.path);
+    final assetRef = await widget.storage.addMedia(_story, image.path);
 
     final newScene = StoryScene(
       id: sceneId,
@@ -150,6 +214,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
       _selectedScene = updatedScene;
       _hasChanges = true;
     });
+    _triggerAutoSave();
   }
 
   void _updateElement(StoryElement updatedElement) {
@@ -220,11 +285,84 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
 
     if (image != null) {
       // Add image to story assets
-      final assetRef = await widget.storage.addMedia(widget.story, image.path);
+      final assetRef = await widget.storage.addMedia(_story, image.path);
 
       final newBg = _selectedScene!.background.copyWith(asset: assetRef);
       _updateScene(_selectedScene!.copyWith(background: newBg));
     }
+  }
+
+  /// Update auto-managed title element based on scene title
+  void _updateSceneTitleElement(String? title) {
+    if (_selectedScene == null) return;
+
+    var elements = List<StoryElement>.from(_selectedScene!.elements);
+    final existingIndex = elements.indexWhere((e) => e.id == _sceneTitleElementId);
+
+    if (title != null && title.isNotEmpty) {
+      // Create or update title element at topCenter
+      final titleElement = StoryElement.title(
+        id: _sceneTitleElementId,
+        text: title,
+        position: const ElementPosition(
+          anchor: AnchorPoint.topCenter,
+          offsetY: 5,
+          width: ElementSize.large,
+        ),
+        color: '#FFFFFF',
+        shadowColor: '#000000',
+      );
+
+      if (existingIndex >= 0) {
+        elements[existingIndex] = titleElement;
+      } else {
+        elements.insert(0, titleElement); // Add at beginning
+      }
+    } else {
+      // Remove title element if exists
+      if (existingIndex >= 0) {
+        elements.removeAt(existingIndex);
+      }
+    }
+
+    _updateScene(_selectedScene!.copyWith(elements: elements));
+  }
+
+  /// Update auto-managed description element based on scene description
+  void _updateSceneDescriptionElement(String? description) {
+    if (_selectedScene == null) return;
+
+    var elements = List<StoryElement>.from(_selectedScene!.elements);
+    final existingIndex = elements.indexWhere((e) => e.id == _sceneDescriptionElementId);
+
+    if (description != null && description.isNotEmpty) {
+      // Create or update text element at center
+      final descElement = StoryElement.text(
+        id: _sceneDescriptionElementId,
+        text: description,
+        position: const ElementPosition(
+          anchor: AnchorPoint.center,
+          width: ElementSize.large,
+        ),
+        fontSize: FontSize.medium,
+        color: '#FFFFFF',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        align: 'center',
+      );
+
+      if (existingIndex >= 0) {
+        elements[existingIndex] = descElement;
+      } else {
+        elements.add(descElement);
+      }
+    } else {
+      // Remove description element if exists
+      if (existingIndex >= 0) {
+        elements.removeAt(existingIndex);
+      }
+    }
+
+    _updateScene(_selectedScene!.copyWith(elements: elements));
   }
 
   Future<void> _previewStory() async {
@@ -241,7 +379,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
       context,
       MaterialPageRoute(
         builder: (context) => StoryViewerPage(
-          story: widget.story,
+          story: _story,
           storage: widget.storage,
           i18n: widget.i18n,
         ),
@@ -297,7 +435,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.i18n.get('story_studio', 'stories')),
+          title: Text(_story.title),
           actions: [
             // Toggle scene properties
             IconButton(
@@ -311,6 +449,12 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
                 });
               },
               tooltip: widget.i18n.get('scene', 'stories'),
+            ),
+            // Settings
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _openSettings,
+              tooltip: widget.i18n.get('story_settings', 'stories'),
             ),
             // Preview
             IconButton(
@@ -477,7 +621,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
           constraints: const BoxConstraints(maxWidth: 400),
           child: SceneEditorCanvas(
             scene: scene,
-            story: widget.story,
+            story: _story,
             storage: widget.storage,
             selectedElementId: _selectedElementId,
             onSelectionChanged: (elementId) {
@@ -502,6 +646,8 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
         i18n: widget.i18n,
         onSceneChanged: _updateScene,
         onSelectBackgroundImage: _selectBackgroundImage,
+        onSceneTitleChanged: _updateSceneTitleElement,
+        onSceneDescriptionChanged: _updateSceneDescriptionElement,
       );
     }
 

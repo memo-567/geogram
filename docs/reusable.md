@@ -148,6 +148,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [AnchorSelectorWidget](#anchorselectorwidget) - 9-point anchor picker for positioning
 - [AddElementDialog](#addelementdialog) - Dialog for adding text/image/button elements
 - [SelectionFrame Pattern](#selectionframe-pattern) - Reusable selection frame with drag handles
+- [SoundPickerWidget](#soundpickerwidget) - Background music picker for stories
 
 ---
 
@@ -6042,6 +6043,66 @@ SlideCanvasWidget(
 
 ---
 
+## Debounced Auto-Save Pattern
+
+Pattern for automatically saving content after a short delay following user edits. Prevents excessive saves while ensuring changes are not lost.
+
+**State Variables:**
+```dart
+Timer? _autoSaveTimer;
+bool _hasChanges = false;
+```
+
+**Trigger Auto-Save:**
+```dart
+void _triggerAutoSave() {
+  _autoSaveTimer?.cancel();
+  _autoSaveTimer = Timer(const Duration(seconds: 3), () {
+    if (_hasChanges && mounted) {
+      _saveContent(silent: true);  // Silent save without UI notification
+    }
+  });
+}
+```
+
+**Usage in Update Methods:**
+```dart
+void _updateContent(Content updated) {
+  setState(() {
+    _content = updated;
+    _hasChanges = true;
+  });
+  _triggerAutoSave();  // Restart debounce timer
+}
+```
+
+**Cleanup:**
+```dart
+@override
+void dispose() {
+  _autoSaveTimer?.cancel();
+  super.dispose();
+}
+```
+
+**Save Method with Silent Option:**
+```dart
+Future<void> _saveContent({bool silent = false}) async {
+  await _storage.save(_content);
+  setState(() => _hasChanges = false);
+
+  if (mounted && !silent) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Saved')),
+    );
+  }
+}
+```
+
+**Reference:** `lib/stories/pages/story_studio_page.dart`
+
+---
+
 ## Inline Text Editing Pattern
 
 Pattern for inline text editing directly in a canvas/widget instead of using popup dialogs. This provides WYSIWYG editing where users see exactly how text looks while typing.
@@ -7189,6 +7250,41 @@ Interactive canvas widget for editing story scenes in Story Studio. Renders the 
 - Keyboard support (Delete to remove, Escape to deselect)
 - Uses `_SelectionFrame` for drag/resize (reusable pattern)
 
+**Text/Title Intrinsic Sizing and Centering Pattern:**
+Text and title elements should use intrinsic sizing (null width/height) rather than percentage-based sizing. Since they use intrinsic sizing, they must be positioned at the anchor point and use `FractionalTranslation` to center horizontally.
+
+```dart
+// In _buildElements():
+final isTextOrTitle = element.type == ElementType.text || element.type == ElementType.title;
+
+if (isTextOrTitle) {
+  // Position at anchor point, use FractionalTranslation to center
+  final (anchorX, anchorY) = position.anchorPercent;
+  final leftPx = (anchorX / 100) * w + (position.offsetX / 100) * w;
+  final topPx = (anchorY / 100) * h + (position.offsetY / 100) * h;
+
+  return Positioned(
+    left: leftPx,
+    top: topPx,
+    child: FractionalTranslation(
+      translation: const Offset(-0.5, 0), // Center horizontally on anchor
+      child: child,
+    ),
+  );
+} else {
+  // For buttons, use percentage-based sizing
+  final (left, top) = position.calculatePosition();
+  final leftPx = (left / 100) * w;
+  final topPx = (top / 100) * h;
+  final widthPx = position.widthPercent > 0 ? (position.widthPercent / 100) * w : null;
+  final heightPx = position.heightPercent != null ? (position.heightPercent! / 100) * h : null;
+
+  return Positioned(left: leftPx, top: topPx, width: widthPx, height: heightPx, child: child);
+}
+```
+
+**Why this is needed:** The `calculatePosition()` method adjusts the left position based on `widthPercent` to center elements. But for text/title with intrinsic sizing (`widthPx = null`), the actual width differs from `widthPercent`, so the centering calculation is wrong. Using `FractionalTranslation(-0.5, 0)` centers the element based on its actual rendered width.
+
 ### ElementPropertiesPanel
 
 **File:** `lib/stories/widgets/element_properties_panel.dart`
@@ -7222,12 +7318,43 @@ Panel for editing scene-level properties like background and auto-advance.
 - `i18n` - I18nService
 - `onSceneChanged` - Callback when scene modified
 - `onSelectBackgroundImage` - Callback to open image picker
+- `onSceneTitleChanged` - Callback for auto-managed title element (optional)
+- `onSceneDescriptionChanged` - Callback for auto-managed description element (optional)
 
 **Sections:**
-- Scene title
+- Scene title (with auto-managed element support)
+- Scene description (with auto-managed element support)
 - Background image (required) with placeholder/letterbox color
+- Background music override
 - Navigation settings (allow back)
 - Auto-advance (enable, delay, target, countdown)
+
+**Auto-Managed Elements Pattern:**
+When `onSceneTitleChanged` or `onSceneDescriptionChanged` callbacks are provided, the parent page can automatically create/update/remove corresponding title or text elements on the scene canvas. This allows users to set scene title/description in the properties panel and have it automatically appear on the image.
+
+```dart
+// In parent page:
+void _updateSceneTitleElement(String? title) {
+  var elements = List<StoryElement>.from(_selectedScene!.elements);
+  final existingIndex = elements.indexWhere((e) => e.id == '_scene_title');
+
+  if (title != null && title.isNotEmpty) {
+    final titleElement = StoryElement.title(
+      id: '_scene_title',
+      text: title,
+      position: const ElementPosition(anchor: AnchorPoint.topCenter, offsetY: 5),
+    );
+    if (existingIndex >= 0) {
+      elements[existingIndex] = titleElement;
+    } else {
+      elements.insert(0, titleElement);
+    }
+  } else if (existingIndex >= 0) {
+    elements.removeAt(existingIndex);
+  }
+  _updateScene(_selectedScene!.copyWith(elements: elements));
+}
+```
 
 ### AnchorSelectorWidget
 
@@ -7261,6 +7388,48 @@ if (element != null) {
 ```
 
 **Also includes:** `AddElementBottomSheet` - bottom sheet to select element type first.
+
+### SoundPickerWidget
+
+**File:** `lib/stories/widgets/sound_picker_widget.dart`
+
+A reusable bottom sheet widget for picking background music tracks from bundled sound clips.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `i18n` | I18nService | Yes | Localization service |
+| `currentTrack` | String? | No | Currently selected track path (e.g., "cinematic/epilogue.mp3") |
+
+**Returns:** `SoundTrack?` - the selected track, `SoundTrack.none()` if "None" was selected, or `null` if cancelled
+
+**Usage:**
+```dart
+final selected = await SoundPickerWidget.show(
+  context,
+  i18n: i18n,
+  currentTrack: currentMusicPath,
+);
+
+// null = cancelled (keep current), SoundTrack.none() = "None" selected, otherwise = track selected
+if (selected != null) {
+  final newPath = selected.isNone ? null : selected.file;
+  print('Selected: $newPath');
+}
+```
+
+**Features:**
+- Categories displayed as ExpansionTile groups
+- Play/stop preview for each track using just_audio
+- Current selection highlighted
+- "None" option to clear music selection
+- Displays track title, mood, and duration
+
+**Related:**
+- `SoundClipsService` - Singleton service managing bundled sounds
+- `SoundTrack` / `SoundCategory` - Model classes for track metadata
+
+---
 
 ### SelectionFrame Pattern
 

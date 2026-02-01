@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/i18n_service.dart';
+import '../../util/app_constants.dart';
 import '../models/story.dart';
 import '../services/stories_storage_service.dart';
 import '../widgets/story_card_widget.dart';
@@ -32,13 +33,60 @@ class StoriesHomePage extends StatefulWidget {
 class _StoriesHomePageState extends State<StoriesHomePage> {
   late StoriesStorageService _storage;
   List<Story> _stories = [];
+  List<Story> _filteredStories = [];
   bool _isLoading = true;
+  final TextEditingController _searchController = TextEditingController();
+  Set<String> _selectedCategories = {};
 
   @override
   void initState() {
     super.initState();
     _storage = StoriesStorageService(basePath: widget.collectionPath);
+    _searchController.addListener(_filterStories);
     _loadStories();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterStories() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      _filteredStories = _stories.where((story) {
+        // Text search
+        final matchesSearch = query.isEmpty ||
+            story.title.toLowerCase().contains(query) ||
+            (story.description?.toLowerCase().contains(query) ?? false);
+
+        // Category filter
+        final matchesCategory = _selectedCategories.isEmpty ||
+            story.tags.any((tag) => _selectedCategories.contains(tag));
+
+        return matchesSearch && matchesCategory;
+      }).toList();
+    });
+  }
+
+  void _toggleCategory(String category) {
+    setState(() {
+      if (_selectedCategories.contains(category)) {
+        _selectedCategories.remove(category);
+      } else {
+        _selectedCategories.add(category);
+      }
+    });
+    _filterStories();
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _searchController.clear();
+      _selectedCategories.clear();
+    });
+    _filterStories();
   }
 
   Future<void> _loadStories() async {
@@ -46,6 +94,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
     try {
       await _storage.initialize();
       _stories = await _storage.loadStories();
+      _filterStories();
     } finally {
       setState(() => _isLoading = false);
     }
@@ -54,43 +103,75 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
   Future<void> _createStory() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
+    final selectedCategories = <String>{};
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(widget.i18n.get('story_create', 'stories')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: InputDecoration(
-                labelText: widget.i18n.get('story_title', 'stories'),
-                hintText: widget.i18n.get('story_title_hint', 'stories'),
-              ),
-              autofocus: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(widget.i18n.get('story_create', 'stories')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: InputDecoration(
+                    labelText: widget.i18n.get('story_title', 'stories'),
+                    hintText: widget.i18n.get('story_title_hint', 'stories'),
+                  ),
+                  autofocus: true,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: descController,
+                  decoration: InputDecoration(
+                    labelText: widget.i18n.get('story_description', 'stories'),
+                    hintText: widget.i18n.get('story_description_hint', 'stories'),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  widget.i18n.get('story_categories', 'stories'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: storyCategoriesConst.map((category) {
+                    final isSelected = selectedCategories.contains(category);
+                    return FilterChip(
+                      label: Text(widget.i18n.get('category_$category', 'stories')),
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        setDialogState(() {
+                          if (selected) {
+                            selectedCategories.add(category);
+                          } else {
+                            selectedCategories.remove(category);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: descController,
-              decoration: InputDecoration(
-                labelText: widget.i18n.get('story_description', 'stories'),
-                hintText: widget.i18n.get('story_description_hint', 'stories'),
-              ),
-              maxLines: 2,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(MaterialLocalizations.of(context).okButtonLabel),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(MaterialLocalizations.of(context).okButtonLabel),
-          ),
-        ],
       ),
     );
 
@@ -98,6 +179,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
       final story = await _storage.createStory(
         title: titleController.text,
         description: descController.text.isNotEmpty ? descController.text : null,
+        categories: selectedCategories.isNotEmpty ? selectedCategories.toList() : null,
         ownerNpub: '', // TODO: Get from profile
         ownerName: null,
       );
@@ -217,11 +299,95 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          _buildSearchBar(),
+          _buildCategoryFilter(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createStory,
         icon: const Icon(Icons.add),
         label: Text(widget.i18n.get('story_create', 'stories')),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: widget.i18n.get('search_stories', 'stories'),
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _searchController.text.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchController.clear();
+                  },
+                )
+              : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          filled: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryFilter() {
+    // Only show categories that have at least one story
+    final usedCategories = <String>{};
+    for (final story in _stories) {
+      usedCategories.addAll(story.tags);
+    }
+    final availableCategories = storyCategoriesConst
+        .where((cat) => usedCategories.contains(cat))
+        .toList();
+
+    // Don't show filter row if no categories are used
+    if (availableCategories.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: FilterChip(
+              label: Text(widget.i18n.get('filter_all', 'stories')),
+              selected: _selectedCategories.isEmpty,
+              onSelected: (_) => _clearFilters(),
+            ),
+          ),
+          ...availableCategories.map((category) {
+            final isSelected = _selectedCategories.contains(category);
+            final iconCode = storyCategoryIconCodes[category];
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: FilterChip(
+                avatar: iconCode != null
+                    ? Icon(
+                        IconData(iconCode, fontFamily: 'MaterialIcons'),
+                        size: 18,
+                      )
+                    : null,
+                label: Text(widget.i18n.get('category_$category', 'stories')),
+                selected: isSelected,
+                onSelected: (_) => _toggleCategory(category),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -258,6 +424,39 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
       );
     }
 
+    // Show "no results" when filters are active but nothing matches
+    if (_filteredStories.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.search_off,
+              size: 64,
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.i18n.get('no_results', 'stories'),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.i18n.get('no_results_hint', 'stories'),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                  ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: _clearFilters,
+              child: Text(widget.i18n.get('filter_all', 'stories')),
+            ),
+          ],
+        ),
+      );
+    }
+
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -266,12 +465,13 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
-      itemCount: _stories.length,
+      itemCount: _filteredStories.length,
       itemBuilder: (context, index) {
-        final story = _stories[index];
+        final story = _filteredStories[index];
         return StoryCardWidget(
           story: story,
           storage: _storage,
+          i18n: widget.i18n,
           onTap: () => _openViewer(story),
           onEdit: () => _openStudio(story),
           onDelete: () => _deleteStory(story),

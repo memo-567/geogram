@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../services/i18n_service.dart';
 import '../models/story.dart';
 import '../services/stories_storage_service.dart';
 
@@ -14,6 +15,7 @@ import '../services/stories_storage_service.dart';
 class StoryCardWidget extends StatefulWidget {
   final Story story;
   final StoriesStorageService storage;
+  final I18nService i18n;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -24,6 +26,7 @@ class StoryCardWidget extends StatefulWidget {
     super.key,
     required this.story,
     required this.storage,
+    required this.i18n,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -45,11 +48,10 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
   }
 
   Future<void> _loadThumbnail() async {
-    if (widget.story.thumbnail != null) {
-      final path = await widget.storage.extractThumbnail(widget.story);
-      if (mounted && path != null) {
-        setState(() => _thumbnailPath = path);
-      }
+    // Try to extract thumbnail - either from metadata or direct path
+    final path = await widget.storage.extractThumbnail(widget.story);
+    if (mounted && path != null) {
+      setState(() => _thumbnailPath = path);
     }
   }
 
@@ -187,18 +189,53 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (widget.story.description != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.story.description!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.7),
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                    // Flexible middle section that can shrink
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (widget.story.description != null) ...[
+                            const SizedBox(height: 4),
+                            Flexible(
+                              child: Text(
+                                widget.story.description!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurface.withValues(alpha: 0.7),
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                          if (widget.story.tags.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 4,
+                              runSpacing: 2,
+                              children: widget.story.tags.take(3).map((tag) {
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primaryContainer,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    widget.i18n.get('category_$tag', 'stories'),
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: colorScheme.onPrimaryContainer,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ],
                       ),
-                    ],
-                    const Spacer(),
+                    ),
                     Row(
                       children: [
                         Icon(

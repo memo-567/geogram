@@ -105,6 +105,9 @@ class StoryScene {
   /// Optional scene title
   final String? title;
 
+  /// Optional scene description (auto-creates centered text element)
+  final String? description;
+
   /// Override global back navigation setting for this scene
   final bool? allowBack;
 
@@ -120,15 +123,23 @@ class StoryScene {
   /// Auto-advance configuration (optional)
   final AutoAdvance? autoAdvance;
 
+  /// Background music override for this scene
+  /// - null: use story-level music
+  /// - "": silence (no music)
+  /// - "path/to/track.mp3": override with specific track
+  final String? backgroundMusic;
+
   const StoryScene({
     required this.id,
     required this.index,
     this.title,
+    this.description,
     this.allowBack,
     required this.background,
     this.elements = const [],
     this.triggers = const [],
     this.autoAdvance,
+    this.backgroundMusic,
   });
 
   /// Get elements sorted by appearAt time
@@ -156,6 +167,7 @@ class StoryScene {
       id: json['id'] as String,
       index: (json['index'] as num?)?.toInt() ?? 0,
       title: json['title'] as String?,
+      description: json['description'] as String?,
       allowBack: json['allowBack'] as bool?,
       background: json['background'] != null
           ? SceneBackground.fromJson(json['background'] as Map<String, dynamic>)
@@ -171,6 +183,7 @@ class StoryScene {
       autoAdvance: json['autoAdvance'] != null
           ? AutoAdvance.fromJson(json['autoAdvance'] as Map<String, dynamic>)
           : null,
+      backgroundMusic: json['backgroundMusic'] as String?,
     );
   }
 
@@ -179,11 +192,13 @@ class StoryScene {
       'id': id,
       'index': index,
       if (title != null) 'title': title,
+      if (description != null) 'description': description,
       if (allowBack != null) 'allowBack': allowBack,
       'background': background.toJson(),
       'elements': elements.map((e) => e.toJson()).toList(),
       'triggers': triggers.map((t) => t.toJson()).toList(),
       if (autoAdvance != null) 'autoAdvance': autoAdvance!.toJson(),
+      if (backgroundMusic != null) 'backgroundMusic': backgroundMusic,
     };
   }
 
@@ -191,21 +206,27 @@ class StoryScene {
     String? id,
     int? index,
     String? title,
+    String? description,
     bool? allowBack,
     SceneBackground? background,
     List<StoryElement>? elements,
     List<StoryTrigger>? triggers,
     AutoAdvance? autoAdvance,
+    String? backgroundMusic,
+    bool clearBackgroundMusic = false,
+    bool clearDescription = false,
   }) {
     return StoryScene(
       id: id ?? this.id,
       index: index ?? this.index,
       title: title ?? this.title,
+      description: clearDescription ? null : (description ?? this.description),
       allowBack: allowBack ?? this.allowBack,
       background: background ?? this.background,
       elements: elements ?? this.elements,
       triggers: triggers ?? this.triggers,
       autoAdvance: autoAdvance ?? this.autoAdvance,
+      backgroundMusic: clearBackgroundMusic ? null : (backgroundMusic ?? this.backgroundMusic),
     );
   }
 }

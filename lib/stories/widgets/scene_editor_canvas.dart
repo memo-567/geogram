@@ -350,17 +350,29 @@ class _EditableElementWrapperState extends State<_EditableElementWrapper> {
   @override
   Widget build(BuildContext context) {
     final position = widget.element.position;
-    final (left, top) = position.calculatePosition();
 
     final w = widget.constraints.maxWidth;
     final h = widget.constraints.maxHeight;
 
-    final leftPx = (left / 100) * w;
-    final topPx = (top / 100) * h;
-
     // For text/title elements, use intrinsic sizing; for buttons use percentage
     final isTextOrTitle = widget.element.type == ElementType.text ||
         widget.element.type == ElementType.title;
+
+    // Calculate position differently for text/title vs other elements
+    final double leftPx;
+    final double topPx;
+    if (isTextOrTitle) {
+      // For text/title, position at anchor point (will use FractionalTranslation to center)
+      final (anchorX, anchorY) = position.anchorPercent;
+      leftPx = (anchorX / 100) * w + (position.offsetX / 100) * w;
+      topPx = (anchorY / 100) * h + (position.offsetY / 100) * h;
+    } else {
+      // For buttons, use calculated position with width adjustment
+      final (left, top) = position.calculatePosition();
+      leftPx = (left / 100) * w;
+      topPx = (top / 100) * h;
+    }
+
     final widthPx = isTextOrTitle ? null : (position.widthPercent > 0 ? (position.widthPercent / 100) * w : null);
     final heightPx = isTextOrTitle ? null : (position.heightPercent != null ? (position.heightPercent! / 100) * h : null);
 
@@ -389,8 +401,11 @@ class _EditableElementWrapperState extends State<_EditableElementWrapper> {
           ? (_measuredSize?.height ?? 30)
           : (heightPx ?? 50);
 
+      // For text/title, adjust left position to account for centering
+      final frameLeft = isTextOrTitle ? leftPx - frameWidth / 2 : leftPx;
+
       return _SelectionFrame(
-        left: leftPx,
+        left: frameLeft,
         top: topPx,
         width: frameWidth,
         height: frameHeight,
@@ -400,6 +415,24 @@ class _EditableElementWrapperState extends State<_EditableElementWrapper> {
         onMove: _handleMove,
         onResize: isTextOrTitle ? null : _handleResize, // Disable resize for text/title
         child: child,
+      );
+    }
+
+    if (isTextOrTitle) {
+      // For text/title, use FractionalTranslation to center on anchor
+      return Positioned(
+        left: leftPx,
+        top: topPx,
+        child: FractionalTranslation(
+          translation: const Offset(-0.5, 0), // Center horizontally on anchor
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: child,
+            ),
+          ),
+        ),
       );
     }
 

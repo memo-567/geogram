@@ -4,8 +4,10 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/i18n_service.dart';
@@ -13,6 +15,7 @@ import '../models/story.dart';
 import '../models/story_content.dart';
 import '../models/story_scene.dart';
 import '../models/story_trigger.dart';
+import '../services/sound_clips_service.dart';
 import '../services/stories_storage_service.dart';
 import '../widgets/scene_viewer_widget.dart';
 
@@ -43,28 +46,107 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   Timer? _autoAdvanceTimer;
   int _countdownSeconds = 0;
 
+  // Background music
+  Player? _musicPlayer;
+  String? _currentMusicTrack;
+  final _soundService = SoundClipsService();
+
   @override
   void initState() {
     super.initState();
+    _initMusicPlayer();
     _loadContent();
+  }
+
+  void _initMusicPlayer() {
+    _musicPlayer = Player();
+    _musicPlayer!.setPlaylistMode(PlaylistMode.loop);
+
+    // Add error listener for debugging
+    _musicPlayer!.stream.error.listen((error) {
+      debugPrint('StoryViewerPage: Music player error: $error');
+    });
   }
 
   @override
   void dispose() {
     _autoAdvanceTimer?.cancel();
+    _stopMusic();
+    _musicPlayer?.dispose();
     super.dispose();
   }
 
   Future<void> _loadContent() async {
     setState(() => _isLoading = true);
     try {
+      await _soundService.init();
       _content = await widget.storage.loadStoryContent(widget.story);
       if (_content != null && _content!.startScene != null) {
+        // Start story-level background music
+        await _startStoryMusic();
         _navigateToScene(_content!.startSceneId, addToHistory: false);
       }
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _startStoryMusic() async {
+    final storyMusic = _content?.settings.backgroundMusic;
+    if (storyMusic != null && storyMusic.isNotEmpty) {
+      await _playMusic(storyMusic);
+    }
+  }
+
+  Future<void> _updateSceneMusic(StoryScene scene) async {
+    // null = use story music, "" = silence, "path" = override
+    if (scene.backgroundMusic == null) {
+      // Use story-level music
+      final storyMusic = _content?.settings.backgroundMusic;
+      if (storyMusic != _currentMusicTrack) {
+        if (storyMusic != null && storyMusic.isNotEmpty) {
+          await _playMusic(storyMusic);
+        } else {
+          await _stopMusic();
+        }
+      }
+    } else if (scene.backgroundMusic!.isEmpty) {
+      // Silence for this scene
+      await _stopMusic();
+    } else {
+      // Override with scene-specific music
+      if (scene.backgroundMusic != _currentMusicTrack) {
+        await _playMusic(scene.backgroundMusic!);
+      }
+    }
+  }
+
+  Future<void> _playMusic(String trackFile) async {
+    if (_musicPlayer == null) return;
+
+    try {
+      final path = _soundService.getTrackPath(trackFile);
+      debugPrint('StoryViewerPage: Playing music from: $path');
+
+      // Check file exists
+      final file = File(path);
+      if (!await file.exists()) {
+        debugPrint('StoryViewerPage: Music file not found: $path');
+        return;
+      }
+
+      await _musicPlayer!.open(Media(path));
+      await _musicPlayer!.play();
+      _currentMusicTrack = trackFile;
+      debugPrint('StoryViewerPage: Music playback started');
+    } catch (e) {
+      debugPrint('StoryViewerPage: Failed to play music: $e');
+    }
+  }
+
+  Future<void> _stopMusic() async {
+    await _musicPlayer?.stop();
+    _currentMusicTrack = null;
   }
 
   void _navigateToScene(String sceneId, {bool addToHistory = true}) {
@@ -83,6 +165,9 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     setState(() {
       _currentScene = scene;
     });
+
+    // Update background music for the scene
+    _updateSceneMusic(scene);
 
     // Start auto-advance timer if configured
     if (scene.autoAdvance != null) {
@@ -174,6 +259,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   }
 
   void _exitStory() {
+    _stopMusic();
     Navigator.of(context).pop();
   }
 

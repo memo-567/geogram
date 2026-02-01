@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "license": "CC0-1.0",
+  "source": "FreePD.com via Internet Archive",
+  "total_tracks": 21,
+  "categories": {
+    "acoustic": {
+      "description": "Acoustic and folk sounds",
+      "tracks": [
+        {"file": "acoustic/guitar_interstitial.mp3", "title": "Guitar Interstitial", "duration_approx": "30s", "mood": "warm"}
+      ]
+    },
+    "ambient": {
+      "description": "Atmospheric and dreamy",
+      "tracks": [
+        {"file": "ambient/diablo.mp3", "title": "Diablo", "duration_approx": "2:00", "mood": "mysterious"},
+        {"file": "ambient/stratosphere.mp3", "title": "Stratosphere", "duration_approx": "1:45", "mood": "spacey"},
+        {"file": "ambient/terminal.mp3", "title": "Terminal", "duration_approx": "1:00", "mood": "tense"}
+      ]
+    },
+    "chill": {
+      "description": "Relaxed and laid-back",
+      "tracks": [
+        {"file": "chill/downy_feathers.mp3", "title": "Downy Feathers", "duration_approx": "2:00", "mood": "soft"},
+        {"file": "chill/last_call.mp3", "title": "Last Call", "duration_approx": "2:00", "mood": "nostalgic"}
+      ]
+    },
+    "cinematic": {
+      "description": "Dramatic and emotional",
+      "tracks": [
+        {"file": "cinematic/epilogue.mp3", "title": "Epilogue", "duration_approx": "2:00", "mood": "reflective"},
+        {"file": "cinematic/interluder.mp3", "title": "Interluder", "duration_approx": "2:15", "mood": "transitional"},
+        {"file": "cinematic/intro.mp3", "title": "Intro", "duration_approx": "1:45", "mood": "opening"},
+        {"file": "cinematic/maestro.mp3", "title": "Maestro", "duration_approx": "1:45", "mood": "dramatic"},
+        {"file": "cinematic/piano_cue.mp3", "title": "Piano Cue", "duration_approx": "20s", "mood": "emotional"},
+        {"file": "cinematic/running_fanfare.mp3", "title": "Running Fanfare", "duration_approx": "45s", "mood": "urgent"},
+        {"file": "cinematic/sting.mp3", "title": "Sting", "duration_approx": "40s", "mood": "attention"}
+      ]
+    },
+    "electronic": {
+      "description": "Synth and digital sounds",
+      "tracks": [
+        {"file": "electronic/synth_short.mp3", "title": "Synth Short", "duration_approx": "20s", "mood": "techy"}
+      ]
+    },
+    "jazz": {
+      "description": "Jazz and sophisticated",
+      "tracks": [
+        {"file": "jazz/jazz_hates_you.mp3", "title": "Jazz Hates You", "duration_approx": "25s", "mood": "quirky"}
+      ]
+    },
+    "upbeat": {
+      "description": "Energetic and happy",
+      "tracks": [
+        {"file": "upbeat/beautiful_soup.mp3", "title": "Beautiful Soup", "duration_approx": "1:20", "mood": "whimsical"},
+        {"file": "upbeat/dopey_stroll.mp3", "title": "Dopey Stroll", "duration_approx": "20s", "mood": "playful"},
+        {"file": "upbeat/here_we_go.mp3", "title": "Here We Go", "duration_approx": "1:00", "mood": "energetic"},
+        {"file": "upbeat/pump_sting.mp3", "title": "Pump Sting", "duration_approx": "25s", "mood": "exciting"}
+      ]
+    },
+    "world": {
+      "description": "Cultural and ethnic sounds",
+      "tracks": [
+        {"file": "world/bongo_flute.mp3", "title": "Bongo Flute", "duration_approx": "25s", "mood": "tribal"},
+        {"file": "world/east_of_tunesia.mp3", "title": "East of Tunisia", "duration_approx": "1:10", "mood": "exotic"}
+      ]
+    }
+  }
+}
