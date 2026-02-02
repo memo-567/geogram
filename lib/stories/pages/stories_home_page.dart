@@ -8,6 +8,34 @@ import 'package:flutter/material.dart';
 import '../../services/i18n_service.dart';
 import '../../util/app_constants.dart';
 import '../models/story.dart';
+
+/// Const map of category icons for tree-shaking support
+const Map<String, IconData> _storyCategoryIcons = {
+  'news': Icons.newspaper,
+  'fun': Icons.celebration,
+  'tech': Icons.computer,
+  'adult': Icons.no_adult_content,
+  'diary': Icons.menu_book,
+  'geocache': Icons.explore,
+  'travel': Icons.flight,
+  'tutorial': Icons.school,
+  'gaming': Icons.sports_esports,
+  'food': Icons.restaurant,
+  'fitness': Icons.fitness_center,
+  'art': Icons.palette,
+  'music': Icons.music_note,
+  'nature': Icons.park,
+  'history': Icons.history_edu,
+  'science': Icons.science,
+  'business': Icons.business,
+  'family': Icons.family_restroom,
+  'pets': Icons.pets,
+  'diy': Icons.build,
+  'mystery': Icons.quiz,
+  'romance': Icons.favorite,
+  'horror': Icons.mood_bad,
+  'fantasy': Icons.auto_fix_high,
+};
 import '../services/stories_storage_service.dart';
 import '../widgets/story_card_widget.dart';
 import 'story_viewer_page.dart';
@@ -371,15 +399,12 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
           ),
           ...availableCategories.map((category) {
             final isSelected = _selectedCategories.contains(category);
-            final iconCode = storyCategoryIconCodes[category];
+            final icon = _storyCategoryIcons[category];
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: FilterChip(
-                avatar: iconCode != null
-                    ? Icon(
-                        IconData(iconCode, fontFamily: 'MaterialIcons'),
-                        size: 18,
-                      )
+                avatar: icon != null
+                    ? Icon(icon, size: 18)
                     : null,
                 label: Text(widget.i18n.get('category_$category', 'stories')),
                 selected: isSelected,
