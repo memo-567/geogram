@@ -759,6 +759,13 @@ class _CreateDebtPageState extends State<CreateDebtPage> {
                                     width: 100,
                                     height: 100,
                                     fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return const SizedBox(
+                                        width: 100,
+                                        height: 100,
+                                        child: Icon(Icons.broken_image, color: Colors.grey),
+                                      );
+                                    },
                                   ),
                                 ),
                                 Positioned(

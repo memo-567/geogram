@@ -533,6 +533,14 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
       return Image.memory(
         _imageCache[imagePath]!,
         fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            color: Colors.grey.withValues(alpha: 0.2),
+            child: const Center(
+              child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+            ),
+          );
+        },
       );
     }
 
@@ -564,6 +572,14 @@ class _SlideCanvasWidgetState extends State<SlideCanvasWidget> {
         return Image.memory(
           snapshot.data!,
           fit: BoxFit.contain,
+          errorBuilder: (context, error, stackTrace) {
+            return Container(
+              color: Colors.grey.withValues(alpha: 0.2),
+              child: const Center(
+                child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+              ),
+            );
+          },
         );
       },
     );

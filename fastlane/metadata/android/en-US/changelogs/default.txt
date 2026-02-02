@@ -1,0 +1,5 @@
+- Stories app: Create interactive visual stories with scenes, buttons, and triggers
+- Stories app: Add video backgrounds support (play once, no loop)
+- Stories app: Add background music and search/filter functionality
+- Music app: Local music playback with album artwork
+- Various UI improvements and bug fixes

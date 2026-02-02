@@ -7,6 +7,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 import '../models/story.dart';
 import '../models/story_scene.dart';
@@ -38,6 +40,8 @@ class SceneViewerWidget extends StatefulWidget {
 
 class _SceneViewerWidgetState extends State<SceneViewerWidget> {
   String? _backgroundImagePath;
+  Player? _videoPlayer;
+  VideoController? _videoController;
   bool _showBackground = false;
   final Map<String, bool> _visibleElements = {};
   Timer? _timingTimer;
@@ -56,6 +60,7 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
     if (oldWidget.scene.id != widget.scene.id) {
       // Scene changed, reset everything
       _backgroundImagePath = null;
+      _disposeVideoPlayer();
       _showBackground = false;
       _visibleElements.clear();
       _elapsedMs = 0;
@@ -67,19 +72,51 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
   @override
   void dispose() {
     _timingTimer?.cancel();
+    _disposeVideoPlayer();
     super.dispose();
   }
 
+  void _disposeVideoPlayer() {
+    _videoPlayer?.dispose();
+    _videoPlayer = null;
+    _videoController = null;
+  }
+
   Future<void> _loadBackground() async {
-    if (widget.scene.background.asset != null) {
+    final bg = widget.scene.background;
+
+    // Load video if present (video takes priority)
+    if (bg.hasVideo) {
       final path = await widget.storage.extractMedia(
         widget.story,
-        widget.scene.background.asset!,
+        bg.videoAsset!,
+      );
+      if (mounted && path != null) {
+        await _initVideoPlayer(path);
+      }
+    }
+    // Otherwise load image
+    else if (bg.hasImage) {
+      final path = await widget.storage.extractMedia(
+        widget.story,
+        bg.asset!,
       );
       if (mounted && path != null) {
         setState(() => _backgroundImagePath = path);
       }
     }
+  }
+
+  Future<void> _initVideoPlayer(String videoPath) async {
+    _disposeVideoPlayer();
+
+    _videoPlayer = Player();
+    _videoController = VideoController(_videoPlayer!);
+
+    // Video plays once (no loop)
+    await _videoPlayer!.open(Media(videoPath));
+    await _videoPlayer!.play();
+    if (mounted) setState(() {});
   }
 
   void _startTiming() {
@@ -174,6 +211,31 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
     // Always use cover to ensure consistent element positioning across orientations
     const fit = BoxFit.cover;
 
+    Widget mediaWidget;
+
+    // Video background (takes priority over image)
+    if (bg.hasVideo && _videoController != null) {
+      mediaWidget = Video(
+        controller: _videoController!,
+        controls: NoVideoControls,
+        fit: fit,
+        width: constraints.maxWidth,
+        height: constraints.maxHeight,
+      );
+    }
+    // Image background
+    else if (_backgroundImagePath != null) {
+      mediaWidget = Image.file(
+        File(_backgroundImagePath!),
+        width: constraints.maxWidth,
+        height: constraints.maxHeight,
+        fit: fit,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      );
+    } else {
+      mediaWidget = const SizedBox.shrink();
+    }
+
     return AnimatedOpacity(
       opacity: _showBackground ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 300),
@@ -181,15 +243,7 @@ class _SceneViewerWidgetState extends State<SceneViewerWidget> {
         width: constraints.maxWidth,
         height: constraints.maxHeight,
         color: placeholderColor,
-        child: _backgroundImagePath != null
-            ? Image.file(
-                File(_backgroundImagePath!),
-                width: constraints.maxWidth,
-                height: constraints.maxHeight,
-                fit: fit,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              )
-            : const SizedBox.shrink(),
+        child: mediaWidget,
       ),
     );
   }

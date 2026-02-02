@@ -47,6 +47,9 @@ app.*.map.json
 android/key.properties
 android/app/keystore/
 
+# Fastlane (sensitive)
+fastlane/play-store-key.json
+
 # Development symlinks
 /data
 

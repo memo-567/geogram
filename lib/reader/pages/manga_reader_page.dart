@@ -339,6 +339,9 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
             child: Image.memory(
               _pages[index].data,
               fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey));
+              },
             ),
           ),
         );
@@ -354,6 +357,12 @@ class _MangaReaderPageState extends State<MangaReaderPage> {
         return Image.memory(
           _pages[index].data,
           fit: BoxFit.fitWidth,
+          errorBuilder: (context, error, stackTrace) {
+            return const SizedBox(
+              height: 200,
+              child: Center(child: Icon(Icons.broken_image, size: 48, color: Colors.grey)),
+            );
+          },
         );
       },
     );

@@ -133,3 +133,30 @@ jobs:
         files: build/app/outputs/bundle/release/app-release.aab
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Set up Ruby and Fastlane for Play Store upload
+    - name: Set up Ruby
+      if: startsWith(github.ref, 'refs/tags/v') && env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != ''
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+        bundler-cache: true
+        working-directory: fastlane
+      env:
+        GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+
+    # Upload to Google Play Store internal track
+    - name: Upload to Google Play
+      if: startsWith(github.ref, 'refs/tags/v') && env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != ''
+      env:
+        GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+      run: |
+        # Write the service account JSON to a file
+        echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > fastlane/play-store-key.json
+
+        # Run Fastlane to upload to internal track
+        cd fastlane
+        bundle exec fastlane internal
+
+        # Clean up the key file
+        rm -f play-store-key.json

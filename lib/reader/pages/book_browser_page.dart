@@ -401,6 +401,9 @@ class _BookBrowserPageState extends State<BookBrowserPage> {
             return Image.file(
               File(coverPath),
               fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return _buildBookIcon(book);
+              },
             );
           }
           return _buildBookIcon(book);

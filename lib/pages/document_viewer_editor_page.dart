@@ -266,6 +266,12 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
                 Image.memory(
                   pageBytes,
                   fit: BoxFit.fitWidth,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const SizedBox(
+                      height: 200,
+                      child: Center(child: Icon(Icons.broken_image, color: Colors.grey)),
+                    );
+                  },
                 ),
                 // Page number
                 Padding(

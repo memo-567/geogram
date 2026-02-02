@@ -42,5 +42,12 @@ Widget? buildMemoryImage(Uint8List bytes, {double? width, double? height, BoxFit
     width: width,
     height: height,
     fit: fit,
+    errorBuilder: (context, error, stackTrace) {
+      return SizedBox(
+        width: width,
+        height: height,
+        child: const Icon(Icons.broken_image, color: Colors.grey),
+      );
+    },
   );
 }

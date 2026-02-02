@@ -43,6 +43,13 @@ Widget? buildFileImage(String path, {double? width, double? height, BoxFit fit =
         width: width,
         height: height,
         fit: fit,
+        errorBuilder: (context, error, stackTrace) {
+          return SizedBox(
+            width: width,
+            height: height,
+            child: const Icon(Icons.broken_image, color: Colors.grey),
+          );
+        },
       );
     }
   } catch (e) {

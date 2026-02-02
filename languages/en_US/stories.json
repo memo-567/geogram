@@ -27,7 +27,10 @@
   "scene_description_hint": "Optional text shown on scene",
   "scene_background": "Background",
   "scene_background_image": "Image",
+  "scene_background_video": "Video",
   "scene_background_color": "Color",
+  "image_selected": "Image selected",
+  "video_selected": "Video selected",
   "scene_allow_back": "Allow back navigation",
 
   "element": "Element",

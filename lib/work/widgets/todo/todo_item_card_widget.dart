@@ -392,6 +392,14 @@ class TodoItemCardWidget extends StatelessWidget {
                               width: 80,
                               height: 80,
                               fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  width: 80,
+                                  height: 80,
+                                  color: theme.colorScheme.surfaceContainerHighest,
+                                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                                );
+                              },
                             )
                           : Container(
                               width: 80,

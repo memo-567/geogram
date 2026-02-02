@@ -5,6 +5,7 @@
 
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -287,7 +288,33 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
       // Add image to story assets
       final assetRef = await widget.storage.addMedia(_story, image.path);
 
-      final newBg = _selectedScene!.background.copyWith(asset: assetRef);
+      // Clear video when selecting image
+      final newBg = _selectedScene!.background.copyWith(
+        asset: assetRef,
+        clearVideoAsset: true,
+      );
+      _updateScene(_selectedScene!.copyWith(background: newBg));
+    }
+  }
+
+  Future<void> _selectBackgroundVideo() async {
+    if (_selectedScene == null) return;
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      allowMultiple: false,
+    );
+
+    if (result != null && result.files.single.path != null) {
+      final videoPath = result.files.single.path!;
+      // Add video to story assets
+      final assetRef = await widget.storage.addMedia(_story, videoPath);
+
+      // Clear image when selecting video
+      final newBg = _selectedScene!.background.copyWith(
+        videoAsset: assetRef,
+        clearAsset: true,
+      );
       _updateScene(_selectedScene!.copyWith(background: newBg));
     }
   }
@@ -580,9 +607,11 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
                       width: isSelected ? 2 : 1,
                     ),
                   ),
-                  child: scene.background.hasImage
-                      ? const Icon(Icons.image, size: 16, color: Colors.white70)
-                      : Icon(Icons.warning, size: 16, color: Colors.orange.shade300),
+                  child: scene.background.hasVideo
+                      ? const Icon(Icons.videocam, size: 16, color: Colors.white70)
+                      : scene.background.hasImage
+                          ? const Icon(Icons.image, size: 16, color: Colors.white70)
+                          : Icon(Icons.warning, size: 16, color: Colors.orange.shade300),
                 ),
                 title: Text(
                   scene.title ?? '${widget.i18n.get('scene', 'stories')} ${index + 1}',
@@ -646,6 +675,7 @@ class _StoryStudioPageState extends State<StoryStudioPage> {
         i18n: widget.i18n,
         onSceneChanged: _updateScene,
         onSelectBackgroundImage: _selectBackgroundImage,
+        onSelectBackgroundVideo: _selectBackgroundVideo,
         onSceneTitleChanged: _updateSceneTitleElement,
         onSceneDescriptionChanged: _updateSceneDescriptionElement,
       );

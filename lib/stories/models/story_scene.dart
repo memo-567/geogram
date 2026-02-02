@@ -6,12 +6,15 @@
 import 'story_element.dart';
 import 'story_trigger.dart';
 
-/// Scene background configuration - always requires an image
+/// Scene background configuration - supports image or video
 class SceneBackground {
-  /// Image asset path (required)
+  /// Image asset path
   final String? asset;
 
-  /// Placeholder/letterbox color (shown where image doesn't cover)
+  /// Video asset path (plays once, no loop)
+  final String? videoAsset;
+
+  /// Placeholder/letterbox color (shown where media doesn't cover)
   final String placeholder;
 
   /// When background appears (ms from scene start, 0-5000)
@@ -19,6 +22,7 @@ class SceneBackground {
 
   const SceneBackground({
     this.asset,
+    this.videoAsset,
     this.placeholder = '#000000',
     this.appearAt = 0,
   });
@@ -26,9 +30,16 @@ class SceneBackground {
   /// Whether the background has an image set
   bool get hasImage => asset != null && asset!.isNotEmpty;
 
+  /// Whether the background has a video set
+  bool get hasVideo => videoAsset != null && videoAsset!.isNotEmpty;
+
+  /// Whether the background has any media (image or video)
+  bool get hasMedia => hasImage || hasVideo;
+
   factory SceneBackground.fromJson(Map<String, dynamic> json) {
     return SceneBackground(
       asset: json['asset'] as String?,
+      videoAsset: json['videoAsset'] as String?,
       placeholder: json['placeholder'] as String? ??
           json['color'] as String? ??
           '#000000',
@@ -39,6 +50,7 @@ class SceneBackground {
   Map<String, dynamic> toJson() {
     return {
       if (asset != null) 'asset': asset,
+      if (videoAsset != null) 'videoAsset': videoAsset,
       'placeholder': placeholder,
       if (appearAt > 0) 'appearAt': appearAt,
     };
@@ -46,11 +58,15 @@ class SceneBackground {
 
   SceneBackground copyWith({
     String? asset,
+    String? videoAsset,
     String? placeholder,
     int? appearAt,
+    bool clearAsset = false,
+    bool clearVideoAsset = false,
   }) {
     return SceneBackground(
-      asset: asset ?? this.asset,
+      asset: clearAsset ? null : (asset ?? this.asset),
+      videoAsset: clearVideoAsset ? null : (videoAsset ?? this.videoAsset),
       placeholder: placeholder ?? this.placeholder,
       appearAt: appearAt ?? this.appearAt,
     );

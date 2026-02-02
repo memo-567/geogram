@@ -18,6 +18,7 @@ class ScenePropertiesPanel extends StatefulWidget {
   final I18nService i18n;
   final ValueChanged<StoryScene> onSceneChanged;
   final VoidCallback? onSelectBackgroundImage;
+  final VoidCallback? onSelectBackgroundVideo;
   final ValueChanged<String?>? onSceneTitleChanged;
   final ValueChanged<String?>? onSceneDescriptionChanged;
 
@@ -28,6 +29,7 @@ class ScenePropertiesPanel extends StatefulWidget {
     required this.i18n,
     required this.onSceneChanged,
     this.onSelectBackgroundImage,
+    this.onSelectBackgroundVideo,
     this.onSceneTitleChanged,
     this.onSceneDescriptionChanged,
   });
@@ -55,6 +57,7 @@ class _ScenePropertiesPanelState extends State<ScenePropertiesPanel> {
   List<StoryScene> get allScenes => widget.allScenes;
   void onSceneChanged(StoryScene s) => widget.onSceneChanged(s);
   VoidCallback? get onSelectBackgroundImage => widget.onSelectBackgroundImage;
+  VoidCallback? get onSelectBackgroundVideo => widget.onSelectBackgroundVideo;
 
   @override
   Widget build(BuildContext context) {
@@ -155,46 +158,69 @@ class _ScenePropertiesPanelState extends State<ScenePropertiesPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Image selection (required)
+          // Media status indicator
+          if (bg.hasVideo)
+            Row(
+              children: [
+                const Icon(Icons.check_circle, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    i18n.get('video_selected', 'stories'),
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            )
+          else if (bg.hasImage)
+            Row(
+              children: [
+                const Icon(Icons.check_circle, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    i18n.get('image_selected', 'stories'),
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Icon(Icons.warning, size: 16, color: Colors.orange.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    i18n.get('media_select', 'stories'),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.orange.shade700,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+          const SizedBox(height: 12),
+
+          // Media selection buttons
           Row(
             children: [
               Expanded(
-                child: bg.hasImage
-                    ? Row(
-                        children: [
-                          const Icon(Icons.check_circle, size: 16, color: Colors.green),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              i18n.get('scene_background_image', 'stories'),
-                              style: Theme.of(context).textTheme.bodyMedium,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Row(
-                        children: [
-                          Icon(Icons.warning, size: 16, color: Colors.orange.shade700),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              i18n.get('media_select', 'stories'),
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Colors.orange.shade700,
-                                  ),
-                            ),
-                          ),
-                        ],
-                      ),
+                child: FilledButton.tonalIcon(
+                  icon: const Icon(Icons.image, size: 18),
+                  label: Text(i18n.get('scene_background_image', 'stories')),
+                  onPressed: onSelectBackgroundImage,
+                ),
               ),
               const SizedBox(width: 8),
-              FilledButton.tonalIcon(
-                icon: const Icon(Icons.image, size: 18),
-                label: Text(bg.hasImage
-                    ? i18n.get('scene_background_image', 'stories')
-                    : i18n.get('media_select', 'stories')),
-                onPressed: onSelectBackgroundImage,
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  icon: const Icon(Icons.videocam, size: 18),
+                  label: Text(i18n.get('scene_background_video', 'stories')),
+                  onPressed: onSelectBackgroundVideo,
+                ),
               ),
             ],
           ),

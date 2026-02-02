@@ -27,7 +27,10 @@
   "scene_description_hint": "Texto opcional mostrado na cena",
   "scene_background": "Fundo",
   "scene_background_image": "Imagem",
+  "scene_background_video": "Video",
   "scene_background_color": "Cor",
+  "image_selected": "Imagem selecionada",
+  "video_selected": "Video selecionado",
   "scene_allow_back": "Permitir voltar atras",
 
   "element": "Elemento",

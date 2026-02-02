@@ -1206,6 +1206,14 @@ class _FlasherPageState extends State<FlasherPage>
           width: 64,
           height: 64,
           fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return Container(
+              width: 64,
+              height: 64,
+              color: Colors.grey.withValues(alpha: 0.2),
+              child: const Icon(Icons.broken_image, color: Colors.grey),
+            );
+          },
         );
       }
     }

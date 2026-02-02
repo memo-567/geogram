@@ -8,13 +8,15 @@
 - GitHub Actions builds AAB on every tag (`.github/workflows/build-android.yml`)
 - Fastlane metadata: title, descriptions, icon, feature graphic, 5 screenshots
 - Apache 2.0 license
+- **Privacy policy** (`docs/PRIVACY_POLICY.md`) - needs hosting at public URL
+- **Fastlane Appfile and Fastfile** - created in `fastlane/` directory
+- **CI/CD step to upload to Play Store** - added to workflow (requires secrets)
 
 ### Missing for Google Play
 - Google Play Console account ($25 registration) and app listing
 - Service account JSON key for API access
-- Fastlane Appfile and Fastfile
-- Privacy policy (need to create and host)
-- CI/CD step to upload to Play Store (automated)
+- Host privacy policy at public URL (e.g., `https://geogram.radio/privacy`)
+- Add `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` secret to GitHub
 
 ---
 
@@ -275,9 +277,20 @@ We may update this policy. Check this page for the latest version.
 - [ ] Link service account to Play Console with permissions
 - [ ] Add `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` secret to GitHub
 - [ ] Upload first AAB manually via Play Console
-- [ ] Host privacy policy at public URL
+- [ ] Host privacy policy at public URL (content ready in `docs/PRIVACY_POLICY.md`)
 - [ ] Complete IARC content rating questionnaire
 - [ ] Submit for review
+
+## Files Created
+
+| File | Status |
+|------|--------|
+| `fastlane/Appfile` | Created |
+| `fastlane/Fastfile` | Created |
+| `fastlane/Gemfile` | Created |
+| `fastlane/metadata/android/en-US/changelogs/default.txt` | Created |
+| `.github/workflows/build-android.yml` | Updated with Play Store upload |
+| `.gitignore` | Updated to exclude `play-store-key.json` |
 
 ## Notes
 

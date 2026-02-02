@@ -52,6 +52,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
   }
 
   Future<void> _loadRooms() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _error = null;
@@ -61,6 +62,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
       // Try to load from cache first for instant response
       final cachedRooms = await _loadFromCache();
       if (cachedRooms.isNotEmpty) {
+        if (!mounted) return;
         setState(() {
           _rooms = cachedRooms;
           _isLoading = false;
@@ -75,6 +77,7 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
       await _fetchFromApi();
     } catch (e) {
       LogService().log('RemoteChatBrowserPage: Error loading rooms: $e');
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -191,8 +194,9 @@ class _RemoteChatBrowserPageState extends State<RemoteChatBrowserPage> {
         final List<dynamic> roomsData = data is Map ? (data['rooms'] ?? data) : data;
         LogService().log('RemoteChatBrowserPage: roomsData has ${roomsData.length} items');
 
+        if (!mounted) return;
         setState(() {
-          _rooms = roomsData.map((json) => ChatRoom.fromJson(json)).toList();
+          _rooms = roomsData.map((json) => ChatRoom.fromJson(json as Map<String, dynamic>)).toList();
           _isLoading = false;
         });
         LogService().log('RemoteChatBrowserPage: Fetched ${_rooms.length} rooms from API');

@@ -7,6 +7,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 import '../models/story.dart';
 import '../models/story_element.dart';
@@ -42,6 +44,8 @@ class SceneEditorCanvas extends StatefulWidget {
 
 class _SceneEditorCanvasState extends State<SceneEditorCanvas> {
   String? _backgroundImagePath;
+  Player? _videoPlayer;
+  VideoController? _videoController;
   final FocusNode _focusNode = FocusNode();
 
   @override
@@ -53,9 +57,13 @@ class _SceneEditorCanvasState extends State<SceneEditorCanvas> {
   @override
   void didUpdateWidget(SceneEditorCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final bg = widget.scene.background;
+    final oldBg = oldWidget.scene.background;
     if (oldWidget.scene.id != widget.scene.id ||
-        oldWidget.scene.background.asset != widget.scene.background.asset) {
+        oldBg.asset != bg.asset ||
+        oldBg.videoAsset != bg.videoAsset) {
       _backgroundImagePath = null;
+      _disposeVideoPlayer();
       _loadBackground();
     }
   }
@@ -63,19 +71,52 @@ class _SceneEditorCanvasState extends State<SceneEditorCanvas> {
   @override
   void dispose() {
     _focusNode.dispose();
+    _disposeVideoPlayer();
     super.dispose();
   }
 
+  void _disposeVideoPlayer() {
+    _videoPlayer?.dispose();
+    _videoPlayer = null;
+    _videoController = null;
+  }
+
   Future<void> _loadBackground() async {
-    if (widget.scene.background.asset != null) {
+    final bg = widget.scene.background;
+
+    // Load video if present (video takes priority)
+    if (bg.hasVideo) {
       final path = await widget.storage.extractMedia(
         widget.story,
-        widget.scene.background.asset!,
+        bg.videoAsset!,
+      );
+      if (mounted && path != null) {
+        await _initVideoPlayer(path);
+      }
+    }
+    // Otherwise load image
+    else if (bg.hasImage) {
+      final path = await widget.storage.extractMedia(
+        widget.story,
+        bg.asset!,
       );
       if (mounted && path != null) {
         setState(() => _backgroundImagePath = path);
       }
     }
+  }
+
+  Future<void> _initVideoPlayer(String videoPath) async {
+    _disposeVideoPlayer();
+
+    _videoPlayer = Player();
+    _videoController = VideoController(_videoPlayer!);
+
+    // In editor, loop the video for preview
+    await _videoPlayer!.setPlaylistMode(PlaylistMode.loop);
+    await _videoPlayer!.open(Media(videoPath));
+    await _videoPlayer!.play();
+    if (mounted) setState(() {});
   }
 
   void _handleKeyEvent(KeyEvent event) {
@@ -141,23 +182,40 @@ class _SceneEditorCanvasState extends State<SceneEditorCanvas> {
     // Always use cover to ensure consistent element positioning across orientations
     const fit = BoxFit.cover;
 
+    Widget mediaWidget;
+
+    // Video background (takes priority over image)
+    if (bg.hasVideo && _videoController != null) {
+      mediaWidget = Video(
+        controller: _videoController!,
+        controls: NoVideoControls,
+        fit: fit,
+        width: constraints.maxWidth,
+        height: constraints.maxHeight,
+      );
+    }
+    // Image background
+    else if (_backgroundImagePath != null) {
+      mediaWidget = Image.file(
+        File(_backgroundImagePath!),
+        width: constraints.maxWidth,
+        height: constraints.maxHeight,
+        fit: fit,
+        errorBuilder: (context, error, stackTrace) => _buildMediaPlaceholder(),
+      );
+    } else {
+      mediaWidget = _buildMediaPlaceholder();
+    }
+
     return Container(
       width: constraints.maxWidth,
       height: constraints.maxHeight,
       color: bgColor,
-      child: _backgroundImagePath != null
-          ? Image.file(
-              File(_backgroundImagePath!),
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              fit: fit,
-              errorBuilder: (context, error, stackTrace) => _buildImagePlaceholder(),
-            )
-          : _buildImagePlaceholder(),
+      child: mediaWidget,
     );
   }
 
-  Widget _buildImagePlaceholder() {
+  Widget _buildMediaPlaceholder() {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -165,7 +223,7 @@ class _SceneEditorCanvasState extends State<SceneEditorCanvas> {
           Icon(Icons.add_photo_alternate, size: 48, color: Colors.white.withValues(alpha: 0.5)),
           const SizedBox(height: 8),
           Text(
-            'Select background image',
+            'Select background media',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
           ),
         ],

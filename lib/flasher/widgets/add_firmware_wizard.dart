@@ -869,6 +869,13 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
                             width: 80,
                             height: 80,
                             fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const SizedBox(
+                                width: 80,
+                                height: 80,
+                                child: Icon(Icons.broken_image, color: Colors.grey),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 12),

@@ -196,6 +196,13 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                               child: Image.memory(
                                 _workspaceLogo!,
                                 fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Icon(
+                                    Icons.broken_image,
+                                    size: 40,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  );
+                                },
                               ),
                             )
                           : Icon(
@@ -1535,6 +1542,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                   child: Image.memory(
                     _logoCache[doc.filename]!,
                     fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Icon(Icons.broken_image, color: Colors.grey);
+                    },
                   ),
                 ),
               ),
@@ -1979,6 +1989,9 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                             child: Image.memory(
                               _logoCache[doc.filename]!,
                               fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return const Icon(Icons.broken_image, color: Colors.grey);
+                              },
                             ),
                           ),
                         ),
@@ -2053,6 +2066,13 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                               child: Image.memory(
                                 currentThumbnail!,
                                 fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Icon(
+                                    Icons.broken_image,
+                                    size: 40,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  );
+                                },
                               ),
                             )
                           : Icon(
@@ -2127,6 +2147,13 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                               child: Image.memory(
                                 currentLogo!,
                                 fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Icon(
+                                    Icons.broken_image,
+                                    size: 32,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  );
+                                },
                               ),
                             )
                           : Icon(
