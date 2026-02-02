@@ -5,6 +5,7 @@
 
 import 'dart:io' show Platform, Process;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'log_service.dart';
@@ -21,6 +22,10 @@ class FileLauncherService {
   factory FileLauncherService() => _instance;
   FileLauncherService._internal();
 
+  /// Method channel for Android FileProvider-based file opening.
+  /// Required for Android 7.0+ to avoid FileUriExposedException.
+  static const _androidChannel = MethodChannel('dev.geogram/file_launcher');
+
   /// Open a folder in the system's default file browser.
   ///
   /// Returns true if the folder was opened successfully, false otherwise.
@@ -29,7 +34,7 @@ class FileLauncherService {
   /// - **Linux**: Uses xdg-open
   /// - **macOS**: Uses open command
   /// - **Windows**: Uses explorer
-  /// - **Android**: Uses ACTION_VIEW intent via url_launcher
+  /// - **Android**: Uses FileProvider via method channel (required for Android 7.0+)
   /// - **iOS**: Uses url_launcher (limited support - opens Files app if available)
   /// - **Web**: Not supported, returns false
   Future<bool> openFolder(String path) async {
@@ -39,6 +44,12 @@ class FileLauncherService {
     }
 
     try {
+      // On Android, always use FileProvider via method channel to avoid
+      // FileUriExposedException on Android 7.0+ (API 24+)
+      if (!kIsWeb && Platform.isAndroid) {
+        return await _openFolderPlatformSpecific(path);
+      }
+
       // First try using url_launcher with file:// URI
       final uri = Uri.parse('file://$path');
       if (await canLaunchUrl(uri)) {
@@ -64,6 +75,12 @@ class FileLauncherService {
     }
 
     try {
+      // On Android, always use FileProvider via method channel to avoid
+      // FileUriExposedException on Android 7.0+ (API 24+)
+      if (!kIsWeb && Platform.isAndroid) {
+        return await _openFilePlatformSpecific(path);
+      }
+
       final uri = Uri.parse('file://$path');
       if (await canLaunchUrl(uri)) {
         return await launchUrl(uri);
@@ -107,10 +124,17 @@ class FileLauncherService {
         // Explorer returns 1 even on success sometimes
         return result.exitCode == 0 || result.exitCode == 1;
       } else if (Platform.isAndroid) {
-        // On Android, use content:// URI via url_launcher
-        // The file:// scheme works for most file managers
-        final uri = Uri.parse('file://$path');
-        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+        // Use FileProvider via method channel to avoid FileUriExposedException on Android 7.0+
+        try {
+          final result = await _androidChannel.invokeMethod('openFile', {
+            'path': path,
+            'mimeType': 'resource/folder', // Android file managers recognize this
+          });
+          return result == true;
+        } catch (e) {
+          LogService().log('FileLauncherService: Android FileProvider folder open failed: $e');
+          return false;
+        }
       } else if (Platform.isIOS) {
         // iOS has limited file system access
         // Try to open via shareable URL if available
@@ -141,7 +165,19 @@ class FileLauncherService {
       } else if (Platform.isWindows) {
         final result = await Process.run('start', ['', path], runInShell: true);
         return result.exitCode == 0;
-      } else if (Platform.isAndroid || Platform.isIOS) {
+      } else if (Platform.isAndroid) {
+        // Use FileProvider via method channel to avoid FileUriExposedException on Android 7.0+
+        try {
+          final result = await _androidChannel.invokeMethod('openFile', {
+            'path': path,
+            'mimeType': _getMimeType(path),
+          });
+          return result == true;
+        } catch (e) {
+          LogService().log('FileLauncherService: Android FileProvider failed: $e');
+          return false;
+        }
+      } else if (Platform.isIOS) {
         final uri = Uri.parse('file://$path');
         return await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
@@ -150,6 +186,27 @@ class FileLauncherService {
       LogService().log('FileLauncherService: Platform-specific file open failed: $e');
       return false;
     }
+  }
+
+  /// Get MIME type for common file extensions.
+  String? _getMimeType(String path) {
+    final ext = path.split('.').last.toLowerCase();
+    return switch (ext) {
+      'html' || 'htm' => 'text/html',
+      'pdf' => 'application/pdf',
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png' => 'image/png',
+      'gif' => 'image/gif',
+      'webp' => 'image/webp',
+      'txt' => 'text/plain',
+      'json' => 'application/json',
+      'xml' => 'application/xml',
+      'mp4' => 'video/mp4',
+      'mp3' => 'audio/mpeg',
+      'wav' => 'audio/wav',
+      'zip' => 'application/zip',
+      _ => null,
+    };
   }
 
   /// Check if the current platform supports opening folders.

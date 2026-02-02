@@ -19,6 +19,7 @@ class MainActivity : FlutterActivity() {
     private val BLE_CHANNEL = "dev.geogram/ble_service"
     private val CRASH_CHANNEL = "dev.geogram/crash"
     private val USB_CHANNEL = "dev.geogram/usb_attach"
+    private val FILE_LAUNCHER_CHANNEL = "dev.geogram/file_launcher"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
@@ -222,6 +223,22 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // File launcher channel for opening files with FileProvider (Android 7.0+)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_LAUNCHER_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "openFile" -> {
+                    val path = call.argument<String>("path")
+                    val mimeType = call.argument<String>("mimeType")
+                    if (path != null) {
+                        result.success(openFileWithProvider(path, mimeType))
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Path is required", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     /**
@@ -384,5 +401,68 @@ class MainActivity : FlutterActivity() {
         usbAoaPlugin = null
         usbMethodChannel = null
         super.onDestroy()
+    }
+
+    /**
+     * Open a file using FileProvider for Android 7.0+ compatibility.
+     * This avoids FileUriExposedException when sharing file:// URIs between apps.
+     */
+    private fun openFileWithProvider(filePath: String, mimeType: String?): Boolean {
+        return try {
+            val file = File(filePath)
+            if (!file.exists()) {
+                android.util.Log.e("FileLauncher", "File does not exist: $filePath")
+                return false
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                // Android 7.0+ requires FileProvider to share files between apps
+                val authority = "${applicationContext.packageName}.fileprovider"
+                val uri = FileProvider.getUriForFile(this, authority, file)
+                val type = mimeType ?: getMimeType(filePath) ?: "*/*"
+                intent.setDataAndType(uri, type)
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                android.util.Log.d("FileLauncher", "Opening file with FileProvider: $uri (type: $type)")
+            } else {
+                // Older Android versions can use file:// URI
+                val type = mimeType ?: getMimeType(filePath) ?: "*/*"
+                intent.setDataAndType(android.net.Uri.fromFile(file), type)
+                android.util.Log.d("FileLauncher", "Opening file with file:// URI: $filePath (type: $type)")
+            }
+
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("FileLauncher", "Error opening file: ${e.message}")
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Get MIME type for common file extensions.
+     */
+    private fun getMimeType(path: String): String? {
+        val extension = path.substringAfterLast('.', "")
+        return when (extension.lowercase()) {
+            "html", "htm" -> "text/html"
+            "pdf" -> "application/pdf"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "txt" -> "text/plain"
+            "json" -> "application/json"
+            "xml" -> "application/xml"
+            "mp4" -> "video/mp4"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "zip" -> "application/zip"
+            "apk" -> "application/vnd.android.package-archive"
+            else -> null
+        }
     }
 }

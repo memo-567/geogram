@@ -8,4 +8,6 @@
     <files-path name="files" path="." />
     <!-- External files directory -->
     <external-files-path name="external_files" path="." />
+    <!-- Flutter app data directory (for path_provider getApplicationDocumentsDirectory) -->
+    <files-path name="app_flutter" path="app_flutter/" />
 </paths>
