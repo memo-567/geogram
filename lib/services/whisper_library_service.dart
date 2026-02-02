@@ -28,8 +28,16 @@ class WhisperLibraryService {
 
   /// Check if libwhisper.so is bundled with the app (normal builds)
   /// Returns false for F-Droid builds where it needs to be downloaded
+  /// Returns false on Windows where whisper is not supported
   Future<bool> isLibraryBundled() async {
     if (_isBundled != null) return _isBundled!;
+
+    // Whisper is not supported on Windows
+    if (Platform.isWindows) {
+      _isBundled = false;
+      LogService().log('WhisperLibraryService: Not supported on Windows');
+      return false;
+    }
 
     if (!Platform.isAndroid) {
       _isBundled = true;

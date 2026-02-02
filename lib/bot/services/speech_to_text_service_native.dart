@@ -118,6 +118,8 @@ class SpeechToTextService {
   static bool get isSupported {
     if (kIsWeb) return false;
     // whisper_flutter_new supports: Android 5.0+, iOS 13+, macOS 11+, Linux
+    // NOT supported on Windows
+    if (Platform.isWindows) return false;
     return Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isLinux;
   }
 

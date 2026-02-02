@@ -50,33 +50,24 @@ jobs:
       shell: powershell
       run: |
         # The flutter_onnxruntime plugin expects ONNX Runtime at a specific path
-        # Note: v1.21.1 doesn't have Windows binaries, use v1.21.0 but name the
-        # folder as the plugin expects (1.21.1)
-        $downloadVersion = "1.21.0"
-        $expectedVersion = "1.21.1"
+        # Using v1.21.0 which has Windows binaries available
+        $onnxVersion = "1.21.0"
         $onnxDir = "build\windows\x64\plugins\flutter_onnxruntime\onnxruntime"
-        $extractDir = "$onnxDir\onnxruntime-win-x64-$expectedVersion"
+        $extractDir = "$onnxDir\onnxruntime-win-x64-$onnxVersion"
 
         # Create the directory structure
         New-Item -ItemType Directory -Force -Path $onnxDir | Out-Null
 
-        # Download ONNX Runtime (using 1.21.0 since 1.21.1 doesn't have Windows binaries)
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$downloadVersion/onnxruntime-win-x64-$downloadVersion.zip"
+        # Download ONNX Runtime
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnxVersion/onnxruntime-win-x64-$onnxVersion.zip"
         $zipPath = "$onnxDir\onnxruntime.zip"
 
-        Write-Host "Downloading ONNX Runtime v$downloadVersion (as v$expectedVersion)..."
+        Write-Host "Downloading ONNX Runtime v$onnxVersion..."
         Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
 
-        # Extract to temp directory first
+        # Extract
         Write-Host "Extracting..."
         Expand-Archive -Path $zipPath -DestinationPath $onnxDir -Force
-
-        # Rename to the expected version directory
-        $downloadDir = "$onnxDir\onnxruntime-win-x64-$downloadVersion"
-        if (Test-Path $downloadDir) {
-          Write-Host "Renaming $downloadDir to $extractDir"
-          Rename-Item -Path $downloadDir -NewName "onnxruntime-win-x64-$expectedVersion"
-        }
 
         # Verify extraction
         if (Test-Path "$extractDir\lib\onnxruntime.dll") {
@@ -168,6 +159,46 @@ jobs:
 
         Write-Host "`nAll DLLs in release:"
         Get-ChildItem $targetPath -Filter "*.dll" | Select-Object Name, Length
+
+    - name: Verify DLLs in release
+      shell: powershell
+      run: |
+        $targetPath = "build\windows\x64\runner\Release"
+        Write-Host "=== DLL Verification ==="
+        Write-Host ""
+
+        # List all DLLs
+        Write-Host "All DLLs in release folder:"
+        Get-ChildItem $targetPath -Filter "*.dll" | ForEach-Object {
+          Write-Host "  $($_.Name) ($([math]::Round($_.Length / 1KB, 1)) KB)"
+        }
+        Write-Host ""
+
+        # Check for critical DLLs
+        $criticalDlls = @(
+          "flutter_windows.dll",
+          "msvcp140.dll",
+          "vcruntime140.dll",
+          "onnxruntime.dll"
+        )
+
+        $missing = @()
+        foreach ($dll in $criticalDlls) {
+          if (Test-Path "$targetPath\$dll") {
+            Write-Host "[OK] $dll found"
+          } else {
+            Write-Host "[MISSING] $dll NOT found"
+            $missing += $dll
+          }
+        }
+
+        if ($missing.Count -gt 0) {
+          Write-Error "Missing critical DLLs: $($missing -join ', ')"
+          exit 1
+        }
+
+        Write-Host ""
+        Write-Host "=== DLL verification passed ==="
 
     - name: Create portable archive
       run: |

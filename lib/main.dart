@@ -169,7 +169,13 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize media_kit for cross-platform video playback
-  MediaKit.ensureInitialized();
+  // Wrapped in try-catch to prevent crash if native libraries fail to load
+  try {
+    MediaKit.ensureInitialized();
+  } catch (e) {
+    print('MAIN: MediaKit initialization failed: $e');
+    // Continue without video support - app can still function
+  }
 
   // Re-initialize CrashService with proper paths now that binding is ready
   await CrashService().reinitialize();

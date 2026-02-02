@@ -4,7 +4,8 @@ project(geogram LANGUAGES CXX)
 
 # Override ONNX Runtime version to fix dxcore.dll dependency issue on older Windows
 # See: https://github.com/microsoft/onnxruntime/issues/24771
-set(ONNXRUNTIME_VERSION "1.21.1" CACHE STRING "ONNX Runtime version" FORCE)
+# Note: Using 1.21.0 because 1.21.1 doesn't have Windows binaries available
+set(ONNXRUNTIME_VERSION "1.21.0" CACHE STRING "ONNX Runtime version" FORCE)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
