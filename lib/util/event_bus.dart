@@ -7,6 +7,8 @@
 
 import 'dart:async';
 
+import '../models/chat_message.dart' show MessageStatus;
+
 /// Base class for all events
 abstract class AppEvent {
   final DateTime timestamp;
@@ -294,6 +296,28 @@ class DMMessageDeliveredEvent extends AppEvent {
     required this.callsign,
     required this.messageTimestamp,
   });
+}
+
+/// DM message status changed (pending -> delivered/failed)
+/// Fired by DMQueueService during background delivery attempts
+class DMMessageStatusChangedEvent extends AppEvent {
+  final String callsign;        // The recipient's callsign
+  final String messageId;       // timestamp|author for identification
+  final MessageStatus newStatus; // New status (pending, delivered, failed)
+  final String? transportUsed;  // Transport used for delivery (webrtc, station, etc.)
+  final String? error;          // Error message if failed
+
+  DMMessageStatusChangedEvent({
+    required this.callsign,
+    required this.messageId,
+    required this.newStatus,
+    this.transportUsed,
+    this.error,
+  });
+
+  @override
+  String toString() =>
+      'DMMessageStatusChangedEvent(callsign: $callsign, messageId: $messageId, status: ${newStatus.name})';
 }
 
 /// Connection type for ConnectionStateChangedEvent

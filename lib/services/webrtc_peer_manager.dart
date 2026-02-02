@@ -153,6 +153,15 @@ class WebRTCPeerManager {
     return peer?.isConnected ?? false;
   }
 
+  /// Check if a connection is healthy and ready for reuse
+  /// A healthy connection has an active peer, is connected, and the data channel is open
+  bool hasHealthyConnection(String callsign) {
+    final peer = _peers[callsign.toUpperCase()];
+    return peer != null &&
+        peer.isConnected &&
+        peer.dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen;
+  }
+
   /// Get connection state for a callsign
   WebRTCConnectionState? getConnectionState(String callsign) {
     return _peers[callsign.toUpperCase()]?.state;

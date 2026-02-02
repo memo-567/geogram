@@ -111,6 +111,10 @@ class DirectMessageService {
   final _unreadController = StreamController<Map<String, int>>.broadcast();
   Stream<Map<String, int>> get unreadCountsStream => _unreadController.stream;
 
+  /// Callback to trigger background queue processing
+  /// Set by DMQueueService to avoid circular import
+  Future<void> Function()? onTriggerBackgroundDelivery;
+
   /// Currently viewed conversation callsign (messages here are marked as read)
   String? _currentConversationCallsign;
 
@@ -510,8 +514,112 @@ class DirectMessageService {
   }
 
   /// Send a message in a DM conversation
-  /// Throws [DMMustBeReachableException] if the remote device is not reachable
+  ///
+  /// Implements optimistic UI: message appears immediately with 'pending' status,
+  /// then delivery happens in background via DMQueueService.
+  /// No longer throws [DMMustBeReachableException] - messages are always queued.
   Future<void> sendMessage(
+    String otherCallsign,
+    String content, {
+    Map<String, String>? metadata,
+  }) async {
+    await initialize();
+
+    final normalizedCallsign = otherCallsign.toUpperCase();
+    final profile = _myProfile;
+
+    // 1. Get or create conversation
+    final conversation = await getOrCreateConversation(normalizedCallsign);
+
+    // 2. Create the message with 'pending' status (optimistic UI)
+    final messageMetadata = <String, String>{};
+    if (metadata != null) {
+      messageMetadata.addAll(metadata);
+    }
+    messageMetadata['status'] = 'pending'; // Mark as pending for background delivery
+
+    final message = ChatMessage.now(
+      author: profile.callsign,
+      content: content,
+      metadata: messageMetadata,
+    );
+
+    // 3. Sign the message per chat-format-specification.md
+    // Tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
+    // For DMs, roomId is the other device's callsign (the conversation identifier)
+    // IMPORTANT: Use the message's timestamp for signing so verification works
+    final signingService = SigningService();
+    await signingService.initialize();
+
+    NostrEvent? signedEvent;
+    if (signingService.canSign(profile)) {
+      // Convert message timestamp to Unix seconds for signing
+      // IMPORTANT: Must use the exact same createdAt during verification
+      final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
+      signedEvent = await signingService.generateSignedEvent(
+        content,
+        {
+          'room': normalizedCallsign, // The conversation room is the other device's callsign
+          'callsign': profile.callsign,
+        },
+        profile,
+        createdAt: createdAt,
+      );
+      if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
+        // Store created_at first - receivers need this to reconstruct the exact NOSTR event for verification
+        message.setMeta('created_at', signedEvent.createdAt.toString());
+        message.setMeta('npub', profile.npub);
+        message.setMeta('eventId', signedEvent.id!);
+        message.setMeta('signature', signedEvent.sig!);
+        // Mark as verified - we signed it ourselves
+        message.setMeta('verified', 'true');
+      }
+    }
+
+    // 4. Save to queue for background delivery (includes signed event data)
+    await _saveToQueue(normalizedCallsign, message);
+
+    // 5. Add to cache for immediate UI display
+    _addMessageToCache(normalizedCallsign, message);
+
+    // Update conversation metadata
+    conversation.lastMessageTime = message.dateTime;
+    conversation.lastMessagePreview = content;
+    conversation.lastMessageAuthor = profile.callsign;
+
+    // 6. Fire event for immediate UI display
+    _fireMessageEvent(message, normalizedCallsign, fromSync: false);
+    _notifyListeners();
+
+    // 7. Trigger immediate background delivery attempt (fire and forget)
+    _triggerBackgroundDelivery();
+
+    LogService().log('DM: Message queued for $normalizedCallsign (optimistic UI)');
+  }
+
+  /// Trigger background delivery via DMQueueService
+  /// This is fire-and-forget - errors are handled by the queue service
+  void _triggerBackgroundDelivery() {
+    if (onTriggerBackgroundDelivery == null) {
+      LogService().log('DM: Background delivery not configured (DMQueueService not initialized)');
+      return;
+    }
+
+    // Fire and forget - use microtask to not block the sender
+    Future.microtask(() async {
+      try {
+        await onTriggerBackgroundDelivery!();
+      } catch (e) {
+        LogService().log('DM: Background delivery trigger failed: $e');
+      }
+    });
+  }
+
+  /// Send a message synchronously (old behavior for backwards compatibility)
+  /// Use this when you need to wait for delivery confirmation
+  /// Throws [DMMustBeReachableException] if the remote device is not reachable
+  /// Throws [DMDeliveryFailedException] if delivery fails
+  Future<void> sendMessageSync(
     String otherCallsign,
     String content, {
     Map<String, String>? metadata,
@@ -544,39 +652,31 @@ class DirectMessageService {
     );
 
     // 4. Sign the message per chat-format-specification.md
-    // Tags: [['t', 'chat'], ['room', roomId], ['callsign', callsign]]
-    // For DMs, roomId is the other device's callsign (the conversation identifier)
-    // IMPORTANT: Use the message's timestamp for signing so verification works
     final signingService = SigningService();
     await signingService.initialize();
 
     NostrEvent? signedEvent;
     if (signingService.canSign(profile)) {
-      // Convert message timestamp to Unix seconds for signing
-      // IMPORTANT: Must use the exact same createdAt during verification
       final createdAt = message.dateTime.millisecondsSinceEpoch ~/ 1000;
       signedEvent = await signingService.generateSignedEvent(
         content,
         {
-          'room': normalizedCallsign, // The conversation room is the other device's callsign
+          'room': normalizedCallsign,
           'callsign': profile.callsign,
         },
         profile,
         createdAt: createdAt,
       );
       if (signedEvent != null && signedEvent.sig != null && signedEvent.id != null) {
-        // Store created_at first - receivers need this to reconstruct the exact NOSTR event for verification
         message.setMeta('created_at', signedEvent.createdAt.toString());
         message.setMeta('npub', profile.npub);
         message.setMeta('eventId', signedEvent.id!);
         message.setMeta('signature', signedEvent.sig!);
-        // Mark as verified - we signed it ourselves
         message.setMeta('verified', 'true');
       }
     }
 
     // 5. Push to remote device's chat API FIRST
-    // Send the full signed event (id, pubkey, created_at, kind, tags, content, sig)
     final delivered = await _pushToRemoteChatAPI(
       normalizedCallsign,
       signedEvent,
@@ -594,7 +694,7 @@ class DirectMessageService {
     // 7. Save locally (message was delivered)
     await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
 
-    // 8. Add to cache (incremental update - avoids full reload)
+    // 8. Add to cache
     _addMessageToCache(normalizedCallsign, message);
 
     // Update conversation metadata
@@ -603,7 +703,7 @@ class DirectMessageService {
     conversation.lastMessageAuthor = profile.callsign;
 
     // 9. Fire event and notify listeners
-    _fireMessageEvent(message, otherCallsign, fromSync: false);
+    _fireMessageEvent(message, normalizedCallsign, fromSync: false);
     _notifyListeners();
   }
 

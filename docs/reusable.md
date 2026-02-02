@@ -7460,3 +7460,75 @@ _SelectionFrame(
 - Minimum size enforcement
 - Reports changes as percentages of canvas
 
+
+---
+
+### DMQueueService - Background Message Delivery Pattern
+
+**File:** `lib/services/dm_queue_service.dart`
+
+Singleton service for background message delivery with optimistic UI pattern. Uses `Timer.periodic` for cross-platform compatibility (no Android foreground service needed).
+
+**Pattern usage:**
+```dart
+// Initialize in main.dart (deferred services section)
+await DMQueueService().initialize();
+
+// Register callback for immediate delivery trigger (done automatically in initialize)
+DirectMessageService().onTriggerBackgroundDelivery = DMQueueService().processQueue;
+
+// Check queue status
+final count = await DMQueueService().getQueuedMessageCount(callsign);
+final hasQueued = await DMQueueService().hasQueuedMessages(callsign);
+```
+
+**Features:**
+- Timer.periodic queue processing (10-second interval)
+- Exponential backoff for retries (base 15s, max 10 retries)
+- Fires `DMMessageStatusChangedEvent` for UI updates
+- Uses `ConnectionManager.sendDM()` for transport selection (WebRTC → Station)
+- Preserves signed NOSTR events for later delivery
+
+**Related:**
+- `DirectMessageService` - Main DM service, calls `onTriggerBackgroundDelivery`
+- `DMMessageStatusChangedEvent` - Event bus event for status updates
+- `MessageStatus` enum - pending/delivered/failed states
+
+---
+
+### Optimistic UI for DM Sending
+
+**File:** `lib/services/direct_message_service.dart` (`sendMessage()` method)
+
+Pattern for immediate UI feedback when sending messages, with background delivery.
+
+**Pattern:**
+```dart
+// 1. Create message with 'pending' status
+final message = ChatMessage.now(
+  author: profile.callsign,
+  content: content,
+  metadata: {'status': 'pending'},
+);
+
+// 2. Sign the message
+final signedEvent = await signingService.generateSignedEvent(...);
+
+// 3. Save to queue for background delivery
+await _saveToQueue(callsign, message);
+
+// 4. Add to UI cache immediately
+_addMessageToCache(callsign, message);
+
+// 5. Fire event for immediate UI display
+_fireMessageEvent(message, callsign, fromSync: false);
+
+// 6. Trigger background delivery (fire and forget)
+onTriggerBackgroundDelivery?.call();
+```
+
+**Features:**
+- Message appears immediately with "queued" indicator
+- Background delivery via DMQueueService
+- Status updates via `DMMessageStatusChangedEvent`
+- Existing `isPending`/`isFailed` indicators in `MessageBubbleWidget`

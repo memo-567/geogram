@@ -56,6 +56,7 @@ class _DMChatPageState extends State<DMChatPage> {
   EventSubscription<DirectMessageReceivedEvent>? _messageSubscription;
   EventSubscription<DirectMessageSyncEvent>? _syncSubscription;
   EventSubscription<DMMessageDeliveredEvent>? _deliverySubscription;
+  EventSubscription<DMMessageStatusChangedEvent>? _statusSubscription;
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
   EventSubscription<ChatUploadProgressEvent>? _uploadSubscription;
 
@@ -73,6 +74,7 @@ class _DMChatPageState extends State<DMChatPage> {
     _messageSubscription?.cancel();
     _syncSubscription?.cancel();
     _deliverySubscription?.cancel();
+    _statusSubscription?.cancel();
     _downloadSubscription?.cancel();
     _uploadSubscription?.cancel();
     super.dispose();
@@ -105,6 +107,14 @@ class _DMChatPageState extends State<DMChatPage> {
     _deliverySubscription = EventBus().on<DMMessageDeliveredEvent>((event) {
       if (event.callsign.toUpperCase() == otherUpper) {
         // Reload messages to update status from pending to delivered
+        _loadMessages();
+      }
+    });
+
+    // Listen for message status changes (pending -> delivered/failed)
+    _statusSubscription = EventBus().on<DMMessageStatusChangedEvent>((event) {
+      if (event.callsign.toUpperCase() == otherUpper) {
+        // Reload messages to update status indicator
         _loadMessages();
       }
     });
@@ -221,71 +231,14 @@ class _DMChatPageState extends State<DMChatPage> {
         }
       }
 
-      // Check if device is online
-      final device = _devicesService.getDevice(widget.otherCallsign);
-      final isOnline = device?.isOnline ?? false;
-
-      if (isOnline) {
-        // Try to send immediately
-        await _dmService.sendMessage(
-          widget.otherCallsign,
-          content.trim(),
-          metadata: metadata.isNotEmpty ? metadata : null,
-        );
-      } else {
-        // Queue for later delivery
-        await _dmService.queueMessage(
-          widget.otherCallsign,
-          content.trim(),
-          metadata: metadata.isNotEmpty ? metadata : null,
-        );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_i18n.t('message_queued')),
-              backgroundColor: Colors.orange,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-      await _loadMessages();
-    } on DMMustBeReachableException {
-      // Device became unreachable - queue instead
-      try {
-        final metadata = <String, String>{};
-        if (_quotedMessage != null) {
-          metadata['quote'] = _quotedMessage!.timestamp;
-          metadata['quote_author'] = _quotedMessage!.author;
-          if (_quotedMessage!.content.isNotEmpty) {
-            final excerpt = _quotedMessage!.content.length > 120
-                ? _quotedMessage!.content.substring(0, 120)
-                : _quotedMessage!.content;
-            metadata['quote_excerpt'] = excerpt;
-          }
-        }
-        await _dmService.queueMessage(
-          widget.otherCallsign,
-          content.trim(),
-          metadata: metadata.isNotEmpty ? metadata : null,
-        );
-        await _loadMessages();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_i18n.t('message_queued')),
-              backgroundColor: Colors.orange,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to queue message: $e')),
-          );
-        }
-      }
+      // With optimistic UI, sendMessage always queues for background delivery
+      // Message appears immediately with 'pending' status
+      await _dmService.sendMessage(
+        widget.otherCallsign,
+        content.trim(),
+        metadata: metadata.isNotEmpty ? metadata : null,
+      );
+      // Message will appear via DirectMessageReceivedEvent
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

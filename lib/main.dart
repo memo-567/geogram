@@ -43,6 +43,7 @@ import 'services/security_service.dart';
 import 'services/network_monitor_service.dart';
 import 'services/user_location_service.dart';
 import 'services/direct_message_service.dart';
+import 'services/dm_queue_service.dart';
 import 'services/websocket_service.dart';
 import 'services/backup_service.dart';
 import 'services/window_state_service.dart';
@@ -575,6 +576,10 @@ void main() async {
       // Initialize BackupService for E2E encrypted backups
       await BackupService().initialize();
       LogService().log('BackupService initialized');
+
+      // Initialize DMQueueService for background DM delivery (optimistic UI)
+      await DMQueueService().initialize();
+      LogService().log('DMQueueService initialized');
 
       // Ensure chat rooms exist for all device folders with chat enabled
       GroupSyncService()
