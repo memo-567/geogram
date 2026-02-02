@@ -8,6 +8,10 @@ import 'package:flutter/material.dart';
 import '../../services/i18n_service.dart';
 import '../../util/app_constants.dart';
 import '../models/story.dart';
+import '../services/stories_storage_service.dart';
+import '../widgets/story_card_widget.dart';
+import 'story_viewer_page.dart';
+import 'story_studio_page.dart';
 
 /// Const map of category icons for tree-shaking support
 const Map<String, IconData> _storyCategoryIcons = {
@@ -36,10 +40,6 @@ const Map<String, IconData> _storyCategoryIcons = {
   'horror': Icons.mood_bad,
   'fantasy': Icons.auto_fix_high,
 };
-import '../services/stories_storage_service.dart';
-import '../widgets/story_card_widget.dart';
-import 'story_viewer_page.dart';
-import 'story_studio_page.dart';
 
 /// Main Stories app home page - browser for story documents
 class StoriesHomePage extends StatefulWidget {
