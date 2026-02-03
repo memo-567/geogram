@@ -137,6 +137,12 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Section: Connection Mode
+          _buildSectionHeader(theme, _i18n.t('connection_mode'), Icons.bluetooth),
+          const SizedBox(height: 8),
+          _buildBleOnlyTile(theme),
+          const SizedBox(height: 24),
+
           // Section: API Access
           _buildSectionHeader(theme, _i18n.t('api_access'), Icons.api),
           const SizedBox(height: 8),
@@ -340,6 +346,89 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                 });
               },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBleOnlyTile(ThemeData theme) {
+    final isEnabled = _securityService.bleOnlyMode;
+    final isInternetOnly = AppArgs().internetOnly;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            _i18n.t('ble_only_mode'),
+                            style: theme.textTheme.titleSmall,
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              _i18n.t('restrictive'),
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: Colors.red,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _i18n.t('ble_only_mode_description'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: isEnabled,
+                  onChanged: isInternetOnly
+                      ? null
+                      : (value) {
+                          setState(() {
+                            _securityService.bleOnlyMode = value;
+                          });
+                        },
+                ),
+              ],
+            ),
+            if (isEnabled) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.warning, size: 16, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _i18n.t('ble_only_mode_warning'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.orange,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),

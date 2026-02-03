@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
+import '../../services/security_service.dart';
 import '../../services/webrtc_peer_manager.dart';
 import '../transport.dart';
 import '../transport_message.dart';
@@ -31,8 +32,7 @@ class WebRTCTransport extends Transport with TransportMixin {
 
   @override
   bool get isAvailable {
-    // WebRTC is available on most platforms
-    // Web has some limitations but generally works
+    if (SecurityService().bleOnlyMode) return false;
     return true;
   }
 
@@ -321,10 +321,15 @@ class WebRTCTransport extends Transport with TransportMixin {
             targetCallsign: message.fromCallsign,
             type: messageType,
             payload: payload,
+            sourceTransportId: id,
           );
       }
 
-      emitIncomingMessage(transportMessage);
+      emitIncomingMessage(
+        transportMessage.sourceTransportId == null
+            ? transportMessage.copyWith(sourceTransportId: id)
+            : transportMessage,
+      );
       LogService().log('WebRTCTransport: Received ${messageType.name} from ${message.fromCallsign}');
     } catch (e) {
       LogService().log('WebRTCTransport: Error handling incoming message: $e');

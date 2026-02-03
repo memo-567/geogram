@@ -414,29 +414,9 @@ class BLEGattServerService {
     client.receiveBuffer.addAll(value);
     LogService().log('BLEGattServer: Buffer now ${client.receiveBuffer.length} bytes');
 
-    // Try to parse as complete JSON
-    try {
-      final jsonStr = utf8.decode(client.receiveBuffer);
-
-      // Check if JSON is complete by trying to parse it
-      // This is more robust than just checking for '}'
-      try {
-        final message = json.decode(jsonStr) as Map<String, dynamic>;
-
-        // Successfully parsed - clear buffer and process
-        LogService().log('BLEGattServer: Complete message received: ${message['type']}');
-        client.receiveBuffer.clear();
-
-        // Process message asynchronously
-        _processMessage(deviceId, message);
-      } on FormatException {
-        // JSON not complete yet, wait for more chunks
-        LogService().log('BLEGattServer: Waiting for more chunks (${client.receiveBuffer.length} bytes so far)');
-      }
-    } catch (e) {
-      // UTF-8 decoding failed - likely incomplete multi-byte sequence
-      LogService().log('BLEGattServer: UTF-8 decode pending (${client.receiveBuffer.length} bytes)');
-    }
+    // Extract and process all complete JSON objects from the buffer.
+    // Multiple messages can arrive back-to-back if sent in quick succession.
+    _processClientBuffer(deviceId, client);
 
     return WriteRequestResult(status: 0); // Success
   }
@@ -462,6 +442,71 @@ class BLEGattServerService {
       value: Uint8List(0),
       status: 1, // Error
     );
+  }
+
+  /// Extract complete JSON objects from a client's receive buffer.
+  /// Handles concatenated messages like: {"type":"chat",...}{"type":"ack",...}
+  void _processClientBuffer(String deviceId, ConnectedBLEClient client) {
+    while (client.receiveBuffer.isNotEmpty) {
+      final jsonStr = utf8.decode(client.receiveBuffer, allowMalformed: true);
+
+      final startIdx = jsonStr.indexOf('{');
+      if (startIdx < 0) {
+        LogService().log('BLEGattServer: No JSON object start in buffer, clearing ${client.receiveBuffer.length} bytes');
+        client.receiveBuffer.clear();
+        return;
+      }
+
+      // Track brace depth to find end of first complete JSON object
+      int depth = 0;
+      bool inString = false;
+      bool escaped = false;
+      int? endIdx;
+
+      for (int i = startIdx; i < jsonStr.length; i++) {
+        final c = jsonStr[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (c == '\\' && inString) {
+          escaped = true;
+          continue;
+        }
+        if (c == '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+
+        if (c == '{') {
+          depth++;
+        } else if (c == '}') {
+          depth--;
+          if (depth == 0) {
+            endIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (endIdx == null) {
+        LogService().log('BLEGattServer: Waiting for more chunks (${client.receiveBuffer.length} bytes so far)');
+        return;
+      }
+
+      final objectStr = jsonStr.substring(startIdx, endIdx + 1);
+      final consumedBytes = utf8.encode(jsonStr.substring(0, endIdx + 1));
+      client.receiveBuffer.removeRange(0, consumedBytes.length);
+
+      try {
+        final message = json.decode(objectStr) as Map<String, dynamic>;
+        LogService().log('BLEGattServer: Complete message received: ${message['type']} (${client.receiveBuffer.length} bytes remaining)');
+        _processMessage(deviceId, message);
+      } catch (e) {
+        LogService().log('BLEGattServer: Parse error on extracted object: $e');
+      }
+    }
   }
 
   /// Process received message

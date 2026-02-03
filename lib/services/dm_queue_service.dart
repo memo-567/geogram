@@ -119,7 +119,7 @@ class DMQueueService {
     final callsigns = <String>[];
 
     try {
-      if (!await _storage!.exists('')) return callsigns;
+      if (!await _storage!.directoryExists('')) return callsigns;
 
       final entries = await _storage!.listDirectory('');
       for (final entry in entries) {

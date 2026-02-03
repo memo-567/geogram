@@ -17,6 +17,7 @@ This document explains how Geogram handles device-to-device data transmission th
   - [BLE Transport](#ble-transport)
 - [Priority-Based Routing](#priority-based-routing)
 - [Message Flow](#message-flow)
+  - [Response Routing](#response-routing)
 - [Fallback Mechanism](#fallback-mechanism)
 - [Adding New Transports](#adding-new-transports)
 - [Configuration](#configuration)
@@ -117,6 +118,23 @@ final reachable = await cm.isReachable('X1ABCD');
 
 // Get available transports for a device
 final transports = await cm.getAvailableTransports('X1ABCD');
+```
+
+### TransportMessage
+
+Messages carry a `sourceTransportId` field that tracks which transport they arrived on. This is set automatically by each transport when emitting incoming messages and is used by the ConnectionManager to route API responses back through the same transport (see [Response Routing](#response-routing)).
+
+```dart
+class TransportMessage {
+  final String id;                  // Unique message ID
+  final String targetCallsign;      // Target device callsign
+  final TransportMessageType type;  // apiRequest, apiResponse, directMessage, etc.
+  final String? method;             // HTTP method (GET, POST, etc.)
+  final String? path;               // API path ("/api/status")
+  final dynamic payload;            // Message body
+  final String? sourceTransportId;  // Transport this message arrived on
+  // ...
+}
 ```
 
 ### TransportResult
@@ -517,7 +535,7 @@ Bluetooth Low Energy for offline, short-range communication. Works without any n
 2. **Connection**: GATT client connects to GATT server
 3. **Communication**: Messages sent via GATT characteristics
 4. **Parceling**: Large messages split into 280-byte parcels
-5. **API Bridging**: API-style requests are encoded as JSON on the `_api` channel and decoded back into `TransportMessage.apiRequest` on the receiver, then forwarded by `ConnectionManager` to the local API handlers.
+5. **API Bridging**: API-style requests are encoded as JSON on the `_api` channel and decoded back into `TransportMessage.apiRequest` on the receiver, then forwarded by `ConnectionManager` to the local API handlers. Responses are routed back via BLE using `sourceTransportId` (see [Response Routing](#response-routing)).
 
 **Android-Android Peer Discovery:**
 
@@ -645,6 +663,32 @@ App                ConnectionManager         LAN        WebRTC       Station
 ```
 
 **Receiver note:** For WebRTC and BLE, the incoming `TransportMessage.apiRequest` is forwarded to the local HTTP API (`LogApiService`) because the API handlers live there. If the HTTP API is disabled, P2P API requests will fail on the receiving device.
+
+### Response Routing
+
+When the ConnectionManager receives an API request from a transport and processes it locally, the response **must** go back through the same transport. Transports like BLE and WebRTC use request/response correlation (a Completer keyed by request ID) — if the response arrives on a different transport, the original sender never sees it and the request times out.
+
+The `_sendApiResponse()` method uses the `sourceTransportId` from the incoming request to prefer the originating transport:
+
+```
+Device A (requester)                         Device B (responder)
+     │                                              │
+     │── API request via BLE ──────────────────────►│
+     │   (BLE transport Completer waiting)          │
+     │                                              │── Forward to local API
+     │                                              │── Get response
+     │                                              │
+     │                                              │── _sendApiResponse()
+     │                                              │   sourceTransportId = "ble"
+     │                                              │   1. Try BLE first (source) ✅
+     │                                              │   2. Fall back to others if BLE fails
+     │◄── API response via BLE ─────────────────────│
+     │   (Completer resolved)                       │
+```
+
+Without source-transport-aware routing, the response would go via the highest-priority transport (e.g. LAN), and the BLE Completer on Device A would time out after 30 seconds.
+
+This applies to all transports with request/response correlation: BLE, WebRTC, Bluetooth Classic, and USB AOA.
 
 ### Direct Message Flow
 
@@ -833,6 +877,21 @@ dart tests/webrtc_test.dart --port-a=5577 --port-b=5588 --station-port=8765
 6. **Signaling** - WebRTC signaling messages are relayed
 7. **Log analysis** - WebRTC activity appears in logs
 
+### Run BLE / Connection Tests
+
+```bash
+# Full connection test suite (LAN, BLE, Station) between two Android devices
+bash tests/connections/run_connection_tests.sh
+```
+
+The BLE Ping phase (Phase 5) follows this sequence to ensure reliable BLE communication:
+1. **Ensure advertising** — `ble_advertise` on both devices
+2. **Scan** — `ble_scan` on both devices + 12s wait for discovery
+3. **HELLO handshake** — `ble_hello` on both devices + 8s wait (establishes GATT connections and exchanges callsigns reliably; scanning alone depends on advertisement parsing which can be flaky)
+4. **Ping** — `device_ping` with `transport: "ble"` in both directions
+
+The HELLO handshake step is important because `canReach()` in `ble_transport.dart` checks the BLE discovery service's `_discoveredDevices` map for a matching callsign. Without HELLO, devices discovered via advertisement may have `null` callsigns if the advertising data doesn't include one.
+
 ### Testing Across Networks
 
 For full NAT traversal testing, run instances on different networks:
@@ -873,3 +932,5 @@ For full NAT traversal testing, run instances on different networks:
 | `lib/services/webrtc_peer_manager.dart` | WebRTC peer connection management |
 | `tests/run_webrtc_test.sh` | Automated WebRTC test runner |
 | `tests/webrtc_test.dart` | WebRTC Dart test suite |
+| `tests/connections/run_connection_tests.sh` | BLE, LAN, Station connection test suite |
+| `tests/connections/connection_test.dart` | Connection test Dart suite |

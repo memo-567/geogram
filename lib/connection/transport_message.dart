@@ -63,6 +63,9 @@ class TransportMessage {
   /// Priority (higher values = more urgent, default: 0)
   final int priority;
 
+  /// Transport ID that this message arrived on (set by receiving transport)
+  final String? sourceTransportId;
+
   TransportMessage({
     required this.id,
     required this.targetCallsign,
@@ -76,6 +79,7 @@ class TransportMessage {
     this.ttl,
     DateTime? createdAt,
     this.priority = 0,
+    this.sourceTransportId,
   }) : createdAt = createdAt ?? DateTime.now();
 
   /// Create an API request message
@@ -153,6 +157,7 @@ class TransportMessage {
     Duration? ttl,
     DateTime? createdAt,
     int? priority,
+    String? sourceTransportId,
   }) {
     return TransportMessage(
       id: id ?? this.id,
@@ -167,6 +172,7 @@ class TransportMessage {
       ttl: ttl ?? this.ttl,
       createdAt: createdAt ?? this.createdAt,
       priority: priority ?? this.priority,
+      sourceTransportId: sourceTransportId ?? this.sourceTransportId,
     );
   }
 

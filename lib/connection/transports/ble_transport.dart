@@ -515,6 +515,7 @@ class BleTransport extends Transport with TransportMixin {
           path: payload['path']?.toString(),
           headers: headers.isEmpty ? null : headers,
           payload: payload['body'],
+          sourceTransportId: id,
         );
       } else {
         message = TransportMessage(
@@ -524,6 +525,7 @@ class BleTransport extends Transport with TransportMixin {
           path: bleMessage.channel,
           payload: payload,
           signedEvent: signedEvent,
+          sourceTransportId: id,
         );
       }
 

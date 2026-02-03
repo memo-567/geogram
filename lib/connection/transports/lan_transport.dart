@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
+import '../../services/security_service.dart';
 import '../../api/endpoints/chat_api.dart';
 import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
@@ -34,6 +35,7 @@ class LanTransport extends Transport with TransportMixin {
     // Not available on web (CORS issues) or in internet-only mode
     if (kIsWeb) return false;
     if (AppArgs().internetOnly) return false;
+    if (SecurityService().bleOnlyMode) return false;
     return true;
   }
 

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
+import '../../services/security_service.dart';
 import '../../services/usb_aoa_service.dart';
 import '../../services/collection_service.dart';
 import '../transport.dart';
@@ -48,6 +49,7 @@ class UsbAoaTransport extends Transport with TransportMixin {
     // Not available on web or in internet-only mode
     if (kIsWeb) return false;
     if (AppArgs().internetOnly) return false;
+    if (SecurityService().bleOnlyMode) return false;
     // USB AOA: Android (accessory) + Linux (host)
     return Platform.isAndroid || Platform.isLinux;
   }
@@ -678,6 +680,7 @@ class UsbAoaTransport extends Transport with TransportMixin {
         path: content['path']?.toString(),
         headers: headers.isEmpty ? null : headers,
         payload: content['body'],
+        sourceTransportId: id,
       );
     } else {
       message = TransportMessage(
@@ -687,6 +690,7 @@ class UsbAoaTransport extends Transport with TransportMixin {
         path: channel,
         payload: payload,
         signedEvent: signedEvent,
+        sourceTransportId: id,
       );
     }
 

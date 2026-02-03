@@ -37,6 +37,7 @@ import '../connection/connection_manager.dart';
 import '../connection/transports/lan_transport.dart';
 import '../tracker/services/proximity_detection_service.dart';
 import 'usb_aoa_service.dart';
+import 'security_service.dart';
 
 /// Service for managing remote devices we've contacted
 class DevicesService {
@@ -97,6 +98,13 @@ class DevicesService {
   /// Track initialization state to avoid re-initializing and losing online status
   bool _isInitialized = false;
 
+  /// Whether to skip non-BLE local transports (LAN/USB)
+  bool get _skipNonBleLocal =>
+      AppArgs().internetOnly || SecurityService().bleOnlyMode;
+
+  /// Whether to skip BLE (only in internet-only mode)
+  bool get _skipBle => AppArgs().internetOnly;
+
   /// Initialize the service
   /// [skipBLE] - If true, skip BLE initialization (used for first-time Android users
   /// who need to see onboarding screen before permission dialogs)
@@ -110,8 +118,7 @@ class DevicesService {
     await _loadCachedDevices();
 
     // Skip BLE in internet-only mode
-    final internetOnly = AppArgs().internetOnly;
-    if (internetOnly) {
+    if (_skipBle) {
       LogService().log(
         'DevicesService: Internet-only mode - skipping BLE initialization',
       );
@@ -121,8 +128,8 @@ class DevicesService {
       LogService().log('DevicesService: BLE initialization skipped');
     }
 
-    // Initialize USB AOA (only on Android/Linux, skip in internet-only mode)
-    if (!internetOnly) {
+    // Initialize USB AOA (only on Android/Linux, skip in internet-only/BLE-only mode)
+    if (!_skipNonBleLocal) {
       _initializeUSB();
     }
 
@@ -138,7 +145,7 @@ class DevicesService {
     // Trigger initial local network discovery in background after short delay
     // This gives other local instances time to start before we scan
     final localhostScanEnabled = AppArgs().scanLocalhostEnabled;
-    if (localhostScanEnabled && !internetOnly) {
+    if (localhostScanEnabled && !_skipNonBleLocal) {
       Future.delayed(const Duration(seconds: 5), () {
         LogService().log(
           'DevicesService: Running initial local network scan...',
@@ -177,7 +184,7 @@ class DevicesService {
       'DevicesService: Profile changed to ${event.callsign}, refreshing BLE identity',
     );
 
-    if (AppArgs().internetOnly) {
+    if (_skipBle) {
       LogService().log(
         'DevicesService: Internet-only mode - skipping BLE refresh',
       );
@@ -239,7 +246,7 @@ class DevicesService {
   /// Initialize BLE after onboarding (for first-time Android users)
   Future<void> initializeBLEAfterOnboarding() async {
     // Don't initialize BLE in internet-only mode
-    if (AppArgs().internetOnly) {
+    if (_skipBle) {
       LogService().log(
         'DevicesService: Internet-only mode - BLE not available',
       );
@@ -1459,7 +1466,7 @@ class DevicesService {
     LogService().log('DevicesService: [API] makeDeviceApiRequest $method $path to $normalizedCallsign');
 
     // Sync device info to ConnectionManager before request
-    _syncDeviceToConnectionManager(normalizedCallsign);
+    syncDeviceToConnectionManager(normalizedCallsign);
 
     // Use ConnectionManager for routing
     final connectionManager = ConnectionManager();
@@ -1515,17 +1522,16 @@ class DevicesService {
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
     final device = getDevice(normalizedCallsign);
-    final internetOnly = AppArgs().internetOnly;
 
     // Try direct connection first if device has a URL and appears online
-    // Skip direct connection in internet-only mode (force station proxy)
+    // Skip direct connection in internet-only/BLE-only mode (force station proxy)
     // Also skip if device is only reachable via BLE (no network path)
     final hasNetworkPath = device?.connectionMethods.any(
           (m) => m == 'lan' || m == 'wifi_local' || m == 'internet',
         ) ??
         false;
 
-    if (!internetOnly &&
+    if (!_skipNonBleLocal &&
         device?.url != null &&
         device!.isOnline &&
         hasNetworkPath) {
@@ -1576,7 +1582,7 @@ class DevicesService {
   }
 
   /// Sync device info to ConnectionManager transports
-  void _syncDeviceToConnectionManager(String callsign) {
+  void syncDeviceToConnectionManager(String callsign) {
     final device = getDevice(callsign);
     if (device == null) return;
 
@@ -1627,7 +1633,6 @@ class DevicesService {
 
     // Store previous online state to detect transitions
     final wasOnline = device.isOnline;
-    final internetOnly = AppArgs().internetOnly;
 
     bool directOk = false;
     bool proxyOk = false;
@@ -1641,8 +1646,8 @@ class DevicesService {
         connectedStation.callsign!.toUpperCase() == callsign.toUpperCase();
 
     // Try direct connection first (local WiFi) if device has a URL
-    // Skip direct connection check in internet-only mode
-    if (!internetOnly && device.url != null) {
+    // Skip direct connection check in internet-only/BLE-only mode
+    if (!_skipNonBleLocal && device.url != null) {
       directOk = await _checkDirectConnection(device);
     }
 
@@ -1963,10 +1968,9 @@ class DevicesService {
       }
     }
 
-    final internetOnly = AppArgs().internetOnly;
-    if (internetOnly) {
+    if (_skipNonBleLocal) {
       LogService().log(
-        'DevicesService: Performing internet-only device refresh (no LAN/BLE)',
+        'DevicesService: Performing device refresh (no LAN/USB)',
       );
     } else {
       LogService().log('DevicesService: Performing full device refresh');
@@ -1978,11 +1982,14 @@ class DevicesService {
     // Then, fetch connected clients from connected station (internet)
     await _fetchStationClients();
 
-    // Skip local network and BLE discovery in internet-only mode
-    if (!internetOnly) {
+    // Skip local network discovery in internet-only/BLE-only mode
+    if (!_skipNonBleLocal) {
       // Discover devices on local WiFi network
       await _discoverLocalDevices();
+    }
 
+    // Skip BLE discovery only in internet-only mode (BLE stays active in BLE-only mode)
+    if (!_skipBle) {
       // Discover devices via BLE (in parallel with other checks)
       _discoverBLEDevices();
     }
@@ -2499,7 +2506,7 @@ class DevicesService {
     final collections = <RemoteCollection>[];
 
     // Sync device to ConnectionManager first
-    _syncDeviceToConnectionManager(device.callsign);
+    syncDeviceToConnectionManager(device.callsign);
 
     // Fetch collection folders from /files endpoint via ConnectionManager
     try {
@@ -2736,7 +2743,7 @@ class DevicesService {
     }
 
     // Sync device URL to ConnectionManager (especially LAN transport)
-    _syncDeviceToConnectionManager(normalizedCallsign);
+    syncDeviceToConnectionManager(normalizedCallsign);
   }
 
   /// Remove a device

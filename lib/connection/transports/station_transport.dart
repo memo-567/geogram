@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../../services/log_service.dart';
 import '../../services/station_service.dart';
+import '../../services/security_service.dart';
 import '../../services/websocket_service.dart';
 import '../../api/endpoints/dm_api.dart';
 import '../transport.dart';
@@ -32,7 +33,10 @@ class StationTransport extends Transport with TransportMixin {
   int get priority => 30; // Lower priority (fallback)
 
   @override
-  bool get isAvailable => true; // Available on all platforms
+  bool get isAvailable {
+    if (SecurityService().bleOnlyMode) return false;
+    return true;
+  }
 
   final StationService _stationService = StationService();
   final WebSocketService _wsService = WebSocketService();
@@ -358,6 +362,7 @@ class StationTransport extends Transport with TransportMixin {
             targetCallsign: senderCallsign,
             type: _determineMessageType(event),
             signedEvent: event,
+            sourceTransportId: id,
           );
           emitIncomingMessage(message);
         }

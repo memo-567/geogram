@@ -22,11 +22,13 @@ class SecurityService {
   // Config keys
   static const String _keyDebugApiEnabled = 'security.debugApiEnabled';
   static const String _keyHttpApiEnabled = 'security.httpApiEnabled';
+  static const String _keyBleOnlyMode = 'security.bleOnlyMode';
   static const String _keyLocationGranularity = 'security.locationGranularityMeters';
 
   // Default values
   static const bool _defaultDebugApiEnabled = false;
   static const bool _defaultHttpApiEnabled = true;
+  static const bool _defaultBleOnlyMode = false;
   static const double _defaultLocationGranularity = 25000.0; // 25 km default (middle of slider, city level)
 
   // Location granularity bounds
@@ -45,6 +47,18 @@ class SecurityService {
     _config.setNestedValue(_keyDebugApiEnabled, value);
     _notifyChange();
     LogService().log('SecurityService: Debug API ${value ? 'enabled' : 'disabled'}');
+  }
+
+  /// Check if BLE-only mode is enabled
+  bool get bleOnlyMode {
+    return _config.getNestedValue(_keyBleOnlyMode, _defaultBleOnlyMode) as bool;
+  }
+
+  /// Set BLE-only mode state
+  set bleOnlyMode(bool value) {
+    _config.setNestedValue(_keyBleOnlyMode, value);
+    _notifyChange();
+    LogService().log('SecurityService: BLE-only mode ${value ? 'enabled' : 'disabled'}');
   }
 
   /// Check if HTTP API is enabled

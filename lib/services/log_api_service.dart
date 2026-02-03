@@ -24,6 +24,7 @@ import 'devices_service.dart';
 import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
+import '../connection/connection_manager.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
@@ -8515,12 +8516,74 @@ class LogApiService {
             );
           }
 
+        case 'device_ping':
+          final callsign = params['callsign'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing callsign parameter'}),
+              headers: headers,
+            );
+          }
+          final transport = params['transport'] as String? ?? 'all';
+          final normalizedCallsign = callsign.toUpperCase();
+
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(normalizedCallsign);
+          if (device == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Device not found: $normalizedCallsign'}),
+              headers: headers,
+            );
+          }
+
+          devicesService.syncDeviceToConnectionManager(normalizedCallsign);
+
+          final connectionManager = ConnectionManager();
+          if (!connectionManager.isInitialized) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'ConnectionManager not initialized'}),
+              headers: headers,
+            );
+          }
+
+          // Force specific transport by excluding all others
+          final allIds = {'lan', 'ble', 'station', 'webrtc', 'bluetooth_classic', 'usb_aoa'};
+          Set<String>? excludeTransports;
+          if (transport != 'all') {
+            excludeTransports = allIds.difference({transport});
+          }
+
+          final stopwatch = Stopwatch()..start();
+          final result = await connectionManager.apiRequest(
+            callsign: normalizedCallsign,
+            method: 'GET',
+            path: '/api/status',
+            excludeTransports: excludeTransports,
+          );
+          stopwatch.stop();
+
+          final availableTransportIds = await connectionManager.getAvailableTransports(normalizedCallsign);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': result.success,
+              'callsign': normalizedCallsign,
+              'transport_requested': transport,
+              'transport_used': result.transportUsed,
+              'latency_ms': stopwatch.elapsedMilliseconds,
+              'available_transports': availableTransportIds,
+              'status_code': result.statusCode,
+              'error': result.error,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown device action: $action',
-              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat'],
+              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_ping'],
             }),
             headers: headers,
           );

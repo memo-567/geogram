@@ -1358,43 +1358,111 @@ class _BLEConnection {
     _receiveBuffer.addAll(data);
     LogService().log('BLEDiscovery: [NOTIF] Received ${data.length} bytes, buffer now ${_receiveBuffer.length} bytes');
 
-    // Try to parse as complete JSON - if FormatException, JSON is incomplete
-    try {
-      final jsonStr = utf8.decode(_receiveBuffer);
-      final response = json.decode(jsonStr) as Map<String, dynamic>;
+    // Safety: if buffer grows beyond 64KB without producing valid JSON, clear it
+    if (_receiveBuffer.length > 65536) {
+      LogService().log('BLEDiscovery: [NOTIF] Buffer overflow (${_receiveBuffer.length} bytes), clearing');
       _receiveBuffer.clear();
-      LogService().log('BLEDiscovery: [NOTIF] Parsed complete JSON successfully');
+      return;
+    }
 
-      // Complete pending request if ID matches
-      final messageId = response['id'] as String?;
-      final msgType = response['type'] as String?;
-      LogService().log('BLEDiscovery: [NOTIF] Complete JSON: id=$messageId, type=$msgType');
-      LogService().log('BLEDiscovery: [NOTIF] Pending requests in _BLEConnection: ${_pendingRequests.keys.toList()}');
+    // Extract and process all complete JSON objects from the buffer.
+    // Multiple messages can arrive back-to-back (e.g. chat + api_response)
+    // so we must parse each one individually.
+    _processBuffer();
+  }
 
-      if (messageId != null && _pendingRequests.containsKey(messageId)) {
-        LogService().log('BLEDiscovery: [NOTIF] Matched pending request $messageId - completing');
-        _pendingRequests[messageId]!.complete(response);
-        _pendingRequests.remove(messageId);
-      } else {
-        // Forward to chat handler for messages not matched by pending requests
-        // This allows API responses from GATT server to reach BleTransport
-        LogService().log('BLEDiscovery: [NOTIF] No match in local pending - forwarding to BleTransport (onChatReceived=${onChatReceived != null})');
-        if (onChatReceived != null) {
-          // Add deviceId to response so BleTransport can identify the source
-          response['_deviceId'] = deviceId;
-          LogService().log('BLEDiscovery: [NOTIF] Calling onChatReceived with type=$msgType, id=$messageId');
-          onChatReceived!(response);
-          LogService().log('BLEDiscovery: [NOTIF] onChatReceived completed');
-        } else {
-          LogService().log('BLEDiscovery: [NOTIF] WARNING: onChatReceived is null! Message will be lost');
+  /// Extract complete JSON objects from _receiveBuffer and dispatch them.
+  /// Uses brace-depth tracking to find object boundaries, handling
+  /// concatenated messages like: {"type":"chat",...}{"type":"api_response",...}
+  void _processBuffer() {
+    while (_receiveBuffer.isNotEmpty) {
+      final jsonStr = utf8.decode(_receiveBuffer, allowMalformed: true);
+
+      // Find the start of the first JSON object
+      final startIdx = jsonStr.indexOf('{');
+      if (startIdx < 0) {
+        // No JSON object start found - discard buffer
+        LogService().log('BLEDiscovery: [NOTIF] No JSON object start in buffer, clearing ${_receiveBuffer.length} bytes');
+        _receiveBuffer.clear();
+        return;
+      }
+
+      // Track brace depth to find end of first complete JSON object
+      int depth = 0;
+      bool inString = false;
+      bool escaped = false;
+      int? endIdx;
+
+      for (int i = startIdx; i < jsonStr.length; i++) {
+        final c = jsonStr[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (c == '\\' && inString) {
+          escaped = true;
+          continue;
+        }
+        if (c == '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+
+        if (c == '{') {
+          depth++;
+        } else if (c == '}') {
+          depth--;
+          if (depth == 0) {
+            endIdx = i;
+            break;
+          }
         }
       }
-    } on FormatException {
-      // JSON incomplete, wait for more chunks
-      LogService().log('BLEDiscovery: [NOTIF] JSON incomplete, waiting for more chunks');
-    } catch (e) {
-      // Other error - log but don't clear buffer
-      LogService().log('BLEDiscovery: [NOTIF] Parse error: $e');
+
+      if (endIdx == null) {
+        // Incomplete JSON object - wait for more data
+        LogService().log('BLEDiscovery: [NOTIF] JSON incomplete, waiting for more chunks');
+        return;
+      }
+
+      // Extract the complete JSON substring and update buffer
+      final objectStr = jsonStr.substring(startIdx, endIdx + 1);
+      final consumedBytes = utf8.encode(jsonStr.substring(0, endIdx + 1));
+      _receiveBuffer.removeRange(0, consumedBytes.length);
+
+      // Parse and dispatch
+      try {
+        final response = json.decode(objectStr) as Map<String, dynamic>;
+        LogService().log('BLEDiscovery: [NOTIF] Parsed JSON object (${objectStr.length} chars, ${_receiveBuffer.length} bytes remaining)');
+        _dispatchMessage(response);
+      } catch (e) {
+        LogService().log('BLEDiscovery: [NOTIF] Parse error on extracted object: $e');
+        // Skip this malformed object and continue with remaining buffer
+      }
+    }
+  }
+
+  /// Dispatch a single parsed JSON message
+  void _dispatchMessage(Map<String, dynamic> response) {
+    final messageId = response['id'] as String?;
+    final msgType = response['type'] as String?;
+    LogService().log('BLEDiscovery: [NOTIF] Dispatching message: id=$messageId, type=$msgType');
+
+    if (messageId != null && _pendingRequests.containsKey(messageId)) {
+      LogService().log('BLEDiscovery: [NOTIF] Matched pending request $messageId - completing');
+      _pendingRequests[messageId]!.complete(response);
+      _pendingRequests.remove(messageId);
+    } else {
+      // Forward to chat handler for messages not matched by pending requests
+      LogService().log('BLEDiscovery: [NOTIF] No match in local pending - forwarding to BleTransport (onChatReceived=${onChatReceived != null})');
+      if (onChatReceived != null) {
+        response['_deviceId'] = deviceId;
+        LogService().log('BLEDiscovery: [NOTIF] Calling onChatReceived with type=$msgType, id=$messageId');
+        onChatReceived!(response);
+      } else {
+        LogService().log('BLEDiscovery: [NOTIF] WARNING: onChatReceived is null! Message will be lost');
+      }
     }
   }
 

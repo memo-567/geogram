@@ -309,6 +309,7 @@ class BluetoothClassicTransport extends Transport with TransportMixin {
         headers: (envelope['headers'] as Map<String, dynamic>?)?.cast<String, String>(),
         payload: envelope['payload'],
         signedEvent: envelope['signedEvent'] as Map<String, dynamic>?,
+        sourceTransportId: id,
       );
     } catch (e) {
       LogService().log('BluetoothClassicTransport: Failed to decode message: $e');

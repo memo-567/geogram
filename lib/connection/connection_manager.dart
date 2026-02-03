@@ -481,21 +481,27 @@ class ConnectionManager {
       responseBody = jsonEncode({'error': e.toString()});
     }
 
-    // Send response back to requester
+    // Send response back to requester via the same transport it arrived on
     await _sendApiResponse(
       requestId: message.id,
       targetCallsign: message.targetCallsign,
       statusCode: statusCode,
       body: responseBody,
+      sourceTransportId: message.sourceTransportId,
     );
   }
 
   /// Send API response back to the requester
+  ///
+  /// Prefers the transport the request arrived on ([sourceTransportId]) so that
+  /// transports with request/response correlation (BLE, WebRTC, USB) receive
+  /// the response on the same channel. Falls back to any reachable transport.
   Future<void> _sendApiResponse({
     required String requestId,
     required String targetCallsign,
     required int statusCode,
     required String body,
+    String? sourceTransportId,
   }) async {
     // Encode response as JSON payload
     final responsePayload = jsonEncode({
@@ -513,8 +519,31 @@ class ConnectionManager {
       payload: responsePayload,
     );
 
-    // Find a transport that can reach the requester
+    // If we know which transport the request arrived on, try that first
+    if (sourceTransportId != null) {
+      final sourceTransport = availableTransports
+          .where((t) => t.id == sourceTransportId)
+          .firstOrNull;
+      if (sourceTransport != null) {
+        try {
+          final canReachDevice = await sourceTransport.canReach(targetCallsign).timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => false,
+          );
+          if (canReachDevice) {
+            await sourceTransport.sendAsync(responseMessage);
+            LogService().log('ConnectionManager: Sent API response to $targetCallsign via ${sourceTransport.id} (source transport)');
+            return;
+          }
+        } catch (e) {
+          LogService().log('ConnectionManager: Error sending response via source transport ${sourceTransport.id}: $e');
+        }
+      }
+    }
+
+    // Fall back to any transport that can reach the requester
     for (final transport in availableTransports) {
+      if (transport.id == sourceTransportId) continue; // Already tried
       try {
         final canReachDevice = await transport.canReach(targetCallsign).timeout(
           const Duration(seconds: 2),
