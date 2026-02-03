@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import '../models/chat_message.dart';
 import '../models/dm_conversation.dart';
 import '../services/direct_message_service.dart';
+import '../services/dm_queue_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
@@ -176,19 +177,8 @@ class _DMChatPageState extends State<DMChatPage> {
     final isOnline = device?.isOnline ?? false;
 
     if (isOnline) {
-      // Flush in background - don't await
-      _dmService.flushQueue(widget.otherCallsign).then((delivered) {
-        if (delivered > 0 && mounted) {
-          _loadMessages(); // Reload to update status
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('$delivered queued message(s) delivered'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }).catchError((e) {
+      // Trigger DMQueueService to process all queued messages (single delivery path)
+      DMQueueService().processQueue().catchError((e) {
         // Ignore errors - queue will be retried later
       });
     }
@@ -212,6 +202,7 @@ class _DMChatPageState extends State<DMChatPage> {
   }
 
   Future<void> _sendMessage(String content) async {
+    if (_isSending) return;
     if (content.trim().isEmpty) return;
 
     setState(() {
@@ -615,8 +606,8 @@ class _DMChatPageState extends State<DMChatPage> {
     });
 
     try {
-      // First, flush any queued messages
-      final delivered = await _dmService.flushQueue(widget.otherCallsign);
+      // First, flush any queued messages via DMQueueService (single delivery path)
+      await DMQueueService().processQueue();
 
       // Then sync to get messages from them
       final result = await _dmService.syncWithDevice(
@@ -627,11 +618,10 @@ class _DMChatPageState extends State<DMChatPage> {
       if (mounted) {
         if (result.success) {
           await _loadMessages();
-          final queueInfo = delivered > 0 ? ', $delivered queued sent' : '';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent$queueInfo',
+                'Sync complete: ${result.messagesReceived} received, ${result.messagesSent} sent',
               ),
             ),
           );

@@ -42,7 +42,7 @@ class DMQueueService {
   final Map<String, DateTime> _nextRetryTime = {};
 
   /// Backoff factor for exponential backoff (base 2)
-  static const _backoffBaseSeconds = 15;
+  static const _backoffBaseSeconds = 3;
 
   /// Profile storage for queue file operations
   ProfileStorage? _storage;

@@ -17,6 +17,7 @@ import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'station_discovery_service.dart';
 import 'direct_message_service.dart';
+import 'dm_queue_service.dart';
 import 'log_service.dart';
 import 'ble_discovery_service.dart';
 import 'ble_foreground_service.dart';
@@ -1706,16 +1707,10 @@ class DevicesService {
 
     final dmService = DirectMessageService();
 
-    // First, flush any queued messages for this device
-    dmService
-        .flushQueue(callsign)
-        .then((delivered) {
-          if (delivered > 0) {
-            LogService().log(
-              'DevicesService: Delivered $delivered queued messages to $callsign',
-            );
-          }
-
+    // First, flush any queued messages via DMQueueService (single delivery path)
+    DMQueueService()
+        .processQueue()
+        .then((_) {
           // Then sync to get any messages from them
           return dmService.syncWithDevice(callsign, deviceUrl: deviceUrl);
         })

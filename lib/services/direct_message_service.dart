@@ -591,34 +591,8 @@ class DirectMessageService {
     _fireMessageEvent(message, normalizedCallsign, fromSync: false);
     _notifyListeners();
 
-    // 7. Trigger immediate delivery via HTTP API (fire and forget)
-    if (signedEvent != null) {
-      final event = signedEvent; // Local non-nullable for closure capture
-      Future.microtask(() async {
-        try {
-          final success = await _pushQueuedMessage(
-            normalizedCallsign,
-            event,
-            profile.callsign,
-            metadata: message.metadata,
-          );
-          if (success) {
-            // Update status on the SAME object that's in the cache
-            message.setMeta('status', 'delivered');
-            await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
-            await _removeFromQueue(normalizedCallsign, message.timestamp);
-            invalidateMessageCache(normalizedCallsign);
-            EventBus().fire(DMMessageDeliveredEvent(
-              callsign: normalizedCallsign,
-              messageTimestamp: message.timestamp,
-            ));
-            _notifyListeners();
-          }
-        } catch (e) {
-          LogService().log('DM: Immediate delivery failed for $normalizedCallsign: $e');
-        }
-      });
-    }
+    // 7. Trigger background delivery via DMQueueService (immediate kick)
+    _triggerBackgroundDelivery();
 
     LogService().log('DM: Message queued for $normalizedCallsign (optimistic UI)');
   }
@@ -1179,7 +1153,8 @@ class DirectMessageService {
         if (extraMetadata.isNotEmpty) 'metadata': extraMetadata,
       });
 
-      LogService().log('DM Queue: Pushing message to $targetCallsign via $path');
+      final device = DevicesService().getDevice(targetCallsign);
+      LogService().log('DM Queue: Pushing to $targetCallsign - device=${device?.callsign}, online=${device?.isOnline}, methods=${device?.connectionMethods}');
 
       final response = await DevicesService().makeDeviceApiRequest(
         callsign: targetCallsign,
@@ -2190,7 +2165,18 @@ class DirectMessageService {
     final key = callsign.toUpperCase();
     final cache = _messageCache[key];
     if (cache != null) {
-      // Add message and re-sort to maintain order
+      // Dedup by eventId to prevent duplicate display
+      final eventId = message.getMeta('eventId');
+      if (eventId != null && eventId.isNotEmpty) {
+        final existingIdx = cache.messages.indexWhere(
+          (m) => m.getMeta('eventId') == eventId,
+        );
+        if (existingIdx >= 0) {
+          cache.messages[existingIdx] = message; // Update in-place
+          cache.lastLoaded = DateTime.now();
+          return;
+        }
+      }
       cache.messages.add(message);
       cache.messages.sort();
       cache.newestTimestamp = cache.messages.last.timestamp;

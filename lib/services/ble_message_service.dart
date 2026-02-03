@@ -480,16 +480,20 @@ class BLEMessageService {
           }
         }
 
-        // For other channels, wrap in chat message
-        LogService().log('BLEMessageService: [SEND] Sending wrapped chat to client');
-        await sendChatToClient(
-          deviceId: clientDeviceId,
-          content: content,
-          channel: channel,
-          signature: signature,
-          npub: npub,
-        );
-        return true;
+        if (!shouldWaitForAck) {
+          // Fire-and-forget: use server notification (fast, no confirmation)
+          LogService().log('BLEMessageService: [SEND] Sending wrapped chat to client (fire-and-forget)');
+          await sendChatToClient(
+            deviceId: clientDeviceId,
+            content: content,
+            channel: channel,
+            signature: signature,
+            npub: npub,
+          );
+          return true;
+        }
+        // For reliable delivery (DMs), fall through to client mode with ack
+        LogService().log('BLEMessageService: [SEND] Skipping server path for $target (waitForAck=true), using client mode');
       } else {
         LogService().log('BLEMessageService: [SEND] $target is NOT a connected client');
       }
