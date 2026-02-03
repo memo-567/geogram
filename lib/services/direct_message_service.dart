@@ -1795,7 +1795,7 @@ class DirectMessageService {
         }
       }
 
-      if (messageFiles.isEmpty) return [];
+      // Note: Don't return early if messageFiles is empty - we still need to load queued messages
 
       // Load and parse each file
       for (final filePath in messageFiles) {

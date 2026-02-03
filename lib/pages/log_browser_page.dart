@@ -3,8 +3,12 @@
  * License: Apache-2.0
  */
 
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import '../services/log_service.dart';
 import '../services/crash_service.dart';
 import '../services/i18n_service.dart';
@@ -36,6 +40,9 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   List<String> _logLines = [];
   int _totalLogLines = 0;
   bool _logsTruncated = false;
+
+  // Track which crash cards have expanded stack traces (by index)
+  final Set<int> _expandedCrashCards = {};
 
   @override
   void initState() {
@@ -144,7 +151,10 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     try {
       final logs = await _crashService.readAllCrashLogs() ?? await _logService.readCrashLog();
       if (mounted) {
-        setState(() => _crashLogs = logs);
+        setState(() {
+          _crashLogs = logs;
+          _expandedCrashCards.clear();
+        });
       }
     } catch (_) {
       if (mounted) {
@@ -555,27 +565,135 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
     );
   }
 
-  /// Build the crash panel - kept similar to original for highlighted format
+  /// Parse raw crash logs into a list of structured maps, sorted most recent first.
+  List<Map<String, String>> _parseCrashReports(String? crashLogs) {
+    if (crashLogs == null || crashLogs.trim().isEmpty) return [];
+
+    final reports = <Map<String, String>>[];
+    const startMarker = '=== CRASH REPORT ===';
+    const endMarker = '=== END CRASH REPORT ===';
+
+    int searchStart = 0;
+    while (true) {
+      final startIndex = crashLogs.indexOf(startMarker, searchStart);
+      if (startIndex == -1) break;
+
+      final endIndex = crashLogs.indexOf(endMarker, startIndex);
+      final String rawBlock;
+      if (endIndex == -1) {
+        rawBlock = crashLogs.substring(startIndex).trim();
+        searchStart = crashLogs.length;
+      } else {
+        rawBlock = crashLogs.substring(startIndex, endIndex + endMarker.length).trim();
+        searchStart = endIndex + endMarker.length;
+      }
+
+      final map = <String, String>{'raw': rawBlock};
+
+      // Parse key-value fields from the block
+      for (final line in rawBlock.split('\n')) {
+        if (line.startsWith('Timestamp: ')) {
+          map['timestamp'] = line.substring('Timestamp: '.length).trim();
+        } else if (line.startsWith('Type: ')) {
+          map['type'] = line.substring('Type: '.length).trim();
+        } else if (line.startsWith('App Version: ')) {
+          map['version'] = line.substring('App Version: '.length).trim();
+        } else if (line.startsWith('Platform: ')) {
+          map['platform'] = line.substring('Platform: '.length).trim();
+        } else if (line.startsWith('Error: ')) {
+          map['error'] = line.substring('Error: '.length).trim();
+        }
+      }
+
+      // Extract stack trace (everything between "Stack Trace:" and end marker)
+      final stIndex = rawBlock.indexOf('Stack Trace:\n');
+      if (stIndex != -1) {
+        final stStart = stIndex + 'Stack Trace:\n'.length;
+        final stEnd = rawBlock.indexOf(endMarker);
+        if (stEnd != -1) {
+          map['stackTrace'] = rawBlock.substring(stStart, stEnd).trim();
+        } else {
+          map['stackTrace'] = rawBlock.substring(stStart).trim();
+        }
+      }
+
+      reports.add(map);
+    }
+
+    // Sort most recent first by timestamp
+    reports.sort((a, b) {
+      final ta = a['timestamp'] ?? '';
+      final tb = b['timestamp'] ?? '';
+      return tb.compareTo(ta);
+    });
+
+    return reports;
+  }
+
+  /// Format an ISO timestamp into a human-readable string (e.g. "Feb 3, 2025 at 15:30").
+  String _formatCrashTimestamp(String isoTimestamp) {
+    try {
+      final dt = DateTime.parse(isoTimestamp);
+      const months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      final month = months[dt.month - 1];
+      final hour = dt.hour.toString().padLeft(2, '0');
+      final minute = dt.minute.toString().padLeft(2, '0');
+      return '$month ${dt.day}, ${dt.year} at $hour:$minute';
+    } catch (_) {
+      return isoTimestamp;
+    }
+  }
+
+  /// Compute a relative time string (e.g. "2 days ago", "just now").
+  String _relativeCrashTime(String isoTimestamp) {
+    try {
+      final dt = DateTime.parse(isoTimestamp);
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+
+      if (diff.inSeconds < 60) return 'just now';
+      if (diff.inMinutes < 60) {
+        final m = diff.inMinutes;
+        return '$m ${m == 1 ? 'minute' : 'minutes'} ago';
+      }
+      if (diff.inHours < 24) {
+        final h = diff.inHours;
+        return '$h ${h == 1 ? 'hour' : 'hours'} ago';
+      }
+      final d = diff.inDays;
+      if (d < 30) return '$d ${d == 1 ? 'day' : 'days'} ago';
+      if (d < 365) {
+        final months = d ~/ 30;
+        return '$months ${months == 1 ? 'month' : 'months'} ago';
+      }
+      final years = d ~/ 365;
+      return '$years ${years == 1 ? 'year' : 'years'} ago';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Build the crash panel with individual crash cards.
   Widget _buildCrashPanel() {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final formalCrashReports = _extractFormalCrashReports(_crashLogs);
     final hasCrashLogs = formalCrashReports != null && formalCrashReports.isNotEmpty;
     final crashCount = _countFormalCrashReports(_crashLogs);
+    final parsedCrashes = _parseCrashReports(_crashLogs);
 
     if (_isLoadingLogFiles && _crashLogs == null) {
       _loadCrashLogs();
       return const Center(child: CircularProgressIndicator());
     }
 
-    return SingleChildScrollView(
-      controller: _crashScrollController,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Row(
+    return Column(
+      children: [
+        // Header row
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: Row(
             children: [
               const Icon(Icons.bug_report, color: Colors.red),
               const SizedBox(width: 8),
@@ -592,95 +710,249 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Copy these logs and share them to help fix issues.',
-            style: TextStyle(color: Colors.grey),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Copy these logs and share them to help fix issues.',
+              style: TextStyle(color: Colors.grey),
+            ),
           ),
-          const SizedBox(height: 16),
-
-          // Crash reports card
-          Card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+        const SizedBox(height: 8),
+        // Summary bar with count, copy-all, delete
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
               children: [
-                // Card header
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.1),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      topRight: Radius.circular(12),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.report_problem, color: Colors.red),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Crash Reports',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '$crashCount',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        icon: const Icon(Icons.copy),
-                        tooltip: 'Copy Crash Reports',
-                        onPressed: hasCrashLogs
-                            ? () => _copyToClipboard(formalCrashReports!, 'Crash reports copied')
-                            : null,
-                      ),
-                      if (hasCrashLogs)
-                        IconButton(
-                          icon: const Icon(Icons.delete_forever, color: Colors.red),
-                          tooltip: 'Delete crash logs',
-                          onPressed: _clearCrashLogs,
-                        ),
-                    ],
+                const Icon(Icons.report_problem, color: Colors.red),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Crash Reports',
+                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
-                // Card content
                 Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.black : Colors.grey[100],
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(12),
-                      bottomRight: Radius.circular(12),
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$crashCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
-                  child: SelectableText(
-                    hasCrashLogs ? formalCrashReports! : 'No crash reports',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      height: 1.4,
-                      color: hasCrashLogs ? null : Colors.grey,
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy Crash Reports',
+                  onPressed: hasCrashLogs
+                      ? () => _copyToClipboard(formalCrashReports, 'Crash reports copied')
+                      : null,
+                ),
+                if (hasCrashLogs)
+                  IconButton(
+                    icon: const Icon(Icons.delete_forever, color: Colors.red),
+                    tooltip: 'Delete crash logs',
+                    onPressed: _clearCrashLogs,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Crash cards list
+        Expanded(
+          child: parsedCrashes.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(Icons.check_circle_outline, size: 48, color: Colors.grey),
+                      SizedBox(height: 16),
+                      Text('No crash reports', style: TextStyle(color: Colors.grey)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  controller: _crashScrollController,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  itemCount: parsedCrashes.length,
+                  itemBuilder: (context, index) =>
+                      _buildCrashCard(parsedCrashes[index], index),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Build an individual crash report card.
+  Widget _buildCrashCard(Map<String, String> crash, int index) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final timestamp = crash['timestamp'] ?? '';
+    final type = crash['type'] ?? 'Unknown';
+    final version = crash['version'] ?? '';
+    final platform = crash['platform'] ?? '';
+    final error = crash['error'] ?? '';
+    final stackTrace = crash['stackTrace'] ?? '';
+    final raw = crash['raw'] ?? '';
+    final isExpanded = _expandedCrashCards.contains(index);
+
+    final formattedDate = timestamp.isNotEmpty ? _formatCrashTimestamp(timestamp) : 'Unknown time';
+    final relativeTime = timestamp.isNotEmpty ? _relativeCrashTime(timestamp) : '';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Date/time row
+            Row(
+              children: [
+                Icon(Icons.access_time, size: 18, color: Colors.red[300]),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: formattedDate,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                        if (relativeTime.isNotEmpty)
+                          TextSpan(
+                            text: '  ($relativeTime)',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 6),
+            // Type + version + platform
+            Wrap(
+              spacing: 12,
+              children: [
+                if (type.isNotEmpty)
+                  Text(type, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                if (version.isNotEmpty)
+                  Text('v$version', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                if (platform.isNotEmpty)
+                  Text(platform, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Error text
+            if (error.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.black : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SelectableText(
+                  error,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            // Expandable stack trace
+            if (stackTrace.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    if (isExpanded) {
+                      _expandedCrashCards.remove(index);
+                    } else {
+                      _expandedCrashCards.add(index);
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        isExpanded ? 'Hide stack trace' : 'Show stack trace',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (isExpanded)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.black : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: SelectableText(
+                    stackTrace,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 8),
+            // Action buttons row
+            Row(
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Copy'),
+                  onPressed: () => _copyToClipboard(raw, 'Crash report copied'),
+                ),
+                if (!kIsWeb && Platform.isAndroid)
+                  TextButton.icon(
+                    icon: const Icon(Icons.share, size: 16),
+                    label: const Text('Share'),
+                    onPressed: () => Share.share(raw),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -308,11 +308,11 @@ class DMQueueService {
     message.setDeliveryStatus(status);
 
     if (status == MessageStatus.delivered) {
-      // Move from queue to delivered messages
-      await _removeFromQueue(callsign, message.timestamp);
-
-      // Save the delivered message through the service
+      // Save FIRST - ensures message persists even if removal fails
       await dmService.saveIncomingMessage(callsign, message);
+
+      // Remove from queue AFTER successful save
+      await _removeFromQueue(callsign, message.timestamp);
 
       // Fire delivered event for backward compatibility
       EventBus().fire(DMMessageDeliveredEvent(
