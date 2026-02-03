@@ -262,7 +262,7 @@ class DirectMessageService {
     final relativePath = normalizedCallsign;
 
     // Create directory structure if needed using storage
-    if (!await _storage!.exists(relativePath)) {
+    if (!await _storage!.directoryExists(relativePath)) {
       await _storage!.createDirectory(relativePath);
       await _storage!.createDirectory('$relativePath/files');
       await _createConfig(relativePath, normalizedCallsign);
@@ -363,7 +363,7 @@ class DirectMessageService {
     if (_chatBasePath == null) return;
 
     try {
-      if (!await _storage!.exists('')) return;
+      if (!await _storage!.directoryExists('')) return;
 
       final entries = await _storage!.listDirectory('');
       for (final entry in entries) {
@@ -1663,6 +1663,15 @@ class DirectMessageService {
       buffer.write('\n');
       await _storage!.writeString(messagesPath, buffer.toString());
     } else {
+      // Deduplicate by eventId before appending
+      final eventId = message.getMeta('eventId');
+      if (eventId != null && eventId.isNotEmpty) {
+        final existingContent = await _storage!.readString(messagesPath);
+        if (existingContent != null && existingContent.contains(eventId)) {
+          LogService().log('DM: Skipping duplicate message (eventId: ${eventId.substring(0, 8)}...)');
+          return;
+        }
+      }
       // Existing file: APPEND only (no truncation, no race)
       await _storage!.appendString(messagesPath, '\n${message.exportAsText()}\n');
     }
@@ -1809,7 +1818,7 @@ class DirectMessageService {
       // Find all message files (messages.txt and messages-{npub}.txt)
       List<String> messageFiles = [];
 
-      if (await _storage!.exists(relativePath)) {
+      if (await _storage!.directoryExists(relativePath)) {
         final entries = await _storage!.listDirectory(relativePath);
         for (final entry in entries) {
           if (!entry.isDirectory) {
@@ -1928,7 +1937,7 @@ class DirectMessageService {
   Future<List<String>> _listMessageFiles(String relativePath) async {
     final messageFiles = <String>[];
 
-    if (await _storage!.exists(relativePath)) {
+    if (await _storage!.directoryExists(relativePath)) {
       final entries = await _storage!.listDirectory(relativePath);
       for (final entry in entries) {
         if (!entry.isDirectory) {
@@ -2307,7 +2316,7 @@ class DirectMessageService {
     final relativePath = normalizedCallsign;
 
     try {
-      if (await _storage!.exists(relativePath)) {
+      if (await _storage!.directoryExists(relativePath)) {
         await _storage!.deleteDirectory(relativePath);
       }
 
