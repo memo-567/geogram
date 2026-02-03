@@ -222,6 +222,66 @@ class CrashService {
     return parts.join('\n\n');
   }
 
+  /// Remove crash reports older than [maxAgeDays] from the Flutter crash log file.
+  Future<void> removeOldCrashLogs({int maxAgeDays = 5}) async {
+    if (kIsWeb) return;
+
+    try {
+      final file = await _getCrashLogFile();
+      if (file == null || !await file.exists()) return;
+
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) return;
+
+      const startMarker = '=== CRASH REPORT ===';
+      const endMarker = '=== END CRASH REPORT ===';
+      final cutoff = DateTime.now().subtract(Duration(days: maxAgeDays));
+      final kept = StringBuffer();
+
+      int searchStart = 0;
+      while (true) {
+        final startIndex = content.indexOf(startMarker, searchStart);
+        if (startIndex == -1) break;
+
+        final endIndex = content.indexOf(endMarker, startIndex);
+        final String block;
+        if (endIndex == -1) {
+          block = content.substring(startIndex).trim();
+          searchStart = content.length;
+        } else {
+          block = content.substring(startIndex, endIndex + endMarker.length).trim();
+          searchStart = endIndex + endMarker.length;
+        }
+
+        // Extract timestamp from block
+        DateTime? ts;
+        for (final line in block.split('\n')) {
+          if (line.startsWith('Timestamp: ')) {
+            try {
+              ts = DateTime.parse(line.substring('Timestamp: '.length).trim());
+            } catch (_) {}
+            break;
+          }
+        }
+
+        // Keep if timestamp is missing (can't determine age) or within cutoff
+        if (ts == null || ts.isAfter(cutoff)) {
+          kept.writeln(block);
+          kept.writeln();
+        }
+      }
+
+      final result = kept.toString().trim();
+      if (result.isEmpty) {
+        await file.delete();
+      } else {
+        await file.writeAsString('$result\n');
+      }
+    } catch (_) {
+      // Best-effort cleanup, don't fail loudly
+    }
+  }
+
   /// Clear Flutter crash logs
   Future<void> clearCrashLogs() async {
     if (kIsWeb) return;

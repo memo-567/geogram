@@ -149,6 +149,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
 
   Future<void> _loadCrashLogs() async {
     try {
+      await _crashService.removeOldCrashLogs();
       final logs = await _crashService.readAllCrashLogs() ?? await _logService.readCrashLog();
       if (mounted) {
         setState(() {
