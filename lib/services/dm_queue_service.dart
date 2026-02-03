@@ -314,6 +314,11 @@ class DMQueueService {
       // Remove from queue AFTER successful save
       await _removeFromQueue(callsign, message.timestamp);
 
+      // Invalidate cache to force reload with signature re-verification.
+      // The queue-loaded message lacks 'verified' metadata (excluded from text format),
+      // so incremental cache update would flash "unverified". Full reload re-verifies.
+      dmService.invalidateMessageCache(callsign);
+
       // Fire delivered event for backward compatibility
       EventBus().fire(DMMessageDeliveredEvent(
         callsign: callsign,
