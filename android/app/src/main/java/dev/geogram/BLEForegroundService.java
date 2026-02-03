@@ -462,12 +462,28 @@ public class BLEForegroundService extends Service {
     }
 
     /**
-     * Called on Android 15+ (API 34+) when a foreground service with a time limit
-     * (like dataSync) reaches its timeout. We must stop within a few seconds or crash.
+     * Called on Android 14 (API 34) when a foreground service with a time limit
+     * (like dataSync) reaches its timeout.
      */
     @Override
     public void onTimeout(int startId) {
-        // Called on Android 15+ when dataSync foreground service times out (6 hours)
+        handleTimeout(startId);
+    }
+
+    /**
+     * Called on Android 15+ (API 35) with the foreground service type that timed out.
+     * This is the preferred overload on API 35+.
+     */
+    @Override
+    public void onTimeout(int startId, int fgsType) {
+        Log.w(TAG, "onTimeout(startId=" + startId + ", fgsType=" + fgsType + ")");
+        handleTimeout(startId);
+    }
+
+    /**
+     * Shared timeout handler. Must stop the service very quickly or Android will crash the app.
+     */
+    private void handleTimeout(int startId) {
         Log.w(TAG, "Foreground service timeout (dataSync limit reached), stopping immediately");
         dataSyncExhausted = true;
         isInForeground = false;

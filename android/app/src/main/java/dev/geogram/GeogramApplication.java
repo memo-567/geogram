@@ -152,7 +152,7 @@ public class GeogramApplication extends Application {
                 crashDir.mkdirs();
             }
 
-            File crashFile = new File(crashDir, "native_crashes.log");
+            File crashFile = new File(crashDir, "crashes.txt");
             FileOutputStream fos = new FileOutputStream(crashFile, true);
 
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US);
@@ -197,7 +197,7 @@ public class GeogramApplication extends Application {
                 crashDir.mkdirs();
             }
 
-            File crashFile = new File(crashDir, "native_crashes.log");
+            File crashFile = new File(crashDir, "crashes.txt");
             FileOutputStream fos = new FileOutputStream(crashFile, true);
 
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US);
@@ -363,7 +363,7 @@ public class GeogramApplication extends Application {
      */
     public String readCrashLogs() {
         try {
-            File crashFile = new File(getFilesDir(), "geogram/logs/native_crashes.log");
+            File crashFile = new File(getFilesDir(), "geogram/logs/crashes.txt");
             if (crashFile.exists()) {
                 java.io.FileInputStream fis = new java.io.FileInputStream(crashFile);
                 byte[] data = new byte[(int) crashFile.length()];
@@ -383,7 +383,7 @@ public class GeogramApplication extends Application {
      */
     public boolean clearCrashLogs() {
         try {
-            File crashFile = new File(getFilesDir(), "geogram/logs/native_crashes.log");
+            File crashFile = new File(getFilesDir(), "geogram/logs/crashes.txt");
             if (crashFile.exists()) {
                 return crashFile.delete();
             }

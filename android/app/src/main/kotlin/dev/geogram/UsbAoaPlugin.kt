@@ -180,7 +180,7 @@ class UsbAoaPlugin(
                         "description" to it.description,
                         "version" to it.version,
                         "uri" to it.uri,
-                        "serial" to it.serial
+                        "serial" to safeGetSerial(it)
                     )
                 }
                 result.success(info)
@@ -773,6 +773,19 @@ class UsbAoaPlugin(
     }
 
     /**
+     * Safely get the serial number from an accessory.
+     * Returns null if the user hasn't granted USB permission (SecurityException).
+     */
+    private fun safeGetSerial(accessory: UsbAccessory): String? {
+        return try {
+            accessory.serial
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Cannot read accessory serial (no permission): ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Notify Dart of successful connection
      */
     private fun notifyConnected(accessory: UsbAccessory) {
@@ -782,7 +795,7 @@ class UsbAoaPlugin(
             "description" to accessory.description,
             "version" to accessory.version,
             "uri" to accessory.uri,
-            "serial" to accessory.serial
+            "serial" to safeGetSerial(accessory)
         ))
     }
 
