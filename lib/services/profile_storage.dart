@@ -58,6 +58,10 @@ abstract class ProfileStorage {
   /// Creates parent directories if needed
   Future<void> writeString(String relativePath, String content);
 
+  /// Append a string to an existing file
+  /// Creates the file if it doesn't exist
+  Future<void> appendString(String relativePath, String content);
+
   /// Write bytes to a file
   /// Creates parent directories if needed
   Future<void> writeBytes(String relativePath, Uint8List bytes);
@@ -165,6 +169,13 @@ class FilesystemProfileStorage extends ProfileStorage {
     final file = File(getAbsolutePath(relativePath));
     await file.parent.create(recursive: true);
     await file.writeAsString(content);
+  }
+
+  @override
+  Future<void> appendString(String relativePath, String content) async {
+    final file = File(getAbsolutePath(relativePath));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(content, mode: FileMode.append);
   }
 
   @override
@@ -295,6 +306,14 @@ class EncryptedProfileStorage extends ProfileStorage {
   @override
   Future<void> writeString(String relativePath, String content) async {
     await writeBytes(relativePath, Uint8List.fromList(utf8.encode(content)));
+  }
+
+  @override
+  Future<void> appendString(String relativePath, String content) async {
+    // Encrypted storage can't do atomic append — read-modify-write fallback
+    final existing = await readString(relativePath);
+    final combined = (existing ?? '') + content;
+    await writeString(relativePath, combined);
   }
 
   @override
@@ -458,6 +477,11 @@ class ScopedProfileStorage extends ProfileStorage {
   @override
   Future<void> writeString(String relativePath, String content) {
     return _inner.writeString(_prefixPath(relativePath), content);
+  }
+
+  @override
+  Future<void> appendString(String relativePath, String content) {
+    return _inner.appendString(_prefixPath(relativePath), content);
   }
 
   @override

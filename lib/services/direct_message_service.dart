@@ -591,8 +591,34 @@ class DirectMessageService {
     _fireMessageEvent(message, normalizedCallsign, fromSync: false);
     _notifyListeners();
 
-    // 7. Trigger immediate background delivery attempt (fire and forget)
-    _triggerBackgroundDelivery();
+    // 7. Trigger immediate delivery via HTTP API (fire and forget)
+    if (signedEvent != null) {
+      final event = signedEvent; // Local non-nullable for closure capture
+      Future.microtask(() async {
+        try {
+          final success = await _pushQueuedMessage(
+            normalizedCallsign,
+            event,
+            profile.callsign,
+            metadata: message.metadata,
+          );
+          if (success) {
+            // Update status on the SAME object that's in the cache
+            message.setMeta('status', 'delivered');
+            await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
+            await _removeFromQueue(normalizedCallsign, message.timestamp);
+            invalidateMessageCache(normalizedCallsign);
+            EventBus().fire(DMMessageDeliveredEvent(
+              callsign: normalizedCallsign,
+              messageTimestamp: message.timestamp,
+            ));
+            _notifyListeners();
+          }
+        } catch (e) {
+          LogService().log('DM: Immediate delivery failed for $normalizedCallsign: $e');
+        }
+      });
+    }
 
     LogService().log('DM: Message queued for $normalizedCallsign (optimistic UI)');
   }
@@ -1109,6 +1135,7 @@ class DirectMessageService {
           // Move from queue to delivered messages file
           await _saveMessage(conversation.path, message, otherNpub: conversation.otherNpub);
           await _removeFromQueue(normalizedCallsign, message.timestamp);
+          invalidateMessageCache(normalizedCallsign);
           delivered++;
 
           // Fire delivery event for UI updates
@@ -1626,21 +1653,19 @@ class DirectMessageService {
     final relativePath = _pathToRelative(path);
     final messagesPath = '$relativePath/$filename';
 
-    // Check if file exists and needs header
-    final existingContent = await _storage!.readString(messagesPath);
-    final needsHeader = existingContent == null;
-
-    final buffer = StringBuffer();
-    if (needsHeader) {
+    final exists = await _storage!.exists(messagesPath);
+    if (!exists) {
+      // New file: write header + message
+      final buffer = StringBuffer();
       buffer.write('# DM: Direct Chat from ${message.datePortion}\n');
+      buffer.write('\n');
+      buffer.write(message.exportAsText());
+      buffer.write('\n');
+      await _storage!.writeString(messagesPath, buffer.toString());
     } else {
-      buffer.write(existingContent);
+      // Existing file: APPEND only (no truncation, no race)
+      await _storage!.appendString(messagesPath, '\n${message.exportAsText()}\n');
     }
-    buffer.write('\n');
-    buffer.write(message.exportAsText());
-    buffer.write('\n');
-
-    await _storage!.writeString(messagesPath, buffer.toString());
   }
 
   /// Convert absolute path to relative path for storage
