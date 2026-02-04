@@ -13,14 +13,14 @@ import '../../services/i18n_service.dart';
 
 /// Page for reading an article
 class ArticleReaderPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String sourceId;
   final RssPost post;
   final I18nService i18n;
 
   const ArticleReaderPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.sourceId,
     required this.post,
     required this.i18n,

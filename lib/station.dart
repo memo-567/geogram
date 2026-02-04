@@ -2635,7 +2635,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
             }
             break;
 
-          case 'COLLECTIONS_REQUEST':
+          case 'APPS_REQUEST':
             // Request for device's collections
             final targetCallsign = message['callsign'] as String?;
             if (targetCallsign != null) {
@@ -2651,19 +2651,19 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
 
               if (targetClient != null) {
                 final forwardMsg = {
-                  'type': 'COLLECTIONS_REQUEST',
+                  'type': 'APPS_REQUEST',
                   'from': client.callsign,
                   'requestId': message['requestId'],
                 };
                 try {
                   targetClient.socket.add(jsonEncode(forwardMsg));
                 } catch (e) {
-                  _log('ERROR', 'Failed to forward COLLECTIONS_REQUEST: $e');
+                  _log('ERROR', 'Failed to forward APPS_REQUEST: $e');
                 }
               } else {
                 // Device not connected
                 final errorResponse = {
-                  'type': 'COLLECTIONS_RESPONSE',
+                  'type': 'APPS_RESPONSE',
                   'requestId': message['requestId'],
                   'error': 'Device not connected',
                   'callsign': targetCallsign,
@@ -2673,7 +2673,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
             }
             break;
 
-          case 'COLLECTIONS_RESPONSE':
+          case 'APPS_RESPONSE':
             // Forward collection response to the requester
             final fromCallsign = message['from'] as String?;
             if (fromCallsign != null) {
@@ -2689,7 +2689,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
                 try {
                   requester.socket.add(data);
                 } catch (e) {
-                  _log('ERROR', 'Failed to forward COLLECTIONS_RESPONSE: $e');
+                  _log('ERROR', 'Failed to forward APPS_RESPONSE: $e');
                 }
               }
             }
@@ -2851,7 +2851,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
 
     final contactsPath = path.join(PureStorageConfig().getCallsignDir(_settings.callsign), 'contacts');
     final contactService = ContactService();
-    await contactService.initializeCollection(contactsPath);
+    await contactService.initializeApp(contactsPath);
     final contacts = await contactService.loadAllContactsRecursively();
     for (final contact in contacts) {
       final npub = contact.npub;
@@ -4000,8 +4000,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
       }
 
       final eventService = EventService();
-      final collectionPath = path.dirname(path.dirname(path.dirname(eventDir)));
-      await eventService.initializeCollection(collectionPath);
+      final appPath = path.dirname(path.dirname(path.dirname(eventDir)));
+      await eventService.initializeApp(appPath);
       final event = await eventService.loadEvent(eventId);
 
       if (event == null) {
@@ -7272,15 +7272,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
     // Route to the appropriate collection based on the first path segment
     // Use centralized app types list from app_constants.dart
     // Path format: /{app}/{rest} (e.g., /blog/index.html, /www/index.html)
-    String collectionPath;
+    String appPath;
     if (subParts.isNotEmpty && knownAppTypesConst.contains(subParts.first.toLowerCase())) {
       // Route to specific app collection: /{app}/{rest}
       final app = subParts.first.toLowerCase();
       final rest = subParts.length > 1 ? subParts.sublist(1).join('/') : '';
-      collectionPath = '/$app/${rest.isEmpty ? "index.html" : rest}';
+      appPath = '/$app/${rest.isEmpty ? "index.html" : rest}';
     } else {
       // Default to www collection
-      collectionPath = '/www/$filePath';
+      appPath = '/www/$filePath';
     }
 
     // Proxy to device
@@ -7289,7 +7289,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
       'type': 'HTTP_REQUEST',
       'requestId': requestId,
       'method': 'GET',
-      'path': collectionPath,
+      'path': appPath,
       'headers': '',
       'body': '',
     };
@@ -7309,8 +7309,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin {
       final body = response['responseBody'] ?? '';
       final isBase64 = response['isBase64'] == true;
 
-      // Set content type based on file extension (use collectionPath which has the actual filename)
-      final ext = collectionPath.split('.').last.toLowerCase();
+      // Set content type based on file extension (use appPath which has the actual filename)
+      final ext = appPath.split('.').last.toLowerCase();
       final contentTypes = {
         'html': 'text/html',
         'htm': 'text/html',

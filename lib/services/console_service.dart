@@ -22,7 +22,7 @@ class ConsoleService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   final List<ConsoleSession> _sessions = [];
   final _random = Random();
 
@@ -30,13 +30,13 @@ class ConsoleService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Get collection path
-  String? get collectionPath => _collectionPath;
+  String? get appPath => _appPath;
 
   /// Get all sessions
   List<ConsoleSession> get sessions => List.unmodifiable(_sessions);
@@ -46,8 +46,8 @@ class ConsoleService {
       _sessions.where((s) => s.keepRunning).toList();
 
   /// Initialize the service with a collection path
-  Future<void> initializeCollection(String collectionPath) async {
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath) async {
+    _appPath = appPath;
     _sessions.clear();
 
     // Create sessions directory using storage
@@ -59,7 +59,7 @@ class ConsoleService {
 
   /// Load all sessions from the collection
   Future<void> _loadSessions() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final entries = await _storage.listDirectory('sessions');
     for (final entry in entries) {
@@ -221,7 +221,7 @@ class ConsoleService {
       metadataNpub: metadataNpub,
       signature: signature,
       sessionPath: folderPath,
-      collectionPath: _collectionPath,
+      appPath: _appPath,
     );
   }
 
@@ -236,7 +236,7 @@ class ConsoleService {
     required String name,
     String? description,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('ConsoleService not initialized');
     }
 
@@ -264,7 +264,7 @@ class ConsoleService {
       state: ConsoleSessionState.stopped,
       description: description,
       sessionPath: sessionPath,
-      collectionPath: _collectionPath,
+      appPath: _appPath,
     );
 
     // Save session.txt
@@ -404,7 +404,7 @@ class ConsoleService {
 
   /// Refresh sessions list
   Future<void> refresh() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
     _sessions.clear();
     await _loadSessions();
   }
@@ -412,6 +412,6 @@ class ConsoleService {
   /// Dispose resources
   void dispose() {
     _sessions.clear();
-    _collectionPath = null;
+    _appPath = null;
   }
 }

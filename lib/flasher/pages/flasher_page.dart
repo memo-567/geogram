@@ -15,7 +15,7 @@ import '../widgets/add_firmware_wizard.dart';
 import '../widgets/firmware_tree_widget.dart';
 import '../widgets/flash_progress_widget.dart';
 import '../widgets/serial_monitor_widget.dart';
-import '../../services/collection_service.dart';
+import '../../services/app_service.dart';
 import '../../services/profile_storage.dart';
 
 /// Main flasher page with Library and Flasher tabs
@@ -77,7 +77,7 @@ class _FlasherPageState extends State<FlasherPage>
     super.initState();
 
     // Set up storage for FlasherService (encrypted or filesystem)
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,

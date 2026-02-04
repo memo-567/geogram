@@ -10,13 +10,13 @@ import 'console_terminal_page.dart';
 
 /// Console browser page - directly shows the terminal
 class ConsoleBrowserPage extends StatelessWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const ConsoleBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   });
 
   @override

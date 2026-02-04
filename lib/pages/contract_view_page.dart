@@ -13,13 +13,13 @@ import '../services/profile_service.dart';
 
 /// Read-only contract view page with option to sign.
 class ContractViewPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String debtId;
   final I18nService i18n;
 
   const ContractViewPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.debtId,
     required this.i18n,
   });
@@ -49,7 +49,7 @@ class _ContractViewPageState extends State<ContractViewPage> {
   Future<void> _loadContract() async {
     setState(() => _loading = true);
     try {
-      await _service.initializeCollection(widget.collectionPath);
+      await _service.initializeApp(widget.appPath);
       final ledger = await _service.findDebt(widget.debtId);
 
       final profile = _profileService.getProfile();

@@ -19,6 +19,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [LocationPickerPage](#locationpickerpage) - Map location selection
 - [PlacePickerPage](#placepickerpage) - Place selection with sorting
 - [ContactPickerPage](#contactpickerpage) - Contact selection with sorting
+- [DocumentViewerWidget](#documentviewerwidget) - Embeddable document viewer (no Scaffold)
 - [DocumentViewerEditorPage](#documentviewereditorpage) - PDF, text, markdown viewer
 - [ContractDocumentPage](#contractdocumentpage) - Markdown document viewer
 
@@ -310,8 +311,28 @@ if (selected != null && selected.isNotEmpty) {
 | `title` | String | No | 'Select files or folders' | Dialog title |
 | `allowMultiSelect` | bool | No | true | Enable multi-selection |
 | `showHiddenFiles` | bool | No | false | Show hidden files initially |
+| `explorerMode` | bool | No | false | Hide selection UI; files opened via `onFileOpen` |
+| `onFileOpen` | ValueChanged\<String\>? | No | null | Called when a file is tapped in explorer mode |
+| `extraLocations` | List\<StorageLocation\>? | No | null | Additional storage shortcuts in the location bar |
 
 **Returns:** `List<String>?` - List of selected file/folder paths, or null if cancelled
+
+**Explorer mode example:**
+```dart
+FileFolderPicker(
+  initialDirectory: '/path/to/profile',
+  title: 'Files',
+  explorerMode: true,
+  onFileOpen: (path) => _openFile(path),
+  extraLocations: [
+    StorageLocation(
+      name: 'Geogram',
+      path: '/path/to/profile',
+      icon: Icons.snippet_folder,
+    ),
+  ],
+)
+```
 
 ---
 
@@ -731,11 +752,69 @@ The search box filters across:
 
 ---
 
+### DocumentViewerWidget
+
+**File:** `lib/pages/document_viewer_editor_page.dart`
+
+Scaffold-free document viewer widget for embedding in split-pane layouts, dialogs, or any custom container. Supports text, markdown, and PDF with auto-detection. Reloads automatically when `filePath` changes via `didUpdateWidget`. When `editable` is true, shows an edit toolbar for text/markdown files with inline editing, save, and cancel (with unsaved-changes guard).
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filePath` | String | Yes | Path to the document file |
+| `viewerType` | DocumentViewerType | No | Force viewer type (default: auto) |
+| `editable` | bool | No | Enable editing for text-based files (default: false) |
+| `showEditToolbar` | bool | No | Show built-in edit toolbar (default: true). Set false when host provides its own edit button via GlobalKey |
+| `onSaved` | VoidCallback? | No | Called after a successful file save |
+
+**Static helper:**
+- `DocumentViewerWidget.isEditableExtension(String ext)` — returns true for extensions that support text editing: `txt`, `log`, `json`, `xml`, `csv`, `yaml`, `yml`, `ini`, `conf`, `cfg`, `toml`, `md`, `markdown`, `html`, `htm`, `css`, `dart`, `py`, `js`, `ts`, `java`, `c`, `cpp`, `h`, `sh`, `bat`, `kt`, `go`, `rs`, `rb`, `php`.
+
+**Public state API** (via `GlobalKey<DocumentViewerWidgetState>`):
+- `isEditing` — whether the widget is in edit mode
+- `isEditableType` — whether the resolved type supports editing
+- `hasUnsavedChanges` — whether there are pending changes
+- `startEditing()` — enter edit mode
+- `saveFile()` — save and exit edit mode
+- `cancelEditing()` — cancel with unsaved-changes guard
+
+**Usage (built-in toolbar):**
+```dart
+DocumentViewerWidget(
+  filePath: selectedPath,
+  viewerType: DocumentViewerType.text,
+  editable: true,
+)
+```
+
+**Usage (external edit control via GlobalKey):**
+```dart
+final _viewerKey = GlobalKey<DocumentViewerWidgetState>();
+
+// In header bar:
+IconButton(
+  icon: const Icon(Icons.edit),
+  onPressed: () => _viewerKey.currentState?.startEditing(),
+)
+
+// Widget:
+DocumentViewerWidget(
+  key: _viewerKey,
+  filePath: selectedPath,
+  editable: true,
+  showEditToolbar: false,
+)
+```
+
+**Used by:** `FilesBrowserPage` (split-pane preview, external edit control), `DocumentViewerEditorPage` (full-screen wrapper, built-in toolbar).
+
+---
+
 ### DocumentViewerEditorPage
 
 **File:** `lib/pages/document_viewer_editor_page.dart`
 
-Universal document viewer with auto-detection for text, markdown, and PDF files. Uses continuous vertical scrolling.
+Universal document viewer with auto-detection for text, markdown, and PDF files. Wraps `DocumentViewerWidget` in a Scaffold with AppBar. Uses continuous vertical scrolling. Automatically enables editing for text-based file extensions when not in readOnly mode.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
@@ -743,7 +822,7 @@ Universal document viewer with auto-detection for text, markdown, and PDF files.
 | `filePath` | String | Yes | Path to the document file |
 | `viewerType` | DocumentViewerType | No | Force viewer type (default: auto) |
 | `title` | String? | No | Custom app bar title (default: filename) |
-| `readOnly` | bool | No | Read-only mode (default: true) |
+| `readOnly` | bool | No | Read-only mode (default: false) |
 
 **Viewer Types:**
 - `DocumentViewerType.auto` - Detect from file extension (default)
@@ -3848,7 +3927,8 @@ ListView.builder(
 | CurrencyPickerWidget | widgets/wallet/ | Picker | Select currencies |
 | TypeSelectorWidget | widgets/inventory/ | Picker | Select inventory types |
 | PhotoViewerPage | pages/ | Viewer | Image & video gallery |
-| DocumentViewerEditorPage | pages/ | Viewer | PDF, text, markdown |
+| DocumentViewerWidget | pages/ | Widget | Embeddable document viewer (no Scaffold) |
+| DocumentViewerEditorPage | pages/ | Viewer | PDF, text, markdown (wraps DocumentViewerWidget) |
 | LocationPickerPage | pages/ | Picker | Map location selection |
 | PlacePickerPage | pages/ | Picker | Place selection with distance/time sorting |
 | ContactPickerPage | pages/ | Picker | Contact selection with A-Z/recent sorting |

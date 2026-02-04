@@ -27,7 +27,7 @@ import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
 import '../services/ble_message_service.dart';
 import '../services/group_sync_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/debug_controller.dart';
 import '../util/event_bus.dart';
 import '../util/app_type_theme.dart';
@@ -67,9 +67,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
   RemoteDevice? _selectedDevice;
-  List<RemoteCollection> _collections = [];
+  List<RemoteApp> _remoteApps = [];
   bool _isLoading = true;
-  bool _isLoadingCollections = false;
+  bool _isLoadingApps = false;
   bool _isScanning = false;
   String? _error;
   int _totalUnreadMessages = 0;
@@ -192,7 +192,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       name: preferred.name,
       url: preferred.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
       description: preferred.description,
-      collections: [],
+      apps: [],
       source: DeviceSourceType.station,
     );
 
@@ -533,7 +533,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  void _openCollection(RemoteCollection collection) {
+  void _openCollection(RemoteApp collection) {
     // Handle different collection types
     switch (collection.type) {
       case 'chat':
@@ -550,7 +550,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     }
   }
 
-  void _openChatCollection(RemoteCollection collection) {
+  void _openChatCollection(RemoteApp collection) {
     if (_selectedDevice == null) return;
 
     // Build the remote device URL
@@ -579,7 +579,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  void _openEventsCollection(RemoteCollection collection) {
+  void _openEventsCollection(RemoteApp collection) {
     if (_selectedDevice == null) return;
 
     // Build the remote device URL
@@ -607,7 +607,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  void _openAlertsCollection(RemoteCollection collection) {
+  void _openAlertsCollection(RemoteApp collection) {
     if (_selectedDevice == null) return;
 
     // Build the remote device URL
@@ -635,7 +635,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  void _showCollectionInfo(RemoteCollection collection) {
+  void _showCollectionInfo(RemoteApp collection) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -2184,8 +2184,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   /// Open the chat room for a device folder
   Future<void> _openFolderChat(DeviceFolder folder) async {
     // Get chat collection
-    final collections = await CollectionService().loadCollections();
-    final chatCollection = collections.where((c) => c.type == 'chat').firstOrNull;
+    final chatCollection = AppService().getAppByType('chat');
 
     if (chatCollection == null || chatCollection.storagePath == null) {
       if (mounted) {
@@ -2204,7 +2203,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         context,
         MaterialPageRoute(
           builder: (context) => ChatBrowserPage(
-            collection: chatCollection,
+            app: chatCollection,
             initialRoomId: folder.id,
           ),
         ),
@@ -2469,9 +2468,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
         // Collections grid
         Expanded(
-          child: _isLoadingCollections
+          child: _isLoadingApps
               ? const Center(child: CircularProgressIndicator())
-              : _collections.isEmpty
+              : _remoteApps.isEmpty
                   ? _buildNoCollections(theme)
                   : LayoutBuilder(
                       builder: (context, constraints) {
@@ -2493,9 +2492,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                             mainAxisSpacing: 8,
                             childAspectRatio: 1.9,
                           ),
-                          itemCount: _collections.length,
+                          itemCount: _remoteApps.length,
                           itemBuilder: (context, index) {
-                            final collection = _collections[index];
+                            final collection = _remoteApps[index];
                             return _buildCollectionCard(theme, collection);
                           },
                         );
@@ -2506,7 +2505,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  Widget _buildCollectionCard(ThemeData theme, RemoteCollection collection) {
+  Widget _buildCollectionCard(ThemeData theme, RemoteApp collection) {
     return Card(
       elevation: 2,
       child: InkWell(
@@ -2586,10 +2585,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
   }
 
-  String _getDisplayTitle(RemoteCollection collection) {
+  String _getDisplayTitle(RemoteApp collection) {
     final name = collection.name;
     // Check if name matches a known collection type and translate it
-    if (CollectionService.knownAppTypes.contains(name.toLowerCase())) {
+    if (AppService.knownAppTypes.contains(name.toLowerCase())) {
       return _getCollectionTypeLabel(name.toLowerCase());
     }
     // Fallback: capitalize first letter
@@ -2602,7 +2601,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   IconData _getCollectionIcon(String type) => getAppTypeIcon(type);
 
   String _getCollectionTypeLabel(String type) {
-    final key = 'collection_type_$type';
+    final key = 'app_type_$type';
     final translated = _i18n.t(key);
     // If translation exists (not returning the key itself), use it
     if (translated != key) {

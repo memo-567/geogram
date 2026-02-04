@@ -34,14 +34,14 @@ class ForumService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize forum service for a collection
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    print('ForumService: Initializing with collection path: $collectionPath');
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    print('ForumService: Initializing with collection path: $appPath');
     await _loadSections();
     await _loadSecurity();
 

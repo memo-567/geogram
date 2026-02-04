@@ -34,14 +34,14 @@ class GroupsService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize groups service for a collection
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    LogService().log('GroupsService: Initializing with collection path: $collectionPath');
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    LogService().log('GroupsService: Initializing with collection path: $appPath');
 
     // Load admins
     await _loadAdmins();
@@ -120,7 +120,7 @@ class GroupsService {
   List<String> getAdmins() => List.unmodifiable(_admins);
 
   /// Check if user is collection admin
-  bool isCollectionAdmin(String npub) {
+  bool isAppAdmin(String npub) {
     return _admins.contains(npub);
   }
 
@@ -414,8 +414,8 @@ class GroupsService {
     if (group != null) {
       buffer.writeln('# GROUP: ${group.title}');
       buffer.writeln('# TYPE: ${group.type.toFileString()}');
-      if (group.collectionType != null) {
-        buffer.writeln('# COLLECTION: ${group.collectionType}');
+      if (group.appType != null) {
+        buffer.writeln('# COLLECTION: ${group.appType}');
       }
       buffer.writeln('# Created: ${group.created}');
       buffer.writeln();
@@ -489,7 +489,7 @@ class GroupsService {
     required String title,
     required String description,
     required GroupType type,
-    String? collectionType,
+    String? appType,
     required String creatorNpub,
     required String creatorCallsign,
   }) async {
@@ -506,7 +506,7 @@ class GroupsService {
       title: title,
       description: description,
       type: type,
-      collectionType: collectionType,
+      appType: appType,
       created: timestamp,
       updated: timestamp,
       status: 'active',
@@ -782,36 +782,36 @@ class GroupsService {
   }
 
   /// Save collection approval status for a user collection
-  Future<void> saveCollectionApproval(
+  Future<void> saveAppApproval(
     String userNpub,
-    String collectionType,
+    String appType,
     String status, // 'approved', 'rejected', 'pending'
     {String? reason}
   ) async {
     final json = {
       'npub': userNpub,
-      'collection_type': collectionType,
+      'app_type': appType,
       'status': status,
       if (reason != null) 'reason': reason,
       'updated': DateTime.now().toIso8601String(),
     };
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
-    final relativeDirPath = 'approvals/$collectionType';
+    final relativeDirPath = 'approvals/$appType';
     if (!await _storage.exists(relativeDirPath)) {
       await _storage.createDirectory(relativeDirPath);
     }
     await _storage.writeString('$relativeDirPath/$userNpub.json', content);
 
-    LogService().log('GroupsService: Saved collection approval: $userNpub/$collectionType = $status');
+    LogService().log('GroupsService: Saved collection approval: $userNpub/$appType = $status');
   }
 
   /// Load collection approval status
-  Future<Map<String, dynamic>?> loadCollectionApproval(
+  Future<Map<String, dynamic>?> loadAppApproval(
     String userNpub,
-    String collectionType,
+    String appType,
   ) async {
-    final content = await _storage.readString('approvals/$collectionType/$userNpub.json');
+    final content = await _storage.readString('approvals/$appType/$userNpub.json');
     if (content == null) return null;
 
     try {
@@ -823,17 +823,17 @@ class GroupsService {
   }
 
   /// Check if collection is approved for user
-  Future<bool> isCollectionApproved(String userNpub, String collectionType) async {
-    final approval = await loadCollectionApproval(userNpub, collectionType);
+  Future<bool> isAppApproved(String userNpub, String appType) async {
+    final approval = await loadAppApproval(userNpub, appType);
     return approval?['status'] == 'approved';
   }
 
   /// Get all pending approvals for a collection type
-  Future<List<Map<String, dynamic>>> getPendingApprovals(String collectionType) async {
+  Future<List<Map<String, dynamic>>> getPendingApprovals(String appType) async {
     final approvals = <Map<String, dynamic>>[];
 
     try {
-      final relativeDirPath = 'approvals/$collectionType';
+      final relativeDirPath = 'approvals/$appType';
       if (!await _storage.exists(relativeDirPath)) return [];
 
       final entries = await _storage.listDirectory(relativeDirPath);

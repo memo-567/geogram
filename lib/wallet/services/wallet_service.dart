@@ -37,12 +37,12 @@ class WalletService {
   /// Check if the service is initialized
   bool get isInitialized => _basePath != null;
 
-  /// Get the current collection path
+  /// Get the current app path
   String? get currentPath => _basePath;
 
-  /// Initialize the service with a collection path
-  Future<void> initializeCollection(String collectionPath) async {
-    _basePath = collectionPath;
+  /// Initialize the service with an app path
+  Future<void> initializeApp(String appPath) async {
+    _basePath = appPath;
 
     // Ensure debts directory exists
     final debtsDir = Directory(path.join(_basePath!, 'debts'));
@@ -62,7 +62,7 @@ class WalletService {
       await requestsDir.create(recursive: true);
     }
 
-    LogService().log('WalletService: Initialized with path $collectionPath');
+    LogService().log('WalletService: Initialized with path $appPath');
   }
 
   /// Reset the service (for switching collections)

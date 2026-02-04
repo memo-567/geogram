@@ -16,7 +16,7 @@ import '../services/config_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/storage_config.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/direct_message_service.dart';
 import '../services/chat_service.dart';
 import '../services/profile_storage.dart';
@@ -970,7 +970,7 @@ class StationServerService {
 
     final contactsPath = path.join(StorageConfig().getCallsignDir(callsign), 'contacts');
     final contactService = ContactService();
-    await contactService.initializeCollection(contactsPath);
+    await contactService.initializeApp(contactsPath);
     final contacts = await contactService.loadAllContactsRecursively();
     for (final contact in contacts) {
       final npub = contact.npub;
@@ -2322,12 +2322,12 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
   Future<bool> _initializeChatServiceIfNeeded({bool createIfMissing = false}) async {
     try {
       final chatService = ChatService();
-      if (chatService.collectionPath != null) {
+      if (chatService.appPath != null) {
         return true;
       }
 
-      final collectionsDir = CollectionService().collectionsDirectory;
-      final chatDir = Directory(path.join(collectionsDir.path, 'chat'));
+      final appsDir = AppService().appsDirectory;
+      final chatDir = Directory(path.join(appsDir.path, 'chat'));
       if (!await chatDir.exists()) {
         if (createIfMissing) {
           await chatDir.create(recursive: true);
@@ -2340,7 +2340,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final profile = ProfileService().getProfile();
 
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
@@ -2351,7 +2351,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         chatService.setStorage(FilesystemProfileStorage(chatDir.path));
       }
 
-      await chatService.initializeCollection(chatDir.path, creatorNpub: profile.npub);
+      await chatService.initializeApp(chatDir.path, creatorNpub: profile.npub);
       LogService().log('StationServerService: ChatService initialized with ${chatService.channels.length} channels');
       return true;
     } catch (e) {
@@ -2502,13 +2502,13 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       return;
     }
 
-    final collectionPath = chatService.collectionPath;
-    if (collectionPath == null) {
+    final appPath = chatService.appPath;
+    if (appPath == null) {
       return;
     }
 
-    final generalDir = Directory(path.join(collectionPath, 'general'));
-    final mainDir = Directory(path.join(collectionPath, 'main'));
+    final generalDir = Directory(path.join(appPath, 'general'));
+    final mainDir = Directory(path.join(appPath, 'main'));
     final useGeneral = await generalDir.exists() && !await mainDir.exists();
 
     final channel = useGeneral
@@ -2540,7 +2540,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       final initialized = await _initializeChatServiceIfNeeded(createIfMissing: true);
       final chatService = ChatService();
 
-      if (!initialized || chatService.collectionPath == null) {
+      if (!initialized || chatService.appPath == null) {
         final response = {
           'callsign': profile.callsign,
           'station': profile.callsign,
@@ -2672,7 +2672,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
           return;
         }
 
-        if (chatService.collectionPath == null) {
+        if (chatService.appPath == null) {
           request.response.statusCode = 404;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
@@ -2777,7 +2777,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
           return;
         }
 
-        if (chatService.collectionPath == null) {
+        if (chatService.appPath == null) {
           request.response.statusCode = 404;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
@@ -3215,7 +3215,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         return;
       }
 
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         request.response.statusCode = 404;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({'error': 'No chat collection loaded'}));
@@ -4187,9 +4187,9 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       // Get the chat collection directory
       await _initializeChatServiceIfNeeded();
       final chatService = ChatService();
-      final collectionPath = chatService.collectionPath;
+      final appPath = chatService.appPath;
 
-      if (collectionPath == null) {
+      if (appPath == null) {
         request.response.statusCode = 500;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({
@@ -4200,7 +4200,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
 
       // Create files directory for the room
-      final filesPath = '$collectionPath/$roomId/files';
+      final filesPath = '$appPath/$roomId/files';
       final filesDir = Directory(filesPath);
       if (!await filesDir.exists()) {
         await filesDir.create(recursive: true);
@@ -4255,16 +4255,16 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       // Get the chat collection directory
       await _initializeChatServiceIfNeeded();
       final chatService = ChatService();
-      final collectionPath = chatService.collectionPath;
+      final appPath = chatService.appPath;
 
-      if (collectionPath == null) {
+      if (appPath == null) {
         request.response.statusCode = 404;
         request.response.write('Chat collection not found');
         return;
       }
 
       // Construct file path
-      final filePath = '$collectionPath/$roomId/files/$filename';
+      final filePath = '$appPath/$roomId/files/$filename';
       final file = File(filePath);
 
       if (!await file.exists()) {
@@ -4924,8 +4924,8 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
 
       final eventService = EventService();
-      final collectionPath = path.dirname(path.dirname(path.dirname(eventDir)));
-      await eventService.initializeCollection(collectionPath);
+      final appPath = path.dirname(path.dirname(path.dirname(eventDir)));
+      await eventService.initializeApp(appPath);
       final event = await eventService.loadEvent(eventId);
 
       if (event == null) {
@@ -6115,22 +6115,22 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
     final targetCallsign = parts[0].toUpperCase();
 
-    // Convert path to collections format for the device
-    // /{callsign}/ -> /collections/www/
-    // /{callsign}/blog/ -> /collections/blog/
-    String collectionPath;
+    // Convert path to apps format for the device
+    // /{callsign}/ -> /apps/www/
+    // /{callsign}/blog/ -> /apps/blog/
+    String appPath;
     if (parts.length == 1) {
       // Root path /{callsign}/ -> serve www collection
-      collectionPath = '/collections/www/';
+      appPath = '/apps/www/';
     } else {
-      // /{callsign}/{collection}/{rest} -> /collections/{collection}/{rest}
-      collectionPath = '/collections/${parts.sublist(1).join('/')}';
-      if (!collectionPath.endsWith('/') && !collectionPath.contains('.')) {
-        collectionPath += '/';
+      // /{callsign}/{collection}/{rest} -> /apps/{collection}/{rest}
+      appPath = '/apps/${parts.sublist(1).join('/')}';
+      if (!appPath.endsWith('/') && !appPath.contains('.')) {
+        appPath += '/';
       }
     }
 
-    LogService().log('Device content request: $method $path -> $targetCallsign $collectionPath');
+    LogService().log('Device content request: $method $path -> $targetCallsign $appPath');
 
     // Find connected client by callsign
     ConnectedClient? targetClient;
@@ -6161,19 +6161,19 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         'type': 'HTTP_REQUEST',
         'requestId': requestId,
         'method': method,
-        'path': collectionPath,
+        'path': appPath,
         'headers': jsonEncode({}),
         'body': null,
       };
 
       targetClient.socket.add(jsonEncode(httpRequestMessage));
-      LogService().log('Sent content HTTP_REQUEST to $targetCallsign: $method $collectionPath (requestId: $requestId)');
+      LogService().log('Sent content HTTP_REQUEST to $targetCallsign: $method $appPath (requestId: $requestId)');
 
       // Wait for response with timeout
       final response = await completer.future.timeout(
         const Duration(seconds: 30),
         onTimeout: () {
-          LogService().log('Content proxy timeout for $targetCallsign $collectionPath');
+          LogService().log('Content proxy timeout for $targetCallsign $appPath');
           return {
             'statusCode': 504,
             'responseHeaders': '{"Content-Type": "text/html"}',
@@ -6215,7 +6215,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         request.response.write(responseBody);
       }
 
-      LogService().log('Device content response: $statusCode for $targetCallsign $collectionPath');
+      LogService().log('Device content response: $statusCode for $targetCallsign $appPath');
     } finally {
       _pendingHttpRequests.remove(requestId);
     }
@@ -6300,31 +6300,31 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
       // Find blog collection with posts
       BlogPost? foundPost;
-      String? collectionName;
+      String? appFolderName;
 
       if (await blogDir.exists()) {
         await for (final entity in blogDir.list()) {
           if (entity is Directory) {
-            // Check if this is a blog collection by looking for collection.js
-            final collectionFile = File('${entity.path}/collection.js');
-            if (await collectionFile.exists()) {
+            // Check if this is a blog collection by looking for app.js
+            final appFile = File('${entity.path}/app.js');
+            if (await appFile.exists()) {
               try {
-                final collectionJson = await collectionFile.readAsString();
-                final collectionData = jsonDecode(collectionJson) as Map<String, dynamic>;
-                if (collectionData['type'] != 'blog') continue;
+                final appJson = await appFile.readAsString();
+                final appData = jsonDecode(appJson) as Map<String, dynamic>;
+                if (appData['type'] != 'blog') continue;
               } catch (_) {
                 continue;
               }
             }
 
-            // Blog structure: {collectionPath}/{year}/{postId}/post.md
+            // Blog structure: {appPath}/{year}/{postId}/post.md
             final blogPath = '${entity.path}/$year/$filename/post.md';
             final blogFile = File(blogPath);
             if (await blogFile.exists()) {
               try {
                 final content = await blogFile.readAsString();
                 foundPost = BlogPost.fromText(content, filename);
-                collectionName = entity.path.split('/').last;
+                appFolderName = entity.path.split('/').last;
                 break;
               } catch (e) {
                 LogService().log('Error parsing blog file: $e');
@@ -6346,7 +6346,7 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
       }
 
       // Load feedback counts
-      final blogPath = '$devicesDir/$callsign/$collectionName/$year/$filename';
+      final blogPath = '$devicesDir/$callsign/$appFolderName/$year/$filename';
       final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(blogPath);
       foundPost = foundPost.copyWith(
         likesCount: feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0,

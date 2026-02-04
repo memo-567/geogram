@@ -21,13 +21,13 @@ import 'location_picker_page.dart';
 
 /// Full-page form for adding or editing a contact
 class AddEditContactPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Contact? contact; // null for new contact, non-null for edit
   final String? groupPath; // folder path for new contacts
 
   const AddEditContactPage({
     Key? key,
-    required this.collectionPath,
+    required this.appPath,
     this.contact,
     this.groupPath,
   }) : super(key: key);
@@ -131,7 +131,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
   }
 
   Future<void> _initializeService() async {
-    await _contactService.initializeCollection(widget.collectionPath);
+    await _contactService.initializeApp(widget.appPath);
   }
 
   void _initializeControllers() {
@@ -1325,7 +1325,7 @@ class _AddEditContactPageState extends State<AddEditContactPage> {
     ImageProvider? currentImage;
     if (!kIsWeb && _selectedProfilePicturePath != null) {
       currentImage = file_helper.getFileImageProvider(_selectedProfilePicturePath!);
-    } else if (!kIsWeb && _existingProfilePicture != null && widget.collectionPath.isNotEmpty) {
+    } else if (!kIsWeb && _existingProfilePicture != null && widget.appPath.isNotEmpty) {
       final path = _contactService.getProfilePicturePath(widget.contact?.callsign ?? '');
       if (path != null && file_helper.fileExists(path)) {
         currentImage = file_helper.getFileImageProvider(path);

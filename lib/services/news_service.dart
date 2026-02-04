@@ -66,22 +66,22 @@ class NewsService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   ChatSecurity _security = ChatSecurity();
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize news service for a collection
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    LogService().log('NewsService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    LogService().log('NewsService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Ensure news directory exists using storage
     await _storage.createDirectory('news');
@@ -100,7 +100,7 @@ class NewsService {
 
   /// Load security settings
   Future<void> _loadSecurity() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final content = await _storage.readString('extra/security.json');
     if (content != null) {
@@ -119,7 +119,7 @@ class NewsService {
 
   /// Save security settings
   Future<void> saveSecurity(ChatSecurity security) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _security = security;
 
@@ -131,7 +131,7 @@ class NewsService {
 
   /// Get available years (folders in news directory)
   Future<List<int>> getYears() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('news')) return [];
 
@@ -157,7 +157,7 @@ class NewsService {
     bool includeExpired = true,
     String? currentUserNpub,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final articles = <NewsArticle>[];
     final years = year != null ? [year] : await getYears();
@@ -199,7 +199,7 @@ class NewsService {
 
   /// Load full article with comments
   Future<NewsArticle?> loadFullArticle(String articleId) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Extract year from articleId (format: YYYY-MM-DD_title)
     final year = articleId.substring(0, 4);
@@ -291,7 +291,7 @@ class NewsService {
     String? npub,
     Map<String, String>? metadata,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       // Validate headlines not empty
@@ -385,7 +385,7 @@ class NewsService {
     Map<String, String>? metadata,
     required String? userNpub,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load existing article
     final article = await loadFullArticle(articleId);
@@ -437,7 +437,7 @@ class NewsService {
 
   /// Delete news article
   Future<bool> deleteArticle(String articleId, String? userNpub) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load article to check permissions
     final article = await loadFullArticle(articleId);
@@ -468,7 +468,7 @@ class NewsService {
 
   /// Toggle like on an article
   Future<bool> toggleLike(String articleId, String callsign) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load article
     final article = await loadFullArticle(articleId);
@@ -508,7 +508,7 @@ class NewsService {
     String? npub,
     String? signature,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load article
     final article = await loadFullArticle(articleId);
@@ -553,7 +553,7 @@ class NewsService {
     required int commentIndex,
     required String? userNpub,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load article
     final article = await loadFullArticle(articleId);

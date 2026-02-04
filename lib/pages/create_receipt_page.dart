@@ -14,12 +14,12 @@ import '../widgets/wallet/currency_picker_widget.dart';
 
 /// Page for creating a new payment receipt
 class CreateReceiptPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final I18nService i18n;
 
   const CreateReceiptPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.i18n,
   });
 

@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/contact.dart' as geogram;
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/contact_import_service.dart';
 import '../services/contact_service.dart';
 import '../services/i18n_service.dart';
@@ -16,12 +16,12 @@ import '../services/profile_storage.dart';
 
 /// Page for importing contacts from device address book
 class ContactImportPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String? groupPath;
 
   const ContactImportPage({
     Key? key,
-    required this.collectionPath,
+    required this.appPath,
     this.groupPath,
   }) : super(key: key);
 
@@ -105,19 +105,19 @@ class _ContactImportPageState extends State<ContactImportPage> {
 
     try {
       // Set up storage before initializing collection
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          widget.collectionPath,
+          widget.appPath,
         );
         _contactService.setStorage(scopedStorage);
       } else {
-        _contactService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+        _contactService.setStorage(FilesystemProfileStorage(widget.appPath));
       }
 
       // Initialize contact service to load existing contacts
-      await _contactService.initializeCollection(widget.collectionPath);
+      await _contactService.initializeApp(widget.appPath);
 
       // Fetch device contacts
       final deviceContacts = await _importService.fetchDeviceContacts();
@@ -195,7 +195,7 @@ class _ContactImportPageState extends State<ContactImportPage> {
 
     final result = await _importService.importContacts(
       contacts: _deviceContacts,
-      collectionPath: widget.collectionPath,
+      appPath: widget.appPath,
       groupPath: importGroupPath,
       existingContacts: _existingContacts,
       onProgress: (imported, total) {

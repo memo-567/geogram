@@ -13,13 +13,13 @@ import '../services/profile_service.dart';
 
 /// Page for viewing and managing receipt details
 class ReceiptDetailPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String receiptId;
   final I18nService i18n;
 
   const ReceiptDetailPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.receiptId,
     required this.i18n,
   });
@@ -47,7 +47,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
   Future<void> _loadReceipt() async {
     setState(() => _loading = true);
     try {
-      await _service.initializeCollection(widget.collectionPath);
+      await _service.initializeApp(widget.appPath);
       final receipt = await _service.getReceipt(widget.receiptId);
 
       final profile = _profileService.getProfile();

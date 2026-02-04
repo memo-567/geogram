@@ -12,7 +12,7 @@ import '../util/feedback_folder_utils.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import 'log_service.dart';
-import 'collection_service.dart';
+import 'app_service.dart';
 import 'profile_storage.dart';
 
 /// Model for chat security (reused for blog)
@@ -76,27 +76,27 @@ class BlogService {
   /// All file operations go through this abstraction.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   ChatSecurity _security = ChatSecurity();
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize blog service for a collection
   ///
-  /// Note: collectionPath should be the blog collection root (e.g., .../devices/X1D808/blog)
+  /// Note: appPath should be the blog collection root (e.g., .../devices/X1D808/blog)
   /// Year directories will be created directly under this path.
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    LogService().log('BlogService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    LogService().log('BlogService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
-    // Ensure blog directory exists (collectionPath is already the blog root)
+    // Ensure blog directory exists (appPath is already the blog root)
     // ProfileStorage handles directory creation automatically
     await _storage.createDirectory('');
     LogService().log('BlogService: Initialized with ProfileStorage');
@@ -114,7 +114,7 @@ class BlogService {
 
   /// Load security settings
   Future<void> _loadSecurity() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final content = await _storage.readString('extra/security.json');
@@ -134,7 +134,7 @@ class BlogService {
 
   /// Save security settings
   Future<void> saveSecurity(ChatSecurity security) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _security = security;
     final content = jsonEncode(security.toJson());
@@ -147,7 +147,7 @@ class BlogService {
 
   /// Get available years (folders in blog directory)
   Future<List<int>> getYears() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final years = <int>[];
 
@@ -173,7 +173,7 @@ class BlogService {
     bool publishedOnly = false,
     String? currentUserNpub,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final posts = <BlogPost>[];
     final years = year != null ? [year] : await getYears();
@@ -229,12 +229,12 @@ class BlogService {
   /// Post is stored at: blog/{year}/{postId}/post.md
   /// Comments are stored in: blog/{year}/{postId}/comments/
   Future<BlogPost?> loadFullPost(String postId) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Extract year from postId (format: YYYY-MM-DD_title)
     final year = postId.substring(0, 4);
     final postRelativePath = '$year/$postId';
-    final postFolderPath = '$_collectionPath/$year/$postId';
+    final postFolderPath = '$_appPath/$year/$postId';
 
     try {
       final content = await _storage.readString('$postRelativePath/post.md');
@@ -321,7 +321,7 @@ class BlogService {
     double? longitude,
     Map<String, String>? metadata,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       final now = DateTime.now();
@@ -398,8 +398,8 @@ class BlogService {
       LogService().log('BlogService: Created post: $postId');
 
       // Regenerate blog cache
-      if (_collectionPath != null) {
-        await CollectionService().generateBlogCache(_collectionPath!);
+      if (_appPath != null) {
+        await AppService().generateBlogCache(_appPath!);
       }
 
       return signedPost;
@@ -471,7 +471,7 @@ class BlogService {
     double? longitude,
     required String? userNpub,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load existing post
     final post = await loadFullPost(postId);
@@ -514,8 +514,8 @@ class BlogService {
       LogService().log('BlogService: Updated post: $postId');
 
       // Regenerate blog cache
-      if (_collectionPath != null) {
-        await CollectionService().generateBlogCache(_collectionPath!);
+      if (_appPath != null) {
+        await AppService().generateBlogCache(_appPath!);
       }
 
       return true;
@@ -536,7 +536,7 @@ class BlogService {
 
   /// Delete blog post (deletes entire folder including comments)
   Future<bool> deletePost(String postId, String? userNpub) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load post to check permissions
     final post = await loadFullPost(postId);
@@ -556,8 +556,8 @@ class BlogService {
       LogService().log('BlogService: Deleted post folder: $postId');
 
       // Regenerate blog cache
-      if (_collectionPath != null) {
-        await CollectionService().generateBlogCache(_collectionPath!);
+      if (_appPath != null) {
+        await AppService().generateBlogCache(_appPath!);
       }
 
       return true;
@@ -578,7 +578,7 @@ class BlogService {
     required String npub,
     required String nsec,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Validate npub and nsec format
     if (!npub.startsWith('npub1') || npub.length != 63) {
@@ -621,7 +621,7 @@ class BlogService {
       event.signWithNsec(nsec);
 
       final year = post.year;
-      final postFolderPath = '$_collectionPath/$year/$postId';
+      final postFolderPath = '$_appPath/$year/$postId';
 
       // Write comment to separate file with signature
       final commentId = await BlogFolderUtils.writeComment(
@@ -648,14 +648,14 @@ class BlogService {
     required String commentId,
     required String? userNpub,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Load post to get year
     final post = await loadFullPost(postId);
     if (post == null) return false;
 
     final year = post.year;
-    final postFolderPath = '$_collectionPath/$year/$postId';
+    final postFolderPath = '$_appPath/$year/$postId';
 
     // Load the comment to check permissions
     final comment = await BlogFolderUtils.getComment(postFolderPath, commentId);
@@ -713,7 +713,7 @@ class BlogService {
   ///
   /// Returns feedback counts and user state for populating BlogPost model
   Future<Map<String, dynamic>> loadFeedback(String postId, {String? userNpub}) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       return {
         'counts': {},
         'userState': {},
@@ -849,7 +849,7 @@ class BlogService {
     String feedbackType,
     String actionName,
   ) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Validate npub format
     if (!npub.startsWith('npub1') || npub.length != 63) {
@@ -963,12 +963,12 @@ class BlogService {
   bool canModerate(String? npub) => _security.isAdmin(npub);
 
   /// Get the collection path (for API use)
-  String? get collectionPath => _collectionPath;
+  String? get appPath => _appPath;
 
   /// Get the post folder path for a given postId
   String? getPostFolderPath(String postId) {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
     final year = postId.substring(0, 4);
-    return '$_collectionPath/$year/$postId';
+    return '$_appPath/$year/$postId';
   }
 }

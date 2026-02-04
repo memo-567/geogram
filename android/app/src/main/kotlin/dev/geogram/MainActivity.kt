@@ -1,5 +1,8 @@
 package dev.geogram
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbDevice
@@ -236,6 +239,14 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID_ARGUMENT", "Path is required", null)
                     }
                 }
+                "copyToClipboard" -> {
+                    val paths = call.argument<List<String>>("paths")
+                    if (paths != null && paths.isNotEmpty()) {
+                        result.success(copyFilesToClipboard(paths))
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Paths list is required", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -438,6 +449,51 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             android.util.Log.e("FileLauncher", "Error opening file: ${e.message}")
             e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Copy files to the system clipboard using content URIs so they can be
+     * pasted in external apps (Telegram, file managers, etc.).
+     */
+    private fun copyFilesToClipboard(paths: List<String>): Boolean {
+        return try {
+            val authority = "${applicationContext.packageName}.fileprovider"
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+            val firstFile = File(paths.first())
+            if (!firstFile.exists()) return false
+            val firstUri = FileProvider.getUriForFile(this, authority, firstFile)
+            val clip = ClipData.newUri(contentResolver, firstFile.name, firstUri)
+
+            // Add remaining files
+            for (i in 1 until paths.size) {
+                val file = File(paths[i])
+                if (!file.exists()) continue
+                val uri = FileProvider.getUriForFile(this, authority, file)
+                clip.addItem(ClipData.Item(uri))
+            }
+
+            // Grant read permission to any app that reads the clipboard
+            clipboard.setPrimaryClip(clip)
+
+            // Grant URI permissions for all items
+            for (i in 0 until clip.itemCount) {
+                val uri = clip.getItemAt(i).uri
+                if (uri != null) {
+                    grantUriPermission(
+                        "android",
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
+
+            android.util.Log.d("FileLauncher", "Copied ${paths.size} file(s) to clipboard")
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("FileLauncher", "Error copying to clipboard: ${e.message}")
             false
         }
     }

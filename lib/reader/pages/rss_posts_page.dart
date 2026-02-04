@@ -13,13 +13,13 @@ import '../../services/i18n_service.dart';
 
 /// Page showing list of posts from an RSS source
 class RssPostsPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Source source;
   final I18nService i18n;
 
   const RssPostsPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.source,
     required this.i18n,
   });
@@ -70,7 +70,7 @@ class _RssPostsPageState extends State<RssPostsPage> {
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ArticleReaderPage(
-            collectionPath: widget.collectionPath,
+            appPath: widget.appPath,
             sourceId: widget.source.id,
             post: post,
             i18n: widget.i18n,

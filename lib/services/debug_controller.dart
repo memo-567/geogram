@@ -7,11 +7,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import '../models/collection.dart';
+import '../models/app.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/usb_aoa_transport.dart';
 import 'chat_service.dart';
-import 'collection_service.dart';
+import 'app_service.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
 import 'usb_aoa_service.dart';
@@ -208,7 +208,7 @@ class DebugActionEvent {
 
 /// Panel indices for navigation
 class PanelIndex {
-  static const int collections = 0;
+  static const int apps = 0;
   static const int maps = 1;
   static const int devices = 2;
   static const int settings = 3;
@@ -217,8 +217,8 @@ class PanelIndex {
   /// Get panel name from index
   static String getName(int index) {
     switch (index) {
-      case collections:
-        return 'collections';
+      case apps:
+        return 'apps';
       case maps:
         return 'maps';
       case devices:
@@ -235,9 +235,9 @@ class PanelIndex {
   /// Get index from panel name
   static int? fromName(String name) {
     switch (name.toLowerCase()) {
-      case 'collections':
+      case 'apps':
       case 'home':
-        return collections;
+        return apps;
       case 'maps':
       case 'map':
         return maps;
@@ -370,7 +370,7 @@ class DebugController {
   /// Trigger chat channels refresh
   Future<void> triggerChatRefresh() async {
     final chatService = ChatService();
-    if (chatService.collectionPath != null) {
+    if (chatService.appPath != null) {
       await chatService.refreshChannels();
     }
     triggerAction(DebugAction.refreshChat);
@@ -559,7 +559,7 @@ class DebugController {
         'action': 'navigate',
         'description': 'Navigate to a panel',
         'params': {
-          'panel': 'Panel name: collections, maps, devices, settings, logs',
+          'panel': 'Panel name: apps, maps, devices, settings, logs',
         },
       },
       {
@@ -960,7 +960,7 @@ class DebugController {
         return {
           'success': false,
           'error': 'Unknown panel: $panel',
-          'available': ['collections', 'maps', 'devices', 'settings', 'logs'],
+          'available': ['apps', 'maps', 'devices', 'settings', 'logs'],
         };
 
       case 'toast':
@@ -1026,7 +1026,7 @@ class DebugController {
         final connManager = ConnectionManager();
         final usbTransport = connManager.getTransport('usb_aoa');
 
-        final localCallsign = CollectionService().currentCallsign;
+        final localCallsign = AppService().currentCallsign;
         final status = {
           'success': true,
           'local_callsign': localCallsign,
@@ -1269,7 +1269,7 @@ class DebugController {
 
       case 'open_console':
         // Navigate to Collections panel and broadcast console open
-        navigateToPanel(PanelIndex.collections);
+        navigateToPanel(PanelIndex.apps);
         triggerOpenConsole(sessionId: params['session_id'] as String?);
         return {'success': true, 'message': 'Console open triggered'};
 
@@ -1283,23 +1283,16 @@ class DebugController {
             : logs;
 
         // Find console collection if available
-        Collection? consoleCollection;
-        try {
-          final collections = await CollectionService().loadCollections();
-          consoleCollection = collections.firstWhere(
-            (c) => c.type == 'console',
-            orElse: () => throw StateError('missing'),
-          );
-        } catch (_) {}
+        final consoleApp = AppService().getAppByType('console');
 
         return {
           'success': true,
           'type': 'cli_terminal',
-          'console_collection': consoleCollection != null
+          'console_app': consoleApp != null
               ? {
-                  'id': consoleCollection.id,
-                  'title': consoleCollection.title,
-                  'path': consoleCollection.storagePath,
+                  'id': consoleApp.id,
+                  'title': consoleApp.title,
+                  'path': consoleApp.storagePath,
                 }
               : null,
           'log_tail': logTail,

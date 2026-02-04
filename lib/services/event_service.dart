@@ -30,21 +30,21 @@ class EventService {
   /// All file operations go through this abstraction.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize event service for a collection
-  Future<void> initializeCollection(String collectionPath) async {
-    print('EventService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath) async {
+    print('EventService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Ensure collection directory exists via storage abstraction
     await _storage.createDirectory('');
@@ -53,7 +53,7 @@ class EventService {
 
   /// Get available years (folders in collection directory)
   Future<List<int>> getYears() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final years = <int>[];
 
@@ -77,7 +77,7 @@ class EventService {
     String? currentCallsign,
     String? currentUserNpub,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final events = <Event>[];
     final years = year != null ? [year] : await getYears();
@@ -109,12 +109,12 @@ class EventService {
 
   /// Load full event with reactions and v1.2 features
   Future<Event?> loadEvent(String eventId) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Extract year from eventId (format: YYYY-MM-DD_title)
     final year = eventId.substring(0, 4);
     final eventRelativePath = '$year/$eventId';
-    final eventDirPath = '$_collectionPath/$year/$eventId';
+    final eventDirPath = '$_appPath/$year/$eventId';
 
     if (!await _storage.directoryExists(eventRelativePath)) {
       print('EventService: Event directory not found: $eventRelativePath');
@@ -263,7 +263,7 @@ class EventService {
     String? npub,
     Map<String, String>? metadata,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       // Use provided event date or current time
@@ -351,7 +351,7 @@ class EventService {
     required String callsign,
     String? targetItem, // null for event itself, or filename/folder name
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -401,7 +401,7 @@ class EventService {
     required String callsign,
     String? targetItem,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -445,7 +445,7 @@ class EventService {
     String? targetItem,
     String? npub,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -492,12 +492,12 @@ class EventService {
 
   /// Load event items (files, folders, etc.)
   Future<List<EventItem>> loadEventItems(String eventId) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     try {
       final year = eventId.substring(0, 4);
       final eventRelativePath = '$year/$eventId';
-      final eventDirPath = '$_collectionPath/$year/$eventId';
+      final eventDirPath = '$_appPath/$year/$eventId';
 
       if (!await _storage.directoryExists(eventRelativePath)) return [];
 
@@ -674,7 +674,7 @@ class EventService {
     required String content,
     String? npub,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       final year = eventId.substring(0, 4);
@@ -726,7 +726,7 @@ class EventService {
     required String npub,
     required RegistrationType type,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -779,7 +779,7 @@ class EventService {
     required String eventId,
     required String callsign,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -824,7 +824,7 @@ class EventService {
     String? password,
     String? note,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -868,7 +868,7 @@ class EventService {
     required String eventId,
     required String url,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -928,7 +928,7 @@ class EventService {
     Map<String, String>? metadata,
     List<String>? contacts,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       final year = eventId.substring(0, 4);
@@ -1005,8 +1005,8 @@ class EventService {
 
           // TODO: ProfileStorage doesn't support rename/move - using direct filesystem
           // This needs to be addressed when ProfileStorage gains rename support
-          final eventDir = Directory('$_collectionPath/$year/$eventId');
-          final newYearDir = Directory('$_collectionPath/$newYear');
+          final eventDir = Directory('$_appPath/$year/$eventId');
+          final newYearDir = Directory('$_appPath/$newYear');
           if (!await newYearDir.exists()) {
             await newYearDir.create(recursive: true);
           }
@@ -1092,7 +1092,7 @@ class EventService {
   ///
   /// Returns true if successfully deleted, false otherwise.
   Future<bool> deleteEvent(String eventId) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = eventId.substring(0, 4);
@@ -1133,13 +1133,13 @@ class EventService {
       final year = eventId.substring(0, 4);
 
       // Scan collections directory for event-type apps
-      final collectionsDir = Directory('$dataDir/collections');
-      if (!await collectionsDir.exists()) {
+      final appsDir = Directory('$dataDir/collections');
+      if (!await appsDir.exists()) {
         print('EventService: Collections directory not found');
         return null;
       }
 
-      final entities = await collectionsDir.list().toList();
+      final entities = await appsDir.list().toList();
       for (var entity in entities) {
         if (entity is Directory) {
           // Check if this is an events-type app by looking for events subdirectory
@@ -1149,10 +1149,10 @@ class EventService {
             final eventDir = Directory('${entity.path}/events/$year/$eventId');
             if (await eventDir.exists()) {
               // Found! Load the event using this collection
-              final savedPath = _collectionPath;
-              _collectionPath = entity.path;
+              final savedPath = _appPath;
+              _appPath = entity.path;
               final event = await loadEvent(eventId);
-              _collectionPath = savedPath; // Restore original path
+              _appPath = savedPath; // Restore original path
               if (event != null) {
                 return event;
               }
@@ -1178,19 +1178,19 @@ class EventService {
 
     try {
       // Search in collections directory
-      final collectionsDir = Directory('$dataDir/collections');
-      if (await collectionsDir.exists()) {
-        final entities = await collectionsDir.list().toList();
+      final appsDir = Directory('$dataDir/collections');
+      if (await appsDir.exists()) {
+        final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
             // Check if this is an events-type app
             final eventsSubdir = Directory('${entity.path}/events');
             if (await eventsSubdir.exists()) {
               // Load events from this app
-              final savedPath = _collectionPath;
-              _collectionPath = entity.path;
+              final savedPath = _appPath;
+              _appPath = entity.path;
               final events = await loadEvents(year: year);
-              _collectionPath = savedPath; // Restore original path
+              _appPath = savedPath; // Restore original path
               allEvents.addAll(events);
             }
           }
@@ -1210,10 +1210,10 @@ class EventService {
                 final eventsSubdir = Directory('${appEntity.path}/events');
                 if (await eventsSubdir.exists()) {
                   // Load events from this app
-                  final savedPath = _collectionPath;
-                  _collectionPath = appEntity.path;
+                  final savedPath = _appPath;
+                  _appPath = appEntity.path;
                   final events = await loadEvents(year: year);
-                  _collectionPath = savedPath; // Restore original path
+                  _appPath = savedPath; // Restore original path
                   allEvents.addAll(events);
                 }
               }
@@ -1238,18 +1238,18 @@ class EventService {
 
     try {
       // Search in collections directory
-      final collectionsDir = Directory('$dataDir/collections');
-      if (await collectionsDir.exists()) {
-        final entities = await collectionsDir.list().toList();
+      final appsDir = Directory('$dataDir/collections');
+      if (await appsDir.exists()) {
+        final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
             final eventsSubdir = Directory('${entity.path}/events');
             if (await eventsSubdir.exists()) {
               // Get years from this app
-              final savedPath = _collectionPath;
-              _collectionPath = entity.path;
+              final savedPath = _appPath;
+              _appPath = entity.path;
               final appYears = await getYears();
-              _collectionPath = savedPath;
+              _appPath = savedPath;
               years.addAll(appYears);
             }
           }
@@ -1268,10 +1268,10 @@ class EventService {
               if (appEntity is Directory) {
                 final eventsSubdir = Directory('${appEntity.path}/events');
                 if (await eventsSubdir.exists()) {
-                  final savedPath = _collectionPath;
-                  _collectionPath = appEntity.path;
+                  final savedPath = _appPath;
+                  _appPath = appEntity.path;
                   final appYears = await getYears();
-                  _collectionPath = savedPath;
+                  _appPath = savedPath;
                   years.addAll(appYears);
                 }
               }
@@ -1300,9 +1300,9 @@ class EventService {
       final year = eventId.substring(0, 4);
 
       // Search in collections directory
-      final collectionsDir = Directory('$dataDir/collections');
-      if (await collectionsDir.exists()) {
-        final entities = await collectionsDir.list().toList();
+      final appsDir = Directory('$dataDir/collections');
+      if (await appsDir.exists()) {
+        final entities = await appsDir.list().toList();
         for (var entity in entities) {
           if (entity is Directory) {
             final eventDir = Directory('${entity.path}/events/$year/$eventId');

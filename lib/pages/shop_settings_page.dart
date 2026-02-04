@@ -11,11 +11,11 @@ import '../services/log_service.dart';
 
 /// Page for managing shop settings
 class ShopSettingsPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
 
   const ShopSettingsPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
   });
 
   @override
@@ -105,7 +105,7 @@ class _ShopSettingsPageState extends State<ShopSettingsPage> {
     });
 
     try {
-      await _marketService.initializeCollection(widget.collectionPath);
+      await _marketService.initializeApp(widget.appPath);
       _shop = _marketService.getShop();
 
       // Check if current user is shop owner

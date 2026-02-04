@@ -29,7 +29,7 @@ import '../services/storage_config.dart';
 import '../services/event_service.dart';
 import '../services/station_service.dart';
 import '../services/station_alert_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/websocket_service.dart';
 import 'report_detail_page.dart';
 import 'place_detail_page.dart';
@@ -50,11 +50,11 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   final MapTileService _mapTileService = MapTileService();
   final I18nService _i18n = I18nService();
   final ConfigService _configService = ConfigService();
-  final CollectionService _collectionService = CollectionService();
+  final AppService _appService = AppService();
   final MapController _mapController = MapController();
 
   late TabController _tabController;
-  late final VoidCallback _collectionsListener;
+  late final VoidCallback _appsListener;
 
   // State
   List<MapItem> _allItems = [];
@@ -105,12 +105,12 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _collectionsListener = () {
+    _appsListener = () {
       if (!mounted) return;
       _mapsService.clearCache();
       _loadItems(forceRefresh: true);
     };
-    _collectionService.collectionsNotifier.addListener(_collectionsListener);
+    _appService.appsNotifier.addListener(_appsListener);
     _profileListener = () {
       if (!mounted) return;
       _handleProfileLocationUpdate();
@@ -122,7 +122,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
 
   @override
   void dispose() {
-    _collectionService.collectionsNotifier.removeListener(_collectionsListener);
+    _appService.appsNotifier.removeListener(_appsListener);
     _profileService.profileNotifier.removeListener(_profileListener);
     _moveReloadTimer?.cancel();
     _autoRefreshTimer?.cancel();
@@ -444,16 +444,16 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       case MapItemType.alert:
         if (item.sourceItem is Report) {
           final report = item.sourceItem as Report;
-          String collectionPath;
+          String appPath;
 
           if (item.isFromStation) {
             // Station alerts: construct path from devices directory
             final storageConfig = StorageConfig();
             final callsign = report.metadata['station_callsign'] ?? 'unknown';
-            collectionPath = '${storageConfig.devicesDir}/$callsign/alerts';
-          } else if (item.collectionPath != null) {
+            appPath = '${storageConfig.devicesDir}/$callsign/alerts';
+          } else if (item.appPath != null) {
             // Local alerts: use the collection path
-            collectionPath = item.collectionPath!;
+            appPath = item.appPath!;
           } else {
             // Fallback - shouldn't happen
             LogService().log('MapsBrowserPage: Alert has no collection path');
@@ -464,7 +464,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             context,
             MaterialPageRoute(
               builder: (context) => ReportDetailPage(
-                collectionPath: collectionPath,
+                appPath: appPath,
                 report: report,
               ),
             ),
@@ -474,20 +474,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       case MapItemType.event:
         if (item.sourceItem is Event) {
           final event = item.sourceItem as Event;
-          var collectionPath = item.collectionPath ?? '';
+          var appPath = item.appPath ?? '';
           var readOnly = false;
 
           if (item.isFromStation) {
             readOnly = true;
             final stationPath = await _resolveStationEventsCollectionPath();
             if (stationPath != null && stationPath.isNotEmpty) {
-              collectionPath = stationPath;
+              appPath = stationPath;
             }
           }
 
           final eventService = EventService();
-          if (collectionPath.isNotEmpty) {
-            await eventService.initializeCollection(collectionPath);
+          if (appPath.isNotEmpty) {
+            await eventService.initializeApp(appPath);
           }
           if (!mounted) return;
 
@@ -497,7 +497,7 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
             MaterialPageRoute(
               builder: (context) => EventDetailPage(
                 event: event,
-                collectionPath: collectionPath,
+                appPath: appPath,
                 eventService: eventService,
                 profileService: _profileService,
                 i18n: _i18n,
@@ -514,13 +514,13 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
       case MapItemType.place:
         if (item.sourceItem is Place) {
           final place = item.sourceItem as Place;
-          final collectionPath = item.collectionPath ?? '';
+          final appPath = item.appPath ?? '';
 
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => PlaceDetailPage(
-                collectionPath: collectionPath,
+                appPath: appPath,
                 place: place,
               ),
             ),

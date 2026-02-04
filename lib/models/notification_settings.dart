@@ -3,7 +3,7 @@ class NotificationSettings {
   bool enableNotifications;
   bool notifyNewMessages;
   bool notifyNearbyDevices;
-  bool notifyCollectionUpdates;
+  bool notifyAppUpdates;
   bool notifyStationStatus;
   bool notifySystemAlerts;
   bool soundEnabled;
@@ -13,7 +13,7 @@ class NotificationSettings {
     this.enableNotifications = true,
     this.notifyNewMessages = true,
     this.notifyNearbyDevices = true,
-    this.notifyCollectionUpdates = false,
+    this.notifyAppUpdates = false,
     this.notifyStationStatus = false,
     this.notifySystemAlerts = true,
     this.soundEnabled = true,
@@ -26,7 +26,7 @@ class NotificationSettings {
       enableNotifications: json['enableNotifications'] as bool? ?? true,
       notifyNewMessages: json['notifyNewMessages'] as bool? ?? true,
       notifyNearbyDevices: json['notifyNearbyDevices'] as bool? ?? true,
-      notifyCollectionUpdates: json['notifyCollectionUpdates'] as bool? ?? false,
+      notifyAppUpdates: json['notifyAppUpdates'] as bool? ?? false,
       notifyStationStatus: json['notifyStationStatus'] as bool? ?? false,
       notifySystemAlerts: json['notifySystemAlerts'] as bool? ?? true,
       soundEnabled: json['soundEnabled'] as bool? ?? true,
@@ -40,7 +40,7 @@ class NotificationSettings {
       'enableNotifications': enableNotifications,
       'notifyNewMessages': notifyNewMessages,
       'notifyNearbyDevices': notifyNearbyDevices,
-      'notifyCollectionUpdates': notifyCollectionUpdates,
+      'notifyAppUpdates': notifyAppUpdates,
       'notifyStationStatus': notifyStationStatus,
       'notifySystemAlerts': notifySystemAlerts,
       'soundEnabled': soundEnabled,
@@ -53,7 +53,7 @@ class NotificationSettings {
     bool? enableNotifications,
     bool? notifyNewMessages,
     bool? notifyNearbyDevices,
-    bool? notifyCollectionUpdates,
+    bool? notifyAppUpdates,
     bool? notifyStationStatus,
     bool? notifySystemAlerts,
     bool? soundEnabled,
@@ -63,7 +63,7 @@ class NotificationSettings {
       enableNotifications: enableNotifications ?? this.enableNotifications,
       notifyNewMessages: notifyNewMessages ?? this.notifyNewMessages,
       notifyNearbyDevices: notifyNearbyDevices ?? this.notifyNearbyDevices,
-      notifyCollectionUpdates: notifyCollectionUpdates ?? this.notifyCollectionUpdates,
+      notifyAppUpdates: notifyAppUpdates ?? this.notifyAppUpdates,
       notifyStationStatus: notifyStationStatus ?? this.notifyStationStatus,
       notifySystemAlerts: notifySystemAlerts ?? this.notifySystemAlerts,
       soundEnabled: soundEnabled ?? this.soundEnabled,

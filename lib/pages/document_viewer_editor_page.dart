@@ -4,9 +4,10 @@
  */
 
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:path/path.dart' as path;
@@ -75,6 +76,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   String? _error;
   PdfDocument? _pdfDocument;
 
+  // Zoom state for PDF viewer
+  final _pdfTransformController = TransformationController();
+
   // Editing state
   bool _isEditing = false;
   bool _hasUnsavedChanges = false;
@@ -95,6 +99,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       _pdfDocument?.close();
       _pdfDocument = null;
       _pdfPages = [];
+      _pdfTransformController.value = Matrix4.identity();
       _textContent = null;
       _isEditing = false;
       _hasUnsavedChanges = false;
@@ -106,6 +111,7 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   @override
   void dispose() {
     _pdfDocument?.close();
+    _pdfTransformController.dispose();
     _editController.dispose();
     super.dispose();
   }
@@ -474,40 +480,73 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
       return const Center(child: Text('No pages found'));
     }
 
-    return SingleChildScrollView(
-      child: Column(
-        children: _pdfPages.asMap().entries.map((entry) {
-          final index = entry.key;
-          final pageBytes = entry.value;
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              children: [
-                // Page image
-                Image.memory(
-                  pageBytes,
-                  fit: BoxFit.fitWidth,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const SizedBox(
-                      height: 200,
-                      child: Center(child: Icon(Icons.broken_image, color: Colors.grey)),
-                    );
-                  },
-                ),
-                // Page number
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: Text(
-                    'Page ${index + 1} of ${_pdfPages.length}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          final keys = HardwareKeyboard.instance.logicalKeysPressed;
+          final ctrlHeld = keys.contains(LogicalKeyboardKey.controlLeft) ||
+              keys.contains(LogicalKeyboardKey.controlRight);
+          if (ctrlHeld) {
+            const minScale = 0.5;
+            const maxScale = 4.0;
+            final scaleDelta = event.scrollDelta.dy > 0 ? 0.9 : 1.1;
+            final currentScale = _pdfTransformController.value.getMaxScaleOnAxis();
+            final newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
+            final focalPoint = event.localPosition;
+            final s = newScale / currentScale;
+            final dx = focalPoint.dx * (1 - s);
+            final dy = focalPoint.dy * (1 - s);
+            final matrix = Matrix4.identity()
+              ..setEntry(0, 0, s)
+              ..setEntry(1, 1, s)
+              ..setEntry(0, 3, dx)
+              ..setEntry(1, 3, dy);
+            _pdfTransformController.value = _pdfTransformController.value * matrix;
+          }
+        }
+      },
+      child: InteractiveViewer(
+        transformationController: _pdfTransformController,
+        minScale: 0.5,
+        maxScale: 4.0,
+        constrained: false,
+        child: SizedBox(
+          width: MediaQuery.of(context).size.width,
+          child: Column(
+            children: _pdfPages.asMap().entries.map((entry) {
+              final index = entry.key;
+              final pageBytes = entry.value;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  children: [
+                    // Page image
+                    Image.memory(
+                      pageBytes,
+                      fit: BoxFit.fitWidth,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const SizedBox(
+                          height: 200,
+                          child: Center(child: Icon(Icons.broken_image, color: Colors.grey)),
+                        );
+                      },
                     ),
-                  ),
+                    // Page number
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 8),
+                      child: Text(
+                        'Page ${index + 1} of ${_pdfPages.length}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          );
-        }).toList(),
+              );
+            }).toList(),
+          ),
+        ),
       ),
     );
   }

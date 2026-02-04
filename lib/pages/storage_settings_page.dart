@@ -86,11 +86,11 @@ const List<StorageCategory> _storageCategories = [
     relativePath: 'tiles',
     color: Colors.blue,
   ),
-  // Collections data
+  // Apps data
   StorageCategory(
-    id: 'collections',
-    translationKey: 'storage_collections',
-    descriptionKey: 'storage_collections_description',
+    id: 'apps',
+    translationKey: 'storage_apps',
+    descriptionKey: 'storage_apps_description',
     icon: Icons.folder_copy,
     relativePath: 'devices',
     color: Colors.amber,

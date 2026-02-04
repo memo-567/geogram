@@ -13,7 +13,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/video.dart' as geogram;
 import '../models/blog_comment.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/video_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
@@ -28,13 +28,13 @@ import '../dialogs/new_video_dialog.dart';
 
 /// YouTube-style video browser with grid layout
 class VideoBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const VideoBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   });
 
   @override
@@ -84,19 +84,19 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
         : profile.callsign;
 
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _videoService.setStorage(scopedStorage);
     } else {
-      _videoService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _videoService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
-    await _videoService.initializeCollection(
-      widget.collectionPath,
+    await _videoService.initializeApp(
+      widget.appPath,
       callsign: profile.callsign,
       creatorNpub: _currentUserNpub,
     );
@@ -160,7 +160,7 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
         builder: (context) => _VideoWatchPage(
           video: fullVideo,
           comments: comments,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           videoService: _videoService,
           profileService: _profileService,
           i18n: _i18n,
@@ -479,7 +479,7 @@ class _VideoBrowserPageState extends State<VideoBrowserPage> {
 class _VideoWatchPage extends StatefulWidget {
   final geogram.Video video;
   final List<BlogComment> comments;
-  final String collectionPath;
+  final String appPath;
   final VideoService videoService;
   final ProfileService profileService;
   final I18nService i18n;
@@ -490,7 +490,7 @@ class _VideoWatchPage extends StatefulWidget {
   const _VideoWatchPage({
     required this.video,
     required this.comments,
-    required this.collectionPath,
+    required this.appPath,
     required this.videoService,
     required this.profileService,
     required this.i18n,
@@ -774,7 +774,7 @@ class _VideoWatchPageState extends State<_VideoWatchPage> {
         SliverToBoxAdapter(
           child: VideoDetailWidget(
             video: _video,
-            collectionPath: widget.collectionPath,
+            appPath: widget.appPath,
             canEdit: canEdit,
             stationUrl: widget.stationUrl,
             profileIdentifier: widget.profileIdentifier,

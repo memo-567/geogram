@@ -38,8 +38,8 @@ enum GroupType {
   educationSchool,
   educationUniversity,
 
-  // Collection-specific
-  collectionModerator;
+  // App-specific
+  appModerator;
 
   static GroupType fromString(String value) {
     final normalized = value.toLowerCase().replaceAll('_', '');
@@ -81,8 +81,8 @@ enum GroupType {
         return 'education_school';
       case GroupType.educationUniversity:
         return 'education_university';
-      case GroupType.collectionModerator:
-        return 'collection_moderator';
+      case GroupType.appModerator:
+        return 'app_moderator';
       default:
         return name;
     }
@@ -95,7 +95,7 @@ class Group {
   final String title;
   final String description;
   final GroupType type;
-  final String? collectionType;
+  final String? appType;
   final String created;
   final String updated;
   final String status;
@@ -109,7 +109,7 @@ class Group {
     required this.title,
     required this.description,
     required this.type,
-    this.collectionType,
+    this.appType,
     required this.created,
     required this.updated,
     this.status = 'active',
@@ -142,8 +142,8 @@ class Group {
   /// Check if group is active
   bool get isActive => status.toLowerCase() == 'active';
 
-  /// Check if group is a collection-specific moderator group
-  bool get isCollectionModerator => type == GroupType.collectionModerator && collectionType != null;
+  /// Check if group is an app-specific moderator group
+  bool get isAppModerator => type == GroupType.appModerator && appType != null;
 
   /// Get admins
   List<GroupMember> get admins => members.where((m) => m.role == GroupRole.admin).toList();
@@ -244,7 +244,7 @@ class Group {
       title: groupData['title'] as String? ?? '',
       description: groupData['description'] as String? ?? '',
       type: GroupType.fromString(groupData['type'] as String? ?? 'association'),
-      collectionType: groupData['collection_type'] as String?,
+      appType: (groupData['app_type'] ?? groupData['collection_type']) as String?,
       created: groupData['created'] as String? ?? '',
       updated: groupData['updated'] as String? ?? '',
       status: groupData['status'] as String? ?? 'active',
@@ -259,7 +259,7 @@ class Group {
         'title': title,
         'description': description,
         'type': type.toFileString(),
-        'collection_type': collectionType,
+        'app_type': appType,
         'created': created,
         'updated': updated,
         'status': status,
@@ -273,7 +273,7 @@ class Group {
     String? title,
     String? description,
     GroupType? type,
-    String? collectionType,
+    String? appType,
     String? created,
     String? updated,
     String? status,
@@ -287,7 +287,7 @@ class Group {
       title: title ?? this.title,
       description: description ?? this.description,
       type: type ?? this.type,
-      collectionType: collectionType ?? this.collectionType,
+      appType: appType ?? this.appType,
       created: created ?? this.created,
       updated: updated ?? this.updated,
       status: status ?? this.status,

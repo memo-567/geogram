@@ -12,7 +12,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'app_args.dart';
 import 'ble_foreground_service.dart';
-import 'collection_service.dart';
+import 'app_service.dart';
 import 'log_service.dart';
 
 /// Service for managing BLE device identity and MAC address tracking
@@ -68,7 +68,7 @@ class BLEIdentityService {
   String get deviceIdString => deviceId.toString();
 
   /// Get the current callsign
-  String get callsign => CollectionService().currentCallsign ?? 'UNKNOWN';
+  String get callsign => AppService().currentCallsign ?? 'UNKNOWN';
 
   /// Get the full identity string (callsign-deviceId)
   /// Compatible with APRS SSID format (e.g., "X34PSK-7")

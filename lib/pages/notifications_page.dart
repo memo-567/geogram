@@ -170,12 +170,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
           _buildNotificationTile(
             context: context,
             icon: Icons.folder_special,
-            title: _i18n.t('collection_updates'),
-            subtitle: _i18n.t('collection_updates_desc'),
-            value: _settings!.notifyCollectionUpdates,
+            title: _i18n.t('app_updates'),
+            subtitle: _i18n.t('app_updates_desc'),
+            value: _settings!.notifyAppUpdates,
             enabled: _settings!.enableNotifications,
             onChanged: (value) {
-              _updateSettings(_settings!.copyWith(notifyCollectionUpdates: value));
+              _updateSettings(_settings!.copyWith(notifyAppUpdates: value));
             },
           ),
 

@@ -14,7 +14,7 @@ class EventTileWidget extends StatelessWidget {
   final Event event;
   final bool isSelected;
   final VoidCallback onTap;
-  final String? collectionPath;
+  final String? appPath;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
@@ -23,16 +23,16 @@ class EventTileWidget extends StatelessWidget {
     required this.event,
     required this.isSelected,
     required this.onTap,
-    this.collectionPath,
+    this.appPath,
     this.onEdit,
     this.onDelete,
   }) : super(key: key);
 
   String? _getThumbnailPath() {
-    if (kIsWeb || collectionPath == null) return null;
+    if (kIsWeb || appPath == null) return null;
     if (!event.hasFlyer) return null;
     final year = event.id.substring(0, 4);
-    return '$collectionPath/$year/${event.id}/${event.primaryFlyer}';
+    return '$appPath/$year/${event.id}/${event.primaryFlyer}';
   }
 
   @override

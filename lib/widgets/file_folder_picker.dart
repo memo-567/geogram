@@ -156,6 +156,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   final Set<String> _calculatingFolders = {};
   final Map<String, String?> _thumbnailCache = {};  // path -> thumbnail path
   final Set<String> _loadingThumbnails = {};
+  final List<FileSystemItem> _clipboardItems = [];
   String? _error;
   bool _isGridView = false;
   final FileBrowserCacheService _cacheService = FileBrowserCacheService();
@@ -541,6 +542,16 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   void _deselectAll() {
     setState(() {
       _selectedPaths.clear();
+    });
+  }
+
+  /// Programmatically select a single file by its absolute path,
+  /// highlighting it in the tree view.
+  void selectFile(String path) {
+    setState(() {
+      _selectedPaths
+        ..clear()
+        ..add(path);
     });
   }
 
@@ -1183,16 +1194,21 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                   ],
                 ),
               ),
-              // Navigate into folder
-              if (item.isDirectory)
-                IconButton(
+              // Actions menu
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  iconSize: 20,
                   icon: Icon(
-                    Icons.chevron_right_rounded,
+                    Icons.more_vert_rounded,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
-                  onPressed: () => _navigateTo(Directory(item.path)),
-                  tooltip: 'Open folder',
+                  onPressed: () => _showItemActions(context, item),
+                  tooltip: 'Actions',
                 ),
+              ),
             ],
           ),
         ),
@@ -1322,6 +1338,30 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                     ),
                   ),
                 ),
+
+              // Actions menu
+              if (!isSelected)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: IconButton(
+                      padding: EdgeInsets.zero,
+                      iconSize: 16,
+                      icon: Icon(
+                        Icons.more_vert_rounded,
+                        color: Colors.white,
+                        shadows: [
+                          Shadow(color: Colors.black54, blurRadius: 4),
+                        ],
+                      ),
+                      onPressed: () => _showItemActions(context, item),
+                      tooltip: 'Actions',
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -1383,6 +1423,27 @@ class FileFolderPickerState extends State<FileFolderPicker> {
                   ),
                 ),
               ),
+
+            // Actions menu
+            if (!isSelected)
+              Positioned(
+                top: 2,
+                right: 2,
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: IconButton(
+                    padding: EdgeInsets.zero,
+                    iconSize: 16,
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: () => _showItemActions(context, item),
+                    tooltip: 'Actions',
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -1403,32 +1464,39 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Icon(
-              Icons.folder_open_rounded,
-              size: 40,
-              color: theme.colorScheme.onSurfaceVariant,
+    return Column(
+      children: [
+        if (_canNavigateUp) _buildParentDirListItem(theme),
+        Expanded(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(
+                    Icons.folder_open_rounded,
+                    size: 40,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'This folder is empty',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            'This folder is empty',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1473,6 +1541,46 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Widget _buildStatusBar(ThemeData theme) {
+    if (_clipboardItems.isNotEmpty) {
+      final label = _clipboardItems.length == 1
+          ? _clipboardItems.first.name
+          : '${_clipboardItems.length} items copied';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.tertiaryContainer,
+          border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.content_paste_rounded, size: 18, color: theme.colorScheme.onTertiaryContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onTertiaryContainer,
+                  fontWeight: FontWeight.w500,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              onPressed: () => setState(() => _clipboardItems.clear()),
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 4),
+            FilledButton.icon(
+              onPressed: _pasteItems,
+              icon: const Icon(Icons.content_paste_rounded, size: 18),
+              label: const Text('Paste here'),
+            ),
+          ],
+        ),
+      );
+    }
+
     final files = _items.where((item) => !item.isDirectory);
     final fileCount = files.length;
     final totalSize = files.fold<int>(0, (sum, item) => sum + item.size);
@@ -1574,6 +1682,270 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         ),
       ),
     );
+  }
+
+  void _showItemActions(BuildContext context, FileSystemItem item) {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  _buildIconBox(_getItemIcon(item), _getIconColor(item), 36),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.edit_rounded),
+              title: const Text('Rename'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _renameItem(item);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_copy_rounded),
+              title: const Text('Copy'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _copyItem(item);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy_rounded),
+              title: const Text('Copy path'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Clipboard.setData(ClipboardData(text: item.path));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Path copied to clipboard')),
+                );
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_rounded, color: theme.colorScheme.error),
+              title: Text('Delete', style: TextStyle(color: theme.colorScheme.error)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _deleteItem(item);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _renameItem(FileSystemItem item) {
+    final controller = TextEditingController(text: item.name);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'New name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) {
+            Navigator.pop(ctx);
+            _performRename(item, controller.text.trim());
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _performRename(item, controller.text.trim());
+            },
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _performRename(FileSystemItem item, String newName) async {
+    if (newName.isEmpty || newName == item.name) return;
+    final dir = p.dirname(item.path);
+    final newPath = p.join(dir, newName);
+    try {
+      if (item.isDirectory) {
+        await Directory(item.path).rename(newPath);
+      } else {
+        await File(item.path).rename(newPath);
+      }
+      _loadDirectory();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Rename failed: $e')),
+        );
+      }
+    }
+  }
+
+  void _copyItem(FileSystemItem item) {
+    setState(() {
+      _clipboardItems
+        ..clear()
+        ..add(item);
+    });
+    _copyToSystemClipboard([item]);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${item.name} ready to paste')),
+    );
+  }
+
+  static const _fileLauncherChannel = MethodChannel('dev.geogram/file_launcher');
+
+  /// Copy file paths to the system clipboard so they can be pasted in
+  /// external apps (Telegram, file managers, etc.).
+  Future<void> _copyToSystemClipboard(List<FileSystemItem> items) async {
+    if (Platform.isAndroid) {
+      try {
+        await _fileLauncherChannel.invokeMethod('copyToClipboard', {
+          'paths': items.map((i) => i.path).toList(),
+        });
+      } catch (_) {
+        // Method channel not available — ignore silently
+      }
+    } else if (Platform.isLinux) {
+      final uris = items.map((i) => Uri.file(i.path).toString()).join('\n');
+      final payload = 'copy\n$uris';
+      try {
+        final process = await Process.start(
+          'xclip',
+          ['-selection', 'clipboard', '-t', 'x-special/gnome-copied-files'],
+        );
+        process.stdin.write(payload);
+        await process.stdin.close();
+        await process.exitCode;
+      } catch (_) {
+        // xclip not available — ignore silently
+      }
+    }
+  }
+
+  Future<String> _resolveDestPath(String dir, String name, bool isDirectory) async {
+    var destPath = p.join(dir, name);
+    if (isDirectory ? !await Directory(destPath).exists() : !await File(destPath).exists()) {
+      return destPath;
+    }
+    final ext = isDirectory ? '' : p.extension(name);
+    final base = isDirectory ? name : p.basenameWithoutExtension(name);
+    var counter = 1;
+    do {
+      final suffix = counter == 1 ? ' (copy)' : ' (copy $counter)';
+      destPath = p.join(dir, '$base$suffix$ext');
+      counter++;
+    } while (isDirectory ? await Directory(destPath).exists() : await File(destPath).exists());
+    return destPath;
+  }
+
+  Future<void> _copyDirectory(Directory source, Directory destination) async {
+    await destination.create(recursive: true);
+    await for (final entity in source.list()) {
+      final newPath = p.join(destination.path, p.basename(entity.path));
+      if (entity is Directory) {
+        await _copyDirectory(entity, Directory(newPath));
+      } else if (entity is File) {
+        await entity.copy(newPath);
+      }
+    }
+  }
+
+  Future<void> _pasteItems() async {
+    for (final item in _clipboardItems) {
+      final destPath = await _resolveDestPath(
+        _currentDirectory.path,
+        item.name,
+        item.isDirectory,
+      );
+      try {
+        if (item.isDirectory) {
+          await _copyDirectory(Directory(item.path), Directory(destPath));
+        } else {
+          await File(item.path).copy(destPath);
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Paste failed: $e')),
+          );
+        }
+        return;
+      }
+    }
+    setState(() => _clipboardItems.clear());
+    _loadDirectory();
+  }
+
+  void _deleteItem(FileSystemItem item) {
+    final theme = Theme.of(context);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete'),
+        content: Text('Delete "${item.name}"? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.colorScheme.error,
+              foregroundColor: theme.colorScheme.onError,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _performDelete(item);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _performDelete(FileSystemItem item) async {
+    try {
+      if (item.isDirectory) {
+        await Directory(item.path).delete(recursive: true);
+      } else {
+        await File(item.path).delete();
+      }
+      _selectedPaths.remove(item.path);
+      _loadDirectory();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed: $e')),
+        );
+      }
+    }
   }
 
   IconData _getItemIcon(FileSystemItem item) {

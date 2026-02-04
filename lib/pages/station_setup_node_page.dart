@@ -142,7 +142,7 @@ class _StationSetupNodePageState extends State<StationSetupNodePage> {
                   SizedBox(height: 8),
                   Text('Network: ${_selectedNetwork!.name}'),
                   Text('Root: ${_selectedNetwork!.rootCallsign}'),
-                  Text('Collections: ${_selectedNetwork!.collections.all.join(", ")}'),
+                  Text('Collections: ${_selectedNetwork!.apps.all.join(", ")}'),
                   Text('Policy: ${_selectedNetwork!.policy.nodeRegistration.name} registration'),
                 ],
               ),
@@ -550,7 +550,7 @@ class _StationSetupNodePageState extends State<StationSetupNodePage> {
               )
             : null,
         channels: channels,
-        supportedCollections: _selectedNetwork!.collections.all,
+        supportedApps: _selectedNetwork!.apps.all,
       );
 
       await _stationNodeService.joinAsNode(

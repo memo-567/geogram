@@ -25,14 +25,14 @@ import 'wallet_settings_page.dart';
 
 /// Main wallet browser page with summary and debt/receipt lists
 class WalletBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
 
   const WalletBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
   });
 
@@ -75,7 +75,7 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
   }
 
   Future<void> _initializeService() async {
-    await _service.initializeCollection(widget.collectionPath);
+    await _service.initializeApp(widget.appPath);
     await Currencies.loadCustomCurrencies();
 
     final profile = _profileService.getProfile();
@@ -131,10 +131,10 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
   }
 
   String _getDisplayTitle() {
-    if (widget.collectionTitle.startsWith('collection_type_')) {
-      return widget.i18n.t(widget.collectionTitle);
+    if (widget.appTitle.startsWith('app_type_')) {
+      return widget.i18n.t(widget.appTitle);
     }
-    return widget.collectionTitle;
+    return widget.appTitle;
   }
 
   void _showFilterSheet() {
@@ -480,7 +480,7 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
       context,
       MaterialPageRoute(
         builder: (_) => CreateDebtPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
         ),
       ),
@@ -495,7 +495,7 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
       context,
       MaterialPageRoute(
         builder: (_) => CreateReceiptPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
         ),
       ),
@@ -510,7 +510,7 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
       context,
       MaterialPageRoute(
         builder: (_) => DebtDetailPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           debtId: debt.id,
           i18n: widget.i18n,
         ),
@@ -526,7 +526,7 @@ class _WalletBrowserPageState extends State<WalletBrowserPage>
       context,
       MaterialPageRoute(
         builder: (_) => ReceiptDetailPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           receiptId: receipt.id,
           i18n: widget.i18n,
         ),

@@ -21,15 +21,15 @@ enum ReaderCategory {
 
 /// Main Reader home page with category icons
 class ReaderHomePage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
   final String? ownerCallsign;
 
   const ReaderHomePage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
     this.ownerCallsign,
   });
@@ -57,7 +57,7 @@ class _ReaderHomePageState extends State<ReaderHomePage> {
   }
 
   Future<void> _initializeService() async {
-    await _service.initializeCollection(widget.collectionPath);
+    await _service.initializeApp(widget.appPath);
     await _loadStats();
     if (mounted) {
       setState(() => _loading = false);
@@ -99,19 +99,19 @@ class _ReaderHomePageState extends State<ReaderHomePage> {
     switch (category) {
       case ReaderCategory.rss:
         page = RssSourcesPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
         );
         break;
       case ReaderCategory.manga:
         page = MangaSourcesPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
         );
         break;
       case ReaderCategory.books:
         page = BookBrowserPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
         );
         break;
@@ -133,7 +133,7 @@ class _ReaderHomePageState extends State<ReaderHomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collectionTitle),
+        title: Text(widget.appTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_outlined),

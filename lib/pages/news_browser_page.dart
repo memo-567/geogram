@@ -8,8 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import '../models/news_article.dart';
-import '../models/collection.dart';
-import '../services/collection_service.dart';
+import '../models/app.dart';
+import '../services/app_service.dart';
 import '../services/news_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -18,11 +18,11 @@ import '../dialogs/new_news_dialog.dart';
 
 /// News browser page with list and detail view
 class NewsBrowserPage extends StatefulWidget {
-  final Collection collection;
+  final App app;
 
   const NewsBrowserPage({
     Key? key,
-    required this.collection,
+    required this.app,
   }) : super(key: key);
 
   @override
@@ -67,20 +67,20 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
     _currentLanguage = appLang.split('_').first;
 
     // Set profile storage for encrypted storage support
-    final collectionPath = widget.collection.storagePath ?? '';
-    final profileStorage = CollectionService().profileStorage;
+    final appPath = widget.app.storagePath ?? '';
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        collectionPath,
+        appPath,
       );
       _newsService.setStorage(scopedStorage);
     } else {
-      _newsService.setStorage(FilesystemProfileStorage(collectionPath));
+      _newsService.setStorage(FilesystemProfileStorage(appPath));
     }
 
-    await _newsService.initializeCollection(
-      collectionPath,
+    await _newsService.initializeApp(
+      appPath,
       creatorNpub: _currentUserNpub,
     );
 
@@ -388,7 +388,7 @@ class _NewsBrowserPageState extends State<NewsBrowserPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collection.title),
+        title: Text(widget.app.title),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),

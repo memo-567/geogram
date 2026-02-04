@@ -705,7 +705,7 @@ class DevicesService {
         name: normalizedCallsign, // Use callsign as name until we know more
         isOnline: true,
         hasCachedData: false,
-        collections: [],
+        apps: [],
         connectionMethods: ['usb'],
         lastSeen: DateTime.now(),
       );
@@ -933,7 +933,7 @@ class DevicesService {
           npub: bleDevice.npub,
           isOnline: true,
           hasCachedData: false,
-          collections: [],
+          apps: [],
           latitude: bleDevice.latitude,
           longitude: bleDevice.longitude,
           connectionMethods: connectionMethods,
@@ -1032,7 +1032,7 @@ class DevicesService {
               ? DateTime.tryParse(statusCache!['lastFetched'] as String)
               : null,
           hasCachedData: true,
-          collections: [],
+          apps: [],
           latitude:
               statusCache?['latitude'] as double? ?? matchingRelay?.latitude,
           longitude:
@@ -1071,7 +1071,7 @@ class DevicesService {
               isOnline: station.isConnected,
               lastSeen: station.lastChecked,
               hasCachedData: false,
-              collections: [],
+              apps: [],
               latitude: station.latitude,
               longitude: station.longitude,
               connectionMethods: station.isConnected ? ['internet'] : [],
@@ -2179,7 +2179,7 @@ class DevicesService {
           url: url,
           isOnline: true,
           hasCachedData: false,
-          collections: [],
+          apps: [],
           latitude: latitude,
           longitude: longitude,
           connectionMethods: ['internet'],
@@ -2286,7 +2286,7 @@ class DevicesService {
           url: localUrl,
           isOnline: true,
           hasCachedData: false,
-          collections: [],
+          apps: [],
           latitude: result.latitude,
           longitude: result.longitude,
           connectionMethods: [connectionType],
@@ -2451,7 +2451,7 @@ class DevicesService {
             npub: deviceData['npub'] as String?,
             isOnline: isOnlineViaStation,
             hasCachedData: false,
-            collections: [],
+            apps: [],
             latitude: deviceData['latitude'] as double?,
             longitude: deviceData['longitude'] as double?,
             preferredColor: deviceData['color'] as String?,
@@ -2480,7 +2480,7 @@ class DevicesService {
   }
 
   /// Fetch collections from a remote device
-  Future<List<RemoteCollection>> fetchCollections(String callsign) async {
+  Future<List<RemoteApp>> fetchApps(String callsign) async {
     final device = _devices[callsign.toUpperCase()];
     if (device == null) return [];
 
@@ -2488,17 +2488,17 @@ class DevicesService {
     final isOnline = await checkReachability(callsign);
 
     if (isOnline) {
-      return await _fetchCollectionsOnline(device);
+      return await _fetchAppsOnline(device);
     } else {
-      return await _loadCachedCollections(callsign);
+      return await _loadCachedApps(callsign);
     }
   }
 
   /// Fetch collections from online device using ConnectionManager
-  Future<List<RemoteCollection>> _fetchCollectionsOnline(
+  Future<List<RemoteApp>> _fetchAppsOnline(
     RemoteDevice device,
   ) async {
-    final collections = <RemoteCollection>[];
+    final remoteApps = <RemoteApp>[];
 
     // Sync device to ConnectionManager first
     syncDeviceToConnectionManager(device.callsign);
@@ -2522,9 +2522,9 @@ class DevicesService {
               final lowerName = name.toLowerCase();
 
               // Only include known collection types (same as local collections)
-              if (_isKnownCollectionType(lowerName)) {
-                collections.add(
-                  RemoteCollection(
+              if (_isKnownAppType(lowerName)) {
+                remoteApps.add(
+                  RemoteApp(
                     name: name,
                     deviceCallsign: device.callsign,
                     type: lowerName,
@@ -2541,7 +2541,7 @@ class DevicesService {
     }
 
     // If no collections found via /files, check if it's a station with chat
-    if (collections.isEmpty) {
+    if (remoteApps.isEmpty) {
       try {
         final chatResponse = await makeDeviceApiRequest(
           callsign: device.callsign,
@@ -2553,8 +2553,8 @@ class DevicesService {
           final data = json.decode(chatResponse.body);
           if (data['rooms'] is List && (data['rooms'] as List).isNotEmpty) {
             // This station has chat rooms, add a chat collection
-            collections.add(
-              RemoteCollection(
+            remoteApps.add(
+              RemoteApp(
                 name: 'Chat',
                 deviceCallsign: device.callsign,
                 type: 'chat',
@@ -2570,33 +2570,33 @@ class DevicesService {
     }
 
     // Update device and cache if we got collections
-    if (collections.isNotEmpty) {
-      await _updateDeviceCollections(device, collections);
-      return collections;
+    if (remoteApps.isNotEmpty) {
+      await _updateDeviceApps(device, remoteApps);
+      return remoteApps;
     }
 
     // Fall back to cached collections
-    return await _loadCachedCollections(device.callsign);
+    return await _loadCachedApps(device.callsign);
   }
 
   /// Update device with fetched collections and cache them
-  Future<void> _updateDeviceCollections(
+  Future<void> _updateDeviceApps(
     RemoteDevice device,
-    List<RemoteCollection> collections,
+    List<RemoteApp> remoteApps,
   ) async {
-    device.collections = collections;
+    device.apps = remoteApps;
     device.lastFetched = DateTime.now();
 
     // Cache the collections if we got any
-    if (collections.isNotEmpty) {
-      await _cacheCollections(device.callsign, collections);
+    if (remoteApps.isNotEmpty) {
+      await _cacheApps(device.callsign, remoteApps);
     }
 
     _notifyListeners();
   }
 
   /// Check if folder name is a known collection type
-  bool _isKnownCollectionType(String name) {
+  bool _isKnownAppType(String name) {
     const knownTypes = {
       'chat',
       'forum',
@@ -2615,7 +2615,7 @@ class DevicesService {
   }
 
   /// Load cached collections for offline browsing
-  Future<List<RemoteCollection>> _loadCachedCollections(String callsign) async {
+  Future<List<RemoteApp>> _loadCachedApps(String callsign) async {
     try {
       final cacheDir = await _cacheService.getDeviceCacheDir(callsign);
       if (cacheDir == null) return [];
@@ -2627,7 +2627,7 @@ class DevicesService {
         final data = json.decode(content) as List;
 
         return data
-            .map((item) => RemoteCollection.fromJson(item, callsign))
+            .map((item) => RemoteApp.fromJson(item, callsign))
             .toList();
       }
     } catch (e) {
@@ -2638,9 +2638,9 @@ class DevicesService {
   }
 
   /// Cache collections for offline access
-  Future<void> _cacheCollections(
+  Future<void> _cacheApps(
     String callsign,
-    List<RemoteCollection> collections,
+    List<RemoteApp> remoteApps,
   ) async {
     try {
       final cacheDir = await _cacheService.getDeviceCacheDir(callsign);
@@ -2648,7 +2648,7 @@ class DevicesService {
 
       final collectionsFile = File('${cacheDir.path}/collections.json');
 
-      final data = collections.map((c) => c.toJson()).toList();
+      final data = remoteApps.map((c) => c.toJson()).toList();
       await collectionsFile.writeAsString(json.encode(data));
     } catch (e) {
       LogService().log('DevicesService: Error caching collections: $e');
@@ -2719,7 +2719,7 @@ class DevicesService {
         url: url,
         isOnline: isOnline,
         hasCachedData: false,
-        collections: [],
+        apps: [],
       );
       _notifyListeners();
     } else {
@@ -3013,7 +3013,7 @@ class RemoteDevice {
   DateTime? lastSeen;
   DateTime? lastFetched;
   bool hasCachedData;
-  List<RemoteCollection> collections;
+  List<RemoteApp> apps;
   double? latitude;
   double? longitude;
   List<String> connectionMethods;
@@ -3047,7 +3047,7 @@ class RemoteDevice {
     this.lastSeen,
     this.lastFetched,
     this.hasCachedData = false,
-    required this.collections,
+    required this.apps,
     this.latitude,
     this.longitude,
     this.connectionMethods = const [],
@@ -3169,7 +3169,7 @@ class RemoteDevice {
 }
 
 /// Represents a collection on a remote device
-class RemoteCollection {
+class RemoteApp {
   final String name;
   final String deviceCallsign;
   final String type;
@@ -3177,7 +3177,7 @@ class RemoteCollection {
   final int? fileCount;
   final String? visibility;
 
-  RemoteCollection({
+  RemoteApp({
     required this.name,
     required this.deviceCallsign,
     required this.type,
@@ -3186,14 +3186,14 @@ class RemoteCollection {
     this.visibility,
   });
 
-  factory RemoteCollection.fromJson(
+  factory RemoteApp.fromJson(
     Map<String, dynamic> json,
     String deviceCallsign,
   ) {
-    return RemoteCollection(
+    return RemoteApp(
       name: json['name'] ?? json['id'] ?? 'Unknown',
       deviceCallsign: deviceCallsign,
-      type: json['type'] ?? 'files',
+      type: json['type'] ?? 'shared_folder',
       description: json['description'],
       fileCount: json['fileCount'] ?? json['file_count'],
       visibility: json['visibility'],

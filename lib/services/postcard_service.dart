@@ -16,21 +16,21 @@ class PostcardService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize postcard service for a collection
-  Future<void> initializeCollection(String collectionPath) async {
-    print('PostcardService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath) async {
+    print('PostcardService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Ensure postcards directory exists using storage
     await _storage.createDirectory('postcards');
@@ -39,7 +39,7 @@ class PostcardService {
 
   /// Get available years (folders in postcards directory)
   Future<List<int>> getYears() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('postcards')) return [];
 
@@ -64,7 +64,7 @@ class PostcardService {
     int? year,
     String? filterByStatus,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final postcards = <Postcard>[];
     final years = year != null ? [year] : await getYears();
@@ -103,7 +103,7 @@ class PostcardService {
 
   /// Load full postcard with stamps, delivery receipt, and acknowledgment
   Future<Postcard?> loadPostcard(String postcardId) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Extract year from postcardId (format: YYYY-MM-DD_msg-{id})
     final year = postcardId.substring(0, 4);
@@ -197,7 +197,7 @@ class PostcardService {
     bool paymentRequested = false,
     String? messageId,
   }) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     try {
       final now = DateTime.now();
@@ -266,7 +266,7 @@ class PostcardService {
     required String receivedVia,
     required String signature,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = postcardId.substring(0, 4);
@@ -320,7 +320,7 @@ class PostcardService {
     String? deliveryNote,
     required String signature,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = postcardId.substring(0, 4);
@@ -375,7 +375,7 @@ class PostcardService {
     required String receivedVia,
     required String signature,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = postcardId.substring(0, 4);
@@ -425,7 +425,7 @@ class PostcardService {
     String? acknowledgmentNote,
     required String signature,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = postcardId.substring(0, 4);
@@ -489,7 +489,7 @@ class PostcardService {
 
   /// Load contributor files from contributors folder
   Future<List<String>> loadContributorFiles(String postcardId) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     try {
       final year = postcardId.substring(0, 4);
@@ -529,7 +529,7 @@ class PostcardService {
 
   /// Mark postcard as expired
   Future<bool> markAsExpired(String postcardId) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       final year = postcardId.substring(0, 4);

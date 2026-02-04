@@ -36,12 +36,12 @@ import 'photo_viewer_page.dart';
 
 /// Page for viewing and editing report details
 class ReportDetailPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Report? report; // null for new report
 
   const ReportDetailPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     this.report,
   });
 
@@ -67,12 +67,12 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
   bool get _isFromStation => _report?.metadata['from_station'] == 'true';
 
   Future<String?> _resolveStationAlertPath() async {
-    if (_report == null || widget.collectionPath.isEmpty) return null;
+    if (_report == null || widget.appPath.isEmpty) return null;
     final existing = await AlertFolderUtils.findAlertPath(
-      widget.collectionPath,
+      widget.appPath,
       _report!.folderName,
     );
-    return existing ?? path.join(widget.collectionPath, _report!.folderName);
+    return existing ?? path.join(widget.appPath, _report!.folderName);
   }
 
   /// Save station alert to disk (for persisting likes, verifications, comments)
@@ -87,7 +87,7 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
       final alertDir = Directory(alertPath);
       final reportFilePath = path.join(alertDir.path, 'report.txt');
 
-      LogService().log('ReportDetailPage: _saveStationAlert() - collectionPath: ${widget.collectionPath}');
+      LogService().log('ReportDetailPage: _saveStationAlert() - appPath: ${widget.appPath}');
       LogService().log('ReportDetailPage: _saveStationAlert() - folderName: ${_report!.folderName}');
       LogService().log('ReportDetailPage: _saveStationAlert() - alertDir: ${alertDir.path}');
       LogService().log('ReportDetailPage: _saveStationAlert() - reportFilePath: $reportFilePath');
@@ -711,9 +711,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null) return;
 
     try {
-      // Build correct path: collectionPath/active/{regionFolder}/{folderName}/images
+      // Build correct path: appPath/active/{regionFolder}/{folderName}/images
       final alertPath = path.join(
-        widget.collectionPath,
+        widget.appPath,
         'active',
         _report!.regionFolder,
         _report!.folderName,
@@ -887,9 +887,9 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
     if (_report == null || _imageFilePaths.isEmpty) return;
 
     try {
-      // Build correct path: collectionPath/active/{regionFolder}/{folderName}/images
+      // Build correct path: appPath/active/{regionFolder}/{folderName}/images
       final alertPath = path.join(
-        widget.collectionPath,
+        widget.appPath,
         'active',
         _report!.regionFolder,
         _report!.folderName,

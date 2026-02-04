@@ -12,7 +12,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'signing_service.dart';
-import 'collection_service.dart';
+import 'app_service.dart';
 import 'debug_controller.dart';
 import 'security_service.dart';
 import 'storage_config.dart';
@@ -131,18 +131,18 @@ class LogApiService {
       final chatService = ChatService();
 
       // Already initialized
-      if (chatService.collectionPath != null) {
+      if (chatService.appPath != null) {
         return true;
       }
 
       // Find chat collection in active profile's directory
-      final collectionsDir = CollectionService().collectionsDirectory;
-      if (collectionsDir == null) {
+      final appsDir = AppService().appsDirectory;
+      if (appsDir == null) {
         LogService().log('LogApiService: No collections directory available');
         return false;
       }
 
-      final chatDir = io.Directory('$collectionsDir/chat');
+      final chatDir = io.Directory('$appsDir/chat');
       if (!await chatDir.exists()) {
         if (createIfMissing) {
           await chatDir.create(recursive: true);
@@ -157,7 +157,7 @@ class LogApiService {
       final npub = activeProfile.npub;
 
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
@@ -169,7 +169,7 @@ class LogApiService {
       }
 
       // Initialize ChatService with the chat collection
-      await chatService.initializeCollection(chatDir.path, creatorNpub: npub);
+      await chatService.initializeApp(chatDir.path, creatorNpub: npub);
       LogService().log('LogApiService: ChatService lazily initialized with ${chatService.channels.length} channels');
       return true;
     } catch (e) {
@@ -760,15 +760,15 @@ class LogApiService {
       // Get the collections base path
       final homeDir = io.Platform.environment['HOME'] ??
                       io.Platform.environment['USERPROFILE'] ?? '';
-      final collectionsBase = path.join(homeDir, 'Documents', 'geogram', 'collections');
+      final appsBase = path.join(homeDir, 'Documents', 'geogram', 'collections');
 
       // Resolve the requested path
       final requestedPath = relativePath.isEmpty
-          ? collectionsBase
-          : path.join(collectionsBase, relativePath);
+          ? appsBase
+          : path.join(appsBase, relativePath);
 
       // Security: ensure path is within collections directory
-      final normalizedBase = path.normalize(collectionsBase);
+      final normalizedBase = path.normalize(appsBase);
       final normalizedPath = path.normalize(requestedPath);
       if (!normalizedPath.startsWith(normalizedBase)) {
         return shelf.Response.forbidden(
@@ -802,8 +802,8 @@ class LogApiService {
         final file = io.File(requestedPath);
         if (await file.exists()) {
           // Check if parent collection is public
-          final collectionPath = _getCollectionPath(relativePath, collectionsBase);
-          if (collectionPath != null && !await _isCollectionPublic(collectionPath)) {
+          final appPath = _getAppPath(relativePath, appsBase);
+          if (appPath != null && !await _isAppPublic(appPath)) {
             return shelf.Response.forbidden(
               jsonEncode({'error': 'Access denied: collection is not public'}),
               headers: headers,
@@ -833,8 +833,8 @@ class LogApiService {
 
       // If browsing inside a collection, verify it's public
       if (!isRootLevel) {
-        final collectionPath = _getCollectionPath(relativePath, collectionsBase);
-        if (collectionPath != null && !await _isCollectionPublic(collectionPath)) {
+        final appPath = _getAppPath(relativePath, appsBase);
+        if (appPath != null && !await _isAppPublic(appPath)) {
           return shelf.Response.forbidden(
             jsonEncode({'error': 'Access denied: collection is not public'}),
             headers: headers,
@@ -857,14 +857,14 @@ class LogApiService {
           }
 
           // Filter by visibility
-          if (isDirectory && !await _isCollectionPublic(entity.path)) {
+          if (isDirectory && !await _isAppPublic(entity.path)) {
             continue;
           }
 
           // For collections, try to get size from tree.json
           int? size;
           if (isDirectory) {
-            size = await _getCollectionSize(entity.path);
+            size = await _getAppSize(entity.path);
           } else {
             final stat = await entity.stat();
             size = stat.size;
@@ -879,7 +879,7 @@ class LogApiService {
         }
       } else {
         // Inside a collection - use tree.json for accurate sizes
-        entries = await _getEntriesFromTreeJson(relativePath, collectionsBase);
+        entries = await _getEntriesFromTreeJson(relativePath, appsBase);
       }
 
       // Sort: directories first, then by name
@@ -893,7 +893,7 @@ class LogApiService {
       return shelf.Response.ok(
         jsonEncode({
           'path': relativePath.isEmpty ? '/' : '/$relativePath',
-          'base': collectionsBase,
+          'base': appsBase,
           'total': entries.length,
           'entries': entries,
         }),
@@ -909,17 +909,17 @@ class LogApiService {
   }
 
   /// Get the collection root path from a relative path
-  String? _getCollectionPath(String relativePath, String collectionsBase) {
+  String? _getAppPath(String relativePath, String appsBase) {
     if (relativePath.isEmpty) return null;
     final parts = relativePath.split('/');
     if (parts.isEmpty) return null;
-    return path.join(collectionsBase, parts.first);
+    return path.join(appsBase, parts.first);
   }
 
   /// Check if a collection is public by reading its security.json
-  Future<bool> _isCollectionPublic(String collectionPath) async {
+  Future<bool> _isAppPublic(String appPath) async {
     try {
-      final securityFile = io.File(path.join(collectionPath, 'extra', 'security.json'));
+      final securityFile = io.File(path.join(appPath, 'extra', 'security.json'));
       if (!await securityFile.exists()) {
         // No security file = assume public (for backwards compatibility)
         return true;
@@ -940,9 +940,9 @@ class LogApiService {
   }
 
   /// Get total size of a collection from its tree.json
-  Future<int> _getCollectionSize(String collectionPath) async {
+  Future<int> _getAppSize(String appPath) async {
     try {
-      final treeJsonFile = io.File(path.join(collectionPath, 'extra', 'tree.json'));
+      final treeJsonFile = io.File(path.join(appPath, 'extra', 'tree.json'));
       if (!await treeJsonFile.exists()) {
         return 0;
       }
@@ -970,7 +970,7 @@ class LogApiService {
   /// Get entries from tree.json for a given path inside a collection
   Future<List<Map<String, dynamic>>> _getEntriesFromTreeJson(
     String relativePath,
-    String collectionsBase,
+    String appsBase,
   ) async {
     final entries = <Map<String, dynamic>>[];
 
@@ -979,15 +979,15 @@ class LogApiService {
       final parts = relativePath.split('/');
       if (parts.isEmpty) return entries;
 
-      final collectionName = parts.first;
-      final collectionPath = path.join(collectionsBase, collectionName);
+      final appFolderName = parts.first;
+      final appPath = path.join(appsBase, appFolderName);
       final subPath = parts.length > 1 ? parts.sublist(1).join('/') : '';
 
       // Read tree.json
-      final treeJsonFile = io.File(path.join(collectionPath, 'extra', 'tree.json'));
+      final treeJsonFile = io.File(path.join(appPath, 'extra', 'tree.json'));
       if (!await treeJsonFile.exists()) {
         // Fall back to filesystem if tree.json doesn't exist
-        return await _listDirectoryFallback(path.join(collectionsBase, relativePath));
+        return await _listDirectoryFallback(path.join(appsBase, relativePath));
       }
 
       final content = await treeJsonFile.readAsString();
@@ -1011,7 +1011,7 @@ class LogApiService {
 
           if (found == null) {
             // Path not found in tree.json, fall back to filesystem
-            return await _listDirectoryFallback(path.join(collectionsBase, relativePath));
+            return await _listDirectoryFallback(path.join(appsBase, relativePath));
           }
 
           currentLevel = found['children'] as List<dynamic>?;
@@ -1033,7 +1033,7 @@ class LogApiService {
     } catch (e) {
       LogService().log('LogApiService: Error reading tree.json: $e');
       // Fall back to filesystem on error
-      return await _listDirectoryFallback(path.join(collectionsBase, relativePath));
+      return await _listDirectoryFallback(path.join(appsBase, relativePath));
     }
 
     return entries;
@@ -1086,13 +1086,13 @@ class LogApiService {
       // Get the collections base path
       final homeDir = io.Platform.environment['HOME'] ??
                       io.Platform.environment['USERPROFILE'] ?? '';
-      final collectionsBase = path.join(homeDir, 'Documents', 'geogram', 'collections');
+      final appsBase = path.join(homeDir, 'Documents', 'geogram', 'collections');
 
       // Resolve the requested path
-      final requestedPath = path.join(collectionsBase, relativePath);
+      final requestedPath = path.join(appsBase, relativePath);
 
       // Security: ensure path is within collections directory
-      final normalizedBase = path.normalize(collectionsBase);
+      final normalizedBase = path.normalize(appsBase);
       final normalizedPath = path.normalize(requestedPath);
       if (!normalizedPath.startsWith(normalizedBase)) {
         return shelf.Response.forbidden(
@@ -1113,8 +1113,8 @@ class LogApiService {
       }
 
       // Check if parent collection is public
-      final collectionPath = _getCollectionPath(relativePath, collectionsBase);
-      if (collectionPath != null && !await _isCollectionPublic(collectionPath)) {
+      final appPath = _getAppPath(relativePath, appsBase);
+      if (appPath != null && !await _isAppPublic(appPath)) {
         return shelf.Response.forbidden(
           jsonEncode({'error': 'Access denied: collection is not public'}),
           headers: headers,
@@ -2323,9 +2323,9 @@ class LogApiService {
   }
 
   /// Load room config from disk (config.json in room folder)
-  Future<ChatChannelConfig?> _loadRoomConfig(String collectionPath, String roomId) async {
+  Future<ChatChannelConfig?> _loadRoomConfig(String appPath, String roomId) async {
     try {
-      final configPath = '$collectionPath/$roomId/config.json';
+      final configPath = '$appPath/$roomId/config.json';
       final configFile = io.File(configPath);
       if (await configFile.exists()) {
         final content = await configFile.readAsString();
@@ -2354,8 +2354,8 @@ class LogApiService {
     // Get visibility from config
     // If config not loaded in channel, try to load from disk
     var config = channel.config;
-    if (config == null && chatService.collectionPath != null) {
-      config = await _loadRoomConfig(chatService.collectionPath!, roomId);
+    if (config == null && chatService.appPath != null) {
+      config = await _loadRoomConfig(chatService.appPath!, roomId);
     }
 
     // Security: Default to RESTRICTED if config is missing (fail closed)
@@ -2441,7 +2441,7 @@ class LogApiService {
       final chatService = ChatService();
 
       // Check if chat service is initialized
-      if (!initialized || chatService.collectionPath == null) {
+      if (!initialized || chatService.appPath == null) {
         LogService().log('LogApiService: Failed to initialize chat service');
         return shelf.Response.ok(
           jsonEncode({
@@ -2768,7 +2768,7 @@ class LogApiService {
       }
 
       // Check if chat service is initialized
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'No chat collection loaded'}),
           headers: headers,
@@ -2881,7 +2881,7 @@ class LogApiService {
       }
 
       // Check if chat service is initialized
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'No chat collection loaded'}),
           headers: headers,
@@ -3282,7 +3282,7 @@ class LogApiService {
       final chatService = ChatService();
 
       // Check if chat service is initialized
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'No chat collection loaded'}),
           headers: headers,
@@ -3311,8 +3311,8 @@ class LogApiService {
         );
       }
 
-      final collectionPath = chatService.collectionPath!;
-      final channelPath = path.join(collectionPath, channel.folder);
+      final appPath = chatService.appPath!;
+      final channelPath = path.join(appPath, channel.folder);
       final files = <Map<String, dynamic>>[];
 
       // For main channel, files are in year/files/ subfolders
@@ -3405,11 +3405,11 @@ class LogApiService {
       await _initializeChatServiceIfNeeded();
       final chatService = ChatService();
 
-      if (chatService.collectionPath != null) {
+      if (chatService.appPath != null) {
         final channel = chatService.getChannel(roomId);
         if (channel != null) {
-          final collectionPath = chatService.collectionPath!;
-          final channelPath = path.join(collectionPath, channel.folder);
+          final appPath = chatService.appPath!;
+          final channelPath = path.join(appPath, channel.folder);
 
           // For main channel, search in year/files/ subfolders
           if (channel.isMain) {
@@ -3965,7 +3965,7 @@ class LogApiService {
         );
       }
 
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         return shelf.Response.notFound(
           jsonEncode({'error': 'No chat collection loaded'}),
           headers: headers,
@@ -7778,10 +7778,10 @@ class LogApiService {
 
           // Initialize EventService for this app
           final eventService = EventService();
-          final collectionPath = '$dataDir/devices/$callsign/$appName';
+          final appPath = '$dataDir/devices/$callsign/$appName';
 
           // Initialize the events directory
-          await eventService.initializeCollection(collectionPath);
+          await eventService.initializeApp(appPath);
 
           // Create the event
           final event = await eventService.createEvent(
@@ -7955,10 +7955,10 @@ class LogApiService {
 
           // Initialize BlogService for this app
           final blogService = BlogService();
-          final collectionPath = '$dataDir/devices/$callsign/$appName';
+          final appPath = '$dataDir/devices/$callsign/$appName';
 
           // Initialize the blog directory
-          await blogService.initializeCollection(collectionPath, creatorNpub: npub);
+          await blogService.initializeApp(appPath, creatorNpub: npub);
 
           // Create the blog post
           final post = await blogService.createPost(
@@ -8012,10 +8012,10 @@ class LogApiService {
           final appName = params['app_name'] as String? ?? 'blog';
 
           final blogService = BlogService();
-          final collectionPath = '$dataDir/devices/$callsign/$appName';
+          final appPath = '$dataDir/devices/$callsign/$appName';
 
           // Check if blog directory exists
-          final blogDir = io.Directory(collectionPath);
+          final blogDir = io.Directory(appPath);
           if (!await blogDir.exists()) {
             return shelf.Response.ok(
               jsonEncode({
@@ -8027,7 +8027,7 @@ class LogApiService {
             );
           }
 
-          await blogService.initializeCollection(collectionPath);
+          await blogService.initializeApp(appPath);
 
           // Load posts
           final posts = await blogService.loadPosts(year: year);
@@ -8065,9 +8065,9 @@ class LogApiService {
 
           final appName = params['app_name'] as String? ?? 'blog';
           final blogService = BlogService();
-          final collectionPath = '$dataDir/devices/$callsign/$appName';
+          final appPath = '$dataDir/devices/$callsign/$appName';
 
-          await blogService.initializeCollection(collectionPath);
+          await blogService.initializeApp(appPath);
 
           // Delete the post (pass null for userNpub to allow deletion in debug mode)
           final success = await blogService.deletePost(blogId, npub);
@@ -8109,10 +8109,10 @@ class LogApiService {
 
           final appName = params['app_name'] as String? ?? 'blog';
           final blogService = BlogService();
-          final collectionPath = '$dataDir/devices/$callsign/$appName';
+          final appPath = '$dataDir/devices/$callsign/$appName';
 
           // Check if the blog post exists
-          final blogDir = io.Directory(collectionPath);
+          final blogDir = io.Directory(appPath);
           if (!await blogDir.exists()) {
             return shelf.Response.notFound(
               jsonEncode({
@@ -8124,7 +8124,7 @@ class LogApiService {
             );
           }
 
-          await blogService.initializeCollection(collectionPath);
+          await blogService.initializeApp(appPath);
           final post = await blogService.loadFullPost(blogId);
 
           if (post == null) {
@@ -8709,17 +8709,17 @@ class LogApiService {
         }
 
         // Build collection path pattern
-        final collectionPath = '$dataDir/devices/$callsign';
+        final appPath = '$dataDir/devices/$callsign';
 
         final result = <String, dynamic>{
           'action': 'contact_debug',
           'dataDir': dataDir,
           'callsign': callsign,
-          'collectionPath': collectionPath,
+          'appPath': appPath,
         };
 
         // Check fast.json
-        final fastJsonPath = '$collectionPath/contacts/fast.json';
+        final fastJsonPath = '$appPath/contacts/fast.json';
         final fastJsonFile = io.File(fastJsonPath);
         result['fastJsonPath'] = fastJsonPath;
         result['fastJsonExists'] = await fastJsonFile.exists();
@@ -8736,7 +8736,7 @@ class LogApiService {
         }
 
         // Check contacts directory
-        final contactsDir = io.Directory('$collectionPath/contacts');
+        final contactsDir = io.Directory('$appPath/contacts');
         result['contactsDirExists'] = await contactsDir.exists();
 
         // List contact files if directory exists
@@ -8754,7 +8754,7 @@ class LogApiService {
         // If callsign provided, check specific contact
         final targetCallsign = params['callsign'] as String?;
         if (targetCallsign != null) {
-          final contactFile = io.File('$collectionPath/contacts/$targetCallsign.txt');
+          final contactFile = io.File('$appPath/contacts/$targetCallsign.txt');
           result['targetCallsign'] = targetCallsign;
           result['contactFilePath'] = contactFile.path;
           result['contactFileExists'] = await contactFile.exists();
@@ -11656,8 +11656,8 @@ class LogApiService {
 
       // Initialize blog service
       final blogService = BlogService();
-      final collectionPath = '$dataDir/devices/$callsign/blog';
-      await blogService.initializeCollection(collectionPath);
+      final appPath = '$dataDir/devices/$callsign/blog';
+      await blogService.initializeApp(appPath);
 
       // Load the blog post with feedback counts
       final post = await blogService.loadFullPostWithFeedback(filename);
@@ -11679,7 +11679,7 @@ class LogApiService {
 
       // Read liked npubs and convert to hex pubkeys for client-side checking
       final year = filename.substring(0, 4);
-      final postPath = '$collectionPath/$year/$filename';
+      final postPath = '$appPath/$year/$filename';
       final likedNpubs = await FeedbackFolderUtils.readFeedbackFile(
         postPath,
         FeedbackFolderUtils.feedbackTypeLikes,
@@ -12095,31 +12095,30 @@ ul, ol { margin-left: 30px; padding: 0; }
   /// Initialize wallet service by finding or creating wallet collection
   Future<bool> _initializeWalletService() async {
     try {
-      final collectionService = CollectionService();
-      final collections = await collectionService.loadCollections();
-      var walletCollection = collections.where((c) => c.type == 'wallet').firstOrNull;
+      final appService = AppService();
+      var walletApp = appService.getAppByType('wallet');
 
       // Create wallet collection if it doesn't exist
-      if (walletCollection == null || walletCollection.storagePath == null) {
+      if (walletApp == null || walletApp.storagePath == null) {
         LogService().log('Wallet API: No wallet collection found, creating one...');
 
         // Create wallet collection
-        final newCollection = await collectionService.createCollection(
+        final newApp = await appService.createApp(
           title: 'Wallet',
           type: 'wallet',
         );
 
-        if (newCollection.storagePath == null) {
+        if (newApp.storagePath == null) {
           LogService().log('Wallet API: Failed to create wallet collection');
           return false;
         }
 
-        walletCollection = newCollection;
-        LogService().log('Wallet API: Created wallet collection at ${newCollection.storagePath}');
+        walletApp = newApp;
+        LogService().log('Wallet API: Created wallet collection at ${newApp.storagePath}');
       }
 
-      final walletPath = walletCollection!.storagePath!;
-      await WalletService().initializeCollection(walletPath);
+      final walletPath = walletApp!.storagePath!;
+      await WalletService().initializeApp(walletPath);
       await WalletSyncService().initialize(walletPath);
       LogService().log('Wallet API: Initialized wallet from $walletPath');
       return true;
@@ -14229,7 +14228,7 @@ ul, ol { margin-left: 30px; padding: 0; }
         case 'p2p_navigate':
           // Navigate to Transfer panel (collections panel, then open transfer)
           final debugController = DebugController();
-          debugController.navigateToPanel(PanelIndex.collections);
+          debugController.navigateToPanel(PanelIndex.apps);
           debugController.triggerP2PNavigate();
 
           return shelf.Response.ok(

@@ -4,8 +4,9 @@
  */
 
 import 'package:flutter/material.dart';
+import '../models/app.dart';
 import '../models/contact.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/contact_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_storage.dart';
@@ -13,11 +14,11 @@ import '../services/profile_storage.dart';
 /// Result returned when a contact is selected
 class ContactPickerResult {
   final Contact contact;
-  final String? collectionTitle;
+  final String? appTitle;
 
   ContactPickerResult({
     required this.contact,
-    this.collectionTitle,
+    this.appTitle,
   });
 }
 
@@ -69,8 +70,8 @@ class ContactPickerPage extends StatefulWidget {
 
 class _ContactPickerPageState extends State<ContactPickerPage> {
   final TextEditingController _searchController = TextEditingController();
-  final List<_ContactWithCollection> _contacts = [];
-  List<_ContactWithCollection> _filtered = [];
+  final List<_ContactWithApp> _contacts = [];
+  List<_ContactWithApp> _filtered = [];
   bool _isLoading = true;
   _SortMode _sortMode = _SortMode.popular;
   final Set<String> _selectedCallsigns = {};
@@ -95,11 +96,9 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
 
   Future<void> _loadContacts() async {
     try {
-      final collectionService = CollectionService();
-      final collections = await collectionService.loadCollections();
-      final contactCollections = collections
-          .where((c) => c.type == 'contacts' && c.storagePath != null)
-          .toList();
+      final collectionService = AppService();
+      final app = collectionService.getAppByType('contacts');
+      final contactCollections = app != null ? [app] : <App>[];
 
       _contacts.clear();
       final contactService = ContactService();
@@ -117,7 +116,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
           contactService.setStorage(FilesystemProfileStorage(collection.storagePath!));
         }
 
-        await contactService.initializeCollection(collection.storagePath!);
+        await contactService.initializeApp(collection.storagePath!);
 
         // Load favorites (instant from cache)
         final favorites = await contactService.loadFavorites();
@@ -136,7 +135,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
 
         await for (final contact
             in contactService.loadAllContactsStreamFast()) {
-          _contacts.add(_ContactWithCollection(contact, collection.title));
+          _contacts.add(_ContactWithApp(contact, collection.title));
         }
       }
 
@@ -221,7 +220,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
 
   void _applyFilter() {
     final query = _searchController.text.trim().toLowerCase();
-    List<_ContactWithCollection> result;
+    List<_ContactWithApp> result;
 
     if (query.isEmpty) {
       result = List.from(_contacts);
@@ -233,7 +232,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
           contact.displayName,
           contact.callsign,
           contact.groupPath ?? '',
-          item.collectionTitle ?? '',
+          item.appTitle ?? '',
           ...contact.emails,
           ...contact.phones,
           ...contact.tags,
@@ -246,8 +245,8 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
 
     // In multi-select mode, pin selected contacts at the top
     if (widget.multiSelect && _selectedCallsigns.isNotEmpty) {
-      final selected = <_ContactWithCollection>[];
-      final unselected = <_ContactWithCollection>[];
+      final selected = <_ContactWithApp>[];
+      final unselected = <_ContactWithApp>[];
       for (final item in result) {
         if (_selectedCallsigns.contains(item.contact.callsign)) {
           selected.add(item);
@@ -263,7 +262,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
     });
   }
 
-  void _selectContact(_ContactWithCollection item) {
+  void _selectContact(_ContactWithApp item) {
     if (widget.multiSelect) {
       if (_selectedCallsigns.contains(item.contact.callsign)) {
         _selectedCallsigns.remove(item.contact.callsign);
@@ -277,7 +276,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
         context,
         ContactPickerResult(
           contact: item.contact,
-          collectionTitle: item.collectionTitle,
+          appTitle: item.appTitle,
         ),
       );
     }
@@ -289,7 +288,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
         .where((item) => _selectedCallsigns.contains(item.contact.callsign))
         .map((item) => ContactPickerResult(
               contact: item.contact,
-              collectionTitle: item.collectionTitle,
+              appTitle: item.appTitle,
             ))
         .toList();
     Navigator.pop(context, selectedContacts);
@@ -426,7 +425,7 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
   }
 
   Widget _buildContactTile(
-      _ContactWithCollection item, bool isSelected, ThemeData theme) {
+      _ContactWithApp item, bool isSelected, ThemeData theme) {
     final contact = item.contact;
 
     return ListTile(
@@ -492,22 +491,22 @@ class _ContactPickerPageState extends State<ContactPickerPage> {
     );
   }
 
-  String _buildSubtitle(_ContactWithCollection item) {
+  String _buildSubtitle(_ContactWithApp item) {
     final parts = <String>[item.contact.callsign];
     if (item.contact.groupPath?.isNotEmpty == true) {
       parts.add(item.contact.groupPath!);
     }
-    if (item.collectionTitle?.isNotEmpty == true) {
-      parts.add(item.collectionTitle!);
+    if (item.appTitle?.isNotEmpty == true) {
+      parts.add(item.appTitle!);
     }
     return parts.join(' • ');
   }
 }
 
 /// Internal class to hold contact with its collection info
-class _ContactWithCollection {
+class _ContactWithApp {
   final Contact contact;
-  final String? collectionTitle;
+  final String? appTitle;
 
-  _ContactWithCollection(this.contact, this.collectionTitle);
+  _ContactWithApp(this.contact, this.appTitle);
 }

@@ -11,7 +11,7 @@ import '../services/i18n_service.dart';
 /// Widget for displaying full postcard details
 class PostcardDetailWidget extends StatelessWidget {
   final Postcard postcard;
-  final String collectionPath;
+  final String appPath;
   final String? currentCallsign;
   final String? currentUserNpub;
   final bool isSender;
@@ -21,7 +21,7 @@ class PostcardDetailWidget extends StatelessWidget {
   const PostcardDetailWidget({
     Key? key,
     required this.postcard,
-    required this.collectionPath,
+    required this.appPath,
     this.currentCallsign,
     this.currentUserNpub,
     required this.isSender,

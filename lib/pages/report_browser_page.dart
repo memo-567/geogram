@@ -9,7 +9,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/report.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/report_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -24,8 +24,8 @@ import 'report_settings_page.dart';
 
 /// Report browser page with list and map views
 class ReportBrowserPage extends StatefulWidget {
-  final String? collectionPath;
-  final String? collectionTitle;
+  final String? appPath;
+  final String? appTitle;
 
   /// Remote device URL for viewing alerts from another device (e.g., "http://localhost:5577")
   final String? remoteDeviceUrl;
@@ -38,8 +38,8 @@ class ReportBrowserPage extends StatefulWidget {
 
   const ReportBrowserPage({
     super.key,
-    this.collectionPath,
-    this.collectionTitle,
+    this.appPath,
+    this.appTitle,
     this.remoteDeviceUrl,
     this.remoteDeviceCallsign,
     this.remoteDeviceName,
@@ -102,18 +102,18 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     } else {
       // Local mode: load from local collection
       // Set profile storage for encrypted storage support
-      final collectionPath = widget.collectionPath ?? '';
-      final profileStorage = CollectionService().profileStorage;
+      final appPath = widget.appPath ?? '';
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          collectionPath,
+          appPath,
         );
         _reportService.setStorage(scopedStorage);
       } else {
-        _reportService.setStorage(FilesystemProfileStorage(collectionPath));
+        _reportService.setStorage(FilesystemProfileStorage(appPath));
       }
-      await _reportService.initializeCollection(collectionPath);
+      await _reportService.initializeApp(appPath);
       await _loadReports();
 
       // Initialize user location service for automatic updates
@@ -329,13 +329,13 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
     // For remote mode, show device name
     if (widget.isRemoteDevice) {
       final deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? '';
-      return '${_i18n.t('collection_type_alerts')} - $deviceName';
+      return '${_i18n.t('app_type_alerts')} - $deviceName';
     }
 
     // Translate known fixed type names
-    final title = widget.collectionTitle ?? '';
+    final title = widget.appTitle ?? '';
     if (title.toLowerCase() == 'alerts') {
-      return _i18n.t('collection_type_alerts');
+      return _i18n.t('app_type_alerts');
     }
     return title;
   }
@@ -508,7 +508,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
                   context,
                   MaterialPageRoute(
                     builder: (context) => ReportSettingsPage(
-                      collectionPath: widget.collectionPath ?? '',
+                      appPath: widget.appPath ?? '',
                     ),
                   ),
                 );
@@ -1207,22 +1207,22 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
 
   void _openReport(Report report) {
     // Determine collection path based on whether it's a station alert or local
-    String collectionPath;
+    String appPath;
     if (report.metadata['from_station'] == 'true') {
       // Station alerts: construct path from devices directory
       final storageConfig = StorageConfig();
       final callsign = report.metadata['station_callsign'] ?? 'unknown';
-      collectionPath = '${storageConfig.devicesDir}/$callsign/alerts';
+      appPath = '${storageConfig.devicesDir}/$callsign/alerts';
     } else {
       // Local alerts: use widget's collection path
-      collectionPath = widget.collectionPath ?? '';
+      appPath = widget.appPath ?? '';
     }
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ReportDetailPage(
-          collectionPath: collectionPath,
+          appPath: appPath,
           report: report,
         ),
       ),
@@ -1234,7 +1234,7 @@ class _ReportBrowserPageState extends State<ReportBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ReportDetailPage(
-          collectionPath: widget.collectionPath ?? '',
+          appPath: widget.appPath ?? '',
         ),
       ),
     ).then((_) => _loadReports());

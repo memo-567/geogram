@@ -5,16 +5,17 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/app.dart';
 import '../models/place.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/place_service.dart';
 
 class PlaceSelection {
   final Place place;
-  final String? collectionTitle;
+  final String? appTitle;
 
-  const PlaceSelection(this.place, this.collectionTitle);
+  const PlaceSelection(this.place, this.appTitle);
 }
 
 class PlacePickerDialog extends StatefulWidget {
@@ -49,14 +50,12 @@ class _PlacePickerDialogState extends State<PlacePickerDialog> {
 
   Future<void> _loadPlaces() async {
     try {
-      final collections = await CollectionService().loadCollections();
-      final placeCollections = collections
-          .where((c) => c.type == 'places' && c.storagePath != null)
-          .toList();
+      final app = AppService().getAppByType('places');
+      final placeCollections = app != null ? [app] : <App>[];
 
       final placeService = PlaceService();
       for (final collection in placeCollections) {
-        await placeService.initializeCollection(collection.storagePath!);
+        await placeService.initializeApp(collection.storagePath!);
         final places = await placeService.loadAllPlaces();
         for (final place in places) {
           _places.add(PlaceSelection(place, collection.title));
@@ -160,9 +159,9 @@ class _PlacePickerDialogState extends State<PlacePickerDialog> {
                               leading: const Icon(Icons.place_outlined),
                               title: Text(name),
                               subtitle: Text(subtitle),
-                              trailing: option.collectionTitle != null
+                              trailing: option.appTitle != null
                                   ? Text(
-                                      option.collectionTitle!,
+                                      option.appTitle!,
                                       style: theme.textTheme.bodySmall?.copyWith(
                                         color: theme.colorScheme.onSurfaceVariant,
                                       ),

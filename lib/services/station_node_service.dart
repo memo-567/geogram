@@ -236,7 +236,7 @@ class StationNodeService {
     required String operatorCallsign,
     required StationNodeConfig config,
     NetworkPolicy policy = const NetworkPolicy(),
-    NetworkCollections collections = const NetworkCollections(),
+    NetworkApps apps = const NetworkApps(),
   }) async {
     final profile = _profileService.getProfile();
     if (profile.npub == null || profile.npub!.isEmpty) {
@@ -259,7 +259,7 @@ class StationNodeService {
       rootNpub: stationKeys.npub,  // Root is the station's npub
       rootCallsign: stationKeys.callsign,  // Root callsign is X3
       policy: policy,
-      collections: collections,
+      apps: apps,
       founded: now,
       updated: now,
     );
@@ -729,11 +729,11 @@ class StationNodeService {
       'authorities/admins',
       'authorities/group-admins',
       'authorities/moderators',
-      'collections',
-      'collections/approved',
-      'collections/pending',
-      'collections/suspended',
-      'collections/banned',
+      'apps',
+      'apps/approved',
+      'apps/pending',
+      'apps/suspended',
+      'apps/banned',
       'public',
       'public/forum',
       'public/chat',
@@ -924,7 +924,7 @@ The station (${_stationNode!.stationCallsign}) is managed by operator ${_station
     final stats = StationNodeStats(
       connectedDevices: _stationServer?.connectedDevices ?? 0,
       messagesRelayed: serverStats?.totalMessages ?? 0,
-      collectionsServed: serverStats?.totalApiRequests ?? 0,
+      appsServed: serverStats?.totalApiRequests ?? 0,
       storageUsedMb: _cachedStorageUsedMb,  // Use cached measurement
       lastActivity: DateTime.now(),
       uptime: uptime,

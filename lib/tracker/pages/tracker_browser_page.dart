@@ -23,7 +23,7 @@ import '../../services/i18n_service.dart';
 import '../../services/config_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/log_service.dart';
-import '../../services/collection_service.dart';
+import '../../services/app_service.dart';
 import '../../services/profile_storage.dart';
 
 /// Tab type for the tracker browser
@@ -48,15 +48,15 @@ List<TrackerTab> get _visibleTabValues =>
 
 /// Main tracker browser page with tabbed layout
 class TrackerBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
   final String? ownerCallsign;
 
   const TrackerBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
     this.ownerCallsign,
   });
@@ -132,7 +132,7 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
 
     if (enabled) {
       // Store collection path for auto-start on app restart
-      _configService.setNestedValue('tracker.proximityCollectionPath', widget.collectionPath);
+      _configService.setNestedValue('tracker.proximityCollectionPath', widget.appPath);
       LogService().log('TrackerBrowser: Calling ProximityDetectionService().start()');
       ProximityDetectionService().start(_service);
     } else {
@@ -289,19 +289,19 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
             : profileCallsign;
 
     // Set up storage for the service (encrypted or filesystem)
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _service.setStorage(scopedStorage);
     } else {
-      _service.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _service.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
-    await _service.initializeCollection(
-      widget.collectionPath,
+    await _service.initializeApp(
+      widget.appPath,
       callsign: ownerCallsign,
     );
     _changesSub = _service.changes.listen(_onTrackerChange);
@@ -435,10 +435,10 @@ class _TrackerBrowserPageState extends State<TrackerBrowserPage>
   }
 
   String _getDisplayTitle() {
-    if (widget.collectionTitle.startsWith('collection_type_')) {
-      return widget.i18n.t(widget.collectionTitle);
+    if (widget.appTitle.startsWith('app_type_')) {
+      return widget.i18n.t(widget.appTitle);
     }
-    return widget.collectionTitle;
+    return widget.appTitle;
   }
 
   @override

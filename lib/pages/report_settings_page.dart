@@ -10,11 +10,11 @@ import '../services/log_service.dart';
 
 /// Page for managing report collection settings
 class ReportSettingsPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
 
   const ReportSettingsPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
   });
 
   @override
@@ -51,7 +51,7 @@ class _ReportSettingsPageState extends State<ReportSettingsPage> {
     setState(() => _isLoading = true);
 
     try {
-      await _reportService.initializeCollection(widget.collectionPath);
+      await _reportService.initializeApp(widget.appPath);
       _settings = _reportService.getSettings();
 
       // Populate controllers

@@ -10,14 +10,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
-import '../models/collection.dart';
+import '../models/app.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/chat_settings.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/chat_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/station_service.dart';
@@ -50,7 +50,7 @@ import '../platform/file_image_helper.dart' as file_helper;
 
 /// Page for browsing and interacting with a chat collection
 class ChatBrowserPage extends StatefulWidget {
-  final Collection? collection;
+  final App? app;
 
   /// For browsing a remote device's chat
   final String? remoteDeviceUrl;
@@ -62,7 +62,7 @@ class ChatBrowserPage extends StatefulWidget {
 
   const ChatBrowserPage({
     Key? key,
-    this.collection,
+    this.app,
     this.remoteDeviceUrl,
     this.remoteDeviceCallsign,
     this.remoteDeviceName,
@@ -144,7 +144,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
-  String? _groupsCollectionPath;
+  String? _groupsAppPath;
 
   @override
   void initState() {
@@ -296,7 +296,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Handle incoming update notification
   void _handleUpdateNotification(UpdateNotification update) {
     // Only handle chat updates
-    if (update.collectionType == 'chat') {
+    if (update.appType == 'chat') {
       // Refresh if we're viewing the room that got updated
       if (_selectedStationRoom != null && _selectedStationRoom!.id == update.path) {
         // Debounce to prevent duplicate refreshes (server sends multiple WebSocket messages)
@@ -490,13 +490,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Initialize chat service with collection path (local mode)
-      final storagePath = widget.collection?.storagePath;
+      final storagePath = widget.app?.storagePath;
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
       }
 
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
@@ -509,18 +509,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Pass current user's npub to initialize admin if needed
       final currentProfile = _profileService.getProfile();
-      await _chatService.initializeCollection(
+      await _chatService.initializeApp(
         storagePath,
         creatorNpub: currentProfile.npub,
       );
 
       _localChatCollectionPath = storagePath;
-      _groupsCollectionPath =
+      _groupsAppPath =
           await GroupSyncService().findCollectionPathByType('groups');
-      if (_groupsCollectionPath != null) {
+      if (_groupsAppPath != null) {
         await GroupSyncService().syncGroupsCollection(
-          groupsCollectionPath: _groupsCollectionPath!,
-          chatCollectionPath: storagePath,
+          groupsAppPath: _groupsAppPath!,
+          chatAppPath: storagePath,
         );
       }
 
@@ -949,7 +949,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (messages.isEmpty) return;
 
     final contactService = ContactService();
-    if (contactService.collectionPath == null) {
+    if (contactService.appPath == null) {
       // Contact service not initialized, skip
       return;
     }
@@ -1374,12 +1374,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Load chat settings
   Future<ChatSettings> _loadChatSettings() async {
     // Remote devices don't have local settings
-    if (widget.isRemoteDevice || widget.collection == null) {
+    if (widget.isRemoteDevice || widget.app == null) {
       return ChatSettings();
     }
 
     try {
-      final storagePath = widget.collection!.storagePath;
+      final storagePath = widget.app!.storagePath;
       if (storagePath == null) return ChatSettings();
 
       final settingsFile =
@@ -1399,7 +1399,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Copy file to channel's files folder
   Future<String?> _copyFileToChannel(String sourceFilePath) async {
     // Not supported for remote devices
-    if (widget.isRemoteDevice || widget.collection == null) {
+    if (widget.isRemoteDevice || widget.app == null) {
       _showError('File attachments not supported for remote devices');
       return null;
     }
@@ -1412,7 +1412,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Determine destination folder
-      final storagePath = widget.collection!.storagePath;
+      final storagePath = widget.app!.storagePath;
       if (storagePath == null) {
         _showError('Collection storage path is null');
         return null;
@@ -2101,7 +2101,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (!message.hasFile) return;
 
     // Not supported for remote devices
-    if (widget.isRemoteDevice || widget.collection == null) {
+    if (widget.isRemoteDevice || widget.app == null) {
       _showError('File attachments not supported for remote devices');
       return;
     }
@@ -2145,9 +2145,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// - For encrypted storage: (null, bytes) - bytes stay in RAM only
   Future<(String?, Uint8List?)> _resolveAttachedFileData(ChatMessage message) async {
     if (!message.hasFile) return (null, null);
-    if (widget.isRemoteDevice || widget.collection == null) return (null, null);
+    if (widget.isRemoteDevice || widget.app == null) return (null, null);
 
-    final storagePath = widget.collection!.storagePath;
+    final storagePath = widget.app!.storagePath;
     if (storagePath == null) return (null, null);
     if (_selectedChannel == null) return (null, null);
 
@@ -2250,11 +2250,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
         if (channel.isGroup &&
             !channel.isMain &&
-            _groupsCollectionPath != null &&
+            _groupsAppPath != null &&
             _localChatCollectionPath != null) {
           await GroupSyncService().syncGroupsCollection(
-            groupsCollectionPath: _groupsCollectionPath!,
-            chatCollectionPath: _localChatCollectionPath!,
+            groupsAppPath: _groupsAppPath!,
+            chatAppPath: _localChatCollectionPath!,
           );
         }
 
@@ -2283,11 +2283,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Open settings page
   void _openSettings() {
     // Not available for remote devices
-    if (widget.isRemoteDevice || widget.collection == null) {
+    if (widget.isRemoteDevice || widget.app == null) {
       return;
     }
 
-    final storagePath = widget.collection!.storagePath;
+    final storagePath = widget.app!.storagePath;
     if (storagePath == null) {
       _showError('Collection storage path is null');
       return;
@@ -2297,7 +2297,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ChatSettingsPage(
-          collectionPath: storagePath,
+          appPath: storagePath,
           channelId: _selectedChannel?.id,
         ),
       ),
@@ -2418,7 +2418,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             // Get the title based on context (remote device or local collection)
             final baseTitle = widget.isRemoteDevice
                 ? (widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? _i18n.t('chat'))
-                : widget.collection?.title ?? _i18n.t('chat');
+                : widget.app?.title ?? _i18n.t('chat');
 
             // In narrow screen, show collection title when on channel list
             if (!isWideScreen && _selectedChannel == null && _selectedStationRoom == null) {

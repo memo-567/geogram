@@ -25,22 +25,22 @@ class MarketService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   MarketShop? _shop;
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize market service for a collection
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    LogService().log('MarketService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    LogService().log('MarketService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Ensure shop directory exists using storage
     await _storage.createDirectory('shop');
@@ -58,7 +58,7 @@ class MarketService {
 
   /// Load shop from file
   Future<void> _loadShop() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final content = await _storage.readString('shop/shop.txt');
     if (content != null) {
@@ -79,7 +79,7 @@ class MarketService {
 
   /// Save shop
   Future<void> saveShop(MarketShop shop) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _shop = shop;
 
@@ -94,7 +94,7 @@ class MarketService {
 
   /// Get all item categories (from folder structure)
   Future<List<String>> getCategories() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('shop/items')) return [];
 
@@ -124,7 +124,7 @@ class MarketService {
 
   /// Load all items
   Future<List<MarketItem>> loadItems({String? category}) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('shop/items')) return [];
 
@@ -178,7 +178,7 @@ class MarketService {
 
   /// Load single item
   Future<MarketItem?> loadItem(String itemId, {String? categoryPath}) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Search for item in all categories if not specified
     if (categoryPath == null) {
@@ -204,7 +204,7 @@ class MarketService {
 
   /// Save item
   Future<void> saveItem(MarketItem item) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final categoryPath = item.categoryPath ?? 'uncategorized';
     final itemDirPath = 'shop/items/$categoryPath/${item.itemId}';
@@ -217,7 +217,7 @@ class MarketService {
 
   /// Delete item
   Future<void> deleteItem(String itemId, {String? categoryPath}) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     if (categoryPath == null) {
       // Find item in all categories
@@ -242,7 +242,7 @@ class MarketService {
 
   /// Load reviews for an item
   Future<List<MarketReview>> loadReviews(String itemId, {String? categoryPath}) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (categoryPath == null) {
       final allItems = await loadItems();
@@ -281,7 +281,7 @@ class MarketService {
 
   /// Save review
   Future<void> saveReview(MarketReview review, {String? categoryPath}) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     if (categoryPath == null) {
       final allItems = await loadItems();
@@ -305,7 +305,7 @@ class MarketService {
 
   /// Load cart for buyer
   Future<MarketCart?> loadCart(String buyerCallsign) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     if (!await _storage.exists('carts')) return null;
 
@@ -330,7 +330,7 @@ class MarketService {
 
   /// Save cart
   Future<void> saveCart(MarketCart cart) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     await _storage.createDirectory('carts');
     await _storage.writeString('carts/${cart.cartId}.txt', cart.exportAsText());
@@ -344,7 +344,7 @@ class MarketService {
 
   /// Load all orders
   Future<List<MarketOrder>> loadOrders({int? year}) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('orders')) return [];
 
@@ -400,7 +400,7 @@ class MarketService {
 
   /// Save order
   Future<void> saveOrder(MarketOrder order) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final year = order.createdDate.year;
     final yearPath = 'orders/$year';
@@ -417,7 +417,7 @@ class MarketService {
 
   /// Load all promotions
   Future<List<MarketPromotion>> loadPromotions() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('shop/promotions')) return [];
 
@@ -452,7 +452,7 @@ class MarketService {
 
   /// Save promotion
   Future<void> savePromotion(MarketPromotion promotion) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     await _storage.createDirectory('shop/promotions');
     await _storage.writeString('shop/promotions/${promotion.promoId}.txt', promotion.exportAsText());
@@ -466,7 +466,7 @@ class MarketService {
 
   /// Load all coupons
   Future<List<MarketCoupon>> loadCoupons() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     if (!await _storage.exists('coupons')) return [];
 
@@ -512,7 +512,7 @@ class MarketService {
 
   /// Save coupon
   Future<void> saveCoupon(MarketCoupon coupon) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     await _storage.createDirectory('coupons');
     await _storage.writeString('coupons/coupon-${coupon.couponCode}.txt', coupon.exportAsText());

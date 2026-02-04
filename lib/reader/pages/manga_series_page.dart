@@ -15,13 +15,13 @@ import '../../services/i18n_service.dart';
 
 /// Page showing manga series from a source
 class MangaSeriesPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Source source;
   final I18nService i18n;
 
   const MangaSeriesPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.source,
     required this.i18n,
   });
@@ -56,7 +56,7 @@ class _MangaSeriesPageState extends State<MangaSeriesPage> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MangaDetailPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           sourceId: widget.source.id,
           manga: manga,
           i18n: widget.i18n,
@@ -257,7 +257,7 @@ class _MangaSeriesPageState extends State<MangaSeriesPage> {
 
   Widget _buildThumbnail(Manga manga) {
     final thumbnailPath =
-        '${widget.collectionPath}/manga/${widget.source.id}/series/${ReaderPathUtils.slugify(manga.title)}/${manga.thumbnail}';
+        '${widget.appPath}/manga/${widget.source.id}/series/${ReaderPathUtils.slugify(manga.title)}/${manga.thumbnail}';
 
     return FutureBuilder<bool>(
       future: File(thumbnailPath).exists(),
@@ -333,14 +333,14 @@ class _MangaSeriesPageState extends State<MangaSeriesPage> {
 
 /// Page showing details of a manga with chapter list
 class MangaDetailPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String sourceId;
   final Manga manga;
   final I18nService i18n;
 
   const MangaDetailPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.sourceId,
     required this.manga,
     required this.i18n,
@@ -381,7 +381,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MangaReaderPage(
-            collectionPath: widget.collectionPath,
+            appPath: widget.appPath,
             sourceId: widget.sourceId,
             mangaSlug: widget.manga.id,
             chapter: chapter,
@@ -567,7 +567,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
 
   Widget _buildHeaderImage() {
     final thumbnailPath =
-        '${widget.collectionPath}/manga/${widget.sourceId}/series/${ReaderPathUtils.slugify(widget.manga.title)}/${widget.manga.thumbnail}';
+        '${widget.appPath}/manga/${widget.sourceId}/series/${ReaderPathUtils.slugify(widget.manga.title)}/${widget.manga.thumbnail}';
 
     return FutureBuilder<bool>(
       future: File(thumbnailPath).exists(),

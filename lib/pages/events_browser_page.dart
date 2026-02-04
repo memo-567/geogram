@@ -12,7 +12,7 @@ import 'package:path/path.dart' as path;
 import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/event_registration.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -27,8 +27,8 @@ import '../dialogs/new_update_dialog.dart';
 /// Events browser page with 2-panel layout
 /// Supports both local collection viewing and remote device viewing via API
 class EventsBrowserPage extends StatefulWidget {
-  final String? collectionPath;
-  final String? collectionTitle;
+  final String? appPath;
+  final String? appTitle;
 
   // Remote device viewing parameters (like ChatBrowserPage)
   final String? remoteDeviceUrl;
@@ -37,8 +37,8 @@ class EventsBrowserPage extends StatefulWidget {
 
   const EventsBrowserPage({
     Key? key,
-    this.collectionPath,
-    this.collectionTitle,
+    this.appPath,
+    this.appTitle,
     this.remoteDeviceUrl,
     this.remoteDeviceCallsign,
     this.remoteDeviceName,
@@ -90,19 +90,19 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       await _loadRemoteEvents();
     } else {
       // Local mode - initialize event service with collection path
-      if (widget.collectionPath != null) {
+      if (widget.appPath != null) {
         // Set profile storage for encrypted storage support
-        final profileStorage = CollectionService().profileStorage;
+        final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
             profileStorage,
-            widget.collectionPath!,
+            widget.appPath!,
           );
           _eventService.setStorage(scopedStorage);
         } else {
-          _eventService.setStorage(FilesystemProfileStorage(widget.collectionPath!));
+          _eventService.setStorage(FilesystemProfileStorage(widget.appPath!));
         }
-        await _eventService.initializeCollection(widget.collectionPath!);
+        await _eventService.initializeApp(widget.appPath!);
       }
       await _loadEvents();
     }
@@ -345,7 +345,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     String callsign,
     String? npub,
   ) async {
-    if (widget.collectionPath == null) return;
+    if (widget.appPath == null) return;
 
     final links = (result['links'] as List<dynamic>?)
             ?.map((link) => link as EventLink)
@@ -408,11 +408,11 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
   String? _normalizePlacePath(String placePath) {
     if (placePath.isEmpty) return '';
-    if (widget.collectionPath == null || widget.collectionPath!.isEmpty) {
+    if (widget.appPath == null || widget.appPath!.isEmpty) {
       return placePath;
     }
     if (path.isAbsolute(placePath)) {
-      final basePath = path.dirname(widget.collectionPath!);
+      final basePath = path.dirname(widget.appPath!);
       final relative = path.relative(placePath, from: basePath);
       if (!relative.startsWith('..')) {
         return relative;
@@ -422,7 +422,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   Future<void> _writeLinksFile(String eventId, List<EventLink> links) async {
-    if (widget.collectionPath == null || links.isEmpty) return;
+    if (widget.appPath == null || links.isEmpty) return;
     final eventPath = _eventFolderPath(eventId);
     final linksFile = File('$eventPath/links.txt');
     await linksFile.writeAsString(
@@ -432,7 +432,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   Future<void> _ensureRegistrationFile(String eventId) async {
-    if (widget.collectionPath == null) return;
+    if (widget.appPath == null) return;
     final eventPath = _eventFolderPath(eventId);
     final registrationFile = File('$eventPath/registration.txt');
     if (await registrationFile.exists()) return;
@@ -448,7 +448,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     List<Map<String, String>> files, {
     required bool ensureUnique,
   }) async {
-    if (widget.collectionPath == null) return;
+    if (widget.appPath == null) return;
     final eventPath = _eventFolderPath(eventId);
 
     for (final file in files) {
@@ -470,7 +470,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
   String _eventFolderPath(String eventId) {
     final year = eventId.substring(0, 4);
-    return '${widget.collectionPath}/$year/$eventId';
+    return '${widget.appPath}/$year/$eventId';
   }
 
   Future<String> _ensureUniqueFileName(String dirPath, String fileName) async {
@@ -493,7 +493,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => NewEventPage(
           event: _selectedEvent!,
-          collectionPath: widget.collectionPath ?? '',
+          appPath: widget.appPath ?? '',
         ),
       ),
     );
@@ -549,7 +549,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => NewEventPage(
           event: event,
-          collectionPath: widget.collectionPath ?? '',
+          appPath: widget.appPath ?? '',
         ),
       ),
     );
@@ -663,7 +663,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
       if (result != null && result.files.isNotEmpty && mounted) {
         final year = _selectedEvent!.id.substring(0, 4);
-        final eventPath = '${widget.collectionPath}/$year/${_selectedEvent!.id}';
+        final eventPath = '${widget.appPath}/$year/${_selectedEvent!.id}';
 
         int copiedCount = 0;
         for (var file in result.files) {
@@ -963,7 +963,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
                 return EventTileWidget(
                   event: event,
                   isSelected: _selectedEvent?.id == event.id,
-                  collectionPath: widget.collectionPath,
+                  appPath: widget.appPath,
                   onTap: () {
                     if (widget.isRemoteDevice) {
                       _selectRemoteEvent(event);
@@ -994,7 +994,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => EventDetailPage(
           event: fullEvent,
-          collectionPath: widget.collectionPath ?? '',
+          appPath: widget.appPath ?? '',
           eventService: _eventService,
           profileService: _profileService,
           i18n: _i18n,
@@ -1040,7 +1040,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
     return EventDetailWidget(
       event: _selectedEvent!,
-      collectionPath: widget.collectionPath ?? '',
+      appPath: widget.appPath ?? '',
       currentCallsign: _currentCallsign,
       currentUserNpub: _currentUserNpub,
       canEdit: canEdit,

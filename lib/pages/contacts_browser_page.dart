@@ -14,7 +14,7 @@ import '../models/contact.dart';
 // Re-export history entry types
 export '../models/contact.dart' show ContactHistoryEntry, ContactHistoryEntryType;
 import '../platform/file_image_helper.dart' as file_helper;
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/contact_service.dart';
 // Re-export metrics and summary classes from contact_service
 export '../services/contact_service.dart' show ContactCallsignMetrics, ContactMetrics, ContactSummary;
@@ -46,13 +46,13 @@ String _getContactInitials(String displayName) {
 
 /// Contacts browser page with 2-panel layout
 class ContactsBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const ContactsBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   }) : super(key: key);
 
   @override
@@ -94,19 +94,19 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
 
   Future<void> _initialize() async {
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _contactService.setStorage(scopedStorage);
     } else {
-      _contactService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _contactService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
     // Initialize contact service
-    await _contactService.initializeCollection(widget.collectionPath);
+    await _contactService.initializeApp(widget.appPath);
     await _loadContacts();
     await _loadGroups();
     await _loadTopContacts();
@@ -375,7 +375,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
         builder: (context) => ContactToolsPage(
           contactService: _contactService,
           i18n: _i18n,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           onDeleteAll: _deleteAllContactsAndGroups,
           onRefresh: _loadContacts,
         ),
@@ -561,7 +561,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
           contactService: _contactService,
           profileService: _profileService,
           i18n: _i18n,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           onEventSearch: (eventId) {
             // Pop back and set the search query
             Navigator.pop(context, {'eventSearch': eventId});
@@ -621,7 +621,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => AddEditContactPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           groupPath: _viewMode == 'group' ? _selectedGroupPath : null,
         ),
       ),
@@ -637,7 +637,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => AddEditContactPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           contact: contact,
         ),
       ),
@@ -754,7 +754,7 @@ class _ContactsBrowserPageState extends State<ContactsBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ContactImportPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           groupPath: _viewMode == 'group' ? _selectedGroupPath : null,
         ),
       ),
@@ -2510,7 +2510,7 @@ class ContactDetailPage extends StatefulWidget {
   final ContactService contactService;
   final ProfileService profileService;
   final I18nService i18n;
-  final String collectionPath;
+  final String appPath;
   final void Function(String eventId)? onEventSearch;
 
   const ContactDetailPage({
@@ -2519,7 +2519,7 @@ class ContactDetailPage extends StatefulWidget {
     required this.contactService,
     required this.profileService,
     required this.i18n,
-    required this.collectionPath,
+    required this.appPath,
     this.onEventSearch,
   }) : super(key: key);
 
@@ -2590,7 +2590,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
   ContactService get contactService => widget.contactService;
   ProfileService get profileService => widget.profileService;
   I18nService get i18n => widget.i18n;
-  String get collectionPath => widget.collectionPath;
+  String get appPath => widget.appPath;
 
   @override
   Widget build(BuildContext context) {
@@ -2612,7 +2612,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => AddEditContactPage(
-                        collectionPath: collectionPath,
+                        appPath: appPath,
                         contact: contact,
                       ),
                     ),
@@ -3019,7 +3019,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
   Future<void> _addEventEntry() async {
     // Load events from current collection
     final eventService = EventService();
-    await eventService.initializeCollection(widget.collectionPath);
+    await eventService.initializeApp(widget.appPath);
     final events = await eventService.loadEvents();
 
     if (events.isEmpty) {

@@ -6,8 +6,9 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../models/app.dart';
 import '../models/place.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/location_service.dart';
 import '../services/log_service.dart';
@@ -16,10 +17,10 @@ import '../services/place_service.dart';
 /// Result of place selection including the place and optional collection info
 class PlacePickerResult {
   final Place place;
-  final String? collectionTitle;
+  final String? appTitle;
   final double? distance; // Distance in km from user's position
 
-  const PlacePickerResult(this.place, this.collectionTitle, this.distance);
+  const PlacePickerResult(this.place, this.appTitle, this.distance);
 }
 
 /// Full-screen page for picking a place from the places collection.
@@ -59,10 +60,10 @@ class PlacePickerPage extends StatefulWidget {
 
 class _PlaceWithDistance {
   final Place place;
-  final String? collectionTitle;
+  final String? appTitle;
   double? distance; // In kilometers
 
-  _PlaceWithDistance(this.place, this.collectionTitle);
+  _PlaceWithDistance(this.place, this.appTitle);
 }
 
 enum _SortMode { distance, time }
@@ -204,14 +205,12 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
 
   Future<void> _loadPlaces() async {
     try {
-      final collections = await CollectionService().loadCollections();
-      final placeCollections = collections
-          .where((c) => c.type == 'places' && c.storagePath != null)
-          .toList();
+      final app = AppService().getAppByType('places');
+      final placeCollections = app != null ? [app] : <App>[];
 
       final placeService = PlaceService();
       for (final collection in placeCollections) {
-        await placeService.initializeCollection(collection.storagePath!);
+        await placeService.initializeApp(collection.storagePath!);
         final places = await placeService.loadAllPlaces();
         for (final place in places) {
           _places.add(_PlaceWithDistance(place, collection.title));
@@ -304,7 +303,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
           place.type ?? '',
           place.getHistory(_langCode) ?? '',
           place.regionPath ?? '',
-          option.collectionTitle ?? '',
+          option.appTitle ?? '',
           // Also search all language variants
           ...place.names.values,
           ...place.descriptions.values,
@@ -506,9 +505,9 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
                               ],
                             ),
                             subtitle: Text(subtitle),
-                            trailing: option.collectionTitle != null
+                            trailing: option.appTitle != null
                                 ? Text(
-                                    option.collectionTitle!,
+                                    option.appTitle!,
                                     style: theme.textTheme.bodySmall?.copyWith(
                                       color: theme.colorScheme.onSurfaceVariant,
                                     ),
@@ -519,7 +518,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
                                 context,
                                 PlacePickerResult(
                                   place,
-                                  option.collectionTitle,
+                                  option.appTitle,
                                   option.distance,
                                 ),
                               );

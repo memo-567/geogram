@@ -244,7 +244,7 @@ class StationNodeConfig {
   final GeographicCoverage? coverage;
   final PowerConfig power;
   final List<ChannelConfig> channels;
-  final List<String> supportedCollections;
+  final List<String> supportedApps;
   final bool acceptConnections;
   final int maxConnections;
 
@@ -253,7 +253,7 @@ class StationNodeConfig {
     this.coverage,
     this.power = const PowerConfig(),
     this.channels = const [],
-    this.supportedCollections = const ['reports', 'places', 'events'],
+    this.supportedApps = const ['reports', 'places', 'events'],
     this.acceptConnections = true,
     this.maxConnections = 50,
   });
@@ -273,7 +273,7 @@ class StationNodeConfig {
               ?.map((e) => ChannelConfig.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
-      supportedCollections: (json['supportedCollections'] as List<dynamic>?)
+      supportedApps: ((json['supportedApps'] ?? json['supportedCollections']) as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           ['reports', 'places', 'events'],
@@ -288,7 +288,7 @@ class StationNodeConfig {
       if (coverage != null) 'coverage': coverage!.toJson(),
       'power': power.toJson(),
       'channels': channels.map((e) => e.toJson()).toList(),
-      'supportedCollections': supportedCollections,
+      'supportedApps': supportedApps,
       'acceptConnections': acceptConnections,
       'maxConnections': maxConnections,
     };
@@ -299,7 +299,7 @@ class StationNodeConfig {
     GeographicCoverage? coverage,
     PowerConfig? power,
     List<ChannelConfig>? channels,
-    List<String>? supportedCollections,
+    List<String>? supportedApps,
     bool? acceptConnections,
     int? maxConnections,
   }) {
@@ -308,7 +308,7 @@ class StationNodeConfig {
       coverage: coverage ?? this.coverage,
       power: power ?? this.power,
       channels: channels ?? this.channels,
-      supportedCollections: supportedCollections ?? this.supportedCollections,
+      supportedApps: supportedApps ?? this.supportedApps,
       acceptConnections: acceptConnections ?? this.acceptConnections,
       maxConnections: maxConnections ?? this.maxConnections,
     );
@@ -319,7 +319,7 @@ class StationNodeConfig {
 class StationNodeStats {
   final int connectedDevices;
   final int messagesRelayed;
-  final int collectionsServed;
+  final int appsServed;
   final int storageUsedMb;
   final DateTime? lastActivity;
   final Duration uptime;
@@ -327,7 +327,7 @@ class StationNodeStats {
   const StationNodeStats({
     this.connectedDevices = 0,
     this.messagesRelayed = 0,
-    this.collectionsServed = 0,
+    this.appsServed = 0,
     this.storageUsedMb = 0,
     this.lastActivity,
     this.uptime = Duration.zero,
@@ -337,7 +337,7 @@ class StationNodeStats {
     return StationNodeStats(
       connectedDevices: json['connectedDevices'] as int? ?? 0,
       messagesRelayed: json['messagesRelayed'] as int? ?? 0,
-      collectionsServed: json['collectionsServed'] as int? ?? 0,
+      appsServed: (json['appsServed'] ?? json['collectionsServed']) as int? ?? 0,
       storageUsedMb: json['storageUsedMb'] as int? ?? 0,
       lastActivity: json['lastActivity'] != null
           ? DateTime.parse(json['lastActivity'] as String)
@@ -350,7 +350,7 @@ class StationNodeStats {
     return {
       'connectedDevices': connectedDevices,
       'messagesRelayed': messagesRelayed,
-      'collectionsServed': collectionsServed,
+      'appsServed': appsServed,
       'storageUsedMb': storageUsedMb,
       if (lastActivity != null) 'lastActivity': lastActivity!.toIso8601String(),
       'uptimeSeconds': uptime.inSeconds,

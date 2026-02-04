@@ -18,7 +18,7 @@ import 'version.dart';
 import 'services/debug_controller.dart';
 import 'services/usb_attachment_service.dart';
 import 'services/config_service.dart';
-import 'services/collection_service.dart';
+import 'services/app_service.dart';
 import 'services/encrypted_storage_service.dart';
 import 'services/profile_service.dart';
 import 'services/profile_storage.dart';
@@ -59,7 +59,7 @@ import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
 import 'connection/transports/usb_aoa_transport.dart';
-import 'models/collection.dart';
+import 'models/app.dart';
 import 'util/file_icon_helper.dart';
 import 'util/event_bus.dart';
 import 'util/app_type_theme.dart';
@@ -100,9 +100,10 @@ import 'flasher/pages/flasher_page.dart';
 import 'work/pages/work_page.dart';
 import 'usenet/pages/usenet_app_page.dart';
 import 'music/pages/music_home_page.dart';
+import 'pages/files_browser_page.dart';
 import 'stories/pages/stories_home_page.dart';
 import 'pages/profile_management_page.dart';
-import 'pages/create_collection_page.dart';
+import 'pages/create_app_page.dart';
 import 'pages/onboarding_page.dart';
 import 'pages/welcome_page.dart';
 import 'pages/security_settings_page.dart';
@@ -301,25 +302,25 @@ void main() async {
     await AppThemeService().initialize();
     LogService().log('AppThemeService initialized');
 
-    // Initialize profile and collection services
-    await CollectionService().init();
-    LogService().log('CollectionService initialized');
+    // Initialize profile and app services
+    await AppService().init();
+    LogService().log('AppService initialized');
 
     await ProfileService().initialize();
     LogService().log('ProfileService initialized');
 
-    // Set active callsign for collection storage path
+    // Set active callsign for app storage path
     final profile = ProfileService().getProfile();
     // Set nsec for encrypted storage access (must be before setActiveCallsign)
     if (profile.nsec.isNotEmpty) {
-      CollectionService().setNsec(profile.nsec);
+      AppService().setNsec(profile.nsec);
     }
-    await CollectionService().setActiveCallsign(profile.callsign);
-    LogService().log('CollectionService callsign set: ${profile.callsign}');
+    await AppService().setActiveCallsign(profile.callsign);
+    LogService().log('AppService callsign set: ${profile.callsign}');
 
-    // Ensure default collections exist for this profile
-    await CollectionService().ensureDefaultCollections();
-    LogService().log('Default collections ensured');
+    // Ensure default apps exist for this profile (non-blocking)
+    AppService().ensureDefaultApps();
+    LogService().log('Default apps creation started');
 
     // Initialize notification service (needed for UI badges)
     await NotificationService().initialize();
@@ -511,46 +512,45 @@ void main() async {
 
       if (!proximityDisabled && firstLaunchComplete) {
         try {
-          // Get or find tracker collection path
-          var collectionPath = ConfigService().getNestedValue(
-            'tracker.proximityCollectionPath',
+          // Get or find tracker app path
+          var appPath = ConfigService().getNestedValue(
+            'tracker.proximityAppPath',
           );
 
-          if (collectionPath is! String || collectionPath.isEmpty) {
-            // Auto-find tracker collection
-            LogService().log('[PROXIMITY] No saved path, searching for tracker collection...');
-            final collections = await CollectionService().loadCollections();
-            final tracker = collections.where((c) => c.type == 'tracker').firstOrNull;
+          if (appPath is! String || appPath.isEmpty) {
+            // Auto-find tracker app
+            LogService().log('[PROXIMITY] No saved path, searching for tracker app...');
+            final tracker = AppService().getAppByType('tracker');
             if (tracker?.storagePath != null) {
-              collectionPath = tracker!.storagePath;
-              ConfigService().setNestedValue('tracker.proximityCollectionPath', collectionPath);
-              LogService().log('[PROXIMITY] Found tracker collection: $collectionPath');
+              appPath = tracker!.storagePath;
+              ConfigService().setNestedValue('tracker.proximityAppPath', appPath);
+              LogService().log('[PROXIMITY] Found tracker app: $appPath');
             }
           }
 
-          if (collectionPath is String && collectionPath.isNotEmpty) {
+          if (appPath is String && appPath.isNotEmpty) {
             final profileCallsign = ProfileService().getProfile().callsign;
             // Set up storage for TrackerService (encrypted or filesystem)
-            final profileStorage = CollectionService().profileStorage;
+            final profileStorage = AppService().profileStorage;
             if (profileStorage != null) {
               final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
                 profileStorage,
-                collectionPath,
+                appPath,
               );
               TrackerService().setStorage(scopedStorage);
             } else {
-              TrackerService().setStorage(FilesystemProfileStorage(collectionPath));
+              TrackerService().setStorage(FilesystemProfileStorage(appPath));
             }
-            await TrackerService().initializeCollection(
-              collectionPath,
+            await TrackerService().initializeApp(
+              appPath,
               callsign: profileCallsign,
             );
             await ProximityDetectionService().start(TrackerService());
             LogService().log(
-              '[PROXIMITY] Background tracking STARTED - collection: $collectionPath',
+              '[PROXIMITY] Background tracking STARTED - app: $appPath',
             );
           } else {
-            LogService().log('[PROXIMITY] No tracker collection found, tracking not started');
+            LogService().log('[PROXIMITY] No tracker app found, tracking not started');
           }
         } catch (e) {
           LogService().log('[PROXIMITY] Failed to auto-start: $e');
@@ -855,7 +855,7 @@ class _HomePageState extends State<HomePage> {
   // Hidden pages (not ready): BotPage
   // Indices: 0=Apps, 1=Maps, 2=Devices, 3=Log
   List<Widget> get _pages => [
-    CollectionsPage(
+    AppsPage(
       searchQuery: _searchQuery,
       onAppSelected: _clearSearchAndUnfocus,
     ),
@@ -1009,21 +1009,20 @@ class _HomePageState extends State<HomePage> {
   void _handleOpenFlasherMonitor(String? devicePath) async {
     LogService().log('HomePage: Opening Flasher Monitor (devicePath: $devicePath)');
 
-    // Find flasher collection
-    var collections = await CollectionService().loadCollections();
-    var flasherCollection = collections.where((c) => c.type == 'flasher').firstOrNull;
+    // Find flasher app
+    var flasherApp = AppService().getAppByType('flasher');
 
-    // Auto-create flasher collection if it doesn't exist
-    if (flasherCollection == null) {
-      LogService().log('HomePage: No flasher collection found, creating one automatically');
+    // Auto-create flasher app if it doesn't exist
+    if (flasherApp == null) {
+      LogService().log('HomePage: No flasher app found, creating one automatically');
       try {
-        flasherCollection = await CollectionService().createCollection(
-          title: _i18n.t('collection_type_flasher'),
+        flasherApp = await AppService().createApp(
+          title: _i18n.t('app_type_flasher'),
           type: 'flasher',
         );
-        LogService().log('HomePage: Created flasher collection: ${flasherCollection.storagePath}');
+        LogService().log('HomePage: Created flasher app: ${flasherApp.storagePath}');
       } catch (e) {
-        LogService().log('HomePage: Failed to create flasher collection: $e');
+        LogService().log('HomePage: Failed to create flasher app: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -1036,12 +1035,12 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    if (flasherCollection.storagePath == null) {
-      LogService().log('HomePage: Flasher collection has no storage path');
+    if (flasherApp.storagePath == null) {
+      LogService().log('HomePage: Flasher app has no storage path');
       return;
     }
 
-    // Navigate to collections panel first
+    // Navigate to apps panel first
     setState(() => _selectedIndex = 0);
 
     // Navigate to FlasherPage with Monitor tab and auto-connect
@@ -1050,7 +1049,7 @@ class _HomePageState extends State<HomePage> {
         context,
         MaterialPageRoute(
           builder: (context) => FlasherPage(
-            basePath: flasherCollection!.storagePath!,
+            basePath: flasherApp!.storagePath!,
             initialTab: 2, // Monitor tab
             autoConnectPort: devicePath,
           ),
@@ -1114,19 +1113,18 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Handle opening a local chat collection (for testing encrypted storage)
+  /// Handle opening a local chat app (for testing encrypted storage)
   void _handleOpenLocalChat() async {
-    print('HomePage: Opening local chat collection via debug action');
+    print('HomePage: Opening local chat app via debug action');
 
-    // Find a chat collection
-    final collections = await CollectionService().loadCollections();
-    final chatCollection = collections.where((c) => c.type == 'chat').firstOrNull;
+    // Find a chat app
+    final chatApp = AppService().getAppByType('chat');
 
-    if (chatCollection == null) {
-      print('HomePage: No chat collection found, creating one');
-      // Create a chat collection if none exists
+    if (chatApp == null) {
+      print('HomePage: No chat app found, creating one');
+      // Create a chat app if none exists
       try {
-        final newCollection = await CollectionService().createCollection(
+        final newApp = await AppService().createApp(
           title: 'Chat',
           type: 'chat',
         );
@@ -1135,30 +1133,30 @@ class _HomePageState extends State<HomePage> {
             context,
             MaterialPageRoute(
               builder: (context) => ChatBrowserPage(
-                collection: newCollection,
+                app: newApp,
               ),
             ),
           );
         }
       } catch (e) {
-        print('HomePage: Failed to create chat collection: $e');
+        print('HomePage: Failed to create chat app: $e');
       }
       return;
     }
 
-    print('HomePage: Found chat collection: ${chatCollection.title} at ${chatCollection.storagePath}');
+    print('HomePage: Found chat app: ${chatApp.title} at ${chatApp.storagePath}');
 
-    // Navigate to ChatBrowserPage with the local collection
+    // Navigate to ChatBrowserPage with the local app
     if (mounted) {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => ChatBrowserPage(
-            collection: chatCollection,
+            app: chatApp,
           ),
         ),
       );
-      print('HomePage: Navigation pushed for local chat collection');
+      print('HomePage: Navigation pushed for local chat app');
     }
   }
 
@@ -1169,15 +1167,15 @@ class _HomePageState extends State<HomePage> {
 
     if (!firstLaunchComplete) {
       // Show welcome/onboarding after first frame
-      // NOTE: Default collections are NOT created here - they are created when
+      // NOTE: Default apps are NOT created here - they are created when
       // the user confirms their callsign in WelcomePage via finalizeProfileIdentity()
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (mounted) {
           // Check if --skip-intro flag was passed (useful for automated testing)
           if (AppArgs().skipIntro) {
-            // Mark first launch as complete, create collections, and skip all intro screens
+            // Mark first launch as complete, create apps, and skip all intro screens
             ConfigService().set('firstLaunchComplete', true);
-            await _createDefaultCollections();
+            await _createDefaultApps();
             LogService().log('Skipping intro screens (--skip-intro flag)');
             return;
           }
@@ -1227,33 +1225,32 @@ class _HomePageState extends State<HomePage> {
     }
 
     try {
-      var collectionPath = ConfigService().getNestedValue('tracker.proximityCollectionPath');
+      var appPath = ConfigService().getNestedValue('tracker.proximityAppPath');
 
-      if (collectionPath is! String || collectionPath.isEmpty) {
-        final collections = await CollectionService().loadCollections();
-        final tracker = collections.where((c) => c.type == 'tracker').firstOrNull;
+      if (appPath is! String || appPath.isEmpty) {
+        final tracker = AppService().getAppByType('tracker');
         if (tracker?.storagePath != null) {
-          collectionPath = tracker!.storagePath;
-          ConfigService().setNestedValue('tracker.proximityCollectionPath', collectionPath);
+          appPath = tracker!.storagePath;
+          ConfigService().setNestedValue('tracker.proximityAppPath', appPath);
         }
       }
 
-      if (collectionPath is String && collectionPath.isNotEmpty) {
+      if (appPath is String && appPath.isNotEmpty) {
         final profileCallsign = ProfileService().getProfile().callsign;
         // Set up storage for TrackerService (encrypted or filesystem)
-        final profileStorage = CollectionService().profileStorage;
+        final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
             profileStorage,
-            collectionPath,
+            appPath,
           );
           TrackerService().setStorage(scopedStorage);
         } else {
-          TrackerService().setStorage(FilesystemProfileStorage(collectionPath));
+          TrackerService().setStorage(FilesystemProfileStorage(appPath));
         }
-        await TrackerService().initializeCollection(collectionPath, callsign: profileCallsign);
+        await TrackerService().initializeApp(appPath, callsign: profileCallsign);
         await ProximityDetectionService().start(TrackerService());
-        LogService().log('[PROXIMITY] Started after onboarding - collection: $collectionPath');
+        LogService().log('[PROXIMITY] Started after onboarding - app: $appPath');
       }
     } catch (e) {
       LogService().log('[PROXIMITY] Failed to start after onboarding: $e');
@@ -1270,9 +1267,9 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Create default collections for first launch
-  Future<void> _createDefaultCollections() async {
-    final collectionService = CollectionService();
+  /// Create default apps for first launch
+  Future<void> _createDefaultApps() async {
+    final appService = AppService();
     final defaultTypes = [
       'chat',
       'blog',
@@ -1284,23 +1281,23 @@ class _HomePageState extends State<HomePage> {
     ];
 
     LogService().log(
-      'Creating default collections. Path: ${collectionService.getDefaultCollectionsPath()}',
+      'Creating default apps. Path: ${appService.getDefaultAppsPath()}',
     );
 
     for (final type in defaultTypes) {
       try {
-        final title = _i18n.t('collection_type_$type');
-        LogService().log('Creating default collection: $type (title: $title)');
-        await collectionService.createCollection(title: title, type: type);
-        LogService().log('Created default collection: $type');
+        final title = _i18n.t('app_type_$type');
+        LogService().log('Creating default app: $type (title: $title)');
+        await appService.createApp(title: title, type: type);
+        LogService().log('Created default app: $type');
       } catch (e, stackTrace) {
-        // Collection might already exist, skip
-        LogService().log('Failed creating $type collection: $e');
+        // App might already exist, skip
+        LogService().log('Failed creating $type app: $e');
         LogService().log('Stack trace: $stackTrace');
       }
     }
 
-    LogService().log('Default collections creation complete');
+    LogService().log('Default apps creation complete');
   }
 
   /// Pre-download offline maps on first launch (100km radius around current position)
@@ -1447,7 +1444,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      // Don't allow back gesture to exit app when on Collections (index 0)
+      // Don't allow back gesture to exit app when on Apps (index 0)
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         // Close settings drawer if it's open
@@ -1466,12 +1463,12 @@ class _HomePageState extends State<HomePage> {
           }
         }
         if (_selectedIndex != 0) {
-          // Navigate back to Collections panel
+          // Navigate back to Apps panel
           setState(() {
             _selectedIndex = 0;
           });
         }
-        // If already on Collections, do nothing (stay there)
+        // If already on Apps, do nothing (stay there)
       },
       child: Scaffold(
         // Disable swipe gesture to open settings drawer - only open via menu icon
@@ -1861,15 +1858,15 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// Collections Page
-class CollectionsPage extends StatefulWidget {
+// Apps Page
+class AppsPage extends StatefulWidget {
   final String searchQuery;
   final VoidCallback? onAppSelected;
 
-  const CollectionsPage({super.key, this.searchQuery = '', this.onAppSelected});
+  const AppsPage({super.key, this.searchQuery = '', this.onAppSelected});
 
   @override
-  State<CollectionsPage> createState() => _CollectionsPageState();
+  State<AppsPage> createState() => _AppsPageState();
 }
 
 class _DefaultAppType {
@@ -1878,8 +1875,8 @@ class _DefaultAppType {
   const _DefaultAppType(this.type, this.icon);
 }
 
-class _CollectionsPageState extends State<CollectionsPage> {
-  final CollectionService _collectionService = CollectionService();
+class _AppsPageState extends State<AppsPage> {
+  final AppService _appService = AppService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
   final ChatNotificationService _chatNotificationService =
@@ -1888,24 +1885,24 @@ class _CollectionsPageState extends State<CollectionsPage> {
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
   Map<String, int> _unreadCounts = {};
 
-  List<Collection> _allCollections = [];
+  List<App> _allApps = [];
   bool _isLoading = true;
 
-  /// Get filtered collections based on search query from parent
-  List<Collection> get _filteredCollections {
+  /// Get filtered apps based on search query from parent
+  List<App> get _filteredApps {
     if (widget.searchQuery.isEmpty) {
-      return _allCollections;
+      return _allApps;
     }
     final query = widget.searchQuery.toLowerCase();
-    return _allCollections.where((collection) {
+    return _allApps.where((app) {
       // Search by title
-      final title = collection.title.toLowerCase();
+      final title = app.title.toLowerCase();
       if (title.contains(query)) return true;
       // Search by translated type name
-      final typeName = _i18n.t('collection_type_${collection.type}').toLowerCase();
+      final typeName = _i18n.t('app_type_${app.type}').toLowerCase();
       if (typeName.contains(query)) return true;
       // Search by type description
-      final descKey = 'collection_type_desc_${collection.type}';
+      final descKey = 'app_type_desc_${app.type}';
       final description = _i18n.t(descKey).toLowerCase();
       if (description != descKey.toLowerCase() && description.contains(query)) {
         return true;
@@ -1915,7 +1912,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
   }
 
   // Default single-instance app types that should always appear
-  // These match the types in CreateCollectionPage
+  // These match the types in CreateAppPage
   static const List<_DefaultAppType> _defaultAppTypes = [
     _DefaultAppType('places', Icons.place),
     _DefaultAppType('blog', Icons.article),
@@ -1938,29 +1935,29 @@ class _CollectionsPageState extends State<CollectionsPage> {
     super.initState();
     _i18n.languageNotifier.addListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.addListener(_onProfileChanged);
-    _collectionService.collectionsNotifier.addListener(_onCollectionsChanged);
+    _appService.appsNotifier.addListener(_onAppsChanged);
     _debugActionSubscription = DebugController().actionStream.listen(
       _handleDebugAction,
     );
-    LogService().log('CollectionsPage: initState - setting up listeners');
-    _loadCollections();
+    LogService().log('AppsPage: initState - setting up listeners');
+    _loadApps();
     _subscribeToUnreadCounts();
   }
 
   void _onProfileChanged() {
     if (!mounted) return;
-    // Profile changed, reload collections for the new profile
-    LogService().log('Profile changed, reloading collections');
-    _loadCollections();
+    // Profile changed, reload apps for the new profile
+    LogService().log('Profile changed, reloading apps');
+    _loadApps();
   }
 
-  void _onCollectionsChanged() {
+  void _onAppsChanged() {
     if (!mounted) return;
-    // Collections were created/updated/deleted, reload the list
+    // Apps were created/updated/deleted, reload the list
     LogService().log(
-      'CollectionsPage: collectionsNotifier triggered, reloading',
+      'AppsPage: appsNotifier triggered, reloading',
     );
-    _loadCollections();
+    _loadApps();
   }
 
   void _subscribeToUnreadCounts() {
@@ -1984,21 +1981,21 @@ class _CollectionsPageState extends State<CollectionsPage> {
   void dispose() {
     _i18n.languageNotifier.removeListener(_onLanguageChanged);
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
-    _collectionService.collectionsNotifier.removeListener(
-      _onCollectionsChanged,
+    _appService.appsNotifier.removeListener(
+      _onAppsChanged,
     );
     _unreadSubscription?.cancel();
     _debugActionSubscription?.cancel();
     super.dispose();
   }
 
-  bool _isFileCollectionType(Collection collection) {
-    return collection.type == 'files';
+  bool _isFileAppType(App app) {
+    return app.type == 'shared_folder';
   }
 
-  /// Build a WorkPage with ProfileStorage from CollectionService
-  Widget _buildWorkPage(Collection collection) {
-    final profileStorage = CollectionService().profileStorage;
+  /// Build a WorkPage with ProfileStorage from AppService
+  Widget _buildWorkPage(App app) {
+    final profileStorage = AppService().profileStorage;
     if (profileStorage == null) {
       // Fallback: if no profile storage, show error
       return Center(
@@ -2007,7 +2004,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
     }
 
     // Extract relative path from absolute storagePath
-    final storagePath = collection.storagePath ?? '';
+    final storagePath = app.storagePath ?? '';
     final basePath = profileStorage.basePath;
     String relativePath;
 
@@ -2029,259 +2026,225 @@ class _CollectionsPageState extends State<CollectionsPage> {
     return WorkPage(
       storage: profileStorage,
       relativePath: relativePath,
-      collectionTitle: collection.title,
+      appTitle: app.title,
     );
   }
 
-  Future<void> _loadCollections() async {
+  Future<void> _loadApps() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
     try {
-      // Use progressive loading for faster perceived performance
-      final collections = <Collection>[];
-
-      await for (final collection
-          in _collectionService.loadCollectionsStream()) {
-        if (!mounted) return;
-        collections.add(collection);
-
-        // Update UI progressively every few collections for responsiveness
-        if (collections.length <= 3 || collections.length % 5 == 0) {
-          _updateCollectionsList(List.from(collections), isComplete: false);
-        }
-      }
-
-      // Final update with all collections
+      final apps = await _appService.loadAppsFast();
       if (!mounted) return;
-      _updateCollectionsList(collections, isComplete: true);
+      _updateAppsList(apps, isComplete: true);
 
-      final types = collections.map((c) => c.type).toList();
-      LogService().log(
-        'CollectionsPage: Loaded ${collections.length} collections: $types',
-      );
+      final types = apps.map((c) => c.type).toList();
+      LogService().log('AppsPage: Loaded ${apps.length} apps: $types');
     } catch (e) {
-      LogService().log('Error loading collections: $e');
+      LogService().log('Error loading apps: $e');
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _updateCollectionsList(
-    List<Collection> collections, {
+  void _updateAppsList(
+    List<App> apps, {
     required bool isComplete,
   }) {
     if (!mounted) return;
 
-    // Separate app and file collections
-    final appCollections = collections
-        .where((c) => !_isFileCollectionType(c))
-        .toList();
-    final fileCollections = collections.where(_isFileCollectionType).toList();
+    final appItems = apps.where((c) => !_isFileAppType(c)).toList();
+    final fileApps = apps.where(_isFileAppType).toList();
 
-    // Sort each group: favorites first, then by usage count, then alphabetically
-    void sortGroup(List<Collection> group) {
-      final config = ConfigService();
+    // Pre-fetch usage counts once — avoids O(N log N) config lookups in sort
+    final config = ConfigService();
+    final usageCache = <String, int>{};
+    for (final app in apps) {
+      usageCache[app.type] =
+          config.getNestedValue('apps.usage.${app.type}', 0) as int;
+    }
+
+    void sortGroup(List<App> group) {
       group.sort((a, b) {
-        // 1. Favorites first
         if (a.isFavorite != b.isFavorite) {
           return a.isFavorite ? -1 : 1;
         }
-        // 2. By usage count (most used first)
-        final aUsage =
-            config.getNestedValue('collections.usage.${a.type}', 0) as int;
-        final bUsage =
-            config.getNestedValue('collections.usage.${b.type}', 0) as int;
+        final aUsage = usageCache[a.type] ?? 0;
+        final bUsage = usageCache[b.type] ?? 0;
         if (aUsage != bUsage) {
           return bUsage.compareTo(aUsage);
         }
-        // 3. Alphabetically
         return a.title.toLowerCase().compareTo(b.title.toLowerCase());
       });
     }
 
-    sortGroup(appCollections);
-    sortGroup(fileCollections);
+    sortGroup(appItems);
+    sortGroup(fileApps);
 
-    // Combine: apps first, then file collections
-    final sortedCollections = [...appCollections, ...fileCollections];
+    final sortedApps = [...appItems, ...fileApps];
 
     setState(() {
-      _allCollections = sortedCollections;
+      _allApps = sortedApps;
       _isLoading = !isComplete;
     });
   }
 
-  Future<void> _createNewCollection() async {
-    final result = await Navigator.push<Collection>(
+  Future<void> _createNewApp() async {
+    final result = await Navigator.push<App>(
       context,
-      MaterialPageRoute(builder: (context) => const CreateCollectionPage()),
+      MaterialPageRoute(builder: (context) => const CreateAppPage()),
     );
 
     if (result != null) {
-      // Collection was created, reload the list
-      _loadCollections();
+      // App was created, reload the list
+      _loadApps();
     }
   }
 
-  void _toggleFavorite(Collection collection) {
-    _collectionService.toggleFavorite(collection);
+  void _toggleFavorite(App app) {
+    _appService.toggleFavorite(app);
     setState(() {});
-    LogService().log('Toggled favorite for ${collection.title}');
+    LogService().log('Toggled favorite for ${app.title}');
   }
 
   void _handleDebugAction(DebugActionEvent event) {
     if (event.action == DebugAction.openConsole) {
       unawaited(
-        _openConsoleCollection(
+        _openConsoleApp(
           sessionId: event.params['session_id'] as String?,
         ),
       );
     }
   }
 
-  Future<void> _deleteCollection(Collection collection) async {
+  Future<void> _deleteApp(App app) async {
     // No confirmation needed - data is not deleted from disk and apps can be re-added
     if (!mounted) return;
     try {
-      await _collectionService.deleteCollection(collection);
-      LogService().log('Deleted collection: ${collection.title}');
-      _loadCollections();
+      await _appService.deleteApp(app);
+      LogService().log('Deleted app: ${app.title}');
+      _loadApps();
     } catch (e) {
-      LogService().log('Error deleting collection: $e');
+      LogService().log('Error deleting app: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting collection: $e')),
+          SnackBar(content: Text('Error deleting app: $e')),
         );
       }
     }
   }
 
   /// Record app usage to enable sorting by frequency
-  void _recordAppUsage(String collectionType) {
+  void _recordAppUsage(String appType) {
     final config = ConfigService();
-    final key = 'collections.usage.$collectionType';
+    final key = 'apps.usage.$appType';
     final currentCount = config.getNestedValue(key, 0) as int;
     config.setNestedValue(key, currentCount + 1);
   }
 
-  /// Check if a collection is a placeholder (not yet created on disk)
-  bool _isPlaceholder(Collection collection) {
-    return collection.id.startsWith('__placeholder_');
+  /// Check if an app is a placeholder (not yet created on disk)
+  bool _isPlaceholder(App app) {
+    return app.id.startsWith('__placeholder_');
   }
 
-  /// Create a collection from a placeholder when triggered via debug API
-  Future<Collection?> _createCollectionFromPlaceholder(
-    Collection placeholder,
+  /// Create an app from a placeholder when triggered via debug API
+  Future<App?> _createAppFromPlaceholder(
+    App placeholder,
   ) async {
     try {
-      final created = await _collectionService.createCollection(
+      final created = await _appService.createApp(
         title: placeholder.title,
         type: placeholder.type,
       );
-      await _loadCollections();
+      await _loadApps();
       return created;
     } catch (e) {
       LogService().log(
-        'CollectionsPage: Failed to create placeholder ${placeholder.type}: $e',
+        'AppsPage: Failed to create placeholder ${placeholder.type}: $e',
       );
       return null;
     }
   }
 
-  Future<Collection?> _findConsoleCollection() async {
-    try {
-      final collections = await _collectionService.loadCollections();
-      if (mounted) {
-        _updateCollectionsList(collections, isComplete: true);
-      }
-      for (final collection in collections) {
-        if (collection.type == 'console') {
-          return collection;
-        }
-      }
-    } catch (e) {
-      LogService().log(
-        'CollectionsPage: Error loading collections for debug action: $e',
-      );
-    }
-    return null;
+  Future<App?> _findConsoleAppEntry() async {
+    return _appService.getAppByType('console');
   }
 
-  Future<void> _openConsoleCollection({String? sessionId}) async {
-    Collection? consoleCollection;
+  Future<void> _openConsoleApp({String? sessionId}) async {
+    App? consoleApp;
     try {
-      consoleCollection = _allCollections.firstWhere(
+      consoleApp = _allApps.firstWhere(
         (c) => c.type == 'console' && !_isPlaceholder(c),
       );
     } catch (_) {}
 
-    if (consoleCollection == null) {
+    if (consoleApp == null) {
       try {
-        final placeholder = _allCollections.firstWhere(
+        final placeholder = _allApps.firstWhere(
           (c) => c.type == 'console',
         );
-        consoleCollection = await _createCollectionFromPlaceholder(placeholder);
+        consoleApp = await _createAppFromPlaceholder(placeholder);
       } catch (_) {}
     }
 
-    if (consoleCollection != null && _isPlaceholder(consoleCollection)) {
-      consoleCollection = await _createCollectionFromPlaceholder(
-        consoleCollection,
+    if (consoleApp != null && _isPlaceholder(consoleApp)) {
+      consoleApp = await _createAppFromPlaceholder(
+        consoleApp,
       );
     }
 
-    consoleCollection ??= await _findConsoleCollection();
-    if (!mounted || consoleCollection == null) {
+    consoleApp ??= await _findConsoleAppEntry();
+    if (!mounted || consoleApp == null) {
       try {
-        final title = _i18n.t('collection_type_console');
-        consoleCollection = await _collectionService.createCollection(
+        final title = _i18n.t('app_type_console');
+        consoleApp = await _appService.createApp(
           title: title,
           type: 'console',
         );
-        await _loadCollections();
+        await _loadApps();
         LogService().log(
-          'CollectionsPage: Created console collection for debug open_console',
+          'AppsPage: Created console app for debug open_console',
         );
       } catch (e) {
         LogService().log(
-          'CollectionsPage: Console collection not found and create failed: $e',
+          'AppsPage: Console app not found and create failed: $e',
         );
         return;
       }
     }
 
-    final collectionPath = consoleCollection.storagePath ?? '';
-    final collectionTitle = consoleCollection.title;
+    final appPath = consoleApp.storagePath ?? '';
+    final appTitle = consoleApp.title;
 
-    _recordAppUsage(consoleCollection.type);
+    _recordAppUsage(consoleApp.type);
     LogService().log(
-      'CollectionsPage: Opening console via debug action (session: ${sessionId ?? "first"})',
+      'AppsPage: Opening console via debug action (session: ${sessionId ?? "first"})',
     );
 
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ConsoleBrowserPage(
-          collectionPath: collectionPath,
-          collectionTitle: collectionTitle,
+          appPath: appPath,
+          appTitle: appTitle,
         ),
       ),
     );
 
     if (mounted) {
-      _loadCollections();
+      _loadApps();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final filteredCollections = _filteredCollections;
+    final filteredApps = _filteredApps;
 
     return Scaffold(
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _allCollections.isEmpty
+          : _allApps.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2293,12 +2256,12 @@ class _CollectionsPageState extends State<CollectionsPage> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    _i18n.t('no_collections_yet'),
+                    _i18n.t('no_apps_yet'),
                     style: theme.textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _i18n.t('create_your_first_collection'),
+                    _i18n.t('create_your_first_app'),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -2306,7 +2269,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
                 ],
               ),
             )
-          : filteredCollections.isEmpty
+          : filteredApps.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2332,7 +2295,7 @@ class _CollectionsPageState extends State<CollectionsPage> {
               ),
             )
           : RefreshIndicator(
-              onRefresh: _loadCollections,
+              onRefresh: _loadApps,
               child: LayoutBuilder(
                       builder: (context, constraints) {
                         // Calculate number of columns based on screen width
@@ -2347,18 +2310,18 @@ class _CollectionsPageState extends State<CollectionsPage> {
                             ? 7 // Large desktop: 7 columns
                             : 8; // Extra large: 8 columns
 
-                        // Separate app collections from file collections
-                        final appCollections = filteredCollections
-                            .where((c) => !_isFileCollectionType(c))
+                        // Separate app items from file apps
+                        final appItems = filteredApps
+                            .where((c) => !_isFileAppType(c))
                             .toList();
-                        final fileCollections = filteredCollections
-                            .where(_isFileCollectionType)
+                        final fileApps = filteredApps
+                            .where(_isFileAppType)
                             .toList();
 
                         return CustomScrollView(
                           slivers: [
-                            // App collections grid
-                            if (appCollections.isNotEmpty)
+                            // App items grid
+                            if (appItems.isNotEmpty)
                               SliverPadding(
                                 padding: const EdgeInsets.fromLTRB(
                                   16,
@@ -2378,216 +2341,225 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                     context,
                                     index,
                                   ) {
-                                    final collection = appCollections[index];
-                                    return _CollectionGridCard(
-                                      collection: collection,
+                                    final appEntry = appItems[index];
+                                    return _AppGridCard(
+                                      app: appEntry,
                                       onTap: () {
                                         // Clear search when app is selected
                                         widget.onAppSelected?.call();
-                                        _recordAppUsage(collection.type);
+                                        _recordAppUsage(appEntry.type);
                                         LogService().log(
-                                          'Opened collection: ${collection.title}',
+                                          'Opened app: ${appEntry.title}',
                                         );
-                                        // Route to appropriate page based on collection type
+                                        // Route to appropriate page based on app type
                                         final Widget targetPage =
-                                            collection.type == 'chat'
+                                            appEntry.type == 'chat'
                                             ? ChatBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'email'
+                                            : appEntry.type == 'email'
                                             ? EmailBrowserPage()
-                                            : collection.type == 'forum'
+                                            : appEntry.type == 'forum'
                                             ? ForumBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'blog'
+                                            : appEntry.type == 'blog'
                                             ? BlogBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'news'
+                                            : appEntry.type == 'news'
                                             ? NewsBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'events'
+                                            : appEntry.type == 'events'
                                             ? EventsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'postcards'
+                                            : appEntry.type == 'postcards'
                                             ? PostcardsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'contacts'
+                                            : appEntry.type == 'contacts'
                                             ? ContactsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'places'
+                                            : appEntry.type == 'places'
                                             ? PlacesBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'market'
+                                            : appEntry.type == 'market'
                                             ? MarketBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'inventory'
+                                            : appEntry.type == 'inventory'
                                             ? InventoryBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'tracker'
+                                            : appEntry.type == 'tracker'
                                             ? TrackerBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'alerts'
+                                            : appEntry.type == 'alerts'
                                             ? ReportBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'groups'
+                                            : appEntry.type == 'groups'
                                             ? GroupsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'backup'
+                                            : appEntry.type == 'backup'
                                             ? const BackupBrowserPage()
-                                            : collection.type == 'station'
+                                            : appEntry.type == 'station'
                                             ? const StationDashboardPage()
-                                            : collection.type == 'transfer'
+                                            : appEntry.type == 'transfer'
                                             ? const TransferPage()
-                                            : collection.type == 'wallet'
+                                            : appEntry.type == 'wallet'
                                             ? WalletBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'console'
+                                            : appEntry.type == 'console'
                                             ? ConsoleBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'log'
+                                            : appEntry.type == 'log'
                                             ? const LogBrowserPage()
-                                            : collection.type == 'videos'
+                                            : appEntry.type == 'videos'
                                             ? VideoBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'transfer'
+                                            : appEntry.type == 'transfer'
                                             ? const TransferPage()
-                                            : collection.type == 'reader'
+                                            : appEntry.type == 'reader'
                                             ? ReaderHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'flasher'
+                                            : appEntry.type == 'flasher'
                                             ? FlasherPage(
                                                 basePath:
-                                                    collection.storagePath ??
+                                                    appEntry.storagePath ??
                                                     '',
                                               )
-                                            : collection.type == 'work'
-                                            ? _buildWorkPage(collection)
-                                            : collection.type == 'usenet'
+                                            : appEntry.type == 'work'
+                                            ? _buildWorkPage(appEntry)
+                                            : appEntry.type == 'usenet'
                                             ? const UsenetAppPage()
-                                            : collection.type == 'music'
+                                            : appEntry.type == 'music'
                                             ? MusicHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                         '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'stories'
+                                            : appEntry.type == 'stories'
                                             ? StoriesHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                         '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : CollectionBrowserPage(
-                                                collection: collection,
+                                            : appEntry.type == 'files'
+                                            ? FilesBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
+                                                i18n: _i18n,
+                                              )
+                                            : AppBrowserPage(
+                                                app: appEntry,
                                               );
 
                                         LogService().log(
-                                          'Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}',
+                                          'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
                                         );
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
                                             builder: (context) => targetPage,
                                           ),
-                                        ).then((_) => _loadCollections());
+                                        ).then((_) => _loadApps());
                                       },
                                       onFavoriteToggle: () =>
-                                          _toggleFavorite(collection),
+                                          _toggleFavorite(appEntry),
                                       onDelete: () =>
-                                          _deleteCollection(collection),
-                                      unreadCount: collection.type == 'chat'
+                                          _deleteApp(appEntry),
+                                      unreadCount: appEntry.type == 'chat'
                                           ? _chatNotificationService
                                                 .totalUnreadCount
                                           : 0,
                                     );
-                                  }, childCount: appCollections.length),
+                                  }, childCount: appItems.length),
                                 ),
                               ),
 
-                            // Separator between fixed and file collections
-                            if (appCollections.isNotEmpty &&
-                                fileCollections.isNotEmpty)
+                            // Separator between fixed and file apps
+                            if (appItems.isNotEmpty &&
+                                fileApps.isNotEmpty)
                               SliverToBoxAdapter(
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
@@ -2603,8 +2575,8 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                 ),
                               ),
 
-                            // File collections grid
-                            if (fileCollections.isNotEmpty)
+                            // File apps grid
+                            if (fileApps.isNotEmpty)
                               SliverPadding(
                                 padding: const EdgeInsets.fromLTRB(
                                   16,
@@ -2624,200 +2596,209 @@ class _CollectionsPageState extends State<CollectionsPage> {
                                     context,
                                     index,
                                   ) {
-                                    final collection = fileCollections[index];
-                                    return _CollectionGridCard(
-                                      collection: collection,
+                                    final appEntry = fileApps[index];
+                                    return _AppGridCard(
+                                      app: appEntry,
                                       onTap: () {
                                         // Clear search when app is selected
                                         widget.onAppSelected?.call();
-                                        _recordAppUsage(collection.type);
+                                        _recordAppUsage(appEntry.type);
                                         LogService().log(
-                                          'Opened collection: ${collection.title}',
+                                          'Opened app: ${appEntry.title}',
                                         );
-                                        // Route to appropriate page based on collection type
+                                        // Route to appropriate page based on app type
                                         final Widget targetPage =
-                                            collection.type == 'chat'
+                                            appEntry.type == 'chat'
                                             ? ChatBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'email'
+                                            : appEntry.type == 'email'
                                             ? EmailBrowserPage()
-                                            : collection.type == 'forum'
+                                            : appEntry.type == 'forum'
                                             ? ForumBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'blog'
+                                            : appEntry.type == 'blog'
                                             ? BlogBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'news'
+                                            : appEntry.type == 'news'
                                             ? NewsBrowserPage(
-                                                collection: collection,
+                                                app: appEntry,
                                               )
-                                            : collection.type == 'events'
+                                            : appEntry.type == 'events'
                                             ? EventsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'postcards'
+                                            : appEntry.type == 'postcards'
                                             ? PostcardsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'contacts'
+                                            : appEntry.type == 'contacts'
                                             ? ContactsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'places'
+                                            : appEntry.type == 'places'
                                             ? PlacesBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'market'
+                                            : appEntry.type == 'market'
                                             ? MarketBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'inventory'
+                                            : appEntry.type == 'inventory'
                                             ? InventoryBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'tracker'
+                                            : appEntry.type == 'tracker'
                                             ? TrackerBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'alerts'
+                                            : appEntry.type == 'alerts'
                                             ? ReportBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'groups'
+                                            : appEntry.type == 'groups'
                                             ? GroupsBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'wallet'
+                                            : appEntry.type == 'wallet'
                                             ? WalletBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'console'
+                                            : appEntry.type == 'console'
                                             ? ConsoleBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'log'
+                                            : appEntry.type == 'log'
                                             ? const LogBrowserPage()
-                                            : collection.type == 'videos'
+                                            : appEntry.type == 'videos'
                                             ? VideoBrowserPage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                               )
-                                            : collection.type == 'reader'
+                                            : appEntry.type == 'reader'
                                             ? ReaderHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                     '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'flasher'
+                                            : appEntry.type == 'flasher'
                                             ? FlasherPage(
                                                 basePath:
-                                                    collection.storagePath ??
+                                                    appEntry.storagePath ??
                                                     '',
                                               )
-                                            : collection.type == 'work'
-                                            ? _buildWorkPage(collection)
-                                            : collection.type == 'usenet'
+                                            : appEntry.type == 'work'
+                                            ? _buildWorkPage(appEntry)
+                                            : appEntry.type == 'usenet'
                                             ? const UsenetAppPage()
-                                            : collection.type == 'music'
+                                            : appEntry.type == 'music'
                                             ? MusicHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                         '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : collection.type == 'stories'
+                                            : appEntry.type == 'stories'
                                             ? StoriesHomePage(
-                                                collectionPath:
-                                                    collection.storagePath ??
+                                                appPath:
+                                                    appEntry.storagePath ??
                                                         '',
-                                                collectionTitle:
-                                                    collection.title,
+                                                appTitle:
+                                                    appEntry.title,
                                                 i18n: _i18n,
                                               )
-                                            : CollectionBrowserPage(
-                                                collection: collection,
+                                            : appEntry.type == 'files'
+                                            ? FilesBrowserPage(
+                                                appPath:
+                                                    appEntry.storagePath ??
+                                                        '',
+                                                appTitle:
+                                                    appEntry.title,
+                                                i18n: _i18n,
+                                              )
+                                            : AppBrowserPage(
+                                                app: appEntry,
                                               );
 
                                         LogService().log(
-                                          'Opening collection: ${collection.title} (type: ${collection.type}) -> ${targetPage.runtimeType}',
+                                          'Opening app: ${appEntry.title} (type: ${appEntry.type}) -> ${targetPage.runtimeType}',
                                         );
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
                                             builder: (context) => targetPage,
                                           ),
-                                        ).then((_) => _loadCollections());
+                                        ).then((_) => _loadApps());
                                       },
                                       onFavoriteToggle: () =>
-                                          _toggleFavorite(collection),
+                                          _toggleFavorite(appEntry),
                                       onDelete: () =>
-                                          _deleteCollection(collection),
+                                          _deleteApp(appEntry),
                                       unreadCount:
-                                          0, // File collections don't track unread
+                                          0, // File apps don't track unread
                                     );
-                                  }, childCount: fileCollections.length),
+                                  }, childCount: fileApps.length),
                                 ),
                               ),
                           ],
@@ -2826,60 +2807,60 @@ class _CollectionsPageState extends State<CollectionsPage> {
                     ),
                   ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createNewCollection,
+        onPressed: _createNewApp,
         icon: const Icon(Icons.add),
-        label: Text(_i18n.t('add_new_collection')),
+        label: Text(_i18n.t('add_new_app')),
       ),
     );
   }
 }
 
-// Collection Grid Card Widget (compact design for grid layout)
-class _CollectionGridCard extends StatelessWidget {
-  final Collection collection;
+// App Grid Card Widget (compact design for grid layout)
+class _AppGridCard extends StatelessWidget {
+  final App app;
   final VoidCallback onTap;
   final VoidCallback onFavoriteToggle;
   final VoidCallback onDelete;
   final int unreadCount;
 
-  const _CollectionGridCard({
-    required this.collection,
+  const _AppGridCard({
+    required this.app,
     required this.onTap,
     required this.onFavoriteToggle,
     required this.onDelete,
     this.unreadCount = 0,
   });
 
-  /// Check if this is a file collection type (not an app)
-  bool _isFileCollectionType() {
-    return collection.type == 'files';
+  /// Check if this is a file app type (not an app)
+  bool _isFileAppType() {
+    return app.type == 'shared_folder';
   }
 
   /// Get display title with proper capitalization and translation for app types
   String _getDisplayTitle() {
     final i18n = I18nService();
-    if (!_isFileCollectionType() && collection.title.isNotEmpty) {
-      // Try to get translated label for known collection types
-      final key = 'collection_type_${collection.type}';
+    if (!_isFileAppType() && app.title.isNotEmpty) {
+      // Try to get translated label for known app types
+      final key = 'app_type_${app.type}';
       final translated = i18n.t(key);
       if (translated != key) {
         return translated;
       }
       // Special case for www -> WWW
-      if (collection.title.toLowerCase() == 'www') {
+      if (app.title.toLowerCase() == 'www') {
         return 'WWW';
       }
-      return collection.title[0].toUpperCase() + collection.title.substring(1);
+      return app.title[0].toUpperCase() + app.title.substring(1);
     }
-    return collection.title;
+    return app.title;
   }
 
-  /// Get appropriate icon based on collection type
-  IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
+  /// Get appropriate icon based on app type
+  IconData _getAppIcon() => getAppTypeIcon(app.type);
 
-  /// Get gradient colors for collection type icon
+  /// Get gradient colors for app type icon
   LinearGradient _getTypeGradient(bool isDark) =>
-      getAppTypeGradient(collection.type, isDark);
+      getAppTypeGradient(app.type, isDark);
 
   void _showContextMenu(BuildContext context, Offset position) {
     final i18n = I18nService();
@@ -2898,8 +2879,8 @@ class _CollectionGridCard extends StatelessWidget {
           child: Row(
             children: [
               Icon(
-                collection.isFavorite ? Icons.star : Icons.star_border,
-                color: collection.isFavorite ? Colors.amber : null,
+                app.isFavorite ? Icons.star : Icons.star_border,
+                color: app.isFavorite ? Colors.amber : null,
               ),
               const SizedBox(width: 8),
               Text(i18n.t('favorite')),
@@ -2978,7 +2959,7 @@ class _CollectionGridCard extends StatelessWidget {
                           ],
                         ),
                         child: Icon(
-                          _getCollectionIcon(),
+                          _getAppIcon(),
                           size: 18,
                           color: Colors.white,
                         ),
@@ -3003,7 +2984,7 @@ class _CollectionGridCard extends StatelessWidget {
               ),
             ),
             // Favorite badge (top-left corner)
-            if (collection.isFavorite)
+            if (app.isFavorite)
               Positioned(
                 top: 4,
                 left: 4,
@@ -3046,10 +3027,10 @@ class _CollectionGridCard extends StatelessWidget {
                       child: Row(
                         children: [
                           Icon(
-                            collection.isFavorite
+                            app.isFavorite
                                 ? Icons.star
                                 : Icons.star_border,
-                            color: collection.isFavorite ? Colors.amber : null,
+                            color: app.isFavorite ? Colors.amber : null,
                           ),
                           const SizedBox(width: 8),
                           Text(i18n.t('favorite')),
@@ -3076,28 +3057,28 @@ class _CollectionGridCard extends StatelessWidget {
   }
 }
 
-// Collection Card Widget (original list design - kept for reference)
-class _CollectionCard extends StatelessWidget {
-  final Collection collection;
+// App Card Widget (original list design - kept for reference)
+class _AppCard extends StatelessWidget {
+  final App app;
   final VoidCallback onTap;
   final VoidCallback onFavoriteToggle;
   final VoidCallback onDelete;
   final VoidCallback onOpenFolder;
 
-  const _CollectionCard({
-    required this.collection,
+  const _AppCard({
+    required this.app,
     required this.onTap,
     required this.onFavoriteToggle,
     required this.onDelete,
     required this.onOpenFolder,
   });
 
-  /// Get appropriate icon based on collection type
-  IconData _getCollectionIcon() => getAppTypeIcon(collection.type);
+  /// Get appropriate icon based on app type
+  IconData _getAppIcon() => getAppTypeIcon(app.type);
 
-  /// Get gradient colors for collection type icon
+  /// Get gradient colors for app type icon
   LinearGradient _getTypeGradient(bool isDark) =>
-      getAppTypeGradient(collection.type, isDark);
+      getAppTypeGradient(app.type, isDark);
 
   @override
   Widget build(BuildContext context) {
@@ -3133,7 +3114,7 @@ class _CollectionCard extends StatelessWidget {
                       ],
                     ),
                     child: Icon(
-                      _getCollectionIcon(),
+                      _getAppIcon(),
                       color: Colors.white,
                       size: 24,
                     ),
@@ -3147,7 +3128,7 @@ class _CollectionCard extends StatelessWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                collection.title,
+                                app.title,
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: -0.2,
@@ -3158,10 +3139,10 @@ class _CollectionCard extends StatelessWidget {
                             ),
                             IconButton(
                               icon: Icon(
-                                collection.isFavorite
+                                app.isFavorite
                                     ? Icons.star
                                     : Icons.star_border,
-                                color: collection.isFavorite
+                                color: app.isFavorite
                                     ? Colors.amber
                                     : null,
                                 size: 22,
@@ -3184,11 +3165,11 @@ class _CollectionCard extends StatelessWidget {
                             ),
                           ],
                         ),
-                        if (collection.description.isNotEmpty)
+                        if (app.description.isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
-                              collection.description,
+                              app.description,
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),
@@ -3206,7 +3187,7 @@ class _CollectionCard extends StatelessWidget {
                 children: [
                   _InfoChip(
                     icon: Icons.calendar_today_outlined,
-                    label: collection.formattedDate,
+                    label: app.formattedDate,
                   ),
                 ],
               ),
@@ -3284,20 +3265,20 @@ class GeoChatPage extends StatelessWidget {
 // SettingsPage has been removed - settings are now in the EndDrawer
 
 // ============================================================================
-// COLLECTION BROWSER PAGE
+// APP BROWSER PAGE
 // ============================================================================
 
-class CollectionBrowserPage extends StatefulWidget {
-  final Collection collection;
+class AppBrowserPage extends StatefulWidget {
+  final App app;
 
-  const CollectionBrowserPage({super.key, required this.collection});
+  const AppBrowserPage({super.key, required this.app});
 
   @override
-  State<CollectionBrowserPage> createState() => _CollectionBrowserPageState();
+  State<AppBrowserPage> createState() => _AppBrowserPageState();
 }
 
-class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
-  final CollectionService _collectionService = CollectionService();
+class _AppBrowserPageState extends State<AppBrowserPage> {
+  final AppService _appService = AppService();
   final I18nService _i18n = I18nService();
   final TextEditingController _searchController = TextEditingController();
   List<FileNode> _allFiles = [];
@@ -3327,13 +3308,13 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
     setState(() => _isLoading = true);
 
     try {
-      final files = await _collectionService.loadFileTree(widget.collection);
+      final files = await _appService.loadFileTree(widget.app);
       setState(() {
         _allFiles = files;
         _filteredFiles = files;
         _isLoading = false;
       });
-      LogService().log('Loaded ${files.length} items in collection');
+      LogService().log('Loaded ${files.length} items in app');
     } catch (e) {
       LogService().log('Error loading files: $e');
       setState(() => _isLoading = false);
@@ -3396,9 +3377,9 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
 
       if (result != null && result.files.isNotEmpty) {
         final paths = result.files.map((f) => f.path!).toList();
-        LogService().log('Adding ${paths.length} files to collection');
+        LogService().log('Adding ${paths.length} files to app');
 
-        await _collectionService.addFiles(widget.collection, paths);
+        await _appService.addFiles(widget.app, paths);
         LogService().log('Files added successfully');
 
         if (mounted) {
@@ -3434,9 +3415,9 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       );
 
       if (result != null) {
-        LogService().log('Adding folder to collection: $result');
+        LogService().log('Adding folder to app: $result');
 
-        await _collectionService.addFolder(widget.collection, result);
+        await _appService.addFolder(widget.app, result);
         LogService().log('Folder added successfully');
 
         if (mounted) {
@@ -3502,7 +3483,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
       try {
         LogService().log('Creating folder: $folderName');
 
-        await _collectionService.createFolder(widget.collection, folderName);
+        await _appService.createFolder(widget.app, folderName);
         LogService().log('Folder created successfully');
 
         if (mounted) {
@@ -3530,7 +3511,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   Future<void> _editSettings() async {
     final updated = await showDialog<bool>(
       context: context,
-      builder: (context) => EditCollectionDialog(collection: widget.collection),
+      builder: (context) => EditAppDialog(app: widget.app),
     );
 
     if (updated == true) {
@@ -3538,25 +3519,25 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
     }
   }
 
-  Future<void> _refreshCollectionFiles() async {
+  Future<void> _refreshAppFiles() async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('regenerating_collection_files'))),
+        SnackBar(content: Text(_i18n.t('regenerating_app_files'))),
       );
 
-      // Force regeneration of all collection files
-      await _collectionService.ensureCollectionFilesUpdated(
-        widget.collection,
+      // Force regeneration of all app files
+      await _appService.ensureAppFilesUpdated(
+        widget.app,
         force: true,
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('collection_files_regenerated'))),
+          SnackBar(content: Text(_i18n.t('app_files_regenerated'))),
         );
       }
     } catch (e) {
-      LogService().log('Error refreshing collection files: $e');
+      LogService().log('Error refreshing app files: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -3573,23 +3554,23 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collection.title),
+        title: Text(widget.app.title),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _refreshCollectionFiles,
-            tooltip: _i18n.t('refresh_collection_files'),
+            onPressed: _refreshAppFiles,
+            tooltip: _i18n.t('refresh_app_files'),
           ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _editSettings,
-            tooltip: _i18n.t('collection_settings'),
+            tooltip: _i18n.t('app_settings'),
           ),
         ],
       ),
       body: Column(
         children: [
-          // Collection Info
+          // App Info
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -3597,9 +3578,9 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (widget.collection.description.isNotEmpty)
+                if (widget.app.description.isNotEmpty)
                   Text(
-                    widget.collection.description,
+                    widget.app.description,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 const SizedBox(height: 8),
@@ -3612,7 +3593,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      '${widget.collection.filesCount} ${widget.collection.filesCount == 1 ? _i18n.t('file') : _i18n.t('files')}',
+                      '${widget.app.filesCount} ${widget.app.filesCount == 1 ? _i18n.t('file') : _i18n.t('files')}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(width: 16),
@@ -3623,7 +3604,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      widget.collection.formattedSize,
+                      widget.app.formattedSize,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(width: 16),
@@ -3634,7 +3615,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      _i18n.t(widget.collection.visibility),
+                      _i18n.t(widget.app.visibility),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -3748,7 +3729,7 @@ class _CollectionBrowserPageState extends State<CollectionBrowserPage> {
                         return _FileNodeTile(
                           fileNode: file,
                           expandedFolders: _expandedFolders,
-                          collectionPath: widget.collection.storagePath ?? '',
+                          appPath: widget.app.storagePath ?? '',
                           onToggleExpand: (path) {
                             setState(() {
                               if (_expandedFolders.contains(path)) {
@@ -3775,13 +3756,13 @@ class _FileNodeTile extends StatefulWidget {
   final int indentLevel;
   final Set<String> expandedFolders;
   final void Function(String) onToggleExpand;
-  final String collectionPath;
+  final String appPath;
 
   const _FileNodeTile({
     required this.fileNode,
     required this.expandedFolders,
     required this.onToggleExpand,
-    required this.collectionPath,
+    required this.appPath,
     this.indentLevel = 0,
   });
 
@@ -3807,7 +3788,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
     if (kIsWeb) return; // No local file access on web
 
     try {
-      final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
+      final filePath = '${widget.appPath}/${widget.fileNode.path}';
       final file = File(filePath);
       if (await file.exists()) {
         setState(() {
@@ -3861,7 +3842,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
     }
 
     try {
-      final filePath = '${widget.collectionPath}/${widget.fileNode.path}';
+      final filePath = '${widget.appPath}/${widget.fileNode.path}';
       final file = File(filePath);
 
       if (!await file.exists()) {
@@ -3975,7 +3956,7 @@ class _FileNodeTileState extends State<_FileNodeTile> {
               fileNode: child,
               expandedFolders: widget.expandedFolders,
               onToggleExpand: widget.onToggleExpand,
-              collectionPath: widget.collectionPath,
+              appPath: widget.appPath,
               indentLevel: widget.indentLevel + 1,
             ),
           ),
@@ -3985,20 +3966,20 @@ class _FileNodeTileState extends State<_FileNodeTile> {
 }
 
 // ============================================================================
-// EDIT COLLECTION DIALOG
+// EDIT APP DIALOG
 // ============================================================================
 
-class EditCollectionDialog extends StatefulWidget {
-  final Collection collection;
+class EditAppDialog extends StatefulWidget {
+  final App app;
 
-  const EditCollectionDialog({super.key, required this.collection});
+  const EditAppDialog({super.key, required this.app});
 
   @override
-  State<EditCollectionDialog> createState() => _EditCollectionDialogState();
+  State<EditAppDialog> createState() => _EditAppDialogState();
 }
 
-class _EditCollectionDialogState extends State<EditCollectionDialog> {
-  final CollectionService _collectionService = CollectionService();
+class _EditAppDialogState extends State<EditAppDialog> {
+  final AppService _appService = AppService();
   final I18nService _i18n = I18nService();
   late TextEditingController _titleController;
   late TextEditingController _descriptionController;
@@ -4009,12 +3990,12 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
   @override
   void initState() {
     super.initState();
-    _titleController = TextEditingController(text: widget.collection.title);
+    _titleController = TextEditingController(text: widget.app.title);
     _descriptionController = TextEditingController(
-      text: widget.collection.description,
+      text: widget.app.description,
     );
-    _visibility = widget.collection.visibility;
-    _encryption = widget.collection.encryption;
+    _visibility = widget.app.visibility;
+    _encryption = widget.app.encryption;
   }
 
   @override
@@ -4038,35 +4019,35 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
 
     try {
       // Capture old title before updating
-      final oldTitle = widget.collection.title;
+      final oldTitle = widget.app.title;
 
-      // Update collection properties
-      widget.collection.title = title;
-      widget.collection.description = _descriptionController.text.trim();
-      widget.collection.visibility = _visibility;
-      widget.collection.encryption = _encryption;
+      // Update app properties
+      widget.app.title = title;
+      widget.app.description = _descriptionController.text.trim();
+      widget.app.visibility = _visibility;
+      widget.app.encryption = _encryption;
 
       // Save to disk (will rename folder if title changed)
-      await _collectionService.updateCollection(
-        widget.collection,
+      await _appService.updateApp(
+        widget.app,
         oldTitle: oldTitle,
       );
 
       LogService().log(
-        'Updated collection settings: ${widget.collection.title}',
+        'Updated app settings: ${widget.app.title}',
       );
 
       if (mounted) {
         Navigator.pop(context, true);
       }
     } catch (e, stackTrace) {
-      LogService().log('ERROR updating collection: $e');
+      LogService().log('ERROR updating app: $e');
       LogService().log('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              _i18n.t('error_updating_collection', params: [e.toString()]),
+              _i18n.t('error_updating_app', params: [e.toString()]),
             ),
           ),
         );
@@ -4081,7 +4062,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_i18n.t('collection_settings')),
+      title: Text(_i18n.t('app_settings')),
       content: SingleChildScrollView(
         child: SizedBox(
           width: 500,
@@ -4089,9 +4070,9 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Collection ID (read-only)
+              // App ID (read-only)
               Text(
-                _i18n.t('collection_id'),
+                _i18n.t('app_id'),
                 style: Theme.of(context).textTheme.labelSmall,
               ),
               const SizedBox(height: 4),
@@ -4103,7 +4084,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SelectableText(
-                  widget.collection.id,
+                  widget.app.id,
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(fontFamily: 'Courier New'),
@@ -4115,7 +4096,7 @@ class _EditCollectionDialogState extends State<EditCollectionDialog> {
               TextField(
                 controller: _titleController,
                 decoration: InputDecoration(
-                  labelText: _i18n.t('collection_title'),
+                  labelText: _i18n.t('app_title'),
                   border: const OutlineInputBorder(),
                 ),
                 enabled: !_isSaving,

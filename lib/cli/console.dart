@@ -3,7 +3,7 @@ import 'dart:io';
 import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/station_server_service.dart';
@@ -75,16 +75,16 @@ class Console {
 
       await LogService().init();
       await ConfigService().init();
-      await CollectionService().init();
+      await AppService().init();
       await ProfileService().initialize();
 
       // Set active callsign
       final profile = ProfileService().getProfile();
       // Set nsec for encrypted storage access (must be before setActiveCallsign)
       if (profile.nsec.isNotEmpty) {
-        CollectionService().setNsec(profile.nsec);
+        AppService().setNsec(profile.nsec);
       }
-      await CollectionService().setActiveCallsign(profile.callsign);
+      await AppService().setActiveCallsign(profile.callsign);
 
       // Initialize station server service
       await StationServerService().initialize();

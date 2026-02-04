@@ -5,7 +5,7 @@
 
 import 'package:flutter/material.dart';
 import '../models/postcard.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/postcard_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -16,13 +16,13 @@ import '../dialogs/new_postcard_dialog.dart';
 
 /// Postcards browser page with 2-panel layout
 class PostcardsBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const PostcardsBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   }) : super(key: key);
 
   @override
@@ -64,19 +64,19 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     _currentCallsign = profile.callsign;
 
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _postcardService.setStorage(scopedStorage);
     } else {
-      _postcardService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _postcardService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
     // Initialize postcard service
-    await _postcardService.initializeCollection(widget.collectionPath);
+    await _postcardService.initializeApp(widget.appPath);
 
     await _loadPostcards();
 
@@ -464,7 +464,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
       MaterialPageRoute(
         builder: (context) => _PostcardDetailPage(
           postcard: fullPostcard,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           postcardService: _postcardService,
           i18n: _i18n,
           currentCallsign: _currentCallsign,
@@ -509,7 +509,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
 
     return PostcardDetailWidget(
       postcard: _selectedPostcard!,
-      collectionPath: widget.collectionPath,
+      appPath: widget.appPath,
       currentCallsign: _currentCallsign,
       currentUserNpub: _currentUserNpub,
       isSender: isSender,
@@ -528,7 +528,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
 /// Full-screen postcard detail page for mobile view
 class _PostcardDetailPage extends StatefulWidget {
   final Postcard postcard;
-  final String collectionPath;
+  final String appPath;
   final PostcardService postcardService;
   final I18nService i18n;
   final String? currentCallsign;
@@ -539,7 +539,7 @@ class _PostcardDetailPage extends StatefulWidget {
   const _PostcardDetailPage({
     Key? key,
     required this.postcard,
-    required this.collectionPath,
+    required this.appPath,
     required this.postcardService,
     required this.i18n,
     required this.currentCallsign,
@@ -588,7 +588,7 @@ class _PostcardDetailPageState extends State<_PostcardDetailPage> {
         ),
         body: PostcardDetailWidget(
           postcard: _postcard,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           currentCallsign: widget.currentCallsign,
           currentUserNpub: widget.currentUserNpub,
           isSender: widget.isSender,

@@ -1,8 +1,8 @@
 import 'dart:convert';
 
-/// File node in the collection tree
+/// File node in the app tree
 class FileNode {
-  String path; // Relative path within collection
+  String path; // Relative path within app
   String name;
   int size;
   bool isDirectory;
@@ -48,8 +48,8 @@ class FileNode {
   }
 }
 
-/// Model representing a Geogram collection
-class Collection {
+/// Model representing a Geogram app
+class App {
   String id;
   String title;
   String description;
@@ -60,14 +60,14 @@ class Collection {
   String? storagePath;
   bool isOwned;
   bool isFavorite;
-  String type; // 'files', 'forum', 'chat', 'www'
+  String type; // 'shared_folder', 'forum', 'chat', 'www'
 
   // Security settings
   String visibility; // 'public', 'private', 'restricted'
   List<String> allowedReaders; // List of npub keys
   String encryption; // 'none', 'aes256'
 
-  Collection({
+  App({
     required this.id,
     required this.title,
     this.description = '',
@@ -78,15 +78,15 @@ class Collection {
     this.storagePath,
     this.isOwned = false,
     this.isFavorite = false,
-    this.type = 'files',
+    this.type = 'shared_folder',
     this.visibility = 'public',
     this.allowedReaders = const [],
     this.encryption = 'none',
   });
 
-  /// Create a Collection from JSON map
-  factory Collection.fromJson(Map<String, dynamic> json) {
-    return Collection(
+  /// Create an App from JSON map
+  factory App.fromJson(Map<String, dynamic> json) {
+    return App(
       id: json['id'] as String? ?? '',
       title: json['title'] as String? ?? 'Untitled',
       description: json['description'] as String? ?? '',
@@ -97,14 +97,14 @@ class Collection {
       storagePath: json['storagePath'] as String?,
       isOwned: json['isOwned'] as bool? ?? false,
       isFavorite: json['isFavorite'] as bool? ?? false,
-      type: json['type'] as String? ?? 'files',
+      type: json['type'] as String? ?? 'shared_folder',
       visibility: json['visibility'] as String? ?? 'public',
       allowedReaders: (json['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [],
       encryption: json['encryption'] as String? ?? 'none',
     );
   }
 
-  /// Convert Collection to JSON map
+  /// Convert App to JSON map
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -124,10 +124,10 @@ class Collection {
     };
   }
 
-  /// Generate collection.js content for storage
-  String generateCollectionJs() {
+  /// Generate app.js content for storage
+  String generateAppJs() {
     final data = {
-      'collection': {
+      'app': {
         'id': id,
         'title': title,
         'description': description,
@@ -140,9 +140,9 @@ class Collection {
     final jsonStr = JsonEncoder.withIndent('  ').convert(data);
 
     return '''
-// Geogram Collection Metadata
+// Geogram App Metadata
 // Generated: ${DateTime.now().toIso8601String()}
-window.COLLECTION_DATA = $jsonStr;
+window.APP_DATA = $jsonStr;
 ''';
   }
 

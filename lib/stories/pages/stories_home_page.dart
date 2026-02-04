@@ -43,14 +43,14 @@ const Map<String, IconData> _storyCategoryIcons = {
 
 /// Main Stories app home page - browser for story documents
 class StoriesHomePage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
 
   const StoriesHomePage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
   });
 
@@ -69,7 +69,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
   @override
   void initState() {
     super.initState();
-    _storage = StoriesStorageService(basePath: widget.collectionPath);
+    _storage = StoriesStorageService(basePath: widget.appPath);
     _searchController.addListener(_filterStories);
     _loadStories();
   }
@@ -318,7 +318,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collectionTitle),
+        title: Text(widget.appTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

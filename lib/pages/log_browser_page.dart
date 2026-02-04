@@ -308,7 +308,7 @@ class _LogBrowserPageState extends State<LogBrowserPage> with SingleTickerProvid
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('collection_type_log')),
+        title: Text(_i18n.t('app_type_log')),
         actions: [
           IconButton(
             icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),

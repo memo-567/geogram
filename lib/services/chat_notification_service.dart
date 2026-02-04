@@ -63,7 +63,7 @@ class ChatNotificationService {
   /// Handle incoming UPDATE notification
   void _handleUpdateNotification(UpdateNotification update) {
     // Only handle chat updates
-    if (update.collectionType != 'chat') {
+    if (update.appType != 'chat') {
       return;
     }
 

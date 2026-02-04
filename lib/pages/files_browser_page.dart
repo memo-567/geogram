@@ -5,6 +5,7 @@
 
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -45,6 +46,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
   final _pickerKey = GlobalKey<FileFolderPickerState>();
   final _viewerKey = GlobalKey<DocumentViewerWidgetState>();
   final _imageFocusNode = FocusNode();
+  final _transformController = TransformationController();
 
   /// Absolute path of the file currently previewed in the right panel.
   String? _previewPath;
@@ -73,6 +75,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
   @override
   void dispose() {
     _imageFocusNode.dispose();
+    _transformController.dispose();
     super.dispose();
   }
 
@@ -109,6 +112,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     final isWide = MediaQuery.of(context).size.width >= 800;
 
     if (isWide && _isPreviewable(ext)) {
+      _transformController.value = Matrix4.identity();
       setState(() {
         _previewPath = path;
         _previewExt = ext;
@@ -149,6 +153,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
       _currentFileIndex--;
       _previewPath = _folderFiles[_currentFileIndex];
       _previewExt = p.extension(_previewPath!).toLowerCase().replaceFirst('.', '');
+      _transformController.value = Matrix4.identity();
       setState(() {});
       _pickerKey.currentState?.selectFile(_previewPath!);
     }
@@ -159,6 +164,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
       _currentFileIndex++;
       _previewPath = _folderFiles[_currentFileIndex];
       _previewExt = p.extension(_previewPath!).toLowerCase().replaceFirst('.', '');
+      _transformController.value = Matrix4.identity();
       setState(() {});
       _pickerKey.currentState?.selectFile(_previewPath!);
     }
@@ -427,19 +433,46 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
         },
         child: Stack(
           children: [
-            InteractiveViewer(
-              key: ValueKey(path),
-              minScale: 0.5,
-              maxScale: 4.0,
-              child: Center(
-                child: Image.file(
-                  File(path),
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(
-                      child: Icon(Icons.broken_image, size: 64, color: Colors.grey),
-                    );
-                  },
+            Listener(
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent) {
+                  final keys = HardwareKeyboard.instance.logicalKeysPressed;
+                  final ctrlHeld = keys.contains(LogicalKeyboardKey.controlLeft) ||
+                      keys.contains(LogicalKeyboardKey.controlRight);
+                  if (ctrlHeld) {
+                    const minScale = 0.5;
+                    const maxScale = 4.0;
+                    final scaleDelta = event.scrollDelta.dy > 0 ? 0.9 : 1.1;
+                    final currentScale = _transformController.value.getMaxScaleOnAxis();
+                    final newScale = (currentScale * scaleDelta).clamp(minScale, maxScale);
+                    final focalPoint = event.localPosition;
+                    final s = newScale / currentScale;
+                    final dx = focalPoint.dx * (1 - s);
+                    final dy = focalPoint.dy * (1 - s);
+                    final matrix = Matrix4.identity()
+                      ..setEntry(0, 0, s)
+                      ..setEntry(1, 1, s)
+                      ..setEntry(0, 3, dx)
+                      ..setEntry(1, 3, dy);
+                    _transformController.value = _transformController.value * matrix;
+                  }
+                }
+              },
+              child: InteractiveViewer(
+                key: ValueKey(path),
+                transformationController: _transformController,
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Center(
+                  child: Image.file(
+                    File(path),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Center(
+                        child: Icon(Icons.broken_image, size: 64, color: Colors.grey),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),

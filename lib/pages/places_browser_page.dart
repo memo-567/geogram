@@ -11,7 +11,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path/path.dart' as path;
 import '../models/place.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/config_service.dart';
 import '../services/place_service.dart';
 import '../services/i18n_service.dart';
@@ -31,13 +31,13 @@ import 'place_map_view_page.dart';
 
 /// Places browser page
 class PlacesBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const PlacesBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   }) : super(key: key);
 
   @override
@@ -129,17 +129,17 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
     try {
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          widget.collectionPath,
+          widget.appPath,
         );
         _placeService.setStorage(scopedStorage);
       } else {
-        _placeService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+        _placeService.setStorage(FilesystemProfileStorage(widget.appPath));
       }
-      await _placeService.initializeCollection(widget.collectionPath);
+      await _placeService.initializeApp(widget.appPath);
       final places = await _placeService.loadAllPlaces();
 
       // Sort by name
@@ -354,7 +354,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
 
       final sharingService = PlaceSharingService();
       final uploadedCount = await sharingService.uploadLocalPlacesToStations(
-        widget.collectionPath,
+        widget.appPath,
         knownStationRelativePaths: knownPaths,
       );
 
@@ -474,7 +474,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => AddEditPlacePage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           place: place,
         ),
       ),
@@ -570,7 +570,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
     try {
       final uploadedCount = await sharingService.uploadPlaceToStations(
         place,
-        widget.collectionPath,
+        widget.appPath,
       );
 
       if (mounted) {
@@ -707,7 +707,7 @@ class _PlacesBrowserPageState extends State<PlacesBrowserPage> {
             context,
             MaterialPageRoute(
               builder: (context) => AddEditPlacePage(
-                collectionPath: widget.collectionPath,
+                appPath: widget.appPath,
               ),
             ),
           );

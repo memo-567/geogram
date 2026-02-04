@@ -25,12 +25,12 @@ import '../widgets/place_coordinates_row.dart';
 /// Full-screen place detail page
 /// Can be used from the map, places browser, or anywhere else
 class PlaceDetailPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Place place;
 
   const PlaceDetailPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.place,
   });
 
@@ -60,7 +60,7 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
 
     try {
       // Initialize place service with collection path
-      await _placeService.initializeCollection(widget.collectionPath);
+      await _placeService.initializeApp(widget.appPath);
 
       // Load photos from place folder
       await _loadPhotos();
@@ -202,7 +202,7 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
       context,
       MaterialPageRoute(
         builder: (context) => AddEditPlacePage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           place: _place,
         ),
       ),

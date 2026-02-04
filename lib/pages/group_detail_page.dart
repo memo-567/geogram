@@ -15,19 +15,19 @@ import '../models/group_application.dart';
 import '../services/groups_service.dart';
 import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import 'location_picker_page.dart';
 
 /// Group detail page with tabs for managing all aspects
 class GroupDetailPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String groupName;
 
   const GroupDetailPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.groupName,
   });
 
@@ -61,17 +61,17 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
 
   Future<void> _initialize() async {
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _groupsService.setStorage(scopedStorage);
     } else {
-      _groupsService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _groupsService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
-    await _groupsService.initializeCollection(widget.collectionPath);
+    await _groupsService.initializeApp(widget.appPath);
     await _loadGroup();
   }
 
@@ -113,7 +113,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
 
       await _groupsService.addMember(widget.groupName, member);
       await GroupSyncService().syncGroupsCollection(
-        groupsCollectionPath: widget.collectionPath,
+        groupsAppPath: widget.appPath,
       );
       await _loadGroup();
 
@@ -147,7 +147,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
     if (confirm == true) {
       await _groupsService.removeMember(widget.groupName, member.npub);
       await GroupSyncService().syncGroupsCollection(
-        groupsCollectionPath: widget.collectionPath,
+        groupsAppPath: widget.appPath,
       );
       await _loadGroup();
 
@@ -168,7 +168,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
     if (result != null && result != member.role) {
       await _groupsService.updateMemberRole(widget.groupName, member.npub, result);
       await GroupSyncService().syncGroupsCollection(
-        groupsCollectionPath: widget.collectionPath,
+        groupsAppPath: widget.appPath,
       );
       await _loadGroup();
 
@@ -292,7 +292,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> with SingleTickerProv
         );
         await _groupsService.addMember(widget.groupName, member);
         await GroupSyncService().syncGroupsCollection(
-          groupsCollectionPath: widget.collectionPath,
+          groupsAppPath: widget.appPath,
         );
       }
 

@@ -10,7 +10,7 @@ import '../../services/log_service.dart';
 import '../../services/app_args.dart';
 import '../../services/security_service.dart';
 import '../../services/usb_aoa_service.dart';
-import '../../services/collection_service.dart';
+import '../../services/app_service.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
@@ -289,7 +289,7 @@ class UsbAoaTransport extends Transport with TransportMixin {
   /// Send hello message with our callsign
   Future<void> _sendHello() async {
     try {
-      final callsign = CollectionService().currentCallsign;
+      final callsign = AppService().currentCallsign;
       if (callsign == null || callsign.isEmpty) {
         LogService().log('UsbAoaTransport: No active callsign to send');
         return;

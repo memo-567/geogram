@@ -4,23 +4,23 @@
  */
 
 /// Lightweight update notification from a station
-/// Format: UPDATE:{callsign}/{collectionType}/{path}
+/// Format: UPDATE:{callsign}/{appType}/{path}
 /// Example: UPDATE:X3R5TR/chat/test
 class UpdateNotification {
   final String callsign;
-  final String collectionType;
+  final String appType;
   final String path;
 
   UpdateNotification({
     required this.callsign,
-    required this.collectionType,
+    required this.appType,
     required this.path,
   });
 
   /// Parse an update notification string
   /// Returns null if the format is invalid
   static UpdateNotification? parse(String notification) {
-    // Format: UPDATE:{callsign}/{collectionType}/{path}
+    // Format: UPDATE:{callsign}/{appType}/{path}
     if (!notification.startsWith('UPDATE:')) {
       return null;
     }
@@ -34,12 +34,12 @@ class UpdateNotification {
 
     return UpdateNotification(
       callsign: parts[0],
-      collectionType: parts[1],
+      appType: parts[1],
       path: parts.sublist(2).join('/'), // Handle paths with slashes
     );
   }
 
   @override
   String toString() =>
-      'UpdateNotification(callsign: $callsign, type: $collectionType, path: $path)';
+      'UpdateNotification(callsign: $callsign, type: $appType, path: $path)';
 }

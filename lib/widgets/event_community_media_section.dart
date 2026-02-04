@@ -22,14 +22,14 @@ import '../pages/photo_viewer_page.dart';
 
 class EventCommunityMediaSection extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final String? currentCallsign;
   final String? currentUserNpub;
 
   const EventCommunityMediaSection({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     required this.currentCallsign,
     required this.currentUserNpub,
   }) : super(key: key);
@@ -116,9 +116,9 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
       widget.event.canModerate(widget.currentCallsign ?? '', widget.currentUserNpub);
 
   String? get _eventPath {
-    if (widget.collectionPath.isEmpty) return null;
+    if (widget.appPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/$year/${widget.event.id}';
+    return '${widget.appPath}/$year/${widget.event.id}';
   }
 
   String? get _mediaRoot {
@@ -149,7 +149,7 @@ class _EventCommunityMediaSectionState extends State<EventCommunityMediaSection>
   void didUpdateWidget(covariant EventCommunityMediaSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.event.id != widget.event.id ||
-        oldWidget.collectionPath != widget.collectionPath ||
+        oldWidget.appPath != widget.appPath ||
         oldWidget.event.visibility != widget.event.visibility) {
       _loadContributions();
     }

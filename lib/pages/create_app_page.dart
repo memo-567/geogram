@@ -8,22 +8,22 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../util/app_constants.dart';
 import '../util/app_type_theme.dart';
 
-/// Full-page UI for creating a new collection
+/// Full-page UI for creating a new app
 /// Features a two-column layout: type selector on left, details panel on right
-class CreateCollectionPage extends StatefulWidget {
-  const CreateCollectionPage({super.key});
+class CreateAppPage extends StatefulWidget {
+  const CreateAppPage({super.key});
 
   @override
-  State<CreateCollectionPage> createState() => _CreateCollectionPageState();
+  State<CreateAppPage> createState() => _CreateAppPageState();
 }
 
-class _CreateCollectionPageState extends State<CreateCollectionPage> {
+class _CreateAppPageState extends State<CreateAppPage> {
   final I18nService _i18n = I18nService();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
@@ -40,60 +40,61 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   final Map<String, GlobalKey> _itemKeys = {};
 
   /// Get app types sorted alphabetically by localized name
-  List<_CollectionTypeInfo> get _sortedTypes {
-    final types = List<_CollectionTypeInfo>.from(_collectionTypes);
+  List<_AppTypeInfo> get _sortedTypes {
+    final types = List<_AppTypeInfo>.from(_appTypes);
     types.sort(
       (a, b) => _i18n
-          .t('collection_type_${a.type}')
+          .t('app_type_${a.type}')
           .toLowerCase()
-          .compareTo(_i18n.t('collection_type_${b.type}').toLowerCase()),
+          .compareTo(_i18n.t('app_type_${b.type}').toLowerCase()),
     );
     return types;
   }
 
   /// Get filtered app types based on search query
-  List<_CollectionTypeInfo> get _filteredTypes {
+  List<_AppTypeInfo> get _filteredTypes {
     if (_searchQuery.isEmpty) {
       return _sortedTypes;
     }
     final query = _searchQuery.toLowerCase();
     return _sortedTypes.where((typeInfo) {
-      final title = _i18n.t('collection_type_${typeInfo.type}').toLowerCase();
+      final title = _i18n.t('app_type_${typeInfo.type}').toLowerCase();
       final description = _getTypeDescription(typeInfo.type).toLowerCase();
       return title.contains(query) || description.contains(query);
     }).toList();
   }
 
-  // Collection types with their icons (ordered by relevance)
+  // App types with their icons (ordered by relevance)
   // Hidden types (not ready): forum, bot, postcards, market, www, news
-  static const List<_CollectionTypeInfo> _collectionTypes = [
-    _CollectionTypeInfo('places', Icons.place),
-    _CollectionTypeInfo('blog', Icons.article),
-    _CollectionTypeInfo('chat', Icons.chat),
-    _CollectionTypeInfo('contacts', Icons.contacts),
-    _CollectionTypeInfo('email', Icons.email),
-    _CollectionTypeInfo('events', Icons.event),
-    // _CollectionTypeInfo('forum', Icons.forum),  // Hidden: not ready
-    _CollectionTypeInfo('alerts', Icons.campaign),
-    // _CollectionTypeInfo('news', Icons.newspaper),  // Hidden: not ready
-    // _CollectionTypeInfo('www', Icons.language),  // Hidden: not ready
-    _CollectionTypeInfo('inventory', Icons.inventory_2),
-    _CollectionTypeInfo('wallet', Icons.account_balance_wallet),
-    _CollectionTypeInfo('log', Icons.article_outlined),
-    _CollectionTypeInfo('backup', Icons.backup),
-    _CollectionTypeInfo('transfer', Icons.swap_horiz),
-    _CollectionTypeInfo('files', Icons.folder),
-    // _CollectionTypeInfo('postcards', Icons.mail),  // Hidden: not ready
-    // _CollectionTypeInfo('market', Icons.storefront),  // Hidden: not ready
-    _CollectionTypeInfo('groups', Icons.groups),
-    _CollectionTypeInfo('console', Icons.terminal),
-    _CollectionTypeInfo('tracker', Icons.track_changes),
-    _CollectionTypeInfo('videos', Icons.video_library),
-    _CollectionTypeInfo('reader', Icons.menu_book),
-    _CollectionTypeInfo('flasher', Icons.flash_on),
-    _CollectionTypeInfo('work', Icons.work),
-    _CollectionTypeInfo('music', Icons.library_music),
-    _CollectionTypeInfo('stories', Icons.auto_stories),
+  static const List<_AppTypeInfo> _appTypes = [
+    _AppTypeInfo('places', Icons.place),
+    _AppTypeInfo('blog', Icons.article),
+    _AppTypeInfo('chat', Icons.chat),
+    _AppTypeInfo('contacts', Icons.contacts),
+    _AppTypeInfo('email', Icons.email),
+    _AppTypeInfo('events', Icons.event),
+    // _AppTypeInfo('forum', Icons.forum),  // Hidden: not ready
+    _AppTypeInfo('alerts', Icons.campaign),
+    // _AppTypeInfo('news', Icons.newspaper),  // Hidden: not ready
+    // _AppTypeInfo('www', Icons.language),  // Hidden: not ready
+    _AppTypeInfo('inventory', Icons.inventory_2),
+    _AppTypeInfo('wallet', Icons.account_balance_wallet),
+    _AppTypeInfo('log', Icons.article_outlined),
+    _AppTypeInfo('backup', Icons.backup),
+    _AppTypeInfo('transfer', Icons.swap_horiz),
+    _AppTypeInfo('shared_folder', Icons.folder),
+    // _AppTypeInfo('postcards', Icons.mail),  // Hidden: not ready
+    // _AppTypeInfo('market', Icons.storefront),  // Hidden: not ready
+    _AppTypeInfo('groups', Icons.groups),
+    _AppTypeInfo('console', Icons.terminal),
+    _AppTypeInfo('tracker', Icons.track_changes),
+    _AppTypeInfo('videos', Icons.video_library),
+    _AppTypeInfo('reader', Icons.menu_book),
+    _AppTypeInfo('flasher', Icons.flash_on),
+    _AppTypeInfo('work', Icons.work),
+    _AppTypeInfo('music', Icons.library_music),
+    _AppTypeInfo('stories', Icons.auto_stories),
+    _AppTypeInfo('files', Icons.snippet_folder),
   ];
 
   // Single-instance types - use centralized constant from app_constants.dart
@@ -107,13 +108,13 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   Future<void> _checkExistingTypes() async {
     try {
-      final collectionsService = CollectionService();
-      final collectionsDir = Directory(
-        '${collectionsService.getDefaultCollectionsPath()}',
+      final appsService = AppService();
+      final appsDir = Directory(
+        '${appsService.getDefaultAppsPath()}',
       );
 
-      if (await collectionsDir.exists()) {
-        final folders = await collectionsDir.list().toList();
+      if (await appsDir.exists()) {
+        final folders = await appsDir.list().toList();
         final existingFolderNames = folders
             .where((e) => e is Directory)
             .map((e) => e.path.split('/').last)
@@ -124,7 +125,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
             existingFolderNames,
           );
           // Initialize item keys for scroll-to functionality
-          for (final type in _collectionTypes) {
+          for (final type in _appTypes) {
             _itemKeys[type.type] = GlobalKey();
           }
         });
@@ -146,7 +147,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   bool get _canCreate {
     if (_isCreating) return false;
     if (_selectedType == null) return false;
-    if (_selectedType == 'files') {
+    if (_selectedType == 'shared_folder') {
       if (_titleController.text.trim().isEmpty) return false;
       if (!_useAutoFolder && _selectedFolderPath == null) return false;
     } else {
@@ -158,7 +159,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   Future<void> _pickFolder() async {
     try {
       final result = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select root folder for collection',
+        dialogTitle: 'Select root folder for app',
       );
 
       if (result != null) {
@@ -183,36 +184,36 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
     try {
       final type = _selectedType!;
-      final title = type == 'files'
+      final title = type == 'shared_folder'
           ? _titleController.text.trim()
-          : _i18n.t('collection_type_$type');
+          : _i18n.t('app_type_$type');
 
-      final collection = await CollectionService().createCollection(
+      final app = await AppService().createApp(
         title: title,
         description: _descriptionController.text.trim(),
         type: type,
-        customRootPath: type == 'files'
+        customRootPath: type == 'shared_folder'
             ? (_useAutoFolder ? null : _selectedFolderPath)
             : null,
       );
 
       // Update visibility if not public
-      if (type == 'files' && _visibility != 'public') {
-        collection.visibility = _visibility;
-        await CollectionService().updateCollection(collection);
+      if (type == 'shared_folder' && _visibility != 'public') {
+        app.visibility = _visibility;
+        await AppService().updateApp(app);
       }
 
-      LogService().log('Created collection: ${collection.title}');
+      LogService().log('Created app: ${app.title}');
 
       if (mounted) {
-        Navigator.pop(context, collection);
+        Navigator.pop(context, app);
       }
     } catch (e, stackTrace) {
-      LogService().log('ERROR creating collection: $e');
+      LogService().log('ERROR creating app: $e');
       LogService().log('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating collection: $e')),
+          SnackBar(content: Text('Error creating app: $e')),
         );
       }
     } finally {
@@ -226,7 +227,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_i18n.t('add_new_collection')),
+        title: Text(_i18n.t('add_new_app')),
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.pop(context),
@@ -316,7 +317,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
     return getAppTypeGradient(type, theme.brightness == Brightness.dark);
   }
 
-  Widget _buildAppListItem(_CollectionTypeInfo typeInfo) {
+  Widget _buildAppListItem(_AppTypeInfo typeInfo) {
     final theme = Theme.of(context);
     final isDisabled =
         _existingTypes.contains(typeInfo.type) &&
@@ -341,7 +342,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                   setState(() {
                     _selectedType = isExpanded ? null : typeInfo.type;
                     // Clear title when collapsing or switching types
-                    if (!isExpanded && typeInfo.type != 'files') {
+                    if (!isExpanded && typeInfo.type != 'shared_folder') {
                       _titleController.clear();
                     }
                   });
@@ -399,7 +400,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            _i18n.t('collection_type_${typeInfo.type}'),
+                            _i18n.t('app_type_${typeInfo.type}'),
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                               letterSpacing: -0.2,
@@ -481,7 +482,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
   }
 
   Widget _buildExpandedDetails(
-    _CollectionTypeInfo typeInfo,
+    _AppTypeInfo typeInfo,
     ThemeData theme,
     String description,
     List<String> features,
@@ -541,8 +542,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                       .toList(),
                 ),
               ],
-              // Settings for 'files' type
-              if (typeInfo.type == 'files') ...[
+              // Settings for 'shared_folder' type
+              if (typeInfo.type == 'shared_folder') ...[
                 const SizedBox(height: 20),
                 _buildFilesSettings(theme),
               ],
@@ -627,8 +628,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           TextField(
             controller: _titleController,
             decoration: InputDecoration(
-              labelText: _i18n.t('collection_title'),
-              hintText: _i18n.t('collection_title_hint'),
+              labelText: _i18n.t('app_title'),
+              hintText: _i18n.t('app_title_hint'),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -709,7 +710,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
                           const SizedBox(height: 4),
                           Text(
                             _useAutoFolder
-                                ? '~/Documents/geogram/devices/${CollectionService().currentCallsign ?? "..."}'
+                                ? '~/Documents/geogram/devices/${AppService().currentCallsign ?? "..."}'
                                 : _i18n.t('choose_custom_location'),
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
@@ -791,14 +792,14 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   String _getTypeDescription(String type) {
     // Try to get from i18n, fallback to default descriptions
-    final key = 'collection_type_desc_$type';
+    final key = 'app_type_desc_$type';
     final translated = _i18n.t(key);
     if (translated != key) return translated;
 
     // Fallback descriptions
     switch (type) {
-      case 'files':
-        return 'Store and organize files in custom folders. Create multiple collections for different purposes like documents, photos, or projects.';
+      case 'shared_folder':
+        return 'Store and share files in a shared folder. Create multiple shared folders for different purposes like documents, photos, or projects.';
       case 'forum':
         return 'Discussion forum for threaded conversations and community discussions. Topics are organized by categories with support for replies and moderation.';
       case 'chat':
@@ -843,6 +844,8 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
         return 'Local music player with folder-based album discovery. Scan your music folders, play tracks with shuffle and repeat, track listening history and statistics.';
       case 'stories':
         return 'Tell your story your way. Create stunning visual experiences with tap-through scenes, touch hotspots, and cinematic auto-play. Share moments, build tutorials, or craft adventures that captivate your audience.';
+      case 'files':
+        return 'Browse and manage files on your device. View the geogram profile folder contents and navigate the filesystem. Opens documents, images, music, and videos with built-in viewers.';
       default:
         return '';
     }
@@ -850,7 +853,7 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
   List<String> _getTypeFeatures(String type) {
     // Try to get from i18n first
-    final key = 'collection_type_features_$type';
+    final key = 'app_type_features_$type';
     final translated = _i18n.t(key);
     if (translated != key) {
       return translated.split('|');
@@ -858,12 +861,12 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
 
     // Fallback features
     switch (type) {
-      case 'files':
+      case 'shared_folder':
         return [
           'Organize files by folders',
           'Share with specific users',
           'Set visibility permissions',
-          'Multiple collections allowed',
+          'Multiple shared folders allowed',
         ];
       case 'forum':
         return [
@@ -997,16 +1000,24 @@ class _CreateCollectionPageState extends State<CreateCollectionPage> {
           'Flexible text and image layouts',
           'Link to URLs or sounds',
         ];
+      case 'files':
+        return [
+          'Profile folder browser',
+          'Device file navigation',
+          'Built-in document viewer',
+          'Image, music, and video playback',
+          'Storage location shortcuts',
+        ];
       default:
         return [];
     }
   }
 }
 
-/// Helper class for collection type information
-class _CollectionTypeInfo {
+/// Helper class for app type information
+class _AppTypeInfo {
   final String type;
   final IconData icon;
 
-  const _CollectionTypeInfo(this.type, this.icon);
+  const _AppTypeInfo(this.type, this.icon);
 }

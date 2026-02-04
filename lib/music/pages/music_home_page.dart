@@ -18,14 +18,14 @@ import 'music_settings_page.dart';
 
 /// Main music app home page
 class MusicHomePage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
 
   const MusicHomePage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
   });
 
@@ -52,7 +52,7 @@ class _MusicHomePageState extends State<MusicHomePage>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
 
-    _storage = MusicStorageService(basePath: widget.collectionPath);
+    _storage = MusicStorageService(basePath: widget.appPath);
     _libraryService = MusicLibraryService(storage: _storage);
     _playbackService = MusicPlaybackService(storage: _storage);
 
@@ -267,7 +267,7 @@ class _MusicHomePageState extends State<MusicHomePage>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collectionTitle),
+        title: Text(widget.appTitle),
         actions: [
           if (_isScanning)
             Padding(

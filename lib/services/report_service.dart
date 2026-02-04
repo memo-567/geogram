@@ -31,7 +31,7 @@ class ReportService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   ReportSettings _settings = ReportSettings();
   final ProfileService _profileService = ProfileService();
   final SigningService _signingService = SigningService();
@@ -41,15 +41,15 @@ class ReportService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize report service for a collection
-  Future<void> initializeCollection(String collectionPath) async {
-    LogService().log('ReportService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath) async {
+    LogService().log('ReportService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Ensure directories exist using storage
     await _storage.createDirectory('active');
@@ -64,7 +64,7 @@ class ReportService {
 
   /// Load settings
   Future<void> _loadSettings() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final content = await _storage.readString('extra/settings.json');
     if (content != null) {
@@ -83,7 +83,7 @@ class ReportService {
 
   /// Save settings
   Future<void> saveSettings(ReportSettings settings) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _settings = settings;
     final content = const JsonEncoder.withIndent('  ').convert(_settings.toJson());
@@ -96,7 +96,7 @@ class ReportService {
 
   /// Load all reports
   Future<List<Report>> loadReports({bool includeExpired = false}) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final reports = <Report>[];
 
@@ -175,7 +175,7 @@ class ReportService {
 
   /// Load single report by folder name
   Future<Report?> loadReport(String folderName, {bool checkExpired = true}) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Try active first
     var report = await _findReport('active', folderName);
@@ -271,7 +271,7 @@ class ReportService {
     bool notifyRelays = true,
     bool updateLastModified = true,
   }) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     // Update lastModified timestamp if requested
     var reportToSave = report;
@@ -415,7 +415,7 @@ class ReportService {
 
   /// Load updates for a report
   Future<List<ReportUpdate>> loadUpdates(String folderName) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final report = await loadReport(folderName);
     if (report == null) return [];
@@ -452,7 +452,7 @@ class ReportService {
 
   /// Save update for a report
   Future<void> saveUpdate(String folderName, ReportUpdate update) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
@@ -528,7 +528,7 @@ class ReportService {
 
   /// Verify a report
   Future<void> verify(String folderName, String npub) async {
-    if (npub.isEmpty || _collectionPath == null) return;
+    if (npub.isEmpty || _appPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
@@ -585,7 +585,7 @@ class ReportService {
   /// Point a report (call attention to it)
   /// Points are stored under feedback/points.txt (signed events).
   Future<void> pointReport(String folderName, String npub) async {
-    if (npub.isEmpty || _collectionPath == null) return;
+    if (npub.isEmpty || _appPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
@@ -648,7 +648,7 @@ class ReportService {
   /// Unpoint a report (remove attention call)
   /// Points are stored under feedback/points.txt (signed events).
   Future<void> unpointReport(String folderName, String npub) async {
-    if (npub.isEmpty || _collectionPath == null) return;
+    if (npub.isEmpty || _appPath == null) return;
 
     final report = await loadReport(folderName);
     if (report == null) return;
@@ -697,7 +697,7 @@ class ReportService {
 
   /// Load comments for a report
   Future<List<ReportComment>> loadComments(String folderName) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final report = await loadReport(folderName);
     if (report == null) return [];
@@ -753,7 +753,7 @@ class ReportService {
 
   /// Add a comment to a report
   Future<ReportComment> addComment(String folderName, String author, String commentContent, {String? npub}) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -863,7 +863,7 @@ class ReportService {
 
   /// Check if report is in expired folder (searches recursively)
   Future<bool> _isReportExpired(String folderName) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     if (!await _storage.exists('expired')) return false;
 

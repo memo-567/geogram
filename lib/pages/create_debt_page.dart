@@ -19,12 +19,12 @@ import '../widgets/user_picker_widget.dart';
 
 /// Page for creating a new debt
 class CreateDebtPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final I18nService i18n;
 
   const CreateDebtPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.i18n,
   });
 

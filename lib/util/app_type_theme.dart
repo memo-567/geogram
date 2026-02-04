@@ -41,7 +41,7 @@ IconData getAppTypeIcon(String type) {
       return Icons.groups;
     case 'postcards':
       return Icons.mail;
-    case 'files':
+    case 'shared_folder':
       return Icons.folder;
     case 'inventory':
       return Icons.inventory_2;
@@ -73,6 +73,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.library_music;
     case 'stories':
       return Icons.auto_stories;
+    case 'files':
+      return Icons.snippet_folder;
     default:
       return Icons.folder;
   }
@@ -169,7 +171,7 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
             ? [const Color(0xFF0277BD), const Color(0xFF01579B)]
             : [const Color(0xFF29B6F6), const Color(0xFF039BE5)],
       );
-    case 'files':
+    case 'shared_folder':
       return LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
@@ -304,6 +306,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFFEF6C00), const Color(0xFFE65100)]
             : [const Color(0xFFFFA726), const Color(0xFFFF9800)],
+      );
+    case 'files':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFFF57F17), const Color(0xFFE65100)]
+            : [const Color(0xFFFFCA28), const Color(0xFFFFA000)],
       );
     default:
       return LinearGradient(

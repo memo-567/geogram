@@ -1007,7 +1007,7 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: node.config.supportedCollections.map((c) => Chip(
+              children: node.config.supportedApps.map((c) => Chip(
                 label: Text(c),
                 backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
               )).toList(),

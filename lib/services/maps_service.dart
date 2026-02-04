@@ -13,8 +13,8 @@ import 'package:path/path.dart' as path;
 import '../models/event.dart';
 import '../models/place.dart';
 import '../models/map_item.dart';
-import '../models/collection.dart';
-import 'collection_service.dart';
+import '../models/app.dart';
+import 'app_service.dart';
 import 'event_service.dart';
 import 'place_service.dart';
 import 'news_service.dart';
@@ -35,7 +35,7 @@ class MapsService {
   MapsService._internal();
 
   // Cache for collections
-  List<Collection>? _cachedCollections;
+  List<App>? _cachedApps;
   DateTime? _cacheTimestamp;
   static const Duration _cacheDuration = Duration(minutes: 5);
 
@@ -47,30 +47,30 @@ class MapsService {
   final Map<String, (double, double)> _placeCoordinatesCache = {};
 
   /// Get collections with caching
-  Future<List<Collection>> _getCollections({bool forceRefresh = false}) async {
+  Future<List<App>> _getApps({bool forceRefresh = false}) async {
     final now = DateTime.now();
 
     // Return cached collections if valid
     if (!forceRefresh &&
-        _cachedCollections != null &&
+        _cachedApps != null &&
         _cacheTimestamp != null &&
         now.difference(_cacheTimestamp!) < _cacheDuration) {
-      LogService().log('MapsService: Using cached collections (${_cachedCollections!.length} items)');
-      return _cachedCollections!;
+      LogService().log('MapsService: Using cached collections (${_cachedApps!.length} items)');
+      return _cachedApps!;
     }
 
     // Load fresh collections
     LogService().log('MapsService: Loading fresh collections...');
-    _cachedCollections = await CollectionService().loadCollections();
+    _cachedApps = await AppService().loadApps();
     _cacheTimestamp = now;
-    LogService().log('MapsService: Cached ${_cachedCollections!.length} collections');
+    LogService().log('MapsService: Cached ${_cachedApps!.length} collections');
 
-    return _cachedCollections!;
+    return _cachedApps!;
   }
 
   /// Clear the collections cache
   void clearCache() {
-    _cachedCollections = null;
+    _cachedApps = null;
     _cacheTimestamp = null;
     _cachedStationEvents = null;
     _stationEventsTimestamp = null;
@@ -145,17 +145,17 @@ class MapsService {
 
     try {
       // Get all collections and filter for events type
-      final collections = await _getCollections(forceRefresh: forceRefresh);
-      final eventCollections = collections.where((c) => c.type == 'events').toList();
+      final apps = await _getApps(forceRefresh: forceRefresh);
+      final eventApps = apps.where((c) => c.type == 'events').toList();
 
-      LogService().log('MapsService: Found ${eventCollections.length} event collections');
+      LogService().log('MapsService: Found ${eventApps.length} event collections');
 
-      for (var collection in eventCollections) {
-        if (collection.storagePath == null) continue;
+      for (var app in eventApps) {
+        if (app.storagePath == null) continue;
 
         try {
           final eventService = EventService();
-          await eventService.initializeCollection(collection.storagePath!);
+          await eventService.initializeApp(app.storagePath!);
 
           final events = await eventService.loadEvents();
 
@@ -163,7 +163,7 @@ class MapsService {
             if (!_isEventCurrentOrUpcoming(event, now)) continue;
             final coords = await _resolveEventCoordinates(
               event,
-              collectionPath: collection.storagePath,
+              appPath: app.storagePath,
             );
             if (coords == null) continue;
             final (lat, lon) = coords;
@@ -180,16 +180,16 @@ class MapsService {
             items.add(MapItem.fromEvent(
               event,
               distanceKm: distance,
-              collectionPath: collection.storagePath,
+              appPath: app.storagePath,
               latitude: lat,
               longitude: lon,
             ));
             localEventKeys.add(_buildEventKey(event));
           }
 
-          LogService().log('MapsService: Loaded ${events.length} events from ${collection.title}');
+          LogService().log('MapsService: Loaded ${events.length} events from ${app.title}');
         } catch (e) {
-          LogService().log('MapsService: Error loading events from ${collection.title}: $e');
+          LogService().log('MapsService: Error loading events from ${app.title}: $e');
         }
       }
 
@@ -220,7 +220,7 @@ class MapsService {
           items.add(MapItem.fromEvent(
             event,
             distanceKm: distance,
-            collectionPath: null,
+            appPath: null,
             isFromStation: true,
             idOverride: eventKey.isNotEmpty ? eventKey : null,
             latitude: lat,
@@ -273,13 +273,13 @@ class MapsService {
 
   Future<(double, double)?> _resolveEventCoordinates(
     Event event, {
-    String? collectionPath,
+    String? appPath,
   }) async {
     final placePath = event.placePath;
     if (placePath != null && placePath.isNotEmpty) {
       final resolvedPlacePath = _resolvePlacePath(
         placePath,
-        collectionPath,
+        appPath,
         author: event.author,
       );
       if (resolvedPlacePath == null || resolvedPlacePath.isEmpty) return null;
@@ -307,13 +307,13 @@ class MapsService {
 
   String? _resolvePlacePath(
     String placePath,
-    String? collectionPath, {
+    String? appPath, {
     String? author,
   }) {
     if (placePath.isEmpty) return null;
     if (path.isAbsolute(placePath)) return placePath;
-    if (collectionPath != null && collectionPath.isNotEmpty) {
-      final basePath = path.dirname(collectionPath);
+    if (appPath != null && appPath.isNotEmpty) {
+      final basePath = path.dirname(appPath);
       return path.normalize(path.join(basePath, placePath));
     }
     if (StorageConfig().isInitialized) {
@@ -427,21 +427,21 @@ class MapsService {
 
     try {
       // Get all collections and filter for places type
-      final collections = await _getCollections(forceRefresh: forceRefresh);
-      final placeCollections = collections.where((c) => c.type == 'places').toList();
+      final apps = await _getApps(forceRefresh: forceRefresh);
+      final placeApps = apps.where((c) => c.type == 'places').toList();
 
-      LogService().log('MapsService: Found ${placeCollections.length} place collections');
+      LogService().log('MapsService: Found ${placeApps.length} place collections');
 
-      for (var collection in placeCollections) {
-        if (collection.storagePath == null) continue;
+      for (var app in placeApps) {
+        if (app.storagePath == null) continue;
 
         try {
           final placeService = PlaceService();
-          await placeService.initializeCollection(collection.storagePath!);
+          await placeService.initializeApp(app.storagePath!);
 
           final places = await placeService.loadAllPlaces();
 
-          final basePath = path.join(collection.storagePath!, 'places');
+          final basePath = path.join(app.storagePath!, 'places');
 
           for (var place in places) {
             final distance = MapItem.calculateDistance(
@@ -453,7 +453,7 @@ class MapsService {
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            items.add(MapItem.fromPlace(place, distanceKm: distance, collectionPath: collection.storagePath));
+            items.add(MapItem.fromPlace(place, distanceKm: distance, appPath: app.storagePath));
 
             final folderPath = place.folderPath;
             if (folderPath != null && folderPath.isNotEmpty) {
@@ -464,9 +464,9 @@ class MapsService {
             }
           }
 
-          LogService().log('MapsService: Loaded ${places.length} places from ${collection.title}');
+          LogService().log('MapsService: Loaded ${places.length} places from ${app.title}');
         } catch (e) {
-          LogService().log('MapsService: Error loading places from ${collection.title}: $e');
+          LogService().log('MapsService: Error loading places from ${app.title}: $e');
         }
       }
 
@@ -505,10 +505,10 @@ class MapsService {
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            final collectionPath =
-                devicesDir != null ? path.join(devicesDir, entry.callsign) : _collectionPathFromFolder(place.folderPath);
+            final appPath =
+                devicesDir != null ? path.join(devicesDir, entry.callsign) : _appPathFromFolder(place.folderPath);
 
-            if (collectionPath == null || collectionPath.isEmpty) {
+            if (appPath == null || appPath.isEmpty) {
               continue;
             }
 
@@ -521,7 +521,7 @@ class MapsService {
               longitude: place.longitude,
               distanceKm: distance,
               sourceItem: place,
-              collectionPath: collectionPath,
+              appPath: appPath,
               isFromStation: true,
             ));
           }
@@ -542,7 +542,7 @@ class MapsService {
     return items;
   }
 
-  String? _collectionPathFromFolder(String? folderPath) {
+  String? _appPathFromFolder(String? folderPath) {
     if (folderPath == null || folderPath.isEmpty) return null;
     final parts = path.split(folderPath);
     final placesIndex = parts.lastIndexOf('places');
@@ -562,17 +562,17 @@ class MapsService {
 
     try {
       // Get all collections and filter for news type
-      final collections = await _getCollections(forceRefresh: forceRefresh);
-      final newsCollections = collections.where((c) => c.type == 'news').toList();
+      final apps = await _getApps(forceRefresh: forceRefresh);
+      final newsApps = apps.where((c) => c.type == 'news').toList();
 
-      LogService().log('MapsService: Found ${newsCollections.length} news collections');
+      LogService().log('MapsService: Found ${newsApps.length} news collections');
 
-      for (var collection in newsCollections) {
-        if (collection.storagePath == null) continue;
+      for (var app in newsApps) {
+        if (app.storagePath == null) continue;
 
         try {
           final newsService = NewsService();
-          await newsService.initializeCollection(collection.storagePath!);
+          await newsService.initializeApp(app.storagePath!);
 
           final articles = await newsService.loadArticles(includeExpired: false);
 
@@ -588,12 +588,12 @@ class MapsService {
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            items.add(MapItem.fromNews(article, distanceKm: distance, languageCode: languageCode, collectionPath: collection.storagePath));
+            items.add(MapItem.fromNews(article, distanceKm: distance, languageCode: languageCode, appPath: app.storagePath));
           }
 
-          LogService().log('MapsService: Loaded ${articles.length} news from ${collection.title}');
+          LogService().log('MapsService: Loaded ${articles.length} news from ${app.title}');
         } catch (e) {
-          LogService().log('MapsService: Error loading news from ${collection.title}: $e');
+          LogService().log('MapsService: Error loading news from ${app.title}: $e');
         }
       }
 
@@ -618,19 +618,19 @@ class MapsService {
 
     try {
       // Get all collections and filter for alerts type
-      final collections = await _getCollections(forceRefresh: forceRefresh);
-      final reportCollections = collections.where((c) => c.type == 'alerts').toList();
+      final apps = await _getApps(forceRefresh: forceRefresh);
+      final reportApps = apps.where((c) => c.type == 'alerts').toList();
 
-      LogService().log('MapsService: Found ${reportCollections.length} alerts collections');
+      LogService().log('MapsService: Found ${reportApps.length} alerts collections');
 
       // Load local alerts from collections
-      for (var collection in reportCollections) {
-        if (collection.storagePath == null) continue;
+      for (var app in reportApps) {
+        if (app.storagePath == null) continue;
 
         try {
           // Initialize ReportService for this collection
           final reportService = ReportService();
-          await reportService.initializeCollection(collection.storagePath!);
+          await reportService.initializeApp(app.storagePath!);
 
           final reports = await reportService.loadReports(includeExpired: false);
 
@@ -644,13 +644,13 @@ class MapsService {
 
             if (radiusKm != null && distance > radiusKm) continue;
 
-            items.add(MapItem.fromAlert(report, distanceKm: distance, languageCode: languageCode, collectionPath: collection.storagePath));
+            items.add(MapItem.fromAlert(report, distanceKm: distance, languageCode: languageCode, appPath: app.storagePath));
             addedFolderNames.add(report.folderName);
           }
 
-          LogService().log('MapsService: Loaded ${reports.length} reports from ${collection.title}');
+          LogService().log('MapsService: Loaded ${reports.length} reports from ${app.title}');
         } catch (e) {
-          LogService().log('MapsService: Error loading reports from ${collection.title}: $e');
+          LogService().log('MapsService: Error loading reports from ${app.title}: $e');
         }
       }
 
@@ -684,7 +684,7 @@ class MapsService {
             report,
             distanceKm: distance,
             languageCode: languageCode,
-            collectionPath: null, // Station alerts don't have a local collection path
+            appPath: null, // Station alerts don't have a local collection path
             isFromStation: true,
           ));
           addedFolderNames.add(report.folderName);
@@ -748,17 +748,17 @@ class MapsService {
 
     try {
       // Get all collections and filter for contacts type
-      final collections = await _getCollections(forceRefresh: forceRefresh);
-      final contactCollections = collections.where((c) => c.type == 'contacts').toList();
+      final apps = await _getApps(forceRefresh: forceRefresh);
+      final contactApps = apps.where((c) => c.type == 'contacts').toList();
 
-      LogService().log('MapsService: Found ${contactCollections.length} contact collections');
+      LogService().log('MapsService: Found ${contactApps.length} contact collections');
 
-      for (var collection in contactCollections) {
-        if (collection.storagePath == null) continue;
+      for (var app in contactApps) {
+        if (app.storagePath == null) continue;
 
         try {
           final contactService = ContactService();
-          await contactService.initializeCollection(collection.storagePath!);
+          await contactService.initializeApp(app.storagePath!);
 
           final contacts = await contactService.loadAllContactsRecursively();
 
@@ -776,13 +776,13 @@ class MapsService {
 
               if (radiusKm != null && distance > radiusKm) continue;
 
-              items.add(MapItem.fromContact(contact, location, distanceKm: distance, collectionPath: collection.storagePath));
+              items.add(MapItem.fromContact(contact, location, distanceKm: distance, appPath: app.storagePath));
             }
           }
 
-          LogService().log('MapsService: Loaded ${contacts.length} contacts from ${collection.title}');
+          LogService().log('MapsService: Loaded ${contacts.length} contacts from ${app.title}');
         } catch (e) {
-          LogService().log('MapsService: Error loading contacts from ${collection.title}: $e');
+          LogService().log('MapsService: Error loading contacts from ${app.title}: $e');
         }
       }
 

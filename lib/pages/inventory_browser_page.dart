@@ -18,14 +18,14 @@ import 'inventory_item_page.dart';
 
 /// Main inventory browser page with two-panel layout
 class InventoryBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
   final I18nService i18n;
 
   const InventoryBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
     required this.i18n,
   });
 
@@ -68,7 +68,7 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
   }
 
   Future<void> _initializeService() async {
-    await _service.initializeCollection(widget.collectionPath);
+    await _service.initializeApp(widget.appPath);
     _changesSub = _service.changes.listen(_onInventoryChange);
     await _loadTemplateItems();
     await _loadContents();
@@ -106,10 +106,10 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
 
   String _getDisplayTitle() {
     // If the title looks like a translation key, translate it
-    if (widget.collectionTitle.startsWith('collection_type_')) {
-      return widget.i18n.t(widget.collectionTitle);
+    if (widget.appTitle.startsWith('app_type_')) {
+      return widget.i18n.t(widget.appTitle);
     }
-    return widget.collectionTitle;
+    return widget.appTitle;
   }
 
   void _toggleSearch() {
@@ -343,7 +343,7 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (_) => InventoryItemPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           folderPath: _currentPath,
           i18n: widget.i18n,
         ),
@@ -359,7 +359,7 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (_) => InventoryItemPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           folderPath: _currentPath,
           i18n: widget.i18n,
           templateItem: template,
@@ -376,7 +376,7 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (_) => InventoryItemPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           folderPath: _currentPath,
           item: item,
           i18n: widget.i18n,
@@ -1252,7 +1252,7 @@ class _InventoryBrowserPageState extends State<InventoryBrowserPage> {
 
   String _getMediaPath() {
     return InventoryFolderUtils.buildMediaPath(
-      widget.collectionPath,
+      widget.appPath,
       _currentPath,
     );
   }

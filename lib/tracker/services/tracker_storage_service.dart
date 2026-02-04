@@ -1041,7 +1041,7 @@ class TrackerStorageService {
   // ============ Metadata Operations ============
 
   /// Read collection metadata
-  Future<TrackerCollectionMetadata?> readMetadata() async {
+  Future<TrackerAppMetadata?> readMetadata() async {
     try {
       final filePath = TrackerPathUtils.metadataFile(basePath);
       final relativePath = _relativePath(filePath);
@@ -1049,7 +1049,7 @@ class TrackerStorageService {
       if (content == null) return null;
 
       final json = jsonDecode(content) as Map<String, dynamic>;
-      return TrackerCollectionMetadata.fromJson(json);
+      return TrackerAppMetadata.fromJson(json);
     } catch (e) {
       LogService().log('TrackerStorageService: Error reading metadata: $e');
       return null;
@@ -1057,7 +1057,7 @@ class TrackerStorageService {
   }
 
   /// Write collection metadata
-  Future<bool> writeMetadata(TrackerCollectionMetadata metadata) async {
+  Future<bool> writeMetadata(TrackerAppMetadata metadata) async {
     try {
       final filePath = TrackerPathUtils.metadataFile(basePath);
       final relativePath = _relativePath(filePath);

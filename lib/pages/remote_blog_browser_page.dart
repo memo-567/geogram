@@ -488,7 +488,7 @@ class _RemoteBlogPostDetailPage extends StatelessWidget {
         children: [
           BlogPostDetailWidget(
             post: post,
-            collectionPath: '', // Not used for remote posts
+            appPath: '', // Not used for remote posts
             canEdit: false, // Read-only for remote posts
             stationUrl: stationUrl,
             profileIdentifier: device.callsign,

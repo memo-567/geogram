@@ -67,7 +67,7 @@ class MapItem {
   final double longitude;
   final double? distanceKm;
   final dynamic sourceItem; // Original Event/Place/NewsArticle/Report/Station/Contact
-  final String? collectionPath; // Path to collection folder for opening details
+  final String? appPath; // Path to app folder for opening details
   final bool isFromStation; // True if this item came from a station (remote)
 
   MapItem({
@@ -79,7 +79,7 @@ class MapItem {
     required this.longitude,
     this.distanceKm,
     this.sourceItem,
-    this.collectionPath,
+    this.appPath,
     this.isFromStation = false,
   });
 
@@ -87,7 +87,7 @@ class MapItem {
   factory MapItem.fromEvent(
     Event event, {
     double? distanceKm,
-    String? collectionPath,
+    String? appPath,
     bool isFromStation = false,
     String? idOverride,
     double? latitude,
@@ -107,13 +107,13 @@ class MapItem {
       longitude: resolvedLon,
       distanceKm: distanceKm,
       sourceItem: event,
-      collectionPath: collectionPath,
+      appPath: appPath,
       isFromStation: isFromStation,
     );
   }
 
   /// Create MapItem from a Place
-  factory MapItem.fromPlace(Place place, {double? distanceKm, String? collectionPath}) {
+  factory MapItem.fromPlace(Place place, {double? distanceKm, String? appPath}) {
     return MapItem(
       type: MapItemType.place,
       id: place.placeFolderName,
@@ -123,12 +123,12 @@ class MapItem {
       longitude: place.longitude,
       distanceKm: distanceKm,
       sourceItem: place,
-      collectionPath: collectionPath,
+      appPath: appPath,
     );
   }
 
   /// Create MapItem from a NewsArticle
-  factory MapItem.fromNews(NewsArticle news, {double? distanceKm, String? languageCode, String? collectionPath}) {
+  factory MapItem.fromNews(NewsArticle news, {double? distanceKm, String? languageCode, String? appPath}) {
     return MapItem(
       type: MapItemType.news,
       id: news.id,
@@ -138,12 +138,12 @@ class MapItem {
       longitude: news.longitude!,
       distanceKm: distanceKm,
       sourceItem: news,
-      collectionPath: collectionPath,
+      appPath: appPath,
     );
   }
 
   /// Create MapItem from a Report (Alert)
-  factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? collectionPath, bool isFromStation = false}) {
+  factory MapItem.fromAlert(Report report, {double? distanceKm, String? languageCode, String? appPath, bool isFromStation = false}) {
     // Build subtitle with severity, status, and points if any
     final parts = <String>['${report.severity.name} - ${report.status.name}'];
     if (report.pointCount > 0) {
@@ -162,7 +162,7 @@ class MapItem {
       longitude: report.longitude,
       distanceKm: distanceKm,
       sourceItem: report,
-      collectionPath: collectionPath,
+      appPath: appPath,
       isFromStation: isFromStation,
     );
   }
@@ -182,7 +182,7 @@ class MapItem {
   }
 
   /// Create MapItem from a Contact (using first location with coordinates)
-  factory MapItem.fromContact(Contact contact, ContactLocation location, {double? distanceKm, String? collectionPath}) {
+  factory MapItem.fromContact(Contact contact, ContactLocation location, {double? distanceKm, String? appPath}) {
     return MapItem(
       type: MapItemType.contact,
       id: '${contact.callsign}_${location.name}',
@@ -192,7 +192,7 @@ class MapItem {
       longitude: location.longitude!,
       distanceKm: distanceKm,
       sourceItem: contact,
-      collectionPath: collectionPath,
+      appPath: appPath,
     );
   }
 
@@ -243,7 +243,7 @@ class MapItem {
       longitude: longitude,
       distanceKm: newDistance,
       sourceItem: sourceItem,
-      collectionPath: collectionPath,
+      appPath: appPath,
       isFromStation: isFromStation,
     );
   }

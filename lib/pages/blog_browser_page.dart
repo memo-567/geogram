@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -20,13 +20,13 @@ import '../dialogs/new_blog_post_dialog.dart';
 
 /// Blog browser page with 2-panel layout
 class BlogBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const BlogBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   }) : super(key: key);
 
   @override
@@ -82,21 +82,21 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 
     // Set profile storage for encrypted storage support
     // Use ScopedProfileStorage to scope operations to the collection path
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _blogService.setStorage(scopedStorage);
     } else {
       // Fallback: create filesystem storage from collection path
-      _blogService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _blogService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
     // Initialize blog service
-    await _blogService.initializeCollection(
-      widget.collectionPath,
+    await _blogService.initializeApp(
+      widget.appPath,
       creatorNpub: _currentUserNpub,
     );
 
@@ -171,7 +171,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       MaterialPageRoute(
         builder: (context) => _BlogPostDetailPage(
           post: fullPost,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           blogService: _blogService,
           profileService: _profileService,
           i18n: _i18n,
@@ -773,7 +773,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
             children: [
               BlogPostDetailWidget(
                 post: _selectedPost!,
-                collectionPath: widget.collectionPath,
+                appPath: widget.appPath,
                 canEdit: canEdit,
                 onEdit: _editPost,
                 onDelete: _deletePost,
@@ -901,7 +901,7 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 /// Full-screen blog post detail page for mobile view
 class _BlogPostDetailPage extends StatefulWidget {
   final BlogPost post;
-  final String collectionPath;
+  final String appPath;
   final BlogService blogService;
   final ProfileService profileService;
   final I18nService i18n;
@@ -913,7 +913,7 @@ class _BlogPostDetailPage extends StatefulWidget {
   const _BlogPostDetailPage({
     Key? key,
     required this.post,
-    required this.collectionPath,
+    required this.appPath,
     required this.blogService,
     required this.profileService,
     required this.i18n,
@@ -1247,7 +1247,7 @@ class _BlogPostDetailPageState extends State<_BlogPostDetailPage> {
                 children: [
                   BlogPostDetailWidget(
                     post: _post,
-                    collectionPath: widget.collectionPath,
+                    appPath: widget.appPath,
                     canEdit: canEdit,
                     onEdit: _editPost,
                     onDelete: _deletePost,

@@ -38,7 +38,8 @@ class _MirrorWizardPageState extends State<MirrorWizardPage> {
     _AppInfo('events', 'Events', 'Calendar events', Icons.event),
     _AppInfo('contacts', 'Contacts', 'Contact list', Icons.contacts),
     _AppInfo('tracker', 'Tracker', 'GPS tracks', Icons.route),
-    _AppInfo('files', 'Files', 'Shared files', Icons.folder),
+    _AppInfo('shared_folder', 'Shared folder', 'Shared files', Icons.folder),
+    _AppInfo('files', 'Files', 'File explorer', Icons.snippet_folder),
   ];
 
   @override

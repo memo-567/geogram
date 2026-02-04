@@ -169,13 +169,13 @@ class ProfileChangedEvent extends AppEvent {
   });
 }
 
-/// Collection updated (tiles, files, etc.)
-class CollectionUpdatedEvent extends AppEvent {
-  final String collectionType;  // 'tiles', 'files', 'audio', etc.
+/// App updated (tiles, files, etc.)
+class AppUpdatedEvent extends AppEvent {
+  final String appType;  // 'tiles', 'files', 'audio', etc.
   final String? path;
 
-  CollectionUpdatedEvent({
-    required this.collectionType,
+  AppUpdatedEvent({
+    required this.appType,
     this.path,
   });
 }

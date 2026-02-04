@@ -33,18 +33,18 @@ class InventoryService {
   /// Check if the service is initialized
   bool get isInitialized => _storage != null;
 
-  /// Get the current collection path
+  /// Get the current app path
   String? get currentPath => _currentPath;
 
-  /// Initialize the service with a collection path
-  Future<void> initializeCollection(String path) async {
+  /// Initialize the service with an app path
+  Future<void> initializeApp(String path) async {
     _currentPath = path;
     _storage = InventoryStorageService(path);
     await _storage!.initialize();
     LogService().log('InventoryService: Initialized with path $path');
   }
 
-  /// Reset the service (for switching collections)
+  /// Reset the service (for switching apps)
   void reset() {
     _storage = null;
     _currentPath = null;

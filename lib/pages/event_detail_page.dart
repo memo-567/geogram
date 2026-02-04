@@ -26,7 +26,7 @@ import 'place_detail_page.dart';
 /// Full-screen event detail page (shared by events browser and map).
 class EventDetailPage extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final EventService eventService;
   final ProfileService profileService;
   final I18nService i18n;
@@ -37,7 +37,7 @@ class EventDetailPage extends StatefulWidget {
   const EventDetailPage({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     required this.eventService,
     required this.profileService,
     required this.i18n,
@@ -62,7 +62,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _refreshEvent({bool markChanged = false}) async {
-    if (widget.collectionPath.isEmpty) return;
+    if (widget.appPath.isEmpty) return;
     final updatedEvent = await widget.eventService.loadEvent(_event.id);
     if (updatedEvent != null && mounted) {
       setState(() {
@@ -75,13 +75,13 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _editEvent() async {
-    if (widget.readOnly || widget.collectionPath.isEmpty) return;
+    if (widget.readOnly || widget.appPath.isEmpty) return;
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => NewEventPage(
           event: _event,
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
         ),
       ),
     );
@@ -140,9 +140,9 @@ class _EventDetailPageState extends State<EventDetailPage> {
 
   String? _normalizePlacePath(String placePath) {
     if (placePath.isEmpty) return '';
-    if (widget.collectionPath.isEmpty) return placePath;
+    if (widget.appPath.isEmpty) return placePath;
     if (path.isAbsolute(placePath)) {
-      final basePath = path.dirname(widget.collectionPath);
+      final basePath = path.dirname(widget.appPath);
       final relative = path.relative(placePath, from: basePath);
       if (!relative.startsWith('..')) {
         return relative;
@@ -152,7 +152,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _uploadFiles() async {
-    if (widget.readOnly || widget.collectionPath.isEmpty) return;
+    if (widget.readOnly || widget.appPath.isEmpty) return;
     try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
@@ -162,7 +162,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
 
       if (result != null && result.files.isNotEmpty && mounted) {
         final year = _event.id.substring(0, 4);
-        final eventPath = '${widget.collectionPath}/$year/${_event.id}';
+        final eventPath = '${widget.appPath}/$year/${_event.id}';
 
         int copiedCount = 0;
         for (var file in result.files) {
@@ -207,7 +207,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _createUpdate() async {
-    if (widget.readOnly || widget.collectionPath.isEmpty) return;
+    if (widget.readOnly || widget.appPath.isEmpty) return;
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => const NewUpdateDialog(),
@@ -245,7 +245,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
 
   /// Update contacts for the event
   Future<void> _updateEventContacts(List<String> contacts) async {
-    if (widget.readOnly || widget.collectionPath.isEmpty) return;
+    if (widget.readOnly || widget.appPath.isEmpty) return;
 
     final newEventId = await widget.eventService.updateEvent(
       eventId: _event.id,
@@ -271,11 +271,11 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _openContact(String callsign) async {
-    if (widget.collectionPath.isEmpty) return;
+    if (widget.appPath.isEmpty) return;
 
-    // Events collectionPath is like: devices/X1DPDX/events
+    // Events appPath is like: devices/X1DPDX/events
     // Contacts are at: devices/X1DPDX/contacts/
-    final devicePath = path.dirname(widget.collectionPath);
+    final devicePath = path.dirname(widget.appPath);
     final contactsCollectionPath = '$devicePath/contacts';
     final fastJsonPath = '$contactsCollectionPath/fast.json';
 
@@ -322,7 +322,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
             contactService: ContactService(),
             profileService: widget.profileService,
             i18n: widget.i18n,
-            collectionPath: contactsCollectionPath,
+            appPath: contactsCollectionPath,
           ),
         ),
       );
@@ -337,10 +337,10 @@ class _EventDetailPageState extends State<EventDetailPage> {
   }
 
   Future<void> _openPlace(String placePath) async {
-    if (widget.collectionPath.isEmpty) return;
+    if (widget.appPath.isEmpty) return;
 
     // Resolve the place path relative to the collection
-    final basePath = path.dirname(widget.collectionPath);
+    final basePath = path.dirname(widget.appPath);
     final fullPlacePath = path.isAbsolute(placePath)
         ? placePath
         : path.normalize(path.join(basePath, placePath));
@@ -374,7 +374,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
           context,
           MaterialPageRoute(
             builder: (context) => PlaceDetailPage(
-              collectionPath: placesCollectionPath,
+              appPath: placesCollectionPath,
               place: place,
             ),
           ),
@@ -407,20 +407,20 @@ class _EventDetailPageState extends State<EventDetailPage> {
   @override
   Widget build(BuildContext context) {
     final canEdit = !widget.readOnly &&
-        widget.collectionPath.isNotEmpty &&
+        widget.appPath.isNotEmpty &&
         _event.canEdit(widget.currentCallsign ?? '', widget.currentUserNpub);
-    final canManage = !widget.readOnly && widget.collectionPath.isNotEmpty;
+    final canManage = !widget.readOnly && widget.appPath.isNotEmpty;
 
     final detail = EventDetailWidget(
       event: _event,
-      collectionPath: widget.collectionPath,
+      appPath: widget.appPath,
       currentCallsign: widget.currentCallsign,
       currentUserNpub: widget.currentUserNpub,
       canEdit: canEdit,
       onEdit: canEdit ? _editEvent : null,
       onUploadFiles: canManage ? _uploadFiles : null,
       onCreateUpdate: canManage ? _createUpdate : null,
-      onFeedbackUpdated: widget.collectionPath.isNotEmpty
+      onFeedbackUpdated: widget.appPath.isNotEmpty
           ? () => _refreshEvent(markChanged: true)
           : null,
       onPlaceOpen: _openPlace,
@@ -448,7 +448,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
               ),
           ],
         ),
-        body: widget.collectionPath.isEmpty
+        body: widget.appPath.isEmpty
             ? detail
             : RefreshIndicator(
                 onRefresh: () => _refreshEvent(markChanged: true),

@@ -8,11 +8,11 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
-import '../models/collection.dart';
+import '../models/app.dart';
 import '../models/forum_section.dart';
 import '../models/forum_thread.dart';
 import '../models/forum_post.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/forum_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -25,11 +25,11 @@ import '../widgets/new_thread_dialog.dart';
 
 /// Page for browsing and interacting with a forum collection
 class ForumBrowserPage extends StatefulWidget {
-  final Collection collection;
+  final App app;
 
   const ForumBrowserPage({
     Key? key,
-    required this.collection,
+    required this.app,
   }) : super(key: key);
 
   @override
@@ -71,13 +71,13 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
     try {
       // Initialize forum service with collection path
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) {
         throw Exception('Collection storage path is null');
       }
 
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
@@ -90,7 +90,7 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
       // Pass current user's npub to initialize admin if needed
       final currentProfile = _profileService.getProfile();
-      await _forumService.initializeCollection(
+      await _forumService.initializeApp(
         storagePath,
         creatorNpub: currentProfile.npub,
       );
@@ -244,7 +244,7 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
   /// Load forum settings
   Future<Map<String, dynamic>> _loadForumSettings() async {
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) return {};
 
       final settingsFile =
@@ -272,7 +272,7 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
       }
 
       // Determine destination folder
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null || _selectedSection == null || _selectedThread == null) {
         _showError('Invalid forum state');
         return null;
@@ -364,7 +364,7 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
     if (!post.hasFile || _selectedSection == null) return;
 
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) {
         _showError('Collection storage path is null');
         return;
@@ -540,13 +540,13 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
 
             // In narrow screen, show "Forum" when on the section list
             if (!isWideScreen && _selectedSection == null && _selectedThread == null) {
-              return Text(widget.collection.title);
+              return Text(widget.app.title);
             }
 
             return Text(
               _selectedThread?.title ??
                   _selectedSection?.name ??
-                  widget.collection.title,
+                  widget.app.title,
             );
           },
         ),
@@ -817,7 +817,7 @@ class _ForumBrowserPageState extends State<ForumBrowserPage> {
             threads: threads,
             forumService: _forumService,
             profileService: _profileService,
-            collection: widget.collection,
+            app: widget.app,
             isAdmin: _isAdmin,
           ),
         ),
@@ -1493,7 +1493,7 @@ class _ThreadListPage extends StatefulWidget {
   final List<ForumThread> threads;
   final ForumService forumService;
   final ProfileService profileService;
-  final Collection collection;
+  final App app;
   final bool isAdmin;
 
   const _ThreadListPage({
@@ -1502,7 +1502,7 @@ class _ThreadListPage extends StatefulWidget {
     required this.threads,
     required this.forumService,
     required this.profileService,
-    required this.collection,
+    required this.app,
     required this.isAdmin,
   }) : super(key: key);
 
@@ -1542,7 +1542,7 @@ class _ThreadListPageState extends State<_ThreadListPage> {
           posts: posts,
           forumService: widget.forumService,
           profileService: widget.profileService,
-          collection: widget.collection,
+          app: widget.app,
           isAdmin: widget.isAdmin,
         ),
       ),
@@ -1629,7 +1629,7 @@ class _ThreadListPageState extends State<_ThreadListPage> {
 
   Future<Map<String, dynamic>> _loadForumSettings() async {
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) return {};
 
       final settingsFile = File(path.join(storagePath, 'extra', 'settings.json'));
@@ -1873,7 +1873,7 @@ class _PostsPage extends StatefulWidget {
   final List<ForumPost> posts;
   final ForumService forumService;
   final ProfileService profileService;
-  final Collection collection;
+  final App app;
   final bool isAdmin;
 
   const _PostsPage({
@@ -1883,7 +1883,7 @@ class _PostsPage extends StatefulWidget {
     required this.posts,
     required this.forumService,
     required this.profileService,
-    required this.collection,
+    required this.app,
     required this.isAdmin,
   }) : super(key: key);
 
@@ -1979,7 +1979,7 @@ class _PostsPageState extends State<_PostsPage> {
 
   Future<Map<String, dynamic>> _loadForumSettings() async {
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) return {};
 
       final settingsFile = File(path.join(storagePath, 'extra', 'settings.json'));
@@ -2007,7 +2007,7 @@ class _PostsPageState extends State<_PostsPage> {
         return null;
       }
 
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) {
         return null;
       }
@@ -2094,7 +2094,7 @@ class _PostsPageState extends State<_PostsPage> {
     if (!post.hasFile) return;
 
     try {
-      final storagePath = widget.collection.storagePath;
+      final storagePath = widget.app.storagePath;
       if (storagePath == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

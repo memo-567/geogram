@@ -15,7 +15,7 @@ import 'video_player_widget.dart';
 /// Widget for displaying video detail with player and metadata
 class VideoDetailWidget extends StatefulWidget {
   final Video video;
-  final String collectionPath;
+  final String appPath;
   final bool canEdit;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -31,7 +31,7 @@ class VideoDetailWidget extends StatefulWidget {
   const VideoDetailWidget({
     Key? key,
     required this.video,
-    required this.collectionPath,
+    required this.appPath,
     this.canEdit = false,
     this.onEdit,
     this.onDelete,

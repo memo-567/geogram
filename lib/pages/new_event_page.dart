@@ -10,12 +10,13 @@ import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
 import '../dialogs/new_update_dialog.dart';
+import '../models/app.dart';
 import '../models/contact.dart';
 import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/group.dart';
 import '../models/place.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -32,12 +33,12 @@ class NewEventPage extends StatefulWidget {
   final Event? event;
 
   /// Required when editing an event
-  final String? collectionPath;
+  final String? appPath;
 
   const NewEventPage({
     Key? key,
     this.event,
-    this.collectionPath,
+    this.appPath,
   }) : super(key: key);
 
   /// Whether this page is in edit mode
@@ -81,9 +82,9 @@ class _PendingUpdate {
 
 class _GroupOption {
   final Group group;
-  final String? collectionTitle;
+  final String? appTitle;
 
-  const _GroupOption(this.group, this.collectionTitle);
+  const _GroupOption(this.group, this.appTitle);
 }
 
 class _NewEventPageState extends State<NewEventPage>
@@ -182,9 +183,9 @@ class _NewEventPageState extends State<NewEventPage>
     }
 
     // Load existing flyers/photos
-    if (widget.collectionPath != null && event.flyers.isNotEmpty) {
+    if (widget.appPath != null && event.flyers.isNotEmpty) {
       final year = event.id.substring(0, 4);
-      final eventFolderPath = '${widget.collectionPath}/$year/${event.id}';
+      final eventFolderPath = '${widget.appPath}/$year/${event.id}';
       for (final flyerName in event.flyers) {
         final flyerPath = '$eventFolderPath/$flyerName';
         if (File(flyerPath).existsSync()) {
@@ -198,9 +199,9 @@ class _NewEventPageState extends State<NewEventPage>
     }
 
     // Load existing trailer
-    if (widget.collectionPath != null && event.trailer != null) {
+    if (widget.appPath != null && event.trailer != null) {
       final year = event.id.substring(0, 4);
-      final eventFolderPath = '${widget.collectionPath}/$year/${event.id}';
+      final eventFolderPath = '${widget.appPath}/$year/${event.id}';
       final trailerPath = '$eventFolderPath/${event.trailer}';
       if (File(trailerPath).existsSync()) {
         _trailer = _PendingFile(
@@ -573,10 +574,8 @@ class _NewEventPageState extends State<NewEventPage>
 
   Future<void> _loadGroups() async {
     try {
-      final collections = await CollectionService().loadCollections();
-      final groupCollections = collections
-          .where((c) => c.type == 'groups' && c.storagePath != null)
-          .toList();
+      final app = AppService().getAppByType('groups');
+      final groupCollections = app != null ? [app] : <App>[];
 
       _availableGroups.clear();
       final groupsService = GroupsService();
@@ -584,7 +583,7 @@ class _NewEventPageState extends State<NewEventPage>
 
       for (final collection in groupCollections) {
         // Set profile storage for encrypted storage support
-        final profileStorage = CollectionService().profileStorage;
+        final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
             profileStorage,
@@ -594,7 +593,7 @@ class _NewEventPageState extends State<NewEventPage>
         } else {
           groupsService.setStorage(FilesystemProfileStorage(collection.storagePath!));
         }
-        await groupsService.initializeCollection(
+        await groupsService.initializeApp(
           collection.storagePath!,
           creatorNpub: profile.npub,
         );
@@ -1746,8 +1745,8 @@ class _NewEventPageState extends State<NewEventPage>
               if (option.group.title.isNotEmpty && option.group.name != option.group.title) {
                 subtitleParts.add(option.group.name);
               }
-              if (option.collectionTitle != null && option.collectionTitle!.isNotEmpty) {
-                subtitleParts.add(option.collectionTitle!);
+              if (option.appTitle != null && option.appTitle!.isNotEmpty) {
+                subtitleParts.add(option.appTitle!);
               }
               return CheckboxListTile(
                 value: _selectedGroups.contains(option.group.name),

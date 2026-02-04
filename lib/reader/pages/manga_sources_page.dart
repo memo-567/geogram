@@ -12,12 +12,12 @@ import '../../services/i18n_service.dart';
 
 /// Page showing list of manga sources
 class MangaSourcesPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final I18nService i18n;
 
   const MangaSourcesPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.i18n,
   });
 
@@ -60,7 +60,7 @@ class _MangaSourcesPageState extends State<MangaSourcesPage> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MangaSeriesPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           source: source,
           i18n: widget.i18n,
         ),

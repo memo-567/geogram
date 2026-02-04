@@ -8,7 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/encrypted_storage_service.dart';
 import '../services/signing_service.dart';
 import '../services/app_args.dart';
@@ -404,16 +404,16 @@ class ProfileService {
     _activeProfileId = profileId;
     _saveAllProfiles();
 
-    // Update CollectionService to use the new profile's storage path BEFORE notifying listeners
+    // Update AppService to use the new profile's storage path BEFORE notifying listeners
     final newProfile = getProfile();
     // Set nsec for encrypted storage access (must be before setActiveCallsign)
     if (newProfile.nsec.isNotEmpty) {
-      CollectionService().setNsec(newProfile.nsec);
+      AppService().setNsec(newProfile.nsec);
     }
-    await CollectionService().setActiveCallsign(newProfile.callsign);
+    await AppService().setActiveCallsign(newProfile.callsign);
 
     // Ensure default collections exist for this profile
-    await CollectionService().ensureDefaultCollections();
+    await AppService().ensureDefaultApps();
 
     // Notify listeners AFTER callsign is updated so they load correct collections
     activeProfileNotifier.value = profileId;
@@ -655,10 +655,10 @@ class ProfileService {
     try {
       // Set nsec for encrypted storage access (must be before setActiveCallsign)
       if (profile.nsec.isNotEmpty) {
-        CollectionService().setNsec(profile.nsec);
+        AppService().setNsec(profile.nsec);
       }
-      await CollectionService().setActiveCallsign(profile.callsign);
-      await CollectionService().ensureDefaultCollections();
+      await AppService().setActiveCallsign(profile.callsign);
+      await AppService().ensureDefaultApps();
     } catch (e) {
       LogService().log('ProfileService: Failed to update callsign path: $e');
     }

@@ -22,7 +22,7 @@ import '../pages/photo_viewer_page.dart';
 /// Widget for displaying event detail with all v1.2 features
 class EventDetailWidget extends StatelessWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final String? currentCallsign;
   final String? currentUserNpub;
   final bool canEdit;
@@ -38,7 +38,7 @@ class EventDetailWidget extends StatelessWidget {
   const EventDetailWidget({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.currentCallsign,
     this.currentUserNpub,
     this.canEdit = false,
@@ -116,7 +116,7 @@ class EventDetailWidget extends StatelessWidget {
           if (event.hasContacts || (canEdit && onContactsUpdated != null)) ...[
             EventContactsSection(
               event: event,
-              collectionPath: collectionPath,
+              appPath: appPath,
               canEdit: canEdit,
               onContactsUpdated: onContactsUpdated,
               onContactTap: onContactOpen,
@@ -133,7 +133,7 @@ class EventDetailWidget extends StatelessWidget {
           // Files & Photos section
           EventFilesSection(
             event: event,
-            collectionPath: collectionPath,
+            appPath: appPath,
             onUploadFiles: onUploadFiles,
             refreshKey: filesRefreshKey,
           ),
@@ -141,7 +141,7 @@ class EventDetailWidget extends StatelessWidget {
 
           EventCommunityMediaSection(
             event: event,
-            collectionPath: collectionPath,
+            appPath: appPath,
             currentCallsign: currentCallsign,
             currentUserNpub: currentUserNpub,
           ),
@@ -149,7 +149,7 @@ class EventDetailWidget extends StatelessWidget {
 
           EventFeedbackSection(
             event: event,
-            collectionPath: collectionPath,
+            appPath: appPath,
             onFeedbackUpdated: onFeedbackUpdated,
           ),
           const SizedBox(height: 24),
@@ -344,9 +344,9 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildFlyer(BuildContext context, ThemeData theme, I18nService i18n) {
     final year = event.id.substring(0, 4);
-    final flyerPath = '$collectionPath/$year/${event.id}/${event.primaryFlyer}';
+    final flyerPath = '$appPath/$year/${event.id}/${event.primaryFlyer}';
     final flyerPaths = event.flyers
-        .map((flyer) => '$collectionPath/$year/${event.id}/$flyer')
+        .map((flyer) => '$appPath/$year/${event.id}/$flyer')
         .toList();
     final canOpen = !kIsWeb && flyerPaths.isNotEmpty;
 
@@ -460,7 +460,7 @@ class EventDetailWidget extends StatelessWidget {
   Widget _buildRegistration(BuildContext context, ThemeData theme, I18nService i18n) {
     return EventRegistrationSection(
       event: event,
-      collectionPath: collectionPath,
+      appPath: appPath,
       currentCallsign: currentCallsign,
       currentUserNpub: currentUserNpub,
       onRegistrationUpdated: onFeedbackUpdated,
@@ -728,7 +728,7 @@ class EventDetailWidget extends StatelessWidget {
 
 class EventRegistrationSection extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final String? currentCallsign;
   final String? currentUserNpub;
   final Future<void> Function()? onRegistrationUpdated;
@@ -736,7 +736,7 @@ class EventRegistrationSection extends StatefulWidget {
   const EventRegistrationSection({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.currentCallsign,
     this.currentUserNpub,
     this.onRegistrationUpdated,
@@ -770,7 +770,7 @@ class _EventRegistrationSectionState extends State<EventRegistrationSection> {
   Future<void> _toggleRegistration(RegistrationType type) async {
     if (_isSubmitting) return;
 
-    if (widget.collectionPath.isEmpty) {
+    if (widget.appPath.isEmpty) {
       _showMessage(_i18n.t('connection_failed'), isError: true);
       return;
     }
@@ -842,7 +842,7 @@ class _EventRegistrationSectionState extends State<EventRegistrationSection> {
     final callsign = widget.currentCallsign ?? '';
     final isGoing = callsign.isNotEmpty && _registration.isGoing(callsign);
     final isInterested = callsign.isNotEmpty && _registration.isInterested(callsign);
-    final isReadOnly = widget.collectionPath.isEmpty;
+    final isReadOnly = widget.appPath.isEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -957,14 +957,14 @@ class _EventRegistrationSectionState extends State<EventRegistrationSection> {
 /// Stateful widget for displaying and managing event files
 class EventFilesSection extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final VoidCallback? onUploadFiles;
   final int refreshKey;
 
   const EventFilesSection({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.onUploadFiles,
     this.refreshKey = 0,
   }) : super(key: key);
@@ -1005,7 +1005,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
     try {
       final year = widget.event.id.substring(0, 4);
       final eventDir = io.Directory(
-        '${widget.collectionPath}/$year/${widget.event.id}',
+        '${widget.appPath}/$year/${widget.event.id}',
       );
 
       if (await eventDir.exists()) {
@@ -1277,7 +1277,7 @@ class _EventFilesSectionState extends State<EventFilesSection> {
 /// Section for displaying and managing contacts associated with an event
 class EventContactsSection extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final bool canEdit;
   final void Function(List<String> contacts)? onContactsUpdated;
   final void Function(String callsign)? onContactTap;
@@ -1285,7 +1285,7 @@ class EventContactsSection extends StatefulWidget {
   const EventContactsSection({
     Key? key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.canEdit = false,
     this.onContactsUpdated,
     this.onContactTap,
@@ -1315,13 +1315,13 @@ class _EventContactsSectionState extends State<EventContactsSection> {
 
   /// Load contact info directly from fast.json file
   Future<void> _loadContactInfo() async {
-    if (widget.collectionPath.isEmpty || widget.event.contacts.isEmpty) return;
+    if (widget.appPath.isEmpty || widget.event.contacts.isEmpty) return;
 
     final infoMap = <String, _ContactInfo>{};
 
-    // Events collectionPath is like: devices/X1DPDX/events
+    // Events appPath is like: devices/X1DPDX/events
     // Contacts are at: devices/X1DPDX/contacts/fast.json
-    final devicePath = path.dirname(widget.collectionPath);
+    final devicePath = path.dirname(widget.appPath);
     final fastJsonPath = '$devicePath/contacts/fast.json';
 
     try {
@@ -1427,7 +1427,7 @@ class _EventContactsSectionState extends State<EventContactsSection> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isReadOnly = widget.collectionPath.isEmpty || !widget.canEdit;
+    final isReadOnly = widget.appPath.isEmpty || !widget.canEdit;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

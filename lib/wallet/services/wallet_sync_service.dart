@@ -113,8 +113,8 @@ class WalletSyncService {
   bool get isInitialized => _basePath != null;
 
   /// Initialize the sync service
-  Future<void> initialize(String collectionPath) async {
-    _basePath = collectionPath;
+  Future<void> initialize(String appPath) async {
+    _basePath = appPath;
 
     // Ensure requests directory exists
     final requestsDir = Directory(path.join(_basePath!, 'requests'));

@@ -39,7 +39,7 @@ class VideoService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
   String? _callsign;
   String? _creatorNpub;
 
@@ -47,19 +47,19 @@ class VideoService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize video service for a collection
   ///
-  /// [collectionPath] - Path to videos collection root (e.g., .../devices/X1D808/videos)
+  /// [appPath] - Path to videos collection root (e.g., .../devices/X1D808/videos)
   /// [callsign] - Current user's callsign
   /// [creatorNpub] - Current user's npub for admin checks
-  Future<void> initializeCollection(String collectionPath, {String? callsign, String? creatorNpub}) async {
-    LogService().log('VideoService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath, {String? callsign, String? creatorNpub}) async {
+    LogService().log('VideoService: Initializing with collection path: $appPath');
+    _appPath = appPath;
     _callsign = callsign;
     _creatorNpub = creatorNpub;
 
@@ -77,8 +77,8 @@ class VideoService {
 
   /// Get path to user's videos folder
   String? get userVideosPath {
-    if (_collectionPath == null || _callsign == null) return null;
-    return '$_collectionPath/$_callsign';
+    if (_appPath == null || _callsign == null) return null;
+    return '$_appPath/$_callsign';
   }
 
   /// Load all videos for a callsign
@@ -99,12 +99,12 @@ class VideoService {
     bool recursive = true,
     String? userNpub,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final targetCallsign = callsign ?? _callsign;
     if (targetCallsign == null) return [];
 
-    final videosPath = '$_collectionPath/$targetCallsign';
+    final videosPath = '$_appPath/$targetCallsign';
     final videos = <Video>[];
 
     // Determine search path
@@ -148,12 +148,12 @@ class VideoService {
 
   /// Load a single video by ID
   Future<Video?> loadVideo(String videoId, {String? callsign, String? userNpub}) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     final targetCallsign = callsign ?? _callsign;
     if (targetCallsign == null) return null;
 
-    final videosPath = '$_collectionPath/$targetCallsign';
+    final videosPath = '$_appPath/$targetCallsign';
     final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
     if (videoFolderPath == null) return null;
@@ -299,7 +299,7 @@ class VideoService {
     String? npub,
     String? nsec,
   }) async {
-    if (_collectionPath == null || _callsign == null) {
+    if (_appPath == null || _callsign == null) {
       LogService().log('VideoService: Not initialized');
       return null;
     }
@@ -332,8 +332,8 @@ class VideoService {
       // Generate video folder name
       final baseName = finalTitles['EN'] ?? finalTitles.values.first;
       final parentPath = folderPath != null && folderPath.isNotEmpty
-          ? '$_collectionPath/$_callsign/${folderPath.join('/')}'
-          : '$_collectionPath/$_callsign';
+          ? '$_appPath/$_callsign/${folderPath.join('/')}'
+          : '$_appPath/$_callsign';
 
       // Ensure parent folder exists
       await Directory(parentPath).create(recursive: true);
@@ -436,7 +436,7 @@ class VideoService {
     String? nsec,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     try {
       // Load existing video
@@ -501,10 +501,10 @@ class VideoService {
   /// Delete a video
   Future<bool> deleteVideo(String videoId, {String? callsign}) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return false;
@@ -529,10 +529,10 @@ class VideoService {
     String? callsign,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return null;
+    if (_appPath == null || targetCallsign == null) return null;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) {
@@ -573,7 +573,7 @@ class VideoService {
     String? callsign,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     // Validate folder depth
     if (!VideoFolderUtils.isValidFolderDepth(newFolderPath)) {
@@ -582,7 +582,7 @@ class VideoService {
     }
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final currentPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (currentPath == null) return false;
@@ -618,7 +618,7 @@ class VideoService {
     String? callsign,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     // Validate folder depth
     final depth = (parentPath?.length ?? 0) + 1;
@@ -629,8 +629,8 @@ class VideoService {
 
     try {
       final basePath = parentPath != null && parentPath.isNotEmpty
-          ? '$_collectionPath/$targetCallsign/${parentPath.join('/')}'
-          : '$_collectionPath/$targetCallsign';
+          ? '$_appPath/$targetCallsign/${parentPath.join('/')}'
+          : '$_appPath/$targetCallsign';
 
       final sanitizedName = VideoFolderUtils.sanitizeFolderName(name);
       final folderPath = '$basePath/$sanitizedName';
@@ -666,12 +666,12 @@ $description
     String? callsign,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return [];
+    if (_appPath == null || targetCallsign == null) return [];
 
     try {
       final basePath = folderPath != null && folderPath.isNotEmpty
-          ? '$_collectionPath/$targetCallsign/${folderPath.join('/')}'
-          : '$_collectionPath/$targetCallsign';
+          ? '$_appPath/$targetCallsign/${folderPath.join('/')}'
+          : '$_appPath/$targetCallsign';
 
       final folderNames = await VideoFolderUtils.listSubfolders(basePath);
       final folders = <Map<String, dynamic>>[];
@@ -728,10 +728,10 @@ $description
   /// Record a view
   Future<bool> recordView(String videoId, String npub, String nsec, {String? callsign}) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return false;
@@ -768,10 +768,10 @@ $description
     String? callsign,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return null;
+    if (_appPath == null || targetCallsign == null) return null;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return null;
@@ -815,10 +815,10 @@ $description
   /// Load comments for a video
   Future<List<BlogComment>> loadComments(String videoId, {String? callsign}) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return [];
+    if (_appPath == null || targetCallsign == null) return [];
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return [];
@@ -847,10 +847,10 @@ $description
     String? nsec,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return null;
+    if (_appPath == null || targetCallsign == null) return null;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return null;
@@ -889,10 +889,10 @@ $description
     String? userNpub,
   }) async {
     final targetCallsign = callsign ?? _callsign;
-    if (_collectionPath == null || targetCallsign == null) return false;
+    if (_appPath == null || targetCallsign == null) return false;
 
     try {
-      final videosPath = '$_collectionPath/$targetCallsign';
+      final videosPath = '$_appPath/$targetCallsign';
       final videoFolderPath = await VideoFolderUtils.findVideoPath(videosPath, videoId);
 
       if (videoFolderPath == null) return false;

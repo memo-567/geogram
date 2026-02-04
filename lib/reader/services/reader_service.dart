@@ -32,7 +32,7 @@ class ReaderService {
   /// Check if the service is initialized
   bool get isInitialized => _storage != null;
 
-  /// Get the current collection path
+  /// Get the current app path
   String? get currentPath => _currentPath;
 
   /// Get current settings
@@ -41,8 +41,8 @@ class ReaderService {
   /// Get current progress
   ReadingProgress get progress => _progress ?? ReadingProgress();
 
-  /// Initialize the service with a collection path
-  Future<void> initializeCollection(String path) async {
+  /// Initialize the service with an app path
+  Future<void> initializeApp(String path) async {
     _currentPath = path;
     _storage = ReaderStorageService(path);
     await _storage!.initialize();
@@ -54,7 +54,7 @@ class ReaderService {
     LogService().log('ReaderService: Initialized with path $path');
   }
 
-  /// Reset the service (for switching collections)
+  /// Reset the service (for switching apps)
   void reset() {
     _storage = null;
     _currentPath = null;

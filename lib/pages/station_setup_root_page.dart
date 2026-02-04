@@ -362,7 +362,7 @@ class _StationSetupRootPageState extends State<StationSetupRootPage> {
           retentionDays: 0, // Forever
           chatRetentionDays: 0, // Forever
         ),
-        supportedCollections: ['reports', 'places', 'events', 'forum', 'chat'],
+        supportedApps: ['reports', 'places', 'events', 'forum', 'chat'],
       );
 
       final policy = NetworkPolicy(
@@ -373,7 +373,7 @@ class _StationSetupRootPageState extends State<StationSetupRootPage> {
         allowFederation: true,
       );
 
-      final collections = NetworkCollections(
+      final collections = NetworkApps(
         community: ['reports', 'places', 'events'],
         public: ['forum', 'chat'],
         userApprovalRequired: [],
@@ -385,7 +385,7 @@ class _StationSetupRootPageState extends State<StationSetupRootPage> {
         operatorCallsign: _callsignController.text,
         config: config,
         policy: policy,
-        collections: collections,
+        apps: collections,
       );
 
       if (mounted) {

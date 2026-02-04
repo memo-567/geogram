@@ -518,13 +518,13 @@ class ContactImportService {
   /// Import selected contacts
   Future<ImportResult> importContacts({
     required List<DeviceContactInfo> contacts,
-    required String collectionPath,
+    required String appPath,
     required String? groupPath,
     List<geogram.Contact>? existingContacts,
     required Function(int imported, int total) onProgress,
   }) async {
     final contactService = ContactService();
-    await contactService.initializeCollection(collectionPath);
+    await contactService.initializeApp(appPath);
 
     final existing = existingContacts ?? await contactService.loadAllContactsRecursively();
     final usedCallsigns = existing.map((contact) => contact.callsign).toSet();

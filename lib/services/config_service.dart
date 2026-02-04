@@ -92,7 +92,7 @@ class ConfigService {
     _config = {
       'version': '1.0.0',
       'created': DateTime.now().toIso8601String(),
-      'collections': <String, dynamic>{
+      'apps': <String, dynamic>{
         'favorites': <String>[],
       },
       'settings': <String, dynamic>{
@@ -231,25 +231,28 @@ class ConfigService {
     _save();
   }
 
-  /// Check if a collection is favorited
-  bool isFavorite(String collectionId) {
-    final favorites = getNestedValue('collections.favorites', <String>[]) as List;
-    return favorites.contains(collectionId);
+  /// Check if an app is favorited
+  bool isFavorite(String appId) {
+    // Migration: check old key too
+    final favorites = getNestedValue('apps.favorites', null) as List? ??
+        getNestedValue('collections.favorites', <String>[]) as List;
+    return favorites.contains(appId);
   }
 
-  /// Toggle favorite status of a collection
-  void toggleFavorite(String collectionId) {
-    final favorites = List<String>.from(
-      getNestedValue('collections.favorites', <String>[]) as List
-    );
+  /// Toggle favorite status of an app
+  void toggleFavorite(String appId) {
+    // Migration: read from old key if new doesn't exist
+    final raw = getNestedValue('apps.favorites', null) as List? ??
+        getNestedValue('collections.favorites', <String>[]) as List;
+    final favorites = List<String>.from(raw);
 
-    if (favorites.contains(collectionId)) {
-      favorites.remove(collectionId);
+    if (favorites.contains(appId)) {
+      favorites.remove(appId);
     } else {
-      favorites.add(collectionId);
+      favorites.add(appId);
     }
 
-    setNestedValue('collections.favorites', favorites);
+    setNestedValue('apps.favorites', favorites);
   }
 
   /// Get the full configuration map
@@ -311,46 +314,52 @@ class ConfigService {
     }
   }
 
-  /// Store collection npub/nsec key pair
-  void storeCollectionKeys(NostrKeys keys) {
-    // Ensure collectionKeys section exists
-    if (!_config.containsKey('collectionKeys')) {
-      _config['collectionKeys'] = <String, dynamic>{};
+  /// Store app npub/nsec key pair
+  void storeAppKeys(NostrKeys keys) {
+    // Migration: move old 'collectionKeys' to 'appKeys' if needed
+    if (_config.containsKey('collectionKeys') && !_config.containsKey('appKeys')) {
+      _config['appKeys'] = _config['collectionKeys'];
+    }
+    // Ensure appKeys section exists
+    if (!_config.containsKey('appKeys')) {
+      _config['appKeys'] = <String, dynamic>{};
     }
 
-    final collectionKeys = _config['collectionKeys'] as Map<String, dynamic>;
-    collectionKeys[keys.npub] = keys.toJson();
+    final appKeys = _config['appKeys'] as Map<String, dynamic>;
+    appKeys[keys.npub] = keys.toJson();
 
     _save();
-    stderr.writeln('Stored keys for collection: ${keys.npub}');
+    stderr.writeln('Stored keys for app: ${keys.npub}');
   }
 
   /// Get nsec for a given npub
   String? getNsec(String npub) {
-    final collectionKeys = _config['collectionKeys'] as Map<String, dynamic>?;
-    if (collectionKeys == null || !collectionKeys.containsKey(npub)) {
+    // Check new key first, fall back to old key
+    final appKeys = (_config['appKeys'] ?? _config['collectionKeys']) as Map<String, dynamic>?;
+    if (appKeys == null || !appKeys.containsKey(npub)) {
       return null;
     }
 
-    final keyData = collectionKeys[npub] as Map<String, dynamic>;
+    final keyData = appKeys[npub] as Map<String, dynamic>;
     return keyData['nsec'] as String?;
   }
 
-  /// Check if we own this collection (have the nsec)
-  bool isOwnedCollection(String npub) {
+  /// Check if we own this app (have the nsec)
+  bool isOwnedApp(String npub) {
     return getNsec(npub) != null;
   }
 
-  /// Get all owned collections (npubs we have nsec for)
-  Map<String, String> getAllOwnedCollections() {
+  /// Get all owned apps (npubs we have nsec for)
+  Map<String, String> getAllOwnedApps() {
     final owned = <String, String>{};
-    final collectionKeys = _config['collectionKeys'] as Map<String, dynamic>?;
+    // Check new key first, fall back to old key
+    final appKeys = (_config['appKeys'] ?? _config['collectionKeys']) as Map<String, dynamic>?;
 
-    if (collectionKeys == null) {
+    if (appKeys == null) {
       return owned;
     }
 
-    for (var entry in collectionKeys.entries) {
+    for (var entry in appKeys.entries) {
       final npub = entry.key;
       final keyData = entry.value as Map<String, dynamic>;
       final nsec = keyData['nsec'] as String?;

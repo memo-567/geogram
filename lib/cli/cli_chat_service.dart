@@ -47,19 +47,19 @@ class CliChatService {
       throw StateError('PureStorageConfig must be initialized first');
     }
 
-    // Collection path is the chat subfolder within the device directory
+    // App path is the chat subfolder within the device directory
     // This matches the desktop structure: devices/<callsign>/chat/
-    final collectionPath = '${storageConfig.devicesDir}/$callsign/chat';
+    final appPath = '${storageConfig.devicesDir}/$callsign/chat';
 
-    // Ensure collection directory exists
-    final collectionDir = Directory(collectionPath);
-    if (!await collectionDir.exists()) {
-      await collectionDir.create(recursive: true);
-      stderr.writeln('CliChatService: Created collection directory: $collectionPath');
+    // Ensure app directory exists
+    final appDir = Directory(appPath);
+    if (!await appDir.exists()) {
+      await appDir.create(recursive: true);
+      stderr.writeln('CliChatService: Created app directory: $appPath');
     }
 
     // Initialize the underlying ChatService
-    await _chatService.initializeCollection(collectionPath, creatorNpub: npub);
+    await _chatService.initializeApp(appPath, creatorNpub: npub);
 
     // Ensure main channel exists
     if (_chatService.channels.isEmpty) {

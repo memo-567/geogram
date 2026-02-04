@@ -17,13 +17,13 @@ import 'workspace_detail_page.dart';
 class WorkPage extends StatefulWidget {
   final ProfileStorage storage;
   final String relativePath;
-  final String? collectionTitle;
+  final String? appTitle;
 
   const WorkPage({
     super.key,
     required this.storage,
     required this.relativePath,
-    this.collectionTitle,
+    this.appTitle,
   });
 
   @override
@@ -200,7 +200,7 @@ class _WorkPageState extends State<WorkPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.collectionTitle ?? _i18n.t('work_title')),
+        title: Text(widget.appTitle ?? _i18n.t('work_title')),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

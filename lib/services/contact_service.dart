@@ -117,25 +117,25 @@ class ContactService {
   /// IMPORTANT: This MUST be set before using the service.
   late ProfileStorage _storage;
 
-  String? _collectionPath;
+  String? _appPath;
 
   /// Get the current collection path
-  String? get collectionPath => _collectionPath;
+  String? get appPath => _appPath;
 
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Get the relative path from collection path
   String _getRelativePath(String fullPath) {
-    if (_collectionPath == null) return fullPath;
-    if (fullPath.startsWith(_collectionPath!)) {
-      final rel = fullPath.substring(_collectionPath!.length);
+    if (_appPath == null) return fullPath;
+    if (fullPath.startsWith(_appPath!)) {
+      final rel = fullPath.substring(_appPath!.length);
       return rel.startsWith('/') ? rel.substring(1) : rel;
     }
     return fullPath;
@@ -146,9 +146,9 @@ class ContactService {
   DateTime? _summaryCacheTime;
 
   /// Initialize contact service for a collection
-  Future<void> initializeCollection(String collectionPath) async {
-    LogService().log('ContactService: Initializing with collection path: $collectionPath');
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath) async {
+    LogService().log('ContactService: Initializing with collection path: $appPath');
+    _appPath = appPath;
 
     // Using ProfileStorage - directories are created implicitly
     await _storage.createDirectory('');
@@ -158,7 +158,7 @@ class ContactService {
 
   /// Load all contacts (with optional group filter)
   Future<List<Contact>> loadContacts({String? groupPath}) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final contacts = <Contact>[];
     final relativePath = groupPath ?? '';
@@ -198,7 +198,7 @@ class ContactService {
 
   /// Load all contacts recursively (including subgroups)
   Future<List<Contact>> loadAllContactsRecursively() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final contacts = <Contact>[];
 
@@ -241,7 +241,7 @@ class ContactService {
   /// Stream contacts incrementally, prioritizing popular contacts first.
   /// This provides a better UX by showing contacts as they load.
   Stream<Contact> loadAllContactsStream() async* {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     // Use ProfileStorage - collect all paths then yield
     final allFilePaths = <String>[];
@@ -283,7 +283,7 @@ class ContactService {
   /// Load contact summaries from fast.json (instant)
   /// Returns null if fast.json doesn't exist or is invalid
   Future<List<ContactSummary>?> loadContactSummaries() async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     // Use in-memory cache if still valid (5 seconds)
     final now = DateTime.now();
@@ -327,7 +327,7 @@ class ContactService {
 
   /// Save contact summaries to fast.json
   Future<void> saveContactSummaries(List<ContactSummary> summaries) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final jsonList = summaries.map((s) => s.toJson()).toList();
@@ -343,7 +343,7 @@ class ContactService {
   /// Rebuild fast.json from all contact files
   /// This should be called when contacts change or initially if fast.json is missing
   Future<void> rebuildFastJson() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     LogService().log('ContactService: Rebuilding fast.json...');
 
@@ -449,7 +449,7 @@ class ContactService {
   /// Stream contacts with fast initial load
   /// First yields from fast.json (instant), then loads full details in background
   Stream<Contact> loadAllContactsStreamFast() async* {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     // Try to load from fast.json first
     final summaries = await loadContactSummaries();
@@ -504,7 +504,7 @@ class ContactService {
   /// Search contacts that have email addresses
   /// Returns a list of (displayName, email, callsign, profilePicture) for autocomplete
   Future<List<Map<String, String?>>> searchContactsWithEmail(String query) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final results = <Map<String, String?>>[];
     final queryLower = query.toLowerCase();
@@ -557,7 +557,7 @@ class ContactService {
   DateTime? _emailContactsCacheTime;
 
   Future<List<Map<String, String?>>> getContactsWithEmails() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     // Return cached if recent (5 minutes)
     final now = DateTime.now();
@@ -591,7 +591,7 @@ class ContactService {
   /// Delete all cache and metrics files to reset the contacts app state
   /// This removes: fast.json, .contact_metrics.txt, .click_stats.txt, .favorites.json
   Future<int> deleteAllCacheFiles() async {
-    if (_collectionPath == null) return 0;
+    if (_appPath == null) return 0;
 
     int deletedCount = 0;
     final filesToDelete = [
@@ -666,7 +666,7 @@ class ContactService {
 
   /// Load single contact by callsign
   Future<Contact?> loadContact(String callsign, {String? groupPath}) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     final relativePath = groupPath != null && groupPath.isNotEmpty
         ? '$groupPath/$callsign.txt'
@@ -1122,7 +1122,7 @@ class ContactService {
     bool skipDuplicateCheck = false,
     bool skipFastJsonRebuild = false,
   }) async {
-    if (_collectionPath == null) return 'Collection not initialized';
+    if (_appPath == null) return 'Collection not initialized';
 
     // Check for duplicates (callsign and npub)
     if (!skipDuplicateCheck) {
@@ -1245,7 +1245,7 @@ class ContactService {
   /// Set [skipFastJsonRebuild] to true when doing batch operations (e.g., merge)
   /// and you'll manually call rebuildFastJson() at the end
   Future<bool> deleteContact(String callsign, {String? groupPath, bool skipFastJsonRebuild = false}) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     final relativePath = groupPath != null && groupPath.isNotEmpty
         ? '$groupPath/$callsign.txt'
@@ -1276,7 +1276,7 @@ class ContactService {
 
   /// Move contact to a different group/folder
   Future<bool> moveContactToGroup(String callsign, String? newGroupPath) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     // Find the contact file
     final oldRelativePath = await _findContactFileInStorage(callsign);
@@ -1323,7 +1323,7 @@ class ContactService {
   /// Find a contact file by callsign across all directories using storage
   /// Returns the relative path if found, null otherwise
   Future<String?> _findContactFileInStorage(String callsign) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     return await _findContactFileInStorageRecursive('', callsign);
   }
@@ -1344,7 +1344,7 @@ class ContactService {
 
   /// Delete profile picture for a contact
   Future<void> _deleteProfilePicture(String callsign) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     // Check for common image extensions
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
@@ -1360,7 +1360,7 @@ class ContactService {
 
   /// Load all groups (folders)
   Future<List<ContactGroup>> loadGroups() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final groups = <ContactGroup>[];
     await _loadGroupsRecursiveFromStorage('', groups);
@@ -1475,7 +1475,7 @@ class ContactService {
     String? description,
     String? author,
   }) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     if (await _storage.exists(groupPath)) {
       LogService().log('ContactService: Group already exists: $groupPath');
@@ -1524,7 +1524,7 @@ class ContactService {
 
   /// Delete group (only if empty)
   Future<bool> deleteGroup(String groupPath) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     if (!await _storage.exists(groupPath)) return false;
 
@@ -1556,7 +1556,7 @@ class ContactService {
 
   /// Delete group with all contacts inside (force delete)
   Future<bool> deleteGroupWithContacts(String groupPath) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     if (!await _storage.exists(groupPath)) return false;
 
@@ -1594,7 +1594,7 @@ class ContactService {
 
   /// Helper to delete media files for a contact using storage
   Future<void> _deleteContactMedia(String callsign) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
@@ -1608,7 +1608,7 @@ class ContactService {
 
   /// Delete ALL contacts and groups (destructive operation)
   Future<bool> deleteAllContactsAndGroups() async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     try {
       // Delete all profile pictures in media folder
@@ -1655,13 +1655,13 @@ class ContactService {
   /// Returns File if profile picture exists, null otherwise.
   /// NOTE: Only works for filesystem storage (not encrypted).
   File? getProfilePictureFile(String callsign) {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
     // Encrypted storage doesn't support direct file access
     if (_storage.isEncrypted) return null;
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
-      final file = File('$_collectionPath/media/$callsign.$ext');
+      final file = File('$_appPath/media/$callsign.$ext');
       if (file.existsSync()) {
         return file;
       }
@@ -1680,7 +1680,7 @@ class ContactService {
   /// Get profile picture path for a contact (async version)
   /// Works with both filesystem and encrypted storage.
   Future<String?> getProfilePicturePathAsync(String callsign) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     for (var ext in extensions) {
@@ -1694,7 +1694,7 @@ class ContactService {
 
   /// Save profile picture for a contact
   Future<String?> saveProfilePicture(String callsign, File sourceFile) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     await _storage.createDirectory('media');
 
@@ -1714,7 +1714,7 @@ class ContactService {
 
   /// Save profile picture from bytes (for imported contacts)
   Future<String?> saveProfilePictureFromBytes(String callsign, Uint8List bytes, String extension) async {
-    if (_collectionPath == null) return null;
+    if (_appPath == null) return null;
 
     await _storage.createDirectory('media');
     final relativePath = 'media/$callsign.$extension';
@@ -1733,7 +1733,7 @@ class ContactService {
 
   /// Load click statistics
   Future<Map<String, int>> loadClickStats() async {
-    if (_collectionPath == null) return {};
+    if (_appPath == null) return {};
 
     final content = await _storage.readString('.click_stats.txt');
     if (content == null) return {};
@@ -1763,7 +1763,7 @@ class ContactService {
 
   /// Record a contact click
   Future<void> recordContactClick(String callsign) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final stats = await loadClickStats();
     stats[callsign] = (stats[callsign] ?? 0) + 1;
@@ -1773,7 +1773,7 @@ class ContactService {
 
   /// Save click statistics
   Future<void> _saveClickStats(Map<String, int> stats) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final buffer = StringBuffer();
     buffer.writeln('# CONTACT CLICK STATISTICS');
@@ -1806,7 +1806,7 @@ class ContactService {
   /// Only returns contacts with score > 0
   /// Uses cached favorites for instant loading
   Future<List<Contact>> getTopContacts(int limit) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     // Load from favorites cache (instant)
     final favorites = await loadFavorites();
@@ -1832,7 +1832,7 @@ class ContactService {
 
   /// Load favorites from cache (instant)
   Future<List<ContactSummary>> loadFavorites() async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     // Return in-memory cache if available
     if (_favoritesCache != null) {
@@ -1859,7 +1859,7 @@ class ContactService {
 
   /// Rebuild favorites cache from metrics (call after metrics change)
   Future<void> rebuildFavorites({int limit = 30}) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final metrics = await loadMetrics();
@@ -1924,7 +1924,7 @@ class ContactService {
 
   /// Save favorites to cache file
   Future<void> _saveFavorites(List<ContactSummary> favorites) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final jsonList = favorites.map((s) => s.toJson()).toList();
@@ -1949,7 +1949,7 @@ class ContactService {
 
   /// Load contact metrics
   Future<ContactMetrics> loadMetrics() async {
-    if (_collectionPath == null) return ContactMetrics();
+    if (_appPath == null) return ContactMetrics();
 
     // Use cache if still valid
     final now = DateTime.now();
@@ -1981,7 +1981,7 @@ class ContactService {
 
   /// Save contact metrics
   Future<void> _saveMetrics(ContactMetrics metrics) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _metricsCache = metrics;
     _metricsCacheTime = DateTime.now();
@@ -1999,7 +1999,7 @@ class ContactService {
 
   /// Record a contact view (when viewing contact details)
   Future<void> recordContactView(String callsign) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final metrics = await loadMetrics();
     metrics.recordView(callsign);
@@ -2016,7 +2016,7 @@ class ContactService {
     int index, {
     String? value,
   }) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final metrics = await loadMetrics();
     metrics.recordInteraction(callsign, type, index, value: value);
@@ -2025,7 +2025,7 @@ class ContactService {
 
   /// Record an event association for a contact
   Future<void> recordEventAssociation(String callsign) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final metrics = await loadMetrics();
     metrics.recordEvent(callsign);
@@ -2034,7 +2034,7 @@ class ContactService {
 
   /// Record event associations for multiple contacts
   Future<void> recordEventAssociations(List<String> callsigns) async {
-    if (_collectionPath == null || callsigns.isEmpty) return;
+    if (_appPath == null || callsigns.isEmpty) return;
 
     final metrics = await loadMetrics();
     for (final callsign in callsigns) {
@@ -2093,7 +2093,7 @@ class ContactService {
   /// Rename a group/folder
   /// Note: ProfileStorage doesn't support rename, so this copies all files and deletes old folder
   Future<bool> renameGroup(String oldPath, String newName) async {
-    if (_collectionPath == null) return false;
+    if (_appPath == null) return false;
 
     if (!await _storage.exists(oldPath)) return false;
 

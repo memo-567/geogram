@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path/path.dart' as path;
+import '../models/app.dart';
 import '../models/place.dart';
 import '../services/place_service.dart';
 import '../services/profile_service.dart';
@@ -17,7 +18,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../platform/file_image_helper.dart' as file_helper;
 import '../services/location_provider_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/groups_service.dart';
 import '../services/profile_storage.dart';
 import '../models/group.dart';
@@ -28,19 +29,19 @@ import '../widgets/transcribe_button_widget.dart';
 /// Helper class for group options in visibility selector
 class _GroupOption {
   final Group group;
-  final String? collectionTitle;
+  final String? appTitle;
 
-  const _GroupOption(this.group, this.collectionTitle);
+  const _GroupOption(this.group, this.appTitle);
 }
 
 /// Full-page form for adding or editing a place
 class AddEditPlacePage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final Place? place; // null for new place, non-null for edit
 
   const AddEditPlacePage({
     Key? key,
-    required this.collectionPath,
+    required this.appPath,
     this.place,
   }) : super(key: key);
 
@@ -291,10 +292,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
   /// Load available groups for restricted visibility
   Future<void> _loadGroups() async {
     try {
-      final collections = await CollectionService().loadCollections();
-      final groupCollections = collections
-          .where((c) => c.type == 'groups' && c.storagePath != null)
-          .toList();
+      final app = AppService().getAppByType('groups');
+      final groupCollections = app != null ? [app] : <App>[];
 
       _availableGroups.clear();
       final groupsService = GroupsService();
@@ -302,7 +301,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
       for (final collection in groupCollections) {
         // Set profile storage for encrypted storage support
-        final profileStorage = CollectionService().profileStorage;
+        final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
             profileStorage,
@@ -312,7 +311,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         } else {
           groupsService.setStorage(FilesystemProfileStorage(collection.storagePath!));
         }
-        await groupsService.initializeCollection(
+        await groupsService.initializeApp(
           collection.storagePath!,
           creatorNpub: profile.npub,
         );
@@ -1344,8 +1343,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
                   if (option.group.title.isNotEmpty && option.group.name != option.group.title) {
                     subtitleParts.add(option.group.name);
                   }
-                  if (option.collectionTitle != null && option.collectionTitle!.isNotEmpty) {
-                    subtitleParts.add(option.collectionTitle!);
+                  if (option.appTitle != null && option.appTitle!.isNotEmpty) {
+                    subtitleParts.add(option.appTitle!);
                   }
                   return CheckboxListTile(
                     value: _selectedGroups.contains(option.group.name),

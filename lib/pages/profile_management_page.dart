@@ -175,7 +175,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                   retentionDays: 0, // Forever
                   chatRetentionDays: 0, // Forever
                 ),
-                supportedCollections: ['reports', 'places', 'events', 'forum', 'chat'],
+                supportedApps: ['reports', 'places', 'events', 'forum', 'chat'],
               );
 
               final policy = NetworkPolicy(
@@ -186,7 +186,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                 allowFederation: true,
               );
 
-              final collections = NetworkCollections(
+              final collections = NetworkApps(
                 community: ['reports', 'places', 'events'],
                 public: ['forum', 'chat'],
                 userApprovalRequired: [],
@@ -198,7 +198,7 @@ class _ProfileManagementPageState extends State<ProfileManagementPage> {
                 operatorCallsign: callsign,
                 config: config,
                 policy: policy,
-                collections: collections,
+                apps: collections,
               );
 
               if (mounted) {

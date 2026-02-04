@@ -13,7 +13,7 @@ import 'package:nntp/nntp.dart';
 import '../../models/nntp_account.dart';
 import '../../models/nntp_subscription.dart';
 import '../../services/nntp_service.dart';
-import '../../services/collection_service.dart';
+import '../../services/app_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/profile_storage.dart';
 import '../../services/storage_config.dart';
@@ -60,7 +60,7 @@ class _UsenetAppPageState extends State<UsenetAppPage> {
       // Initialize storage
       final profile = ProfileService().getProfile();
       if (profile != null) {
-        final profileStorage = CollectionService().profileStorage;
+        final profileStorage = AppService().profileStorage;
         if (profileStorage != null) {
           // Create a scoped storage for the usenet directory
           final usenetDir = StorageConfig().usenetDirForProfile(profile.callsign);

@@ -20,7 +20,7 @@ import '../models/email_thread.dart';
 import '../services/email_service.dart';
 import '../services/profile_service.dart';
 import '../services/contact_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/station_service.dart';
 
 /// Email compose page for new messages, replies, and forwards
@@ -121,15 +121,11 @@ class _EmailComposePageState extends State<EmailComposePage> {
     }
 
     // Initialize contact service with contacts collection
-    final collections = await CollectionService().loadCollections();
-    final contactsCollection = collections.firstWhere(
-      (c) => c.type == 'contacts',
-      orElse: () => collections.first,
-    );
+    final contactsCollection = AppService().getAppByType('contacts');
 
-    if (contactsCollection.type == 'contacts' &&
+    if (contactsCollection != null &&
         contactsCollection.storagePath != null) {
-      await _contactService.initializeCollection(contactsCollection.storagePath!);
+      await _contactService.initializeApp(contactsCollection.storagePath!);
       final contacts = await _contactService.getContactsWithEmails();
       if (mounted) {
         setState(() => _emailContacts = contacts);

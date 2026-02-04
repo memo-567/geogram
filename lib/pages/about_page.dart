@@ -163,40 +163,40 @@ class AboutPage extends StatelessWidget {
 
             const SizedBox(height: 32),
 
-            // Collections Feature
+            // Apps Feature
             Text(
-              _i18n.t('collections'),
+              _i18n.t('apps'),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
             Text(
-              _i18n.t('collections_description'),
+              _i18n.t('apps_description'),
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 12),
             _buildFeature(
               context,
               Icons.folder,
-              _i18n.t('collection_sharing_title'),
-              _i18n.t('collection_sharing_desc'),
+              _i18n.t('app_sharing_title'),
+              _i18n.t('app_sharing_desc'),
             ),
             _buildFeature(
               context,
               Icons.vpn_key,
-              _i18n.t('collection_nostr_title'),
-              _i18n.t('collection_nostr_desc'),
+              _i18n.t('app_nostr_title'),
+              _i18n.t('app_nostr_desc'),
             ),
             _buildFeature(
               context,
               Icons.security,
-              _i18n.t('collection_access_title'),
-              _i18n.t('collection_access_desc'),
+              _i18n.t('app_access_title'),
+              _i18n.t('app_access_desc'),
             ),
             _buildFeature(
               context,
               Icons.sync,
-              _i18n.t('collection_sync_title'),
-              _i18n.t('collection_sync_desc'),
+              _i18n.t('app_sync_title'),
+              _i18n.t('app_sync_desc'),
             ),
 
             const SizedBox(height: 32),

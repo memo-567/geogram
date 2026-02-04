@@ -16,7 +16,7 @@ import '../pages/location_picker_page.dart';
 /// Widget for displaying blog post detail
 class BlogPostDetailWidget extends StatelessWidget {
   final BlogPost post;
-  final String collectionPath;
+  final String appPath;
   final bool canEdit;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -35,7 +35,7 @@ class BlogPostDetailWidget extends StatelessWidget {
   const BlogPostDetailWidget({
     Key? key,
     required this.post,
-    required this.collectionPath,
+    required this.appPath,
     this.canEdit = false,
     this.onEdit,
     this.onDelete,
@@ -663,7 +663,7 @@ class BlogPostDetailWidget extends StatelessWidget {
   Future<void> _openFile(BuildContext context, String filename) async {
     final i18n = I18nService();
     final year = post.year;
-    final filePath = '$collectionPath/blog/$year/files/$filename';
+    final filePath = '$appPath/blog/$year/files/$filename';
     final file = File(filePath);
 
     if (!await file.exists()) {

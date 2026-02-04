@@ -26,7 +26,7 @@ import '../widgets/inventory/type_selector_widget.dart';
 
 /// Page for viewing/editing an inventory item
 class InventoryItemPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final List<String> folderPath;
   final InventoryItem? item;
   final InventoryItem? templateItem;
@@ -34,7 +34,7 @@ class InventoryItemPage extends StatefulWidget {
 
   const InventoryItemPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.folderPath,
     this.item,
     this.templateItem,
@@ -2054,7 +2054,7 @@ class _LocationPickerDialog extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.place),
             title: Text(i18n.t('inventory_from_places')),
-            subtitle: Text(i18n.t('inventory_select_from_places_collection')),
+            subtitle: Text(i18n.t('inventory_select_from_places_app')),
             onTap: () async {
               final result = await showDialog<PlaceSelection>(
                 context: context,

@@ -75,7 +75,7 @@ class ConsoleSession {
 
   // File paths
   final String? sessionPath; // Path to session folder
-  final String? collectionPath; // Path to console collection
+  final String? appPath; // Path to console app
 
   ConsoleSession({
     required this.id,
@@ -92,7 +92,7 @@ class ConsoleSession {
     this.metadataNpub,
     this.signature,
     this.sessionPath,
-    this.collectionPath,
+    this.appPath,
   });
 
   /// Parse created timestamp to DateTime
@@ -208,7 +208,7 @@ class ConsoleSession {
     String? metadataNpub,
     String? signature,
     String? sessionPath,
-    String? collectionPath,
+    String? appPath,
   }) {
     return ConsoleSession(
       id: id ?? this.id,
@@ -225,7 +225,7 @@ class ConsoleSession {
       metadataNpub: metadataNpub ?? this.metadataNpub,
       signature: signature ?? this.signature,
       sessionPath: sessionPath ?? this.sessionPath,
-      collectionPath: collectionPath ?? this.collectionPath,
+      appPath: appPath ?? this.appPath,
     );
   }
 

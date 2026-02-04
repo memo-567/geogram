@@ -50,13 +50,13 @@ class TrackerService {
   String? get ownerCallsign => _ownerCallsign;
 
   /// Set the storage to use for file operations.
-  /// This must be called before initializeCollection().
+  /// This must be called before initializeApp().
   void setStorage(ProfileStorage storage) {
     _profileStorage = storage;
   }
 
   /// Initialize the service with a collection path
-  Future<void> initializeCollection(String path, {String? callsign}) async {
+  Future<void> initializeApp(String path, {String? callsign}) async {
     _currentPath = path;
 
     // Use provided ProfileStorage or fall back to filesystem storage
@@ -79,13 +79,13 @@ class TrackerService {
   // ============ Metadata Operations ============
 
   /// Get collection metadata
-  Future<TrackerCollectionMetadata?> getMetadata() async {
+  Future<TrackerAppMetadata?> getMetadata() async {
     if (_storage == null) return null;
     return _storage!.readMetadata();
   }
 
   /// Create or update collection metadata
-  Future<bool> saveMetadata(TrackerCollectionMetadata metadata) async {
+  Future<bool> saveMetadata(TrackerAppMetadata metadata) async {
     if (_storage == null) return false;
     final success = await _storage!.writeMetadata(metadata);
     if (success) {

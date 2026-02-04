@@ -74,7 +74,7 @@ class NotificationService {
   Future<void> updateNotificationType({
     bool? newMessages,
     bool? nearbyDevices,
-    bool? collectionUpdates,
+    bool? appUpdates,
     bool? stationStatus,
     bool? systemAlerts,
   }) async {
@@ -82,7 +82,7 @@ class NotificationService {
       _settings = _settings!.copyWith(
         notifyNewMessages: newMessages,
         notifyNearbyDevices: nearbyDevices,
-        notifyCollectionUpdates: collectionUpdates,
+        notifyAppUpdates: appUpdates,
         notifyStationStatus: stationStatus,
         notifySystemAlerts: systemAlerts,
       );

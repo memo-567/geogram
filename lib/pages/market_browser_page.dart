@@ -6,7 +6,7 @@
 import 'package:flutter/material.dart';
 import '../models/market_shop.dart';
 import '../models/market_item.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/market_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -16,13 +16,13 @@ import 'shop_settings_page.dart';
 
 /// Marketplace browser page with responsive layout
 class MarketBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const MarketBrowserPage({
     Key? key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   }) : super(key: key);
 
   @override
@@ -62,19 +62,19 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
     _currentUserNpub = profile.npub;
 
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _marketService.setStorage(scopedStorage);
     } else {
-      _marketService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _marketService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
-    await _marketService.initializeCollection(
-      widget.collectionPath,
+    await _marketService.initializeApp(
+      widget.appPath,
       creatorNpub: _currentUserNpub,
     );
 
@@ -127,7 +127,7 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_shop?.shopName ?? _i18n.t('collection_type_market')),
+        title: Text(_shop?.shopName ?? _i18n.t('app_type_market')),
         actions: [
           IconButton(
             icon: const Icon(Icons.shopping_cart),
@@ -204,7 +204,7 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
           Text(
             isOwner
                 ? _i18n.t('setup_marketplace_to_sell')
-                : _i18n.t('collection_no_shop_yet'),
+                : _i18n.t('app_no_shop_yet'),
             style: theme.textTheme.bodyMedium,
           ),
           if (isOwner) ...[
@@ -342,7 +342,7 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
                   context,
                   MaterialPageRoute(
                     builder: (context) => ShopSettingsPage(
-                      collectionPath: widget.collectionPath,
+                      appPath: widget.appPath,
                     ),
                   ),
                 );
@@ -660,7 +660,7 @@ class _MarketBrowserPageState extends State<MarketBrowserPage> {
       context,
       MaterialPageRoute(
         builder: (context) => ShopSettingsPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
         ),
       ),
     );

@@ -15,7 +15,7 @@ import '../util/feedback_folder_utils.dart';
 
 class EventLikeButton extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final bool compact;
   final bool showCount;
   final Future<void> Function()? onFeedbackUpdated;
@@ -23,7 +23,7 @@ class EventLikeButton extends StatefulWidget {
   const EventLikeButton({
     super.key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.compact = true,
     this.showCount = false,
     this.onFeedbackUpdated,
@@ -44,9 +44,9 @@ class _EventLikeButtonState extends State<EventLikeButton> {
   String? _currentNpub;
 
   String? get _contentPath {
-    if (widget.collectionPath.isEmpty) return null;
+    if (widget.appPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/$year/${widget.event.id}';
+    return '${widget.appPath}/$year/${widget.event.id}';
   }
 
   @override
@@ -60,7 +60,7 @@ class _EventLikeButtonState extends State<EventLikeButton> {
   void didUpdateWidget(covariant EventLikeButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.event.id != widget.event.id ||
-        oldWidget.collectionPath != widget.collectionPath ||
+        oldWidget.appPath != widget.appPath ||
         oldWidget.event.likeCount != widget.event.likeCount) {
       _currentNpub = _profileService.getProfile().npub;
       _loadLikes();
@@ -232,13 +232,13 @@ class _EventLikeButtonState extends State<EventLikeButton> {
 
 class EventFeedbackSection extends StatefulWidget {
   final Event event;
-  final String collectionPath;
+  final String appPath;
   final Future<void> Function()? onFeedbackUpdated;
 
   const EventFeedbackSection({
     super.key,
     required this.event,
-    required this.collectionPath,
+    required this.appPath,
     this.onFeedbackUpdated,
   });
 
@@ -257,9 +257,9 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
   List<FeedbackComment> _comments = [];
 
   String? get _contentPath {
-    if (widget.collectionPath.isEmpty) return null;
+    if (widget.appPath.isEmpty) return null;
     final year = widget.event.id.substring(0, 4);
-    return '${widget.collectionPath}/$year/${widget.event.id}';
+    return '${widget.appPath}/$year/${widget.event.id}';
   }
 
   @override
@@ -272,7 +272,7 @@ class _EventFeedbackSectionState extends State<EventFeedbackSection> {
   void didUpdateWidget(covariant EventFeedbackSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.event.id != widget.event.id ||
-        oldWidget.collectionPath != widget.collectionPath ||
+        oldWidget.appPath != widget.appPath ||
         oldWidget.event.commentCount != widget.event.commentCount) {
       _loadComments();
     }

@@ -16,12 +16,12 @@ import 'package:path/path.dart' as path;
 
 /// Page for managing chat settings and moderators
 class ChatSettingsPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String? channelId;
 
   const ChatSettingsPage({
     Key? key,
-    required this.collectionPath,
+    required this.appPath,
     this.channelId,
   }) : super(key: key);
 
@@ -56,7 +56,7 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
     try {
       // Load settings
       final settingsFile =
-          File(path.join(widget.collectionPath, 'extra', 'settings.json'));
+          File(path.join(widget.appPath, 'extra', 'settings.json'));
       if (await settingsFile.exists()) {
         final content = await settingsFile.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
@@ -95,13 +95,13 @@ class _ChatSettingsPageState extends State<ChatSettingsPage> {
   /// Save settings
   Future<void> _saveSettings() async {
     try {
-      final extraDir = Directory(path.join(widget.collectionPath, 'extra'));
+      final extraDir = Directory(path.join(widget.appPath, 'extra'));
       if (!await extraDir.exists()) {
         await extraDir.create(recursive: true);
       }
 
       final settingsFile =
-          File(path.join(widget.collectionPath, 'extra', 'settings.json'));
+          File(path.join(widget.appPath, 'extra', 'settings.json'));
       await settingsFile.writeAsString(
         const JsonEncoder.withIndent('  ').convert(_settings.toJson()),
       );

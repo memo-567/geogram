@@ -406,7 +406,7 @@ class EncryptedProfileStorage extends ProfileStorage {
 /// Example:
 /// ```dart
 /// // Profile storage rooted at /devices/X1ABC123/
-/// final profileStorage = CollectionService().profileStorage;
+/// final profileStorage = AppService().profileStorage;
 ///
 /// // Scoped storage rooted at /devices/X1ABC123/blog-xxx/
 /// final blogStorage = ScopedProfileStorage(profileStorage, 'blog-xxx');
@@ -425,13 +425,13 @@ class ScopedProfileStorage extends ProfileStorage {
   /// Extracts the relative path by removing the base path prefix.
   factory ScopedProfileStorage.fromAbsolutePath(
     ProfileStorage baseStorage,
-    String absoluteCollectionPath,
+    String absoluteAppPath,
   ) {
     final basePath = baseStorage.basePath;
     String relativePath;
 
-    if (absoluteCollectionPath.startsWith(basePath)) {
-      relativePath = absoluteCollectionPath.substring(basePath.length);
+    if (absoluteAppPath.startsWith(basePath)) {
+      relativePath = absoluteAppPath.substring(basePath.length);
       // Clean up leading/trailing slashes
       while (relativePath.startsWith('/')) {
         relativePath = relativePath.substring(1);
@@ -441,7 +441,7 @@ class ScopedProfileStorage extends ProfileStorage {
       }
     } else {
       // Fallback: use last path component
-      relativePath = absoluteCollectionPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+      relativePath = absoluteAppPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
     }
 
     return ScopedProfileStorage(baseStorage, relativePath);

@@ -12,7 +12,7 @@ import 'contact_merge_page.dart';
 class ContactToolsPage extends StatelessWidget {
   final ContactService contactService;
   final I18nService i18n;
-  final String collectionPath;
+  final String appPath;
   final VoidCallback? onDeleteAll;
   final VoidCallback? onRefresh;
 
@@ -20,7 +20,7 @@ class ContactToolsPage extends StatelessWidget {
     super.key,
     required this.contactService,
     required this.i18n,
-    required this.collectionPath,
+    required this.appPath,
     this.onDeleteAll,
     this.onRefresh,
   });

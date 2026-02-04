@@ -22,7 +22,7 @@ class AuthorityEntry {
   final String callsign;
   final String npub;
   final AuthorityRole role;
-  final String? collectionType; // For group admins and moderators
+  final String? appType; // For group admins and moderators
   final DateTime appointed;
   final String appointedBy;
   final String status;
@@ -32,14 +32,14 @@ class AuthorityEntry {
     required this.callsign,
     required this.npub,
     required this.role,
-    this.collectionType,
+    this.appType,
     required this.appointed,
     required this.appointedBy,
     this.status = 'active',
     this.scope,
   });
 
-  factory AuthorityEntry.fromFile(String filePath, AuthorityRole role, String? collectionType) {
+  factory AuthorityEntry.fromFile(String filePath, AuthorityRole role, String? appType) {
     final file = File(filePath);
     final content = file.readAsStringSync();
     final lines = content.split('\n');
@@ -76,7 +76,7 @@ class AuthorityEntry {
       callsign: callsign ?? path.basenameWithoutExtension(filePath),
       npub: npub ?? '',
       role: role,
-      collectionType: collectionType,
+      appType: appType,
       appointed: appointed ?? DateTime.now(),
       appointedBy: appointedBy ?? 'unknown',
       status: status ?? 'active',
@@ -161,11 +161,11 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
       if (await groupAdminsDir.exists()) {
         for (final collectionDir in groupAdminsDir.listSync()) {
           if (collectionDir is Directory) {
-            final collectionType = path.basename(collectionDir.path);
+            final appType = path.basename(collectionDir.path);
             final entries = await _loadAuthorityDir(
               collectionDir.path,
               AuthorityRole.groupAdmin,
-              collectionType,
+              appType,
             );
             _groupAdmins.addAll(entries);
           }
@@ -178,11 +178,11 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
       if (await moderatorsDir.exists()) {
         for (final collectionDir in moderatorsDir.listSync()) {
           if (collectionDir is Directory) {
-            final collectionType = path.basename(collectionDir.path);
+            final appType = path.basename(collectionDir.path);
             final entries = await _loadAuthorityDir(
               collectionDir.path,
               AuthorityRole.moderator,
-              collectionType,
+              appType,
             );
             _moderators.addAll(entries);
           }
@@ -200,7 +200,7 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
     }
   }
 
-  Future<List<AuthorityEntry>> _loadAuthorityDir(String dirPath, AuthorityRole role, String? collectionType) async {
+  Future<List<AuthorityEntry>> _loadAuthorityDir(String dirPath, AuthorityRole role, String? appType) async {
     final dir = Directory(dirPath);
     if (!await dir.exists()) return [];
 
@@ -208,7 +208,7 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
     for (final file in dir.listSync()) {
       if (file is File && file.path.endsWith('.txt')) {
         try {
-          entries.add(AuthorityEntry.fromFile(file.path, role, collectionType));
+          entries.add(AuthorityEntry.fromFile(file.path, role, appType));
         } catch (_) {
           // Skip malformed files
         }
@@ -344,8 +344,8 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (entry.collectionType != null)
-              Text('Collection: ${entry.collectionType}', style: TextStyle(fontSize: 12)),
+            if (entry.appType != null)
+              Text('Collection: ${entry.appType}', style: TextStyle(fontSize: 12)),
             if (entry.scope != null)
               Text('Scope: ${entry.scope}', style: TextStyle(fontSize: 12)),
             Text('NPUB: ${_truncateNpub(entry.npub)}', style: TextStyle(fontSize: 11, color: Colors.grey)),
@@ -416,7 +416,7 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildDetailRow('Role', _getRoleName(entry.role)),
-            if (entry.collectionType != null) _buildDetailRow('Collection', entry.collectionType!),
+            if (entry.appType != null) _buildDetailRow('Collection', entry.appType!),
             _buildDetailRow('NPUB', entry.npub),
             _buildDetailRow('Appointed', _formatDate(entry.appointed)),
             _buildDetailRow('Appointed by', entry.appointedBy),
@@ -497,10 +497,10 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
           filePath = path.join(stationDir.path, 'authorities', 'admins', '${entry.callsign}.txt');
           break;
         case AuthorityRole.groupAdmin:
-          filePath = path.join(stationDir.path, 'authorities', 'group-admins', entry.collectionType!, '${entry.callsign}.txt');
+          filePath = path.join(stationDir.path, 'authorities', 'group-admins', entry.appType!, '${entry.callsign}.txt');
           break;
         case AuthorityRole.moderator:
-          filePath = path.join(stationDir.path, 'authorities', 'moderators', entry.collectionType!, '${entry.callsign}.txt');
+          filePath = path.join(stationDir.path, 'authorities', 'moderators', entry.appType!, '${entry.callsign}.txt');
           break;
       }
 
@@ -547,10 +547,10 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
           dirPath = path.join(stationDir.path, 'authorities', 'admins');
           break;
         case AuthorityRole.groupAdmin:
-          dirPath = path.join(stationDir.path, 'authorities', 'group-admins', entry.collectionType!);
+          dirPath = path.join(stationDir.path, 'authorities', 'group-admins', entry.appType!);
           break;
         case AuthorityRole.moderator:
-          dirPath = path.join(stationDir.path, 'authorities', 'moderators', entry.collectionType!);
+          dirPath = path.join(stationDir.path, 'authorities', 'moderators', entry.appType!);
           break;
       }
 
@@ -565,7 +565,7 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
 
       await file.writeAsString('''
 # $roleLabel: ${entry.callsign}
-${entry.collectionType != null ? '# COLLECTION: ${entry.collectionType}\n' : ''}
+${entry.appType != null ? '# COLLECTION: ${entry.appType}\n' : ''}
 CALLSIGN: ${entry.callsign}
 NPUB: ${entry.npub}
 APPOINTED: ${_formatDateForFile(entry.appointed)}
@@ -616,9 +616,9 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
   final _scopeController = TextEditingController();
 
   AuthorityRole _role = AuthorityRole.admin;
-  String? _collectionType;
+  String? _appType;
 
-  final _collectionTypes = ['reports', 'places', 'events', 'forum', 'chat', 'shops', 'services'];
+  final _appTypes = ['reports', 'places', 'events', 'forum', 'chat', 'shops', 'services'];
 
   @override
   void dispose() {
@@ -650,7 +650,7 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
                 setState(() {
                   _role = value.first;
                   if (_role == AuthorityRole.admin) {
-                    _collectionType = null;
+                    _appType = null;
                   }
                 });
               },
@@ -660,11 +660,11 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
               Text('Collection Type', style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: _collectionType,
+                value: _appType,
                 decoration: InputDecoration(border: OutlineInputBorder()),
                 hint: Text('Select collection'),
-                items: _collectionTypes.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (value) => setState(() => _collectionType = value),
+                items: _appTypes.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (value) => setState(() => _appType = value),
               ),
             ],
             SizedBox(height: 16),
@@ -725,7 +725,7 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
       return;
     }
 
-    if (_role != AuthorityRole.admin && _collectionType == null) {
+    if (_role != AuthorityRole.admin && _appType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Collection type is required for this role')),
       );
@@ -738,7 +738,7 @@ class _AddAuthorityDialogState extends State<_AddAuthorityDialog> {
       callsign: _callsignController.text.trim().toUpperCase(),
       npub: _npubController.text.trim(),
       role: _role,
-      collectionType: _collectionType,
+      appType: _appType,
       appointed: DateTime.now(),
       appointedBy: node?.npub ?? 'unknown',
       scope: _scopeController.text.isNotEmpty ? _scopeController.text.trim() : null,

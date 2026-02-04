@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier, kIsWeb;
 import 'package:mime/mime.dart';
-import '../models/collection.dart';
+import '../models/app.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_security.dart';
 import '../models/chat_settings.dart';
@@ -25,14 +25,14 @@ import 'blog_service.dart' hide ChatSecurity;
 import 'event_service.dart';
 import 'place_service.dart';
 
-/// Service for managing collections on disk (or in memory for web)
-class CollectionService {
-  static final CollectionService _instance = CollectionService._internal();
-  factory CollectionService() => _instance;
-  CollectionService._internal();
+/// Service for managing apps on disk (or in memory for web)
+class AppService {
+  static final AppService _instance = AppService._internal();
+  factory AppService() => _instance;
+  AppService._internal();
 
   Directory? _devicesDir;
-  Directory? _collectionsDir;
+  Directory? _appsDir;
   String? _currentCallsign;
   String? _currentNsec;
   bool _useEncryptedStorage = false;
@@ -40,24 +40,24 @@ class CollectionService {
   final EncryptedStorageService _encryptedStorageService = EncryptedStorageService();
   ProfileStorage? _profileStorage;
 
-  /// In-memory collection store for web platform
-  final Map<String, Collection> _webCollections = {};
+  /// In-memory app store for web platform
+  final Map<String, App> _webApps = {};
 
-  /// Notifier for when callsign/collections change (incremented on change)
+  /// Notifier for when callsign/apps change (incremented on change)
   final callsignNotifier = ValueNotifier<int>(0);
 
-  /// Notifier for when collections are created, updated, or deleted
-  final collectionsNotifier = ValueNotifier<int>(0);
+  /// Notifier for when apps are created, updated, or deleted
+  final appsNotifier = ValueNotifier<int>(0);
 
-  /// Get the default collections directory path
-  String getDefaultCollectionsPath() {
+  /// Get the default apps directory path
+  String getDefaultAppsPath() {
     if (kIsWeb) {
-      return '/web/collections';  // Virtual path for web
+      return '/web/apps';  // Virtual path for web
     }
-    if (_collectionsDir == null) {
-      throw Exception('CollectionService not initialized. Call init() and setActiveCallsign() first.');
+    if (_appsDir == null) {
+      throw Exception('AppService not initialized. Call init() and setActiveCallsign() first.');
     }
-    return _collectionsDir!.path;
+    return _appsDir!.path;
   }
 
   /// Get the devices directory path (base for all callsign folders)
@@ -66,7 +66,7 @@ class CollectionService {
       return '/web/devices';  // Virtual path for web
     }
     if (_devicesDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
+      throw Exception('AppService not initialized. Call init() first.');
     }
     return _devicesDir!.path;
   }
@@ -86,17 +86,17 @@ class CollectionService {
   void setNsec(String nsec) {
     _currentNsec = nsec;
     // Recreate storage if we have a callsign and are using encrypted storage
-    if (_currentCallsign != null && _useEncryptedStorage && _collectionsDir != null) {
+    if (_currentCallsign != null && _useEncryptedStorage && _appsDir != null) {
       _profileStorage = EncryptedProfileStorage(
         callsign: _currentCallsign!,
         nsec: nsec,
-        basePath: _collectionsDir!.path,
+        basePath: _appsDir!.path,
         encryptedService: _encryptedStorageService,
       );
     }
   }
 
-  /// Initialize the collection service (basic setup)
+  /// Initialize the app service (basic setup)
   ///
   /// Uses StorageConfig for path management. StorageConfig must be initialized
   /// before calling this method.
@@ -110,14 +110,14 @@ class CollectionService {
         // Create virtual devices directory
         await fs.createDirectory('/web/devices', recursive: true);
 
-        stderr.writeln('CollectionService initialized (web mode - IndexedDB storage)');
+        stderr.writeln('AppService initialized (web mode - IndexedDB storage)');
         return;
       }
 
       final storageConfig = StorageConfig();
       if (!storageConfig.isInitialized) {
         throw StateError(
-          'StorageConfig must be initialized before CollectionService. '
+          'StorageConfig must be initialized before AppService. '
           'Call StorageConfig().init() first.',
         );
       }
@@ -129,28 +129,28 @@ class CollectionService {
       }
 
       // Use stderr for init logs since LogService might not be ready
-      stderr.writeln('CollectionService initialized: ${_devicesDir!.path}');
+      stderr.writeln('AppService initialized: ${_devicesDir!.path}');
     } catch (e) {
-      stderr.writeln('Error initializing CollectionService: $e');
+      stderr.writeln('Error initializing AppService: $e');
       rethrow;
     }
   }
 
-  /// Set the active callsign and configure the collections directory
+  /// Set the active callsign and configure the apps directory
   /// This should be called after ProfileService is initialized
   Future<void> setActiveCallsign(String callsign) async {
     // Sanitize callsign for folder name (alphanumeric, underscore, dash)
     final sanitizedCallsign = _sanitizeCallsign(callsign);
     _currentCallsign = sanitizedCallsign;
 
-    // On web, create virtual collections directory
+    // On web, create virtual apps directory
     if (kIsWeb) {
       final fs = FileSystemService.instance;
-      final collectionsPath = '/web/devices/$sanitizedCallsign';
-      await fs.createDirectory(collectionsPath, recursive: true);
+      final appsPath = '/web/devices/$sanitizedCallsign';
+      await fs.createDirectory(appsPath, recursive: true);
 
-      stderr.writeln('CollectionService active callsign (web): $sanitizedCallsign');
-      stderr.writeln('Virtual collections directory: $collectionsPath');
+      stderr.writeln('AppService active callsign (web): $sanitizedCallsign');
+      stderr.writeln('Virtual apps directory: $appsPath');
 
       // Notify listeners that callsign changed
       callsignNotifier.value++;
@@ -158,44 +158,44 @@ class CollectionService {
     }
 
     if (_devicesDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
+      throw Exception('AppService not initialized. Call init() first.');
     }
 
-    _collectionsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
+    _appsDir = Directory('${_devicesDir!.path}/$sanitizedCallsign');
 
     // Check if this profile uses encrypted storage
     _useEncryptedStorage = _encryptedStorageService.isEncryptedStorageEnabled(sanitizedCallsign);
 
     if (_useEncryptedStorage) {
       // Don't create folder - data is in encrypted archive
-      stderr.writeln('CollectionService active callsign: $sanitizedCallsign (encrypted storage)');
-      stderr.writeln('Collections directory: ${_collectionsDir!.path} (virtual - data in encrypted archive)');
+      stderr.writeln('AppService active callsign: $sanitizedCallsign (encrypted storage)');
+      stderr.writeln('Apps directory: ${_appsDir!.path} (virtual - data in encrypted archive)');
 
       // Create encrypted storage if we have nsec
       if (_currentNsec != null) {
         _profileStorage = EncryptedProfileStorage(
           callsign: sanitizedCallsign,
           nsec: _currentNsec!,
-          basePath: _collectionsDir!.path,
+          basePath: _appsDir!.path,
           encryptedService: _encryptedStorageService,
         );
       }
     } else {
-      if (!await _collectionsDir!.exists()) {
-        await _collectionsDir!.create(recursive: true);
+      if (!await _appsDir!.exists()) {
+        await _appsDir!.create(recursive: true);
       }
-      stderr.writeln('CollectionService active callsign: $sanitizedCallsign');
-      stderr.writeln('Collections directory: ${_collectionsDir!.path}');
+      stderr.writeln('AppService active callsign: $sanitizedCallsign');
+      stderr.writeln('Apps directory: ${_appsDir!.path}');
 
       // Create filesystem storage
-      _profileStorage = FilesystemProfileStorage(_collectionsDir!.path);
+      _profileStorage = FilesystemProfileStorage(_appsDir!.path);
     }
 
     // Notify listeners that callsign changed
     callsignNotifier.value++;
   }
 
-  /// All known app/collection types that can be routed to via URL
+  /// All known app/app types that can be routed to via URL
   /// Re-exported from app_constants.dart for convenience
   static List<String> get knownAppTypes => knownAppTypesConst;
 
@@ -212,50 +212,45 @@ class CollectionService {
     'tracker',
   ];
 
-  /// Ensure default collections exist for the current profile
+  /// Ensure default apps exist for the current profile
   /// This should be called after setActiveCallsign to create any missing default apps
-  Future<void> ensureDefaultCollections() async {
+  Future<void> ensureDefaultApps() async {
     if (_currentCallsign == null) {
-      stderr.writeln('ensureDefaultCollections: No active callsign set');
+      stderr.writeln('ensureDefaultApps: No active callsign set');
       return;
     }
 
-    // Skip if using encrypted storage - collections are already in the archive
+    // Skip if using encrypted storage - apps are already in the archive
     if (_useEncryptedStorage) {
-      stderr.writeln('ensureDefaultCollections: Skipping - using encrypted storage');
+      stderr.writeln('ensureDefaultApps: Skipping - using encrypted storage');
       return;
     }
 
-    // Load existing collections
-    final existingCollections = await loadCollections();
-    final existingTypes = existingCollections.map((c) => c.type).toSet();
-
-    // Create any missing default collections
+    // Check which default types already have folders — no full app scan needed
     for (final type in _defaultAppTypes) {
-      if (!existingTypes.contains(type)) {
+      final dir = Directory('${_appsDir!.path}/$type');
+      if (!await dir.exists()) {
         try {
-          stderr.writeln('Creating default collection: $type');
-          final collection = await createCollection(
-            title: type[0].toUpperCase() + type.substring(1), // Capitalize
+          stderr.writeln('Creating default app: $type');
+          final app = await createApp(
+            title: type[0].toUpperCase() + type.substring(1),
             description: '',
             type: type,
           );
-          stderr.writeln('Created default collection: $type');
-
-          // Generate default index.html for www collection
-          if (type == 'www' && collection.storagePath != null) {
-            await generateDefaultWwwIndex(collection);
+          stderr.writeln('Created default app: $type');
+          if (type == 'www' && app.storagePath != null) {
+            await generateDefaultWwwIndex(app);
           }
         } catch (e) {
-          stderr.writeln('Error creating default collection $type: $e');
+          stderr.writeln('Error creating default app $type: $e');
         }
       }
     }
   }
 
-  /// Generate default index.html for www collection using the default theme
+  /// Generate default index.html for www app using the default theme
   /// This is public so it can be called from WebsocketService for on-demand creation
-  Future<void> generateDefaultWwwIndex(Collection collection) async {
+  Future<void> generateDefaultWwwIndex(App app) async {
     if (kIsWeb) return; // Skip on web platform
 
     try {
@@ -277,24 +272,24 @@ class CollectionService {
       final displayName = _currentCallsign ?? 'My Website';
       final description = 'A personal website published via geogram';
 
-      // Derive collections directory from the www collection's storage path
-      final collectionsPath = collection.storagePath != null
-          ? Directory(collection.storagePath!).parent.path
+      // Derive apps directory from the www app's storage path
+      final appsPath = app.storagePath != null
+          ? Directory(app.storagePath!).parent.path
           : null;
 
       // Build dynamic content
       final contentBuffer = StringBuffer();
 
       // Check for blog with public posts
-      final blogInfo = await _getPublicBlogInfo(collectionsPath);
+      final blogInfo = await _getPublicBlogInfo(appsPath);
       List<Map<String, dynamic>> recentPosts = [];
 
       if (blogInfo != null && blogInfo['postCount'] > 0) {
         // Generate blog index page
-        await generateBlogIndex(blogInfo['collectionPath'] as String);
+        await generateBlogIndex(blogInfo['appPath'] as String);
 
         // Get recent posts for homepage
-        final cache = await getBlogCacheOrRegenerate(blogInfo['collectionPath'] as String);
+        final cache = await getBlogCacheOrRegenerate(blogInfo['appPath'] as String);
         final posts = (cache['posts'] as List?) ?? [];
         recentPosts = posts
             .where((p) => p['status'] == 'published')
@@ -333,16 +328,16 @@ class CollectionService {
         'TITLE': displayName,
         'GLOBAL_STYLES': globalStyles,
         'APP_STYLES': appStyles,
-        'COLLECTION_NAME': displayName,
-        'COLLECTION_DESCRIPTION': description,
+        'APP_NAME': displayName,
+        'APP_DESCRIPTION': description,
         'CONTENT': contentBuffer.toString(),
         'DATA_JSON': '{"files": []}',
         'SCRIPTS': '',
         'GENERATED_DATE': DateTime.now().toIso8601String(),
       });
 
-      // Write index.html to the collection folder
-      final indexFile = File('${collection.storagePath}/index.html');
+      // Write index.html to the app folder
+      final indexFile = File('${app.storagePath}/index.html');
       await indexFile.writeAsString(html);
       stderr.writeln('Generated default www index.html: ${indexFile.path}');
     } catch (e) {
@@ -373,13 +368,13 @@ class CollectionService {
   }
 
   /// Generate blog cache - scans all posts and writes cache.json
-  /// Returns the cache data and writes it to {blogCollectionPath}/cache.json
-  Future<Map<String, dynamic>> generateBlogCache(String blogCollectionPath) async {
+  /// Returns the cache data and writes it to {blogAppPath}/cache.json
+  Future<Map<String, dynamic>> generateBlogCache(String blogAppPath) async {
     final posts = <Map<String, dynamic>>[];
-    final blogDir = Directory(blogCollectionPath);
+    final blogDir = Directory(blogAppPath);
 
     if (!await blogDir.exists()) {
-      return _writeBlogCache(blogCollectionPath, posts);
+      return _writeBlogCache(blogAppPath, posts);
     }
 
     // Scan year directories (2024, 2025, etc.)
@@ -407,7 +402,7 @@ class CollectionService {
     // Sort by created date (newest first)
     posts.sort((a, b) => (b['created'] as String).compareTo(a['created'] as String));
 
-    return _writeBlogCache(blogCollectionPath, posts);
+    return _writeBlogCache(blogAppPath, posts);
   }
 
   /// Parse post.md file and extract metadata
@@ -502,7 +497,7 @@ class CollectionService {
   }
 
   /// Generate blog index.html listing all published posts
-  Future<void> generateBlogIndex(String blogCollectionPath) async {
+  Future<void> generateBlogIndex(String blogAppPath) async {
     if (kIsWeb) return;
 
     try {
@@ -518,7 +513,7 @@ class CollectionService {
       final appStyles = await themeService.getAppStyles('blog') ?? '';
 
       // Get cache data
-      final cache = await getBlogCacheOrRegenerate(blogCollectionPath);
+      final cache = await getBlogCacheOrRegenerate(blogAppPath);
       final posts = (cache['posts'] as List?) ?? [];
 
       // Filter only published posts
@@ -553,14 +548,14 @@ class CollectionService {
         'TITLE': _currentCallsign ?? 'Blog',
         'GLOBAL_STYLES': globalStyles,
         'APP_STYLES': appStyles,
-        'COLLECTION_NAME': _currentCallsign ?? 'Blog',
-        'COLLECTION_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
+        'APP_NAME': _currentCallsign ?? 'Blog',
+        'APP_DESCRIPTION': '${publishedPosts.length} post${publishedPosts.length != 1 ? 's' : ''}',
         'CONTENT': postsHtml.toString(),
         'DATA_JSON': jsonEncode({'posts': publishedPosts}),
       });
 
       // Write index.html
-      final indexFile = File('$blogCollectionPath/index.html');
+      final indexFile = File('$blogAppPath/index.html');
       await indexFile.writeAsString(html);
     } catch (e) {
       stderr.writeln('Error generating blog index: $e');
@@ -568,34 +563,34 @@ class CollectionService {
   }
 
   /// Get info about public blog posts using the cache
-  /// [collectionsPath] - Optional path to the collections directory. If null, uses _collectionsDir
-  Future<Map<String, dynamic>?> _getPublicBlogInfo([String? collectionsPath]) async {
-    final dirPath = collectionsPath ?? _collectionsDir?.path;
+  /// [appsPath] - Optional path to the apps directory. If null, uses _appsDir
+  Future<Map<String, dynamic>?> _getPublicBlogInfo([String? appsPath]) async {
+    final dirPath = appsPath ?? _appsDir?.path;
     if (dirPath == null) return null;
 
-    final collectionsDir = Directory(dirPath);
-    if (!await collectionsDir.exists()) return null;
+    final appsDir = Directory(dirPath);
+    if (!await appsDir.exists()) return null;
 
     try {
-      // Look for blog collections
-      await for (final entity in collectionsDir.list()) {
+      // Look for blog apps
+      await for (final entity in appsDir.list()) {
         if (entity is Directory) {
           final folderName = entity.path.split('/').last;
-          final collectionJs = File('${entity.path}/collection.js');
+          final appJs = File('${entity.path}/app.js');
 
-          if (await collectionJs.exists()) {
-            final content = await collectionJs.readAsString();
+          if (await appJs.exists()) {
+            final content = await appJs.readAsString();
 
-            // Check if this is a blog collection
+            // Check if this is a blog app
             final isBlog = content.contains('"type": "blog"') ||
                           content.contains('"type":"blog"') ||
                           folderName == 'blog';
 
             if (isBlog) {
-              // Check collection visibility
+              // Check app visibility
               try {
-                final collectionData = jsonDecode(content) as Map<String, dynamic>;
-                if (collectionData['visibility'] == 'private') continue;
+                final appData = jsonDecode(content) as Map<String, dynamic>;
+                if (appData['visibility'] == 'private') continue;
               } catch (_) {}
 
               // Read cache if recent, otherwise regenerate
@@ -605,7 +600,7 @@ class CollectionService {
               if (publishedCount > 0) {
                 return {
                   'postCount': publishedCount,
-                  'collectionPath': entity.path,
+                  'appPath': entity.path,
                 };
               }
             }
@@ -621,7 +616,7 @@ class CollectionService {
 
   /// Generate chat index.html with IRC-style retro interface
   /// This is public so it can be called from WebsocketService for on-demand creation
-  Future<void> generateChatIndex(String chatCollectionPath) async {
+  Future<void> generateChatIndex(String chatAppPath) async {
     if (kIsWeb) return;
 
     try {
@@ -638,18 +633,18 @@ class CollectionService {
 
       // Get chat rooms
       final chatService = ChatService();
-      if (chatService.collectionPath == null) {
+      if (chatService.appPath == null) {
         // Set profile storage for encrypted storage support
         if (_profileStorage != null) {
           final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
             _profileStorage!,
-            chatCollectionPath,
+            chatAppPath,
           );
           chatService.setStorage(scopedStorage);
         } else {
-          chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+          chatService.setStorage(FilesystemProfileStorage(chatAppPath));
         }
-        await chatService.initializeCollection(chatCollectionPath, creatorNpub: ProfileService().getProfile().npub);
+        await chatService.initializeApp(chatAppPath, creatorNpub: ProfileService().getProfile().npub);
       }
 
       final channels = chatService.channels;
@@ -712,12 +707,12 @@ class CollectionService {
         'apiBasePath': '../api/chat/rooms',
       });
 
-      // Determine which apps are available for this collection
-      // chatCollectionPath is like /path/to/collection/chat, so parent is the collection
-      final collectionDir = Directory(chatCollectionPath).parent;
-      final hasBlog = await Directory('${collectionDir.path}/blog').exists();
-      final hasEvents = await Directory('${collectionDir.path}/events').exists();
-      final hasPlaces = await Directory('${collectionDir.path}/places').exists();
+      // Determine which apps are available for this app
+      // chatAppPath is like /path/to/app/chat, so parent is the app
+      final appDir = Directory(chatAppPath).parent;
+      final hasBlog = await Directory('${appDir.path}/blog').exists();
+      final hasEvents = await Directory('${appDir.path}/events').exists();
+      final hasPlaces = await Directory('${appDir.path}/places').exists();
 
       // Generate menu items for device pages
       final menuItems = WebNavigation.generateDeviceMenuItems(
@@ -733,8 +728,8 @@ class CollectionService {
         'TITLE': _currentCallsign ?? 'Chat',
         'GLOBAL_STYLES': globalStyles,
         'APP_STYLES': appStyles,
-        'COLLECTION_NAME': _currentCallsign ?? 'Chat',
-        'COLLECTION_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
+        'APP_NAME': _currentCallsign ?? 'Chat',
+        'APP_DESCRIPTION': '${channels.length} channel${channels.length != 1 ? 's' : ''}',
         'CONTENT': messagesHtml.toString(),
         'CHANNELS_LIST': channelsHtml.toString(),
         'DATA_JSON': dataJson,
@@ -744,7 +739,7 @@ class CollectionService {
       });
 
       // Write index.html
-      final indexFile = File('$chatCollectionPath/index.html');
+      final indexFile = File('$chatAppPath/index.html');
       await indexFile.writeAsString(html);
     } catch (e) {
       stderr.writeln('Error generating chat index: $e');
@@ -783,124 +778,143 @@ class CollectionService {
         .replaceAll(RegExp(r'^_|_$'), ''); // Remove leading/trailing underscores
   }
 
-  /// Get the collections directory
+  /// Get the apps directory
   /// Note: This throws on web as Directory operations are not supported
-  Directory get collectionsDirectory {
+  Directory get appsDirectory {
     if (kIsWeb) {
-      throw UnsupportedError('collectionsDirectory is not available on web platform');
+      throw UnsupportedError('appsDirectory is not available on web platform');
     }
-    if (_collectionsDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
+    if (_appsDir == null) {
+      throw Exception('AppService not initialized. Call init() first.');
     }
-    return _collectionsDir!;
+    return _appsDir!;
   }
 
-  /// Load all collections from disk (including from custom locations)
-  /// On web, loads collections from virtual file system (IndexedDB)
+  /// Load all apps from disk (including from custom locations)
+  /// On web, loads apps from virtual file system (IndexedDB)
   ///
-  /// For faster startup, consider using [loadCollectionsStream] instead
-  /// which provides progressive loading.
-  Future<List<Collection>> loadCollections() async {
-    final collections = <Collection>[];
-    await for (final collection in loadCollectionsStream()) {
-      collections.add(collection);
+  /// For faster startup, consider using [loadAppsFast] instead
+  /// which does a single batch directory listing with no per-app I/O.
+  Future<List<App>> loadApps() async {
+    final apps = <App>[];
+    await for (final app in loadAppsStream()) {
+      apps.add(app);
     }
-    return collections;
+    return apps;
   }
 
-  /// Load collections progressively as a stream.
-  /// This allows the UI to display collections as they load instead of
-  /// waiting for all collections to be scanned.
+  /// Load all apps in a single batch — no stream, no per-app I/O for known types.
+  /// Shared_folder apps get minimal metadata (folder name as title);
+  /// full metadata can be loaded lazily if needed.
+  /// Works transparently with both filesystem and encrypted storage.
+  Future<List<App>> loadAppsFast() async {
+    if (kIsWeb) {
+      return loadApps(); // fallback for web
+    }
+    if (_profileStorage == null) {
+      throw Exception('AppService not initialized.');
+    }
+
+    final results = <App>[];
+    results.add(_createMinimalApp('files', _profileStorage!.basePath));
+
+    final entries = await _profileStorage!.listDirectory('');
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        final folderName = entry.name;
+        if (folderName == 'files') continue; // already added above
+        final storagePath = _profileStorage!.getAbsolutePath(folderName);
+        if (singleInstanceTypesConst.contains(folderName)) {
+          results.add(_createMinimalApp(folderName, storagePath));
+        } else {
+          // Shared folder — minimal app, no file reads
+          final app = App(
+            id: folderName,
+            title: folderName,
+            type: 'shared_folder',
+            updated: DateTime.now().toIso8601String(),
+            storagePath: storagePath,
+            isOwned: true,
+          );
+          app.isFavorite = _configService.isFavorite(app.id);
+          results.add(app);
+        }
+      }
+    }
+
+    return results;
+  }
+
+  /// Load apps progressively as a stream.
+  /// This allows the UI to display apps as they load instead of
+  /// waiting for all apps to be scanned.
   ///
   /// Example usage:
   /// ```dart
-  /// CollectionService().loadCollectionsStream().listen((collection) {
-  ///   setState(() => _collections.add(collection));
+  /// AppService().loadAppsStream().listen((app) {
+  ///   setState(() => _apps.add(app));
   /// });
   /// ```
-  Stream<Collection> loadCollectionsStream() async* {
+  Stream<App> loadAppsStream() async* {
     // On web, load from virtual file system
     if (kIsWeb) {
-      yield* _loadWebCollectionsStream();
+      yield* _loadWebAppsStream();
       return;
     }
 
-    if (_collectionsDir == null) {
-      throw Exception('CollectionService not initialized. Call init() first.');
+    if (_profileStorage == null) {
+      throw Exception('AppService not initialized. Call setActiveCallsign() first.');
     }
 
-    // Use encrypted storage if enabled
-    if (_useEncryptedStorage && _profileStorage != null) {
-      yield* _loadEncryptedCollectionsStream();
-      return;
-    }
+    // Always yield files app (no folder needed)
+    yield _createMinimalApp('files', _profileStorage!.basePath);
 
-    // Load from default collections directory (filesystem)
-    if (await _collectionsDir!.exists()) {
-      await for (final entity in _collectionsDir!.list()) {
-        if (entity is Directory) {
-          try {
-            final collection = await _loadCollectionFromFolder(entity);
-            if (collection != null) {
-              yield collection;
-            }
-          } catch (e) {
-            stderr.writeln('Error loading collection from ${entity.path}: $e');
+    // Single directory listing via abstract storage layer
+    final entries = await _profileStorage!.listDirectory('');
+    for (final entry in entries) {
+      if (entry.isDirectory) {
+        final folderName = entry.name;
+        if (folderName == 'files') continue; // already added above
+        try {
+          if (singleInstanceTypesConst.contains(folderName)) {
+            // Known single-instance type — skip app.js entirely
+            final storagePath = _profileStorage!.getAbsolutePath(folderName);
+            yield _createMinimalApp(folderName, storagePath);
+          } else {
+            // Unknown folder — needs app.js for metadata
+            final app = await _loadAppFromStorage(folderName);
+            if (app != null) yield app;
           }
+        } catch (e) {
+          stderr.writeln('Error loading app from $folderName: $e');
         }
       }
     }
-
-    // TODO: Load from custom locations stored in config
   }
 
-  /// Load collections from encrypted storage
-  Stream<Collection> _loadEncryptedCollectionsStream() async* {
-    if (_profileStorage == null) return;
-
-    try {
-      // List top-level directories (collections)
-      final entries = await _profileStorage!.listDirectory('');
-
-      for (final entry in entries) {
-        if (entry.isDirectory) {
-          try {
-            final collection = await _loadCollectionFromStorage(entry.name);
-            if (collection != null) {
-              yield collection;
-            }
-          } catch (e) {
-            stderr.writeln('Error loading encrypted collection ${entry.name}: $e');
-          }
-        }
-      }
-    } catch (e) {
-      stderr.writeln('Error listing encrypted collections: $e');
-    }
-  }
-
-  /// Load a collection from ProfileStorage (encrypted or filesystem)
-  Future<Collection?> _loadCollectionFromStorage(String folderName) async {
+  /// Load apps from encrypted storage
+  /// Load an app from ProfileStorage (encrypted or filesystem)
+  Future<App?> _loadAppFromStorage(String folderName) async {
     if (_profileStorage == null) return null;
 
-    final collectionJsPath = '$folderName/collection.js';
+    final appJsPath = '$folderName/app.js';
 
-    // Check if collection.js exists
-    if (!await _profileStorage!.exists(collectionJsPath)) {
+    // Check if app.js exists
+    if (!await _profileStorage!.exists(appJsPath)) {
       // Check if this is a chat folder created by CLI
       final channelsExists = await _profileStorage!.exists('$folderName/extra/channels.json');
       final mainExists = await _profileStorage!.directoryExists('$folderName/main');
 
       if (channelsExists || mainExists) {
-        stderr.writeln('Auto-creating collection.js for encrypted chat folder: $folderName');
-        await _autoCreateChatCollectionForStorage(folderName);
-        if (!await _profileStorage!.exists(collectionJsPath)) {
+        stderr.writeln('Auto-creating app.js for encrypted chat folder: $folderName');
+        await _autoCreateChatAppForStorage(folderName);
+        if (!await _profileStorage!.exists(appJsPath)) {
           return null;
         }
       } else if (folderName == 'contacts') {
-        stderr.writeln('Auto-creating collection.js for encrypted contacts folder: $folderName');
-        await _autoCreateContactsCollectionForStorage(folderName);
-        if (!await _profileStorage!.exists(collectionJsPath)) {
+        stderr.writeln('Auto-creating app.js for encrypted contacts folder: $folderName');
+        await _autoCreateContactsAppForStorage(folderName);
+        if (!await _profileStorage!.exists(appJsPath)) {
           return null;
         }
       } else {
@@ -909,11 +923,11 @@ class CollectionService {
     }
 
     try {
-      final content = await _profileStorage!.readString(collectionJsPath);
+      final content = await _profileStorage!.readString(appJsPath);
       if (content == null) return null;
 
       // Extract JSON from JavaScript file
-      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      final startIndex = content.indexOf('window.APP_DATA = {');
       if (startIndex == -1) return null;
 
       final jsonStart = content.indexOf('{', startIndex);
@@ -923,8 +937,8 @@ class CollectionService {
       final jsonContent = content.substring(jsonStart, jsonEnd + 1);
       final data = json.decode(jsonContent) as Map<String, dynamic>;
 
-      final collectionData = data['collection'] as Map<String, dynamic>?;
-      if (collectionData == null) return null;
+      final appData = data['app'] as Map<String, dynamic>?;
+      if (appData == null) return null;
 
       // Check for cached stats
       final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
@@ -934,12 +948,12 @@ class CollectionService {
 
       final storagePath = _profileStorage!.getAbsolutePath(folderName);
 
-      final collection = Collection(
-        id: collectionData['id'] as String? ?? '',
-        title: collectionData['title'] as String? ?? 'Untitled',
-        description: collectionData['description'] as String? ?? '',
-        type: collectionData['type'] as String? ?? 'files',
-        updated: collectionData['updated'] as String? ?? DateTime.now().toIso8601String(),
+      final app = App(
+        id: appData['id'] as String? ?? '',
+        title: appData['title'] as String? ?? 'Untitled',
+        description: appData['description'] as String? ?? '',
+        type: appData['type'] as String? ?? 'shared_folder',
+        updated: appData['updated'] as String? ?? DateTime.now().toIso8601String(),
         storagePath: storagePath,
         isOwned: true,
         visibility: 'public',
@@ -950,20 +964,20 @@ class CollectionService {
       );
 
       // Set favorite status from config
-      collection.isFavorite = _configService.isFavorite(collection.id);
+      app.isFavorite = _configService.isFavorite(app.id);
 
       // Load security settings from storage
-      await _loadSecuritySettingsFromStorage(collection, folderName);
+      await _loadSecuritySettingsFromStorage(app, folderName);
 
-      return collection;
+      return app;
     } catch (e) {
-      stderr.writeln('Error parsing encrypted collection.js for $folderName: $e');
+      stderr.writeln('Error parsing encrypted app.js for $folderName: $e');
       return null;
     }
   }
 
   /// Load security settings from ProfileStorage
-  Future<void> _loadSecuritySettingsFromStorage(Collection collection, String folderName) async {
+  Future<void> _loadSecuritySettingsFromStorage(App app, String folderName) async {
     if (_profileStorage == null) return;
 
     final securityPath = '$folderName/extra/security.json';
@@ -972,24 +986,24 @@ class CollectionService {
 
     try {
       final data = json.decode(content) as Map<String, dynamic>;
-      collection.visibility = data['visibility'] as String? ?? 'public';
-      collection.encryption = data['encryption'] as String? ?? 'none';
+      app.visibility = data['visibility'] as String? ?? 'public';
+      app.encryption = data['encryption'] as String? ?? 'none';
       final readers = data['allowedReaders'] as List<dynamic>?;
-      collection.allowedReaders = readers?.map((e) => e.toString()).toList() ?? [];
+      app.allowedReaders = readers?.map((e) => e.toString()).toList() ?? [];
     } catch (e) {
       stderr.writeln('Error loading security settings for $folderName: $e');
     }
   }
 
-  /// Auto-create chat collection.js for encrypted storage
-  Future<void> _autoCreateChatCollectionForStorage(String folderName) async {
+  /// Auto-create chat app.js for encrypted storage
+  Future<void> _autoCreateChatAppForStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     try {
       final keys = NostrKeyGenerator.generateKeyPair();
-      _configService.storeCollectionKeys(keys);
+      _configService.storeAppKeys(keys);
 
-      final collection = Collection(
+      final app = App(
         id: keys.npub,
         title: 'Chat',
         description: '',
@@ -1003,23 +1017,23 @@ class CollectionService {
       );
 
       await _profileStorage!.writeString(
-        '$folderName/collection.js',
-        collection.generateCollectionJs(),
+        '$folderName/app.js',
+        app.generateAppJs(),
       );
     } catch (e) {
-      stderr.writeln('Error auto-creating chat collection.js for storage: $e');
+      stderr.writeln('Error auto-creating chat app.js for storage: $e');
     }
   }
 
-  /// Auto-create contacts collection.js for encrypted storage
-  Future<void> _autoCreateContactsCollectionForStorage(String folderName) async {
+  /// Auto-create contacts app.js for encrypted storage
+  Future<void> _autoCreateContactsAppForStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     try {
       final keys = NostrKeyGenerator.generateKeyPair();
-      _configService.storeCollectionKeys(keys);
+      _configService.storeAppKeys(keys);
 
-      final collection = Collection(
+      final app = App(
         id: keys.npub,
         title: 'Contacts',
         description: '',
@@ -1033,59 +1047,59 @@ class CollectionService {
       );
 
       await _profileStorage!.writeString(
-        '$folderName/collection.js',
-        collection.generateCollectionJs(),
+        '$folderName/app.js',
+        app.generateAppJs(),
       );
     } catch (e) {
-      stderr.writeln('Error auto-creating contacts collection.js for storage: $e');
+      stderr.writeln('Error auto-creating contacts app.js for storage: $e');
     }
   }
 
-  /// Load web collections from virtual file system
-  Stream<Collection> _loadWebCollectionsStream() async* {
-    // First yield any cached in-memory collections
-    for (final collection in _webCollections.values) {
-      yield collection;
+  /// Load web apps from virtual file system
+  Stream<App> _loadWebAppsStream() async* {
+    // First yield any cached in-memory apps
+    for (final app in _webApps.values) {
+      yield app;
     }
 
     // Then try to load from IndexedDB
     if (_currentCallsign == null) return;
 
     final fs = FileSystemService.instance;
-    final collectionsPath = '/web/devices/$_currentCallsign';
+    final appsPath = '/web/devices/$_currentCallsign';
 
-    if (!await fs.exists(collectionsPath)) return;
+    if (!await fs.exists(appsPath)) return;
 
-    final entities = await fs.list(collectionsPath);
+    final entities = await fs.list(appsPath);
     for (final entity in entities) {
       if (entity.isDirectory) {
         try {
-          final collection = await _loadWebCollectionFromFolder(entity.path);
-          if (collection != null && !_webCollections.containsKey(collection.id)) {
-            _webCollections[collection.id] = collection;
-            yield collection;
+          final app = await _loadWebAppFromFolder(entity.path);
+          if (app != null && !_webApps.containsKey(app.id)) {
+            _webApps[app.id] = app;
+            yield app;
           }
         } catch (e) {
-          stderr.writeln('Error loading web collection from ${entity.path}: $e');
+          stderr.writeln('Error loading web app from ${entity.path}: $e');
         }
       }
     }
   }
 
-  /// Load a collection from virtual file system (web)
-  Future<Collection?> _loadWebCollectionFromFolder(String folderPath) async {
+  /// Load an app from virtual file system (web)
+  Future<App?> _loadWebAppFromFolder(String folderPath) async {
     final fs = FileSystemService.instance;
-    final collectionJsPath = '$folderPath/collection.js';
+    final appJsPath = '$folderPath/app.js';
 
-    if (!await fs.exists(collectionJsPath)) {
+    if (!await fs.exists(appJsPath)) {
       return null;
     }
 
     try {
-      final content = await fs.readAsString(collectionJsPath);
+      final content = await fs.readAsString(appJsPath);
 
       // Extract JSON from JavaScript file
-      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      final startIndex = content.indexOf('window.APP_DATA = {');
       if (startIndex == -1) return null;
 
       final jsonStart = content.indexOf('{', startIndex);
@@ -1095,18 +1109,18 @@ class CollectionService {
       final jsonContent = content.substring(jsonStart, jsonEnd + 1);
       final data = json.decode(jsonContent) as Map<String, dynamic>;
 
-      final collectionData = data['collection'] as Map<String, dynamic>?;
-      if (collectionData == null) return null;
+      final appData = data['app'] as Map<String, dynamic>?;
+      if (appData == null) return null;
 
       // Check for cached stats
       final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
 
-      final collection = Collection(
-        id: collectionData['id'] as String? ?? '',
-        title: collectionData['title'] as String? ?? 'Untitled',
-        description: collectionData['description'] as String? ?? '',
-        type: collectionData['type'] as String? ?? 'files',
-        updated: collectionData['updated'] as String? ?? DateTime.now().toIso8601String(),
+      final app = App(
+        id: appData['id'] as String? ?? '',
+        title: appData['title'] as String? ?? 'Untitled',
+        description: appData['description'] as String? ?? '',
+        type: appData['type'] as String? ?? 'shared_folder',
+        updated: appData['updated'] as String? ?? DateTime.now().toIso8601String(),
         storagePath: folderPath,
         isOwned: true,
         visibility: 'public',
@@ -1117,140 +1131,54 @@ class CollectionService {
       );
 
       // Set favorite status from config
-      collection.isFavorite = _configService.isFavorite(collection.id);
+      app.isFavorite = _configService.isFavorite(app.id);
 
-      return collection;
+      return app;
     } catch (e) {
-      stderr.writeln('Error parsing web collection.js: $e');
+      stderr.writeln('Error parsing web app.js: $e');
       return null;
     }
   }
 
-  /// Load a single collection from a folder
-  ///
-  /// This method is optimized for fast loading:
-  /// - Uses cached file counts if available
-  /// - Defers tree.json and data.js generation to background
-  Future<Collection?> _loadCollectionFromFolder(Directory folder) async {
-    final collectionJsFile = File('${folder.path}/collection.js');
-
-    if (!await collectionJsFile.exists()) {
-      // Check if this is a chat folder created by CLI (has channels.json or main/ folder)
-      final channelsFile = File('${folder.path}/extra/channels.json');
-      final mainFolder = Directory('${folder.path}/main');
-
-      if (await channelsFile.exists() || await mainFolder.exists()) {
-        // This is a chat collection without collection.js - auto-create it
-        stderr.writeln('Auto-creating collection.js for chat folder: ${folder.path}');
-        await _autoCreateChatCollection(folder);
-        // Now try loading again
-        if (!await collectionJsFile.exists()) {
-          return null;
-        }
-      } else {
-        final created = await _autoCreateContactsCollectionJs(folder);
-        if (!created || !await collectionJsFile.exists()) {
-          return null;
-        }
-      }
-    }
-
-    try {
-      final content = await collectionJsFile.readAsString();
-
-      // Extract JSON from JavaScript file
-      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
-      if (startIndex == -1) {
-        return null;
-      }
-
-      final jsonStart = content.indexOf('{', startIndex);
-      final jsonEnd = content.lastIndexOf('};');
-
-      if (jsonStart == -1 || jsonEnd == -1) {
-        return null;
-      }
-
-      final jsonContent = content.substring(jsonStart, jsonEnd + 1);
-      final data = json.decode(jsonContent) as Map<String, dynamic>;
-
-      final collectionData = data['collection'] as Map<String, dynamic>?;
-      if (collectionData == null) {
-        return null;
-      }
-
-      // Check for cached stats to avoid expensive file counting
-      final cachedStats = data['cachedStats'] as Map<String, dynamic>?;
-      final hasCachedStats = cachedStats != null &&
-          cachedStats['fileCount'] != null &&
-          cachedStats['totalSize'] != null;
-
-      final collection = Collection(
-        id: collectionData['id'] as String? ?? '',
-        title: collectionData['title'] as String? ?? 'Untitled',
-        description: collectionData['description'] as String? ?? '',
-        type: collectionData['type'] as String? ?? 'files',
-        updated: collectionData['updated'] as String? ??
-                 DateTime.now().toIso8601String(),
-        storagePath: folder.path,
-        isOwned: true, // All local collections are owned
-        visibility: 'public', // Default, will be overridden by security.json
-        allowedReaders: const [],
-        encryption: 'none',
-        // Use cached stats if available
-        filesCount: hasCachedStats ? (cachedStats['fileCount'] as int? ?? 0) : 0,
-        totalSize: hasCachedStats ? (cachedStats['totalSize'] as int? ?? 0) : 0,
-      );
-
-      // Set favorite status from config
-      collection.isFavorite = _configService.isFavorite(collection.id);
-
-      // Load security settings (will override defaults if file exists)
-      await _loadSecuritySettings(collection, folder);
-
-      // OPTIMIZATION: Defer expensive tree.json generation to background
-      // Only check if tree.json exists - don't generate during load
-      final treeJsonFile = File('${folder.path}/extra/tree.json');
-      final needsTreeGeneration = !await treeJsonFile.exists();
-
-      // Schedule background generation if needed (non-blocking)
-      if (needsTreeGeneration) {
-        // Queue for background generation instead of blocking load
-        _scheduleBackgroundGeneration(folder, collection);
-      }
-
-      // OPTIMIZATION: Only count files if we don't have cached stats
-      if (!hasCachedStats) {
-        // Use tree.json if available for fast counting
-        if (!needsTreeGeneration) {
-          await _countCollectionFiles(collection, folder);
-          // Save cached stats for next time
-          await _saveCachedStats(collection, folder);
-        }
-        // Otherwise, file count will be updated during background generation
-      }
-
-      return collection;
-    } catch (e) {
-      stderr.writeln('Error parsing collection.js: $e');
-      return null;
-    }
+  /// Create a minimal App for known single-instance types.
+  /// Get a single app by type without scanning the directory.
+  /// For single-instance types the folder name equals the type.
+  /// Returns null if the folder doesn't exist.
+  App? getAppByType(String type) {
+    if (_profileStorage == null) return null;
+    final path = _profileStorage!.getAbsolutePath(type);
+    return _createMinimalApp(type, path);
   }
 
-  Future<bool> _autoCreateContactsCollectionJs(Directory folder) async {
+  /// Skips app.js parsing — the folder name is the type.
+  App _createMinimalApp(String type, String storagePath) {
+    final title = type[0].toUpperCase() + type.substring(1);
+    final app = App(
+      id: type,
+      title: title,
+      type: type,
+      updated: DateTime.now().toIso8601String(),
+      storagePath: storagePath,
+      isOwned: true,
+    );
+    app.isFavorite = _configService.isFavorite(app.id);
+    return app;
+  }
+
+  Future<bool> _autoCreateContactsAppJs(Directory folder) async {
     final folderName = folder.path.split('/').last;
     if (folderName != 'contacts') {
       return false;
     }
 
     try {
-      stderr.writeln('Auto-creating collection.js for contacts folder: ${folder.path}');
+      stderr.writeln('Auto-creating app.js for contacts folder: ${folder.path}');
       await _ensureContactsSupportFiles(folder);
 
       final keys = NostrKeyGenerator.generateKeyPair();
-      _configService.storeCollectionKeys(keys);
+      _configService.storeAppKeys(keys);
 
-      final collection = Collection(
+      final app = App(
         id: keys.npub,
         title: 'Contacts',
         description: '',
@@ -1263,11 +1191,11 @@ class CollectionService {
         totalSize: 0,
       );
 
-      final collectionJsFile = File('${folder.path}/collection.js');
-      await collectionJsFile.writeAsString(collection.generateCollectionJs());
+      final appJsFile = File('${folder.path}/app.js');
+      await appJsFile.writeAsString(app.generateAppJs());
       return true;
     } catch (e) {
-      stderr.writeln('Error auto-creating contacts collection.js: $e');
+      stderr.writeln('Error auto-creating contacts app.js: $e');
       return false;
     }
   }
@@ -1300,15 +1228,15 @@ class CollectionService {
   }
 
   /// Schedule background generation of tree.json and other files
-  void _scheduleBackgroundGeneration(Directory folder, Collection collection) {
+  void _scheduleBackgroundGeneration(Directory folder, App app) {
     // Use Future.delayed to not block the current load
     Future.delayed(const Duration(milliseconds: 100), () async {
       try {
-        stderr.writeln('Background: Generating tree.json for ${collection.title}');
+        stderr.writeln('Background: Generating tree.json for ${app.title}');
         await _generateAndSaveTreeJson(folder);
 
         // For files and www types, also ensure data.js and index.html exist
-        if (collection.type == 'files' || collection.type == 'www') {
+        if (app.type == 'shared_folder' || app.type == 'www') {
           if (!await _hasRequiredFiles(folder)) {
             await _generateAndSaveDataJs(folder);
             await _generateAndSaveIndexHtml(folder);
@@ -1316,27 +1244,27 @@ class CollectionService {
         }
 
         // Update file count after generation
-        await _countCollectionFiles(collection, folder);
-        await _saveCachedStats(collection, folder);
+        await _countAppFiles(app, folder);
+        await _saveCachedStats(app, folder);
 
-        // Notify that collection was updated
-        collectionsNotifier.value++;
+        // Notify that app was updated
+        appsNotifier.value++;
       } catch (e) {
-        stderr.writeln('Background generation error for ${collection.title}: $e');
+        stderr.writeln('Background generation error for ${app.title}: $e');
       }
     });
   }
 
-  /// Save cached stats to collection.js for faster subsequent loads
-  Future<void> _saveCachedStats(Collection collection, Directory folder) async {
+  /// Save cached stats to app.js for faster subsequent loads
+  Future<void> _saveCachedStats(App app, Directory folder) async {
     try {
-      final collectionJsFile = File('${folder.path}/collection.js');
-      if (!await collectionJsFile.exists()) return;
+      final appJsFile = File('${folder.path}/app.js');
+      if (!await appJsFile.exists()) return;
 
-      final content = await collectionJsFile.readAsString();
+      final content = await appJsFile.readAsString();
 
       // Extract existing data
-      final startIndex = content.indexOf('window.COLLECTION_DATA = {');
+      final startIndex = content.indexOf('window.APP_DATA = {');
       if (startIndex == -1) return;
 
       final jsonStart = content.indexOf('{', startIndex);
@@ -1348,22 +1276,22 @@ class CollectionService {
 
       // Add/update cached stats
       data['cachedStats'] = {
-        'fileCount': collection.filesCount,
-        'totalSize': collection.totalSize,
+        'fileCount': app.filesCount,
+        'totalSize': app.totalSize,
         'lastScanned': DateTime.now().toIso8601String(),
       };
 
       // Write back
-      final newContent = 'window.COLLECTION_DATA = ${json.encode(data)};';
-      await collectionJsFile.writeAsString(newContent);
+      final newContent = 'window.APP_DATA = ${json.encode(data)};';
+      await appJsFile.writeAsString(newContent);
     } catch (e) {
       // Non-critical - just log and continue
       stderr.writeln('Could not save cached stats: $e');
     }
   }
 
-  /// Count files and calculate total size in a collection
-  Future<void> _countCollectionFiles(Collection collection, Directory folder) async {
+  /// Count files and calculate total size in an app
+  Future<void> _countAppFiles(App app, Directory folder) async {
     int fileCount = 0;
     int totalSize = 0;
 
@@ -1411,8 +1339,8 @@ class CollectionService {
       stderr.writeln('Error counting files: $e');
     }
 
-    collection.filesCount = fileCount;
-    collection.totalSize = totalSize;
+    app.filesCount = fileCount;
+    app.totalSize = totalSize;
   }
 
   /// Scan directory recursively to count files (fallback when tree.json doesn't exist)
@@ -1425,7 +1353,7 @@ class CollectionService {
           // Skip system files
           final fileName = entity.path.split('/').last;
           if (!fileName.startsWith('.') &&
-              fileName != 'collection.js' &&
+              fileName != 'app.js' &&
               fileName != 'tree.json' &&
               fileName != 'data.js') {
             try {
@@ -1448,37 +1376,37 @@ class CollectionService {
     }
   }
 
-  /// Create a new collection
-  Future<Collection> createCollection({
+  /// Create a new app
+  Future<App> createApp({
     required String title,
     String description = '',
-    String type = 'files',
+    String type = 'shared_folder',
     String? customRootPath,
   }) async {
     try {
       // Generate NOSTR key pair (npub/nsec)
       final keys = NostrKeyGenerator.generateKeyPair();
-      final id = keys.npub; // Use npub as collection ID
+      final id = keys.npub; // Use npub as app ID
 
-      stderr.writeln('Creating collection with ID (npub): $id');
+      stderr.writeln('Creating app with ID (npub): $id');
 
       // Store keys in config
-      _configService.storeCollectionKeys(keys);
+      _configService.storeAppKeys(keys);
 
       // On web, use virtual file system (IndexedDB)
       if (kIsWeb) {
-        return await _createWebCollection(id: id, title: title, description: description, type: type);
+        return await _createWebApp(id: id, title: title, description: description, type: type);
       }
 
-      if (_collectionsDir == null || _profileStorage == null) {
-        throw Exception('CollectionService not initialized. Call init() first.');
+      if (_appsDir == null || _profileStorage == null) {
+        throw Exception('AppService not initialized. Call init() first.');
       }
 
       // Determine folder name based on type
       String folderName;
 
-      if (type != 'files') {
-        // For non-files types (forum, chat, www), use the type as folder name
+      if (type != 'shared_folder') {
+        // For non-shared_folder types (forum, chat, www), use the type as folder name
         folderName = type;
 
         stderr.writeln('Using fixed folder name for $type: $folderName');
@@ -1486,7 +1414,7 @@ class CollectionService {
         // Check if this type already exists
         if (await _profileStorage!.directoryExists(folderName)) {
           // Check if the folder is essentially empty (only hidden/system files)
-          // This can happen if the collection was "deleted" but folder remained
+          // This can happen if the app was "deleted" but folder remained
           final entries = await _profileStorage!.listDirectory(folderName);
           final hasUserContent = entries.any((e) {
             // Hidden files/folders (starting with .) and system folders are not user content
@@ -1494,7 +1422,7 @@ class CollectionService {
           });
 
           if (hasUserContent) {
-            throw Exception('A $type collection already exists');
+            throw Exception('A $type app already exists');
           }
 
           // Folder exists but is empty - delete it and recreate fresh
@@ -1526,7 +1454,7 @@ class CollectionService {
         // Custom root paths are only supported for filesystem storage
         if (customRootPath != null && !_useEncryptedStorage) {
           // Fall back to filesystem for custom paths
-          return await _createFilesystemCollection(
+          return await _createFilesystemApp(
             id: id,
             title: title,
             description: description,
@@ -1536,8 +1464,8 @@ class CollectionService {
         }
       }
 
-      // Find unique folder name for files type
-      if (type == 'files') {
+      // Find unique folder name for shared_folder type
+      if (type == 'shared_folder') {
         int counter = 1;
         while (await _profileStorage!.directoryExists(folderName)) {
           folderName = '${title.replaceAll(' ', '_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9_-]'), '_')}_$counter';
@@ -1562,8 +1490,8 @@ class CollectionService {
       // Get the storage path (virtual for encrypted, real for filesystem)
       final storagePath = _profileStorage!.getAbsolutePath(folderName);
 
-      // Create collection object
-      final collection = Collection(
+      // Create app object
+      final app = App(
         id: id,
         title: title,
         description: description,
@@ -1576,26 +1504,26 @@ class CollectionService {
         totalSize: 0,
       );
 
-      stderr.writeln('Writing collection files...');
+      stderr.writeln('Writing app files...');
 
-      // Write collection files using storage abstraction
-      await _writeCollectionFilesWithStorage(collection, folderName);
+      // Write app files using storage abstraction
+      await _writeAppFilesWithStorage(app, folderName);
 
-      stderr.writeln('Collection created successfully');
+      stderr.writeln('App created successfully');
 
-      // Notify listeners that collections changed
-      collectionsNotifier.value++;
+      // Notify listeners that apps changed
+      appsNotifier.value++;
 
-      return collection;
+      return app;
     } catch (e, stackTrace) {
-      stderr.writeln('Error in createCollection: $e');
+      stderr.writeln('Error in createApp: $e');
       stderr.writeln('Stack trace: $stackTrace');
       rethrow;
     }
   }
 
-  /// Create a collection using direct filesystem (for custom root paths)
-  Future<Collection> _createFilesystemCollection({
+  /// Create an app using direct filesystem (for custom root paths)
+  Future<App> _createFilesystemApp({
     required String id,
     required String title,
     required String description,
@@ -1612,49 +1540,49 @@ class CollectionService {
     if (folderName.isEmpty) folderName = 'collection';
 
     // Create folder with uniqueness check
-    var collectionFolder = Directory('$customRootPath/$folderName');
+    var appFolder = Directory('$customRootPath/$folderName');
     int counter = 1;
-    while (await collectionFolder.exists()) {
-      collectionFolder = Directory('$customRootPath/${folderName}_$counter');
+    while (await appFolder.exists()) {
+      appFolder = Directory('$customRootPath/${folderName}_$counter');
       counter++;
     }
 
     // Create folder structure
-    await collectionFolder.create(recursive: true);
-    await Directory('${collectionFolder.path}/extra').create();
+    await appFolder.create(recursive: true);
+    await Directory('${appFolder.path}/extra').create();
 
     // Create skeleton files
-    await _createSkeletonFiles(type, collectionFolder);
+    await _createSkeletonFiles(type, appFolder);
 
-    // Create collection object
-    final collection = Collection(
+    // Create app object
+    final app = App(
       id: id,
       title: title,
       description: description,
       type: type,
       updated: DateTime.now().toIso8601String(),
-      storagePath: collectionFolder.path,
+      storagePath: appFolder.path,
       isOwned: true,
       isFavorite: false,
       filesCount: 0,
       totalSize: 0,
     );
 
-    // Write collection files
-    await _writeCollectionFiles(collection, collectionFolder);
+    // Write app files
+    await _writeAppFiles(app, appFolder);
 
-    collectionsNotifier.value++;
-    return collection;
+    appsNotifier.value++;
+    return app;
   }
 
-  /// Create a collection for web platform with persistence to IndexedDB
-  Future<Collection> _createWebCollection({
+  /// Create an app for web platform with persistence to IndexedDB
+  Future<App> _createWebApp({
     required String id,
     required String title,
     required String description,
     required String type,
   }) async {
-    stderr.writeln('Creating web collection (IndexedDB): $title [$type]');
+    stderr.writeln('Creating web app (IndexedDB): $title [$type]');
 
     if (_currentCallsign == null) {
       throw Exception('No active callsign set');
@@ -1664,7 +1592,7 @@ class CollectionService {
 
     // Determine folder name
     String folderName;
-    if (type != 'files') {
+    if (type != 'shared_folder') {
       folderName = type;
     } else {
       folderName = title
@@ -1677,20 +1605,20 @@ class CollectionService {
     }
 
     final basePath = '/web/devices/$_currentCallsign';
-    var collectionPath = '$basePath/$folderName';
+    var appPath = '$basePath/$folderName';
 
-    // Ensure unique path for files type
-    if (type == 'files') {
+    // Ensure unique path for shared_folder type
+    if (type == 'shared_folder') {
       int counter = 1;
-      while (await fs.exists(collectionPath)) {
-        collectionPath = '$basePath/${folderName}_$counter';
+      while (await fs.exists(appPath)) {
+        appPath = '$basePath/${folderName}_$counter';
         counter++;
       }
     } else {
       // For non-files types, check if already exists
-      if (await fs.exists(collectionPath)) {
+      if (await fs.exists(appPath)) {
         // Check if the folder is essentially empty (can be recreated)
-        final entities = await fs.list(collectionPath);
+        final entities = await fs.list(appPath);
         final hasUserContent = entities.any((entity) {
           return !entity.name.startsWith('.') &&
               entity.name != 'extra' &&
@@ -1698,85 +1626,85 @@ class CollectionService {
         });
 
         if (hasUserContent) {
-          throw Exception('A $type collection already exists');
+          throw Exception('A $type app already exists');
         }
 
         // Folder exists but is empty - delete it and recreate fresh
-        await fs.delete(collectionPath, recursive: true);
+        await fs.delete(appPath, recursive: true);
       }
     }
 
     // Create folder structure
-    await fs.createDirectory(collectionPath, recursive: true);
-    await fs.createDirectory('$collectionPath/extra', recursive: true);
+    await fs.createDirectory(appPath, recursive: true);
+    await fs.createDirectory('$appPath/extra', recursive: true);
 
-    final collection = Collection(
+    final app = App(
       id: id,
       title: title,
       description: description,
       type: type,
       updated: DateTime.now().toIso8601String(),
-      storagePath: collectionPath,
+      storagePath: appPath,
       isOwned: true,
       isFavorite: false,
       filesCount: 0,
       totalSize: 0,
     );
 
-    // Write collection.js
-    await _writeWebCollectionFiles(collection, collectionPath);
+    // Write app.js
+    await _writeWebAppFiles(app, appPath);
 
     // Store in memory cache
-    _webCollections[id] = collection;
+    _webApps[id] = app;
 
-    stderr.writeln('Web collection created successfully: ${collection.title}');
+    stderr.writeln('Web app created successfully: ${app.title}');
 
     // Notify listeners
-    collectionsNotifier.value++;
+    appsNotifier.value++;
 
-    return collection;
+    return app;
   }
 
-  /// Write collection files to web virtual file system
-  Future<void> _writeWebCollectionFiles(Collection collection, String folderPath) async {
+  /// Write app files to web virtual file system
+  Future<void> _writeWebAppFiles(App app, String folderPath) async {
     final fs = FileSystemService.instance;
 
-    // Generate collection.js content
-    final collectionJs = '''window.COLLECTION_DATA = ${json.encode({
-      'collection': {
-        'id': collection.id,
-        'title': collection.title,
-        'description': collection.description,
-        'type': collection.type,
-        'updated': collection.updated,
+    // Generate app.js content
+    final appJs = '''window.APP_DATA = ${json.encode({
+      'app': {
+        'id': app.id,
+        'title': app.title,
+        'description': app.description,
+        'type': app.type,
+        'updated': app.updated,
       },
       'cachedStats': {
-        'fileCount': collection.filesCount,
-        'totalSize': collection.totalSize,
+        'fileCount': app.filesCount,
+        'totalSize': app.totalSize,
         'lastScanned': DateTime.now().toIso8601String(),
       },
     }, toEncodable: (o) => o.toString())};''';
 
-    await fs.writeAsString('$folderPath/collection.js', collectionJs);
+    await fs.writeAsString('$folderPath/app.js', appJs);
 
     // Write empty tree.json
     await fs.writeAsString('$folderPath/extra/tree.json', '[]');
 
     // Write security.json with defaults
     final securityJson = json.encode({
-      'visibility': collection.visibility,
-      'encryption': collection.encryption,
-      'allowedReaders': collection.allowedReaders,
+      'visibility': app.visibility,
+      'encryption': app.encryption,
+      'allowedReaders': app.allowedReaders,
     });
     await fs.writeAsString('$folderPath/extra/security.json', securityJson);
   }
 
-  /// Create skeleton template files based on collection type
-  Future<void> _createSkeletonFiles(String type, Directory collectionFolder) async {
+  /// Create skeleton template files based on app type
+  Future<void> _createSkeletonFiles(String type, Directory appFolder) async {
     try {
       if (type == 'www') {
         // Create default index.html for website type
-        final indexFile = File('${collectionFolder.path}/index.html');
+        final indexFile = File('${appFolder.path}/index.html');
         final indexContent = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1809,42 +1737,42 @@ class CollectionService {
         await indexFile.writeAsString(indexContent);
         stderr.writeln('Created skeleton index.html for www type');
       } else if (type == 'chat') {
-        // Initialize chat collection structure
-        await _initializeChatCollection(collectionFolder);
-        stderr.writeln('Created chat collection skeleton');
+        // Initialize chat app structure
+        await _initializeChatApp(appFolder);
+        stderr.writeln('Created chat app skeleton');
       } else if (type == 'forum') {
-        // Initialize forum collection structure
-        await _initializeForumCollection(collectionFolder);
-        stderr.writeln('Created forum collection skeleton');
+        // Initialize forum app structure
+        await _initializeForumApp(appFolder);
+        stderr.writeln('Created forum app skeleton');
       } else if (type == 'postcards') {
-        // Initialize postcards collection structure
-        await _initializePostcardsCollection(collectionFolder);
-        stderr.writeln('Created postcards collection skeleton');
+        // Initialize postcards app structure
+        await _initializePostcardsApp(appFolder);
+        stderr.writeln('Created postcards app skeleton');
       } else if (type == 'contacts') {
-        // Initialize contacts collection structure
-        await _initializeContactsCollection(collectionFolder);
-        stderr.writeln('Created contacts collection skeleton');
+        // Initialize contacts app structure
+        await _initializeContactsApp(appFolder);
+        stderr.writeln('Created contacts app skeleton');
       } else if (type == 'places') {
-        // Initialize places collection structure
-        await _initializePlacesCollection(collectionFolder);
-        stderr.writeln('Created places collection skeleton');
+        // Initialize places app structure
+        await _initializePlacesApp(appFolder);
+        stderr.writeln('Created places app skeleton');
       } else if (type == 'groups') {
-        // Initialize groups collection structure
-        await _initializeGroupsCollection(collectionFolder);
-        stderr.writeln('Created groups collection skeleton');
+        // Initialize groups app structure
+        await _initializeGroupsApp(appFolder);
+        stderr.writeln('Created groups app skeleton');
       } else if (type == 'station') {
-        // Initialize station collection structure
-        await _initializeRelayCollection(collectionFolder);
-        stderr.writeln('Created station collection skeleton');
+        // Initialize station app structure
+        await _initializeRelayApp(appFolder);
+        stderr.writeln('Created station app skeleton');
       } else if (type == 'console') {
-        // Initialize console collection structure
-        await _initializeConsoleCollection(collectionFolder);
-        stderr.writeln('Created console collection skeleton');
+        // Initialize console app structure
+        await _initializeConsoleApp(appFolder);
+        stderr.writeln('Created console app skeleton');
       }
       // Add more skeleton templates for other types here
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
-      // Don't fail collection creation if skeleton creation fails
+      // Don't fail app creation if skeleton creation fails
     }
   }
 
@@ -1887,45 +1815,45 @@ class CollectionService {
         await _profileStorage!.writeString('$folderName/index.html', indexContent);
         stderr.writeln('Created skeleton index.html for www type');
       } else if (type == 'chat') {
-        await _initializeChatCollectionWithStorage(folderName);
-        stderr.writeln('Created chat collection skeleton');
+        await _initializeChatAppWithStorage(folderName);
+        stderr.writeln('Created chat app skeleton');
       } else if (type == 'forum') {
-        await _initializeForumCollectionWithStorage(folderName);
-        stderr.writeln('Created forum collection skeleton');
+        await _initializeForumAppWithStorage(folderName);
+        stderr.writeln('Created forum app skeleton');
       } else if (type == 'postcards') {
-        await _initializePostcardsCollectionWithStorage(folderName);
-        stderr.writeln('Created postcards collection skeleton');
+        await _initializePostcardsAppWithStorage(folderName);
+        stderr.writeln('Created postcards app skeleton');
       } else if (type == 'contacts') {
-        await _initializeContactsCollectionWithStorage(folderName);
-        stderr.writeln('Created contacts collection skeleton');
+        await _initializeContactsAppWithStorage(folderName);
+        stderr.writeln('Created contacts app skeleton');
       } else if (type == 'places') {
-        await _initializePlacesCollectionWithStorage(folderName);
-        stderr.writeln('Created places collection skeleton');
+        await _initializePlacesAppWithStorage(folderName);
+        stderr.writeln('Created places app skeleton');
       } else if (type == 'groups') {
-        await _initializeGroupsCollectionWithStorage(folderName);
-        stderr.writeln('Created groups collection skeleton');
+        await _initializeGroupsAppWithStorage(folderName);
+        stderr.writeln('Created groups app skeleton');
       } else if (type == 'station') {
-        await _initializeRelayCollectionWithStorage(folderName);
-        stderr.writeln('Created station collection skeleton');
+        await _initializeRelayAppWithStorage(folderName);
+        stderr.writeln('Created station app skeleton');
       } else if (type == 'console') {
-        await _initializeConsoleCollectionWithStorage(folderName);
-        stderr.writeln('Created console collection skeleton');
+        await _initializeConsoleAppWithStorage(folderName);
+        stderr.writeln('Created console app skeleton');
       }
     } catch (e) {
       stderr.writeln('Error creating skeleton files: $e');
     }
   }
 
-  /// Auto-create collection.js for a chat folder created by CLI
-  /// This allows the desktop to recognize chat collections created via CLI
-  Future<void> _autoCreateChatCollection(Directory folder) async {
+  /// Auto-create app.js for a chat folder created by CLI
+  /// This allows the desktop to recognize chat apps created via CLI
+  Future<void> _autoCreateChatApp(Directory folder) async {
     try {
-      // Generate a collection ID
+      // Generate a app ID
       final keys = NostrKeyGenerator.generateKeyPair();
       final id = keys.npub;
 
       // Store keys in config
-      _configService.storeCollectionKeys(keys);
+      _configService.storeAppKeys(keys);
 
       // Ensure extra directory exists
       final extraDir = Directory('${folder.path}/extra');
@@ -1933,8 +1861,8 @@ class CollectionService {
         await extraDir.create(recursive: true);
       }
 
-      // Create collection object
-      final collection = Collection(
+      // Create app object
+      final app = App(
         id: id,
         title: 'Chat',
         description: 'Chat messages',
@@ -1947,26 +1875,26 @@ class CollectionService {
         totalSize: 0,
       );
 
-      // Write collection.js
-      final collectionJsFile = File('${folder.path}/collection.js');
-      await collectionJsFile.writeAsString(collection.generateCollectionJs());
+      // Write app.js
+      final appJsFile = File('${folder.path}/app.js');
+      await appJsFile.writeAsString(app.generateAppJs());
 
       // Write security.json if it doesn't exist
       final securityFile = File('${folder.path}/extra/security.json');
       if (!await securityFile.exists()) {
-        await securityFile.writeAsString(collection.generateSecurityJson());
+        await securityFile.writeAsString(app.generateSecurityJson());
       }
 
-      stderr.writeln('Auto-created chat collection: ${folder.path}');
+      stderr.writeln('Auto-created chat app: ${folder.path}');
     } catch (e) {
-      stderr.writeln('Error auto-creating chat collection: $e');
+      stderr.writeln('Error auto-creating chat app: $e');
     }
   }
 
-  /// Initialize chat collection with main channel and metadata files
-  Future<void> _initializeChatCollection(Directory collectionFolder) async {
+  /// Initialize chat app with main channel and metadata files
+  Future<void> _initializeChatApp(Directory appFolder) async {
     // Create main channel folder
-    final mainDir = Directory('${collectionFolder.path}/main');
+    final mainDir = Directory('${appFolder.path}/main');
     await mainDir.create();
 
     // Create main channel year folder
@@ -1994,7 +1922,7 @@ class CollectionService {
     );
 
     // Create channels.json in extra/
-    final channelsFile = File('${collectionFolder.path}/extra/channels.json');
+    final channelsFile = File('${appFolder.path}/extra/channels.json');
     final channelsData = {
       'version': '1.0',
       'channels': [
@@ -2014,7 +1942,7 @@ class CollectionService {
 
     // Create participants.json in extra/
     final participantsFile =
-        File('${collectionFolder.path}/extra/participants.json');
+        File('${appFolder.path}/extra/participants.json');
     final participantsData = {
       'version': '1.0',
       'participants': {},
@@ -2026,7 +1954,7 @@ class CollectionService {
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final security = ChatSecurity(
       adminNpub: currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
     );
@@ -2039,20 +1967,20 @@ class CollectionService {
     );
 
     // Create settings.json with signing enabled by default
-    final settingsFile = File('${collectionFolder.path}/extra/settings.json');
+    final settingsFile = File('${appFolder.path}/extra/settings.json');
     final settings = ChatSettings(signMessages: true);
     await settingsFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(settings.toJson()),
     );
 
-    stderr.writeln('Chat collection initialized with main channel');
+    stderr.writeln('Chat app initialized with main channel');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
   }
 
-  /// Initialize forum collection with default sections and metadata files
-  Future<void> _initializeForumCollection(Directory collectionFolder) async {
+  /// Initialize forum app with default sections and metadata files
+  Future<void> _initializeForumApp(Directory appFolder) async {
     // Define default sections
     final defaultSections = [
       {
@@ -2083,7 +2011,7 @@ class CollectionService {
 
     // Create section folders and config files
     for (var sectionData in defaultSections) {
-      final sectionDir = Directory('${collectionFolder.path}/${sectionData['folder']}');
+      final sectionDir = Directory('${appFolder.path}/${sectionData['folder']}');
       await sectionDir.create();
 
       // Create section config.json with default settings
@@ -2100,7 +2028,7 @@ class CollectionService {
     }
 
     // Create sections.json in extra/
-    final sectionsFile = File('${collectionFolder.path}/extra/sections.json');
+    final sectionsFile = File('${appFolder.path}/extra/sections.json');
     final sectionsData = {
       'version': '1.0',
       'sections': defaultSections,
@@ -2112,7 +2040,7 @@ class CollectionService {
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final securityData = {
       'version': '1.0',
       'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
@@ -2124,7 +2052,7 @@ class CollectionService {
     );
 
     // Create settings.json with signing enabled by default
-    final settingsFile = File('${collectionFolder.path}/extra/settings.json');
+    final settingsFile = File('${appFolder.path}/extra/settings.json');
     final settingsData = {
       'version': '1.0',
       'signMessages': true,
@@ -2134,16 +2062,16 @@ class CollectionService {
       const JsonEncoder.withIndent('  ').convert(settingsData),
     );
 
-    stderr.writeln('Forum collection initialized with ${defaultSections.length} sections');
+    stderr.writeln('Forum app initialized with ${defaultSections.length} sections');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
   }
 
-  /// Initialize postcards collection with directory structure
-  Future<void> _initializePostcardsCollection(Directory collectionFolder) async {
+  /// Initialize postcards app with directory structure
+  Future<void> _initializePostcardsApp(Directory appFolder) async {
     // Create postcards directory
-    final postcardsDir = Directory('${collectionFolder.path}/postcards');
+    final postcardsDir = Directory('${appFolder.path}/postcards');
     await postcardsDir.create();
 
     // Create current year directory
@@ -2154,7 +2082,7 @@ class CollectionService {
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final securityData = {
       'version': '1.0',
       'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
@@ -2165,22 +2093,22 @@ class CollectionService {
       const JsonEncoder.withIndent('  ').convert(securityData),
     );
 
-    stderr.writeln('Postcards collection initialized');
+    stderr.writeln('Postcards app initialized');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
   }
 
-  /// Initialize contacts collection with directory structure
-  Future<void> _initializeContactsCollection(Directory collectionFolder) async {
+  /// Initialize contacts app with directory structure
+  Future<void> _initializeContactsApp(Directory appFolder) async {
     // Create media directory for profile pictures
-    final mediaDir = Directory('${collectionFolder.path}/media');
+    final mediaDir = Directory('${appFolder.path}/media');
     await mediaDir.create();
 
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final securityData = {
       'version': '1.0',
       'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
@@ -2191,22 +2119,22 @@ class CollectionService {
       const JsonEncoder.withIndent('  ').convert(securityData),
     );
 
-    stderr.writeln('Contacts collection initialized');
+    stderr.writeln('Contacts app initialized');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
   }
 
-  /// Initialize places collection with directory structure
-  Future<void> _initializePlacesCollection(Directory collectionFolder) async {
+  /// Initialize places app with directory structure
+  Future<void> _initializePlacesApp(Directory appFolder) async {
     // Create places directory
-    final placesDir = Directory('${collectionFolder.path}/places');
+    final placesDir = Directory('${appFolder.path}/places');
     await placesDir.create();
 
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final securityData = {
       'version': '1.0',
       'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
@@ -2217,26 +2145,26 @@ class CollectionService {
       const JsonEncoder.withIndent('  ').convert(securityData),
     );
 
-    stderr.writeln('Places collection initialized');
+    stderr.writeln('Places app initialized');
     if (currentProfile.npub.isNotEmpty) {
       stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as admin');
     }
   }
 
-  /// Initialize groups collection with admins.txt and root configuration
-  Future<void> _initializeGroupsCollection(Directory collectionFolder) async {
-    // Get current profile to set as collection admin
+  /// Initialize groups app with admins.txt and root configuration
+  Future<void> _initializeGroupsApp(Directory appFolder) async {
+    // Get current profile to set as app admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
 
     // Create group.json at root
-    final groupJsonFile = File('${collectionFolder.path}/group.json');
+    final groupJsonFile = File('${appFolder.path}/group.json');
     final now = DateTime.now();
     final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
 
     final groupData = {
-      'collection': {
-        'id': 'unique-collection-id',
+      'app': {
+        'id': 'unique-app-id',
         'title': 'Groups',
         'description': 'Community moderation and curation groups',
         'type': 'groups',
@@ -2249,8 +2177,8 @@ class CollectionService {
     );
 
     // Create admins.txt at root
-    final adminsFile = File('${collectionFolder.path}/admins.txt');
-    final adminsContent = '''# ADMINS: Groups Collection
+    final adminsFile = File('${appFolder.path}/admins.txt');
+    final adminsContent = '''# ADMINS: Groups App
 # Created: $timestamp
 
 ${currentProfile.callsign}
@@ -2259,15 +2187,15 @@ ${currentProfile.callsign}
 ''';
     await adminsFile.writeAsString(adminsContent);
 
-    stderr.writeln('Groups collection initialized');
+    stderr.writeln('Groups app initialized');
     if (currentProfile.npub.isNotEmpty) {
-      stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as collection admin');
+      stderr.writeln('Set ${currentProfile.callsign} (${currentProfile.npub}) as app admin');
     }
   }
 
-  /// Initialize station collection with basic structure
+  /// Initialize station app with basic structure
   /// Note: The actual station configuration is managed by StationNodeService
-  Future<void> _initializeRelayCollection(Directory collectionFolder) async {
+  Future<void> _initializeRelayApp(Directory appFolder) async {
     // Get current profile
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
@@ -2275,10 +2203,10 @@ ${currentProfile.callsign}
     final timestamp = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
 
     // Create station.json at root (basic metadata - actual station config is separate)
-    final stationJsonFile = File('${collectionFolder.path}/station.json');
+    final stationJsonFile = File('${appFolder.path}/station.json');
     final stationData = {
-      'collection': {
-        'id': 'station-collection',
+      'app': {
+        'id': 'station-app',
         'title': 'Station',
         'description': 'Configure this device as a station node',
         'type': 'station',
@@ -2294,19 +2222,19 @@ ${currentProfile.callsign}
       const JsonEncoder.withIndent('  ').convert(stationData),
     );
 
-    stderr.writeln('Station collection initialized');
+    stderr.writeln('Station app initialized');
   }
 
-  /// Initialize console collection structure
-  Future<void> _initializeConsoleCollection(Directory collectionFolder) async {
+  /// Initialize console app structure
+  Future<void> _initializeConsoleApp(Directory appFolder) async {
     // Create sessions directory
-    final sessionsDir = Directory('${collectionFolder.path}/sessions');
+    final sessionsDir = Directory('${appFolder.path}/sessions');
     await sessionsDir.create();
 
     // Create security.json with current user as admin
     final profileService = ProfileService();
     final currentProfile = profileService.getProfile();
-    final securityFile = File('${collectionFolder.path}/extra/security.json');
+    final securityFile = File('${appFolder.path}/extra/security.json');
     final securityData = {
       'version': '1.0',
       'adminNpub': currentProfile.npub.isNotEmpty ? currentProfile.npub : null,
@@ -2317,13 +2245,13 @@ ${currentProfile.callsign}
       const JsonEncoder.withIndent('  ').convert(securityData),
     );
 
-    stderr.writeln('Console collection initialized');
+    stderr.writeln('Console app initialized');
   }
 
   // ============ Storage-based initialization methods ============
 
-  /// Initialize chat collection using storage abstraction
-  Future<void> _initializeChatCollectionWithStorage(String folderName) async {
+  /// Initialize chat app using storage abstraction
+  Future<void> _initializeChatAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     final year = DateTime.now().year;
@@ -2381,11 +2309,11 @@ ${currentProfile.callsign}
     final settings = ChatSettings(signMessages: true);
     await _profileStorage!.writeJson('$folderName/extra/settings.json', settings.toJson());
 
-    stderr.writeln('Chat collection initialized with main channel');
+    stderr.writeln('Chat app initialized with main channel');
   }
 
-  /// Initialize forum collection using storage abstraction
-  Future<void> _initializeForumCollectionWithStorage(String folderName) async {
+  /// Initialize forum app using storage abstraction
+  Future<void> _initializeForumAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     final defaultSections = [
@@ -2419,11 +2347,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Forum collection initialized');
+    stderr.writeln('Forum app initialized');
   }
 
-  /// Initialize postcards collection using storage abstraction
-  Future<void> _initializePostcardsCollectionWithStorage(String folderName) async {
+  /// Initialize postcards app using storage abstraction
+  Future<void> _initializePostcardsAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     await _profileStorage!.createDirectory('$folderName/postcards');
@@ -2439,11 +2367,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Postcards collection initialized');
+    stderr.writeln('Postcards app initialized');
   }
 
-  /// Initialize contacts collection using storage abstraction
-  Future<void> _initializeContactsCollectionWithStorage(String folderName) async {
+  /// Initialize contacts app using storage abstraction
+  Future<void> _initializeContactsAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     // Create contacts.json
@@ -2462,11 +2390,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Contacts collection initialized');
+    stderr.writeln('Contacts app initialized');
   }
 
-  /// Initialize places collection using storage abstraction
-  Future<void> _initializePlacesCollectionWithStorage(String folderName) async {
+  /// Initialize places app using storage abstraction
+  Future<void> _initializePlacesAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     // Create places.json
@@ -2485,11 +2413,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Places collection initialized');
+    stderr.writeln('Places app initialized');
   }
 
-  /// Initialize groups collection using storage abstraction
-  Future<void> _initializeGroupsCollectionWithStorage(String folderName) async {
+  /// Initialize groups app using storage abstraction
+  Future<void> _initializeGroupsAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     // Create groups.json
@@ -2509,11 +2437,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Groups collection initialized');
+    stderr.writeln('Groups app initialized');
   }
 
-  /// Initialize station/relay collection using storage abstraction
-  Future<void> _initializeRelayCollectionWithStorage(String folderName) async {
+  /// Initialize station/relay app using storage abstraction
+  Future<void> _initializeRelayAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     // Create config.json
@@ -2533,11 +2461,11 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Station collection initialized');
+    stderr.writeln('Station app initialized');
   }
 
-  /// Initialize console collection using storage abstraction
-  Future<void> _initializeConsoleCollectionWithStorage(String folderName) async {
+  /// Initialize console app using storage abstraction
+  Future<void> _initializeConsoleAppWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
     await _profileStorage!.createDirectory('$folderName/sessions');
@@ -2552,14 +2480,14 @@ ${currentProfile.callsign}
     };
     await _profileStorage!.writeJson('$folderName/extra/security.json', securityData);
 
-    stderr.writeln('Console collection initialized');
+    stderr.writeln('Console app initialized');
   }
 
   /// Generate and save tree.json using storage abstraction
   Future<void> _generateAndSaveTreeJsonWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
-    // For new collections, just create an empty tree
+    // For new apps, just create an empty tree
     final treeData = {
       'version': '1.0',
       'generated': DateTime.now().toIso8601String(),
@@ -2572,8 +2500,8 @@ ${currentProfile.callsign}
   Future<void> _generateAndSaveDataJsWithStorage(String folderName) async {
     if (_profileStorage == null) return;
 
-    // For new collections, create minimal data.js
-    final dataJs = '''const collectionData = {
+    // For new apps, create minimal data.js
+    final dataJs = '''const appData = {
   version: "1.0",
   generated: "${DateTime.now().toIso8601String()}",
   files: []
@@ -2591,10 +2519,10 @@ ${currentProfile.callsign}
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collection</title>
+    <title>App</title>
 </head>
 <body>
-    <h1>Collection Files</h1>
+    <h1>App Files</h1>
     <p>No files yet.</p>
 </body>
 </html>
@@ -2602,76 +2530,76 @@ ${currentProfile.callsign}
     await _profileStorage!.writeString('$folderName/index.html', indexHtml);
   }
 
-  /// Write collection metadata files to disk
-  Future<void> _writeCollectionFiles(
-    Collection collection,
+  /// Write app metadata files to disk
+  Future<void> _writeAppFiles(
+    App app,
     Directory folder,
   ) async {
-    // Write collection.js
-    final collectionJsFile = File('${folder.path}/collection.js');
-    await collectionJsFile.writeAsString(collection.generateCollectionJs());
+    // Write app.js
+    final appJsFile = File('${folder.path}/app.js');
+    await appJsFile.writeAsString(app.generateAppJs());
 
     // Write extra/security.json
     final securityJsonFile = File('${folder.path}/extra/security.json');
-    await securityJsonFile.writeAsString(collection.generateSecurityJson());
+    await securityJsonFile.writeAsString(app.generateSecurityJson());
 
     // Only generate tree.json, data.js, and index.html for files and www types
     // Other types (groups, chat, forum, etc.) have their own structure
-    if (collection.type == 'files' || collection.type == 'www') {
+    if (app.type == 'shared_folder' || app.type == 'www') {
       // Generate and write tree.json, data.js, and index.html
-      // For new collections, generate synchronously so collection is fully ready
+      // For new apps, generate synchronously so app is fully ready
       stderr.writeln('Generating tree.json, data.js, and index.html...');
       await _generateAndSaveTreeJson(folder);
       await _generateAndSaveDataJs(folder);
       await _generateAndSaveIndexHtml(folder);
-      stderr.writeln('Collection files generated successfully');
+      stderr.writeln('App files generated successfully');
     } else {
-      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${collection.type} type');
+      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${app.type} type');
     }
   }
 
-  /// Write collection metadata files using storage abstraction
-  Future<void> _writeCollectionFilesWithStorage(
-    Collection collection,
+  /// Write app metadata files using storage abstraction
+  Future<void> _writeAppFilesWithStorage(
+    App app,
     String folderName,
   ) async {
     if (_profileStorage == null) return;
 
-    // Write collection.js
+    // Write app.js
     await _profileStorage!.writeString(
-      '$folderName/collection.js',
-      collection.generateCollectionJs(),
+      '$folderName/app.js',
+      app.generateAppJs(),
     );
 
     // Write extra/security.json
     await _profileStorage!.writeString(
       '$folderName/extra/security.json',
-      collection.generateSecurityJson(),
+      app.generateSecurityJson(),
     );
 
     // Only generate tree.json, data.js, and index.html for files and www types
-    if (collection.type == 'files' || collection.type == 'www') {
+    if (app.type == 'shared_folder' || app.type == 'www') {
       stderr.writeln('Generating tree.json, data.js, and index.html...');
       await _generateAndSaveTreeJsonWithStorage(folderName);
       await _generateAndSaveDataJsWithStorage(folderName);
       await _generateAndSaveIndexHtmlWithStorage(folderName);
-      stderr.writeln('Collection files generated successfully');
+      stderr.writeln('App files generated successfully');
     } else {
-      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${collection.type} type');
+      stderr.writeln('Skipping tree.json/data.js/index.html generation for ${app.type} type');
     }
   }
 
-  /// Delete a collection
-  Future<void> deleteCollection(Collection collection) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Delete an app
+  Future<void> deleteApp(App app) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
     // Use storage abstraction if available
     if (_profileStorage != null) {
       // Get relative path from storage path
       final basePath = _profileStorage!.basePath;
-      final storagePath = collection.storagePath!;
+      final storagePath = app.storagePath!;
       String relativePath;
 
       if (storagePath.startsWith(basePath)) {
@@ -2685,8 +2613,8 @@ ${currentProfile.callsign}
         if (await folder.exists()) {
           await folder.delete(recursive: true);
         }
-        if (collection.isFavorite) {
-          _configService.toggleFavorite(collection.id);
+        if (app.isFavorite) {
+          _configService.toggleFavorite(app.id);
         }
         return;
       }
@@ -2696,53 +2624,53 @@ ${currentProfile.callsign}
       }
     } else {
       // Fall back to direct filesystem
-      final folder = Directory(collection.storagePath!);
+      final folder = Directory(app.storagePath!);
       if (await folder.exists()) {
         await folder.delete(recursive: true);
       }
     }
 
     // Remove from favorites if present
-    if (collection.isFavorite) {
-      _configService.toggleFavorite(collection.id);
+    if (app.isFavorite) {
+      _configService.toggleFavorite(app.id);
     }
   }
 
-  /// Toggle favorite status of a collection
-  void toggleFavorite(Collection collection) {
-    _configService.toggleFavorite(collection.id);
-    collection.isFavorite = !collection.isFavorite;
+  /// Toggle favorite status of an app
+  void toggleFavorite(App app) {
+    _configService.toggleFavorite(app.id);
+    app.isFavorite = !app.isFavorite;
   }
 
   /// Load security settings from security.json
-  Future<void> _loadSecuritySettings(Collection collection, Directory folder) async {
+  Future<void> _loadSecuritySettings(App app, Directory folder) async {
     try {
       final securityFile = File('${folder.path}/extra/security.json');
       if (await securityFile.exists()) {
         final content = await securityFile.readAsString();
         final data = json.decode(content) as Map<String, dynamic>;
-        collection.visibility = data['visibility'] as String? ?? 'public';
-        collection.allowedReaders = (data['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [];
-        collection.encryption = data['encryption'] as String? ?? 'none';
+        app.visibility = data['visibility'] as String? ?? 'public';
+        app.allowedReaders = (data['allowedReaders'] as List<dynamic>?)?.cast<String>() ?? [];
+        app.encryption = data['encryption'] as String? ?? 'none';
       }
     } catch (e) {
       stderr.writeln('Error loading security settings: $e');
     }
   }
 
-  /// Update collection metadata
-  Future<void> updateCollection(Collection collection, {String? oldTitle}) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Update app metadata
+  Future<void> updateApp(App app, {String? oldTitle}) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
     // Update timestamp
-    collection.updated = DateTime.now().toIso8601String();
+    app.updated = DateTime.now().toIso8601String();
 
     // Use storage abstraction if available
     if (_profileStorage != null) {
       final basePath = _profileStorage!.basePath;
-      final storagePath = collection.storagePath!;
+      final storagePath = app.storagePath!;
       String? relativePath;
 
       if (storagePath.startsWith(basePath)) {
@@ -2755,15 +2683,15 @@ ${currentProfile.callsign}
       if (relativePath != null && relativePath.isNotEmpty) {
         // Check if folder exists in storage
         if (!await _profileStorage!.directoryExists(relativePath)) {
-          throw Exception('Collection folder does not exist');
+          throw Exception('App folder does not exist');
         }
 
         // Note: folder renaming is not supported for encrypted storage
         // Title changes only update metadata, not folder name
-        if (oldTitle != null && oldTitle != collection.title && !_useEncryptedStorage) {
-          await _renameCollectionFolder(collection, oldTitle);
+        if (oldTitle != null && oldTitle != app.title && !_useEncryptedStorage) {
+          await _renameAppFolder(app, oldTitle);
           // Update relativePath after rename
-          final newStoragePath = collection.storagePath!;
+          final newStoragePath = app.storagePath!;
           if (newStoragePath.startsWith(basePath)) {
             relativePath = newStoragePath.substring(basePath.length);
             if (relativePath.startsWith('/')) {
@@ -2773,42 +2701,42 @@ ${currentProfile.callsign}
         }
 
         // Write updated metadata files
-        await _writeCollectionFilesWithStorage(collection, relativePath);
-        stderr.writeln('Updated collection: ${collection.title}');
+        await _writeAppFilesWithStorage(app, relativePath);
+        stderr.writeln('Updated app: ${app.title}');
         return;
       }
     }
 
     // Fall back to direct filesystem operations
-    final folder = Directory(collection.storagePath!);
+    final folder = Directory(app.storagePath!);
     if (!await folder.exists()) {
-      throw Exception('Collection folder does not exist');
+      throw Exception('App folder does not exist');
     }
 
     // If title changed, rename the folder
-    if (oldTitle != null && oldTitle != collection.title) {
-      await _renameCollectionFolder(collection, oldTitle);
+    if (oldTitle != null && oldTitle != app.title) {
+      await _renameAppFolder(app, oldTitle);
     }
 
     // Write updated metadata files
-    final updatedFolder = Directory(collection.storagePath!);
-    await _writeCollectionFiles(collection, updatedFolder);
+    final updatedFolder = Directory(app.storagePath!);
+    await _writeAppFiles(app, updatedFolder);
 
-    stderr.writeln('Updated collection: ${collection.title}');
+    stderr.writeln('Updated app: ${app.title}');
   }
 
-  /// Rename collection folder based on new title
-  Future<void> _renameCollectionFolder(Collection collection, String oldTitle) async {
-    final oldFolder = Directory(collection.storagePath!);
+  /// Rename app folder based on new title
+  Future<void> _renameAppFolder(App app, String oldTitle) async {
+    final oldFolder = Directory(app.storagePath!);
     if (!await oldFolder.exists()) {
-      throw Exception('Collection folder does not exist');
+      throw Exception('App folder does not exist');
     }
 
     // Get parent directory
     final parentPath = oldFolder.parent.path;
 
     // Sanitize new folder name from title
-    String newFolderName = _sanitizeFolderName(collection.title);
+    String newFolderName = _sanitizeFolderName(app.title);
 
     // Find unique folder name if needed
     var newFolder = Directory('$parentPath/$newFolderName');
@@ -2829,11 +2757,11 @@ ${currentProfile.callsign}
     // Rename the folder
     try {
       await oldFolder.rename(newFolder.path);
-      collection.storagePath = newFolder.path;
+      app.storagePath = newFolder.path;
       stderr.writeln('Folder renamed successfully');
     } catch (e) {
       stderr.writeln('Error renaming folder: $e');
-      throw Exception('Failed to rename collection folder: $e');
+      throw Exception('Failed to rename app directory: $e');
     }
   }
 
@@ -2868,15 +2796,15 @@ ${currentProfile.callsign}
     return folderName;
   }
 
-  /// Add files to a collection (copy operation)
-  Future<void> addFiles(Collection collection, List<String> filePaths) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Add files to an app (copy operation)
+  Future<void> addFiles(App app, List<String> filePaths) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
-    final collectionDir = Directory(collection.storagePath!);
-    if (!await collectionDir.exists()) {
-      throw Exception('Collection folder does not exist');
+    final appDir = Directory(app.storagePath!);
+    if (!await appDir.exists()) {
+      throw Exception('App folder does not exist');
     }
 
     for (final filePath in filePaths) {
@@ -2887,7 +2815,7 @@ ${currentProfile.callsign}
       }
 
       final fileName = filePath.split('/').last;
-      final destFile = File('${collectionDir.path}/$fileName');
+      final destFile = File('${appDir.path}/$fileName');
 
       // Copy file
       await sourceFile.copy(destFile.path);
@@ -2895,25 +2823,25 @@ ${currentProfile.callsign}
     }
 
     // Recount files and update metadata
-    await _countCollectionFiles(collection, collectionDir);
+    await _countAppFiles(app, appDir);
 
     // Regenerate tree.json, data.js, and index.html
-    await _generateAndSaveTreeJson(collectionDir);
-    await _generateAndSaveDataJs(collectionDir);
-    await _generateAndSaveIndexHtml(collectionDir);
+    await _generateAndSaveTreeJson(appDir);
+    await _generateAndSaveDataJs(appDir);
+    await _generateAndSaveIndexHtml(appDir);
 
-    await updateCollection(collection);
+    await updateApp(app);
   }
 
-  /// Create a new empty folder in the collection
-  Future<void> createFolder(Collection collection, String folderName) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Create a new empty folder in the app
+  Future<void> createFolder(App app, String folderName) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
-    final collectionDir = Directory(collection.storagePath!);
-    if (!await collectionDir.exists()) {
-      throw Exception('Collection folder does not exist');
+    final appDir = Directory(app.storagePath!);
+    if (!await appDir.exists()) {
+      throw Exception('App folder does not exist');
     }
 
     // Sanitize folder name
@@ -2925,7 +2853,7 @@ ${currentProfile.callsign}
       throw Exception('Invalid folder name');
     }
 
-    final newFolder = Directory('${collectionDir.path}/$sanitized');
+    final newFolder = Directory('${appDir.path}/$sanitized');
 
     if (await newFolder.exists()) {
       throw Exception('Folder already exists');
@@ -2935,23 +2863,23 @@ ${currentProfile.callsign}
     stderr.writeln('Created folder: $sanitized');
 
     // Regenerate tree.json, data.js, and index.html
-    await _generateAndSaveTreeJson(collectionDir);
-    await _generateAndSaveDataJs(collectionDir);
-    await _generateAndSaveIndexHtml(collectionDir);
+    await _generateAndSaveTreeJson(appDir);
+    await _generateAndSaveDataJs(appDir);
+    await _generateAndSaveIndexHtml(appDir);
 
     // Update metadata
-    await updateCollection(collection);
+    await updateApp(app);
   }
 
-  /// Add a folder to a collection (recursive copy)
-  Future<void> addFolder(Collection collection, String folderPath) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Add a folder to an app (recursive copy)
+  Future<void> addFolder(App app, String folderPath) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
-    final collectionDir = Directory(collection.storagePath!);
-    if (!await collectionDir.exists()) {
-      throw Exception('Collection folder does not exist');
+    final appDir = Directory(app.storagePath!);
+    if (!await appDir.exists()) {
+      throw Exception('App folder does not exist');
     }
 
     final sourceDir = Directory(folderPath);
@@ -2960,21 +2888,21 @@ ${currentProfile.callsign}
     }
 
     final folderName = folderPath.split('/').last;
-    final destDir = Directory('${collectionDir.path}/$folderName');
+    final destDir = Directory('${appDir.path}/$folderName');
 
     // Copy folder recursively
     await _copyDirectory(sourceDir, destDir);
     stderr.writeln('Copied folder: $folderName');
 
     // Recount files and update metadata
-    await _countCollectionFiles(collection, collectionDir);
+    await _countAppFiles(app, appDir);
 
     // Regenerate tree.json, data.js, and index.html
-    await _generateAndSaveTreeJson(collectionDir);
-    await _generateAndSaveDataJs(collectionDir);
-    await _generateAndSaveIndexHtml(collectionDir);
+    await _generateAndSaveTreeJson(appDir);
+    await _generateAndSaveDataJs(appDir);
+    await _generateAndSaveIndexHtml(appDir);
 
-    await updateCollection(collection);
+    await updateApp(app);
   }
 
   /// Recursively copy a directory
@@ -2996,17 +2924,17 @@ ${currentProfile.callsign}
     }
   }
 
-  /// Build file tree from collection directory
-  Future<List<FileNode>> _buildFileTree(Directory collectionDir) async {
+  /// Build file tree from app directory
+  Future<List<FileNode>> _buildFileTree(Directory appDir) async {
     final fileNodes = <FileNode>[];
 
     try {
-      final entities = await collectionDir.list(recursive: false).toList();
+      final entities = await appDir.list(recursive: false).toList();
       for (final entity in entities) {
         final name = entity.path.split('/').last;
 
         // Skip metadata folders and files
-        if (name == 'extra' || name == 'collection.js') {
+        if (name == 'extra' || name == 'app.js') {
           continue;
         }
 
@@ -3108,14 +3036,14 @@ ${currentProfile.callsign}
     return fileNodes;
   }
 
-  /// Load file tree from collection
-  Future<List<FileNode>> loadFileTree(Collection collection) async {
-    if (collection.storagePath == null) {
-      throw Exception('Collection has no storage path');
+  /// Load file tree from app
+  Future<List<FileNode>> loadFileTree(App app) async {
+    if (app.storagePath == null) {
+      throw Exception('App has no storage path');
     }
 
-    final collectionDir = Directory(collection.storagePath!);
-    return await _buildFileTree(collectionDir);
+    final appDir = Directory(app.storagePath!);
+    return await _buildFileTree(appDir);
   }
 
   /// Scan directory non-recursively to avoid "too many open files"
@@ -3153,11 +3081,11 @@ ${currentProfile.callsign}
   /// Generate and save tree.json with proper nested structure
   Future<void> _generateAndSaveTreeJson(Directory folder) async {
     try {
-      // Check if this is a www type collection to determine if index.html should be included
+      // Check if this is a www type app to determine if index.html should be included
       bool isWwwType = false;
-      final collectionJsFile = File('${folder.path}/collection.js');
-      if (await collectionJsFile.exists()) {
-        final content = await collectionJsFile.readAsString();
+      final appJsFile = File('${folder.path}/app.js');
+      if (await appJsFile.exists()) {
+        final content = await appJsFile.readAsString();
         isWwwType = content.contains('"type": "www"');
       }
 
@@ -3205,7 +3133,7 @@ ${currentProfile.callsign}
 
         // Skip hidden files, metadata files, and the extra directory
         if (name.startsWith('.') ||
-            name == 'collection.js' ||
+            name == 'app.js' ||
             (!isWwwType && name == 'index.html') ||
             name == 'extra') {
           continue;
@@ -3264,11 +3192,11 @@ ${currentProfile.callsign}
       final filesToProcess = <File>[];
       final directoriesToAdd = <Map<String, dynamic>>[];
 
-      // Check if this is a www type collection to determine if index.html should be included
+      // Check if this is a www type app to determine if index.html should be included
       bool isWwwType = false;
-      final collectionJsFile = File('${folder.path}/collection.js');
-      if (await collectionJsFile.exists()) {
-        final content = await collectionJsFile.readAsString();
+      final appJsFile = File('${folder.path}/app.js');
+      if (await appJsFile.exists()) {
+        final content = await appJsFile.readAsString();
         isWwwType = content.contains('"type": "www"');
       }
 
@@ -3280,9 +3208,9 @@ ${currentProfile.callsign}
         final relativePath = entity.path.substring(folder.path.length + 1);
 
         // Skip hidden files, metadata files, and the extra directory
-        // For www type collections, include index.html as it's content, not metadata
+        // For www type apps, include index.html as it's content, not metadata
         if (relativePath.startsWith('.') ||
-            relativePath == 'collection.js' ||
+            relativePath == 'app.js' ||
             (!isWwwType && relativePath == 'index.html') ||
             relativePath == 'extra' ||
             relativePath.startsWith('extra/')) {
@@ -3383,9 +3311,9 @@ ${currentProfile.callsign}
       final dataJsFile = File('${folder.path}/extra/data.js');
       final now = DateTime.now().toIso8601String();
       final jsonData = JsonEncoder.withIndent('  ').convert(entries);
-      final jsContent = '''// Geogram Collection Data with Metadata
+      final jsContent = '''// Geogram App Data with Metadata
 // Generated: $now
-window.COLLECTION_DATA_FULL = $jsonData;
+window.APP_DATA_FULL = $jsonData;
 ''';
       await dataJsFile.writeAsString(jsContent);
 
@@ -3396,16 +3324,16 @@ window.COLLECTION_DATA_FULL = $jsonData;
     }
   }
 
-  /// Generate and save index.html for collection browsing
+  /// Generate and save index.html for app browsing
   Future<void> _generateAndSaveIndexHtml(Directory folder) async {
     try {
-      // Check if this is a www type collection - if so, skip generating browser index.html
-      final collectionJsFile = File('${folder.path}/collection.js');
-      if (await collectionJsFile.exists()) {
-        final content = await collectionJsFile.readAsString();
-        // Check if this is a www type collection
+      // Check if this is a www type app - if so, skip generating browser index.html
+      final appJsFile = File('${folder.path}/app.js');
+      if (await appJsFile.exists()) {
+        final content = await appJsFile.readAsString();
+        // Check if this is a www type app
         if (content.contains('"type": "www"')) {
-          stderr.writeln('Skipping index.html generation for www type collection');
+          stderr.writeln('Skipping index.html generation for www type app');
           return; // Don't overwrite www type's custom index.html
         }
       }
@@ -3421,14 +3349,14 @@ window.COLLECTION_DATA_FULL = $jsonData;
     }
   }
 
-  /// Generate HTML content for collection browser
+  /// Generate HTML content for app browser
   String _generateIndexHtmlContent() {
     return '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collection Browser</title>
+    <title>App Browser</title>
     <style>
         @font-face {
             font-family: 'VT323';
@@ -3754,9 +3682,9 @@ window.COLLECTION_DATA_FULL = $jsonData;
 <body>
     <div class="container">
         <div class="header">
-            <h1><span id="collection-title">LOADING SYSTEM...</span></h1>
-            <div class="subtitle" id="collection-description"></div>
-            <div class="meta">LATEST UPDATE: <span id="collection-meta"></span></div>
+            <h1><span id="app-title">LOADING SYSTEM...</span></h1>
+            <div class="subtitle" id="app-description"></div>
+            <div class="meta">LATEST UPDATE: <span id="app-meta"></span></div>
         </div>
 
         <div class="stats-box">
@@ -3792,11 +3720,11 @@ window.COLLECTION_DATA_FULL = $jsonData;
         </div>
     </div>
 
-    <script src="collection.js"></script>
+    <script src="app.js"></script>
     <script src="extra/data.js"></script>
     <script>
-        const collectionData = window.COLLECTION_DATA?.collection || {};
-        const fileData = window.COLLECTION_DATA_FULL || [];
+        const appData = window.APP_DATA?.app || {};
+        const fileData = window.APP_DATA_FULL || [];
         let searchTimeout = null;
         let currentSearchQuery = '';
         let selectedIndex = 0;
@@ -3805,7 +3733,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
-            loadCollectionInfo();
+            loadAppInfo();
             setupSearch();
             setupKeyboardShortcuts();
             calculateStats();
@@ -3820,13 +3748,13 @@ window.COLLECTION_DATA_FULL = $jsonData;
             }
         });
 
-        function loadCollectionInfo() {
-            const title = collectionData.title || 'Collection';
-            document.getElementById('collection-title').textContent = title;
-            document.getElementById('collection-description').textContent = collectionData.description || '';
+        function loadAppInfo() {
+            const title = appData.title || 'App';
+            document.getElementById('app-title').textContent = title;
+            document.getElementById('app-description').textContent = appData.description || '';
 
             // Format date as YYYY-MM-DD HH:MM:SS
-            const date = new Date(collectionData.updated);
+            const date = new Date(appData.updated);
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
             const day = String(date.getDate()).padStart(2, '0');
@@ -3835,7 +3763,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
             const seconds = String(date.getSeconds()).padStart(2, '0');
             const isoDateTime = \`\${year}-\${month}-\${day} \${hours}:\${minutes}:\${seconds}\`;
 
-            document.getElementById('collection-meta').textContent = isoDateTime;
+            document.getElementById('app-meta').textContent = isoDateTime;
             // Update browser tab title
             document.title = title;
         }
@@ -4385,7 +4313,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
       }
 
       // For older files, just check if file exists without full validation
-      // Full validation is too expensive for large collections
+      // Full validation is too expensive for large apps
       return true;
     } catch (e) {
       stderr.writeln('Error validating tree.json: $e');
@@ -4393,33 +4321,33 @@ window.COLLECTION_DATA_FULL = $jsonData;
     }
   }
 
-  /// Check if collection has all required files
+  /// Check if app has all required files
   Future<bool> _hasRequiredFiles(Directory folder) async {
-    final collectionJs = File('${folder.path}/collection.js');
+    final appJs = File('${folder.path}/app.js');
     final treeJson = File('${folder.path}/extra/tree.json');
     final dataJs = File('${folder.path}/extra/data.js');
     final indexHtml = File('${folder.path}/index.html');
 
-    return await collectionJs.exists() &&
+    return await appJs.exists() &&
            await treeJson.exists() &&
            await dataJs.exists() &&
            await indexHtml.exists();
   }
 
-  /// Ensure collection files are up to date
-  Future<void> ensureCollectionFilesUpdated(Collection collection, {bool force = false}) async {
-    if (collection.storagePath == null) {
+  /// Ensure app files are up to date
+  Future<void> ensureAppFilesUpdated(App app, {bool force = false}) async {
+    if (app.storagePath == null) {
       return;
     }
 
-    final folder = Directory(collection.storagePath!);
+    final folder = Directory(app.storagePath!);
     if (!await folder.exists()) {
       return;
     }
 
     if (force) {
       // Force regeneration regardless of current state
-      stderr.writeln('Force regenerating collection files for ${collection.title}...');
+      stderr.writeln('Force regenerating app files for ${app.title}...');
       await _generateAndSaveTreeJson(folder);
       await _generateAndSaveDataJs(folder);
       await _generateAndSaveIndexHtml(folder);
@@ -4430,7 +4358,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
     final isValid = await _validateTreeJson(folder);
 
     if (!isValid || !await _hasRequiredFiles(folder)) {
-      stderr.writeln('Regenerating collection files for ${collection.title}...');
+      stderr.writeln('Regenerating app files for ${app.title}...');
       await _generateAndSaveTreeJson(folder);
       await _generateAndSaveDataJs(folder);
       await _generateAndSaveIndexHtml(folder);
@@ -4483,7 +4411,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
       final globalStyles = await themeService.getGlobalStyles() ?? '';
       final appStyles = await themeService.getAppStyles('home') ?? '';
 
-      // Aggregate data from collections
+      // Aggregate data from apps
       final recentPosts = await _getRecentBlogPosts(targetCallsign, limit: 5);
       final upcomingEvents = await _getUpcomingEvents(targetCallsign, limit: 5);
       final placesCount = await _getPlacesCount(targetCallsign);
@@ -4506,8 +4434,8 @@ window.COLLECTION_DATA_FULL = $jsonData;
       // Process template
       final html = themeService.processTemplate(template, {
         'TITLE': title ?? targetCallsign,
-        'COLLECTION_NAME': title ?? targetCallsign,
-        'COLLECTION_DESCRIPTION': description ?? 'Welcome to $targetCallsign',
+        'APP_NAME': title ?? targetCallsign,
+        'APP_DESCRIPTION': description ?? 'Welcome to $targetCallsign',
         'GLOBAL_STYLES': globalStyles,
         'APP_STYLES': appStyles,
         'RECENT_POSTS': recentPostsHtml,
@@ -4529,7 +4457,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
     }
   }
 
-  /// Get recent blog posts from all blog collections
+  /// Get recent blog posts from all blog apps
   Future<List<Map<String, dynamic>>> _getRecentBlogPosts(String callsign, {int limit = 5}) async {
     final posts = <Map<String, dynamic>>[];
 
@@ -4537,16 +4465,16 @@ window.COLLECTION_DATA_FULL = $jsonData;
       final callsignDir = Directory('${_devicesDir!.path}/$callsign');
       if (!await callsignDir.exists()) return posts;
 
-      // Look for blog collections
+      // Look for blog apps
       await for (final entity in callsignDir.list()) {
         if (entity is Directory) {
-          final collectionJs = File('${entity.path}/collection.js');
-          if (await collectionJs.exists()) {
-            final content = await collectionJs.readAsString();
+          final appJs = File('${entity.path}/app.js');
+          if (await appJs.exists()) {
+            final content = await appJs.readAsString();
             if (content.contains('"type": "blog"')) {
-              // This is a blog collection - load posts
+              // This is a blog app - load posts
               final blogService = BlogService();
-              await blogService.initializeCollection(entity.path);
+              await blogService.initializeApp(entity.path);
               final blogPosts = await blogService.loadPosts(publishedOnly: true);
 
               for (final post in blogPosts.take(limit - posts.length)) {
@@ -4577,7 +4505,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
     return posts.take(limit).toList();
   }
 
-  /// Get upcoming events from all event collections
+  /// Get upcoming events from all event apps
   Future<List<Map<String, dynamic>>> _getUpcomingEvents(String callsign, {int limit = 5}) async {
     final events = <Map<String, dynamic>>[];
     final now = DateTime.now();
@@ -4586,16 +4514,16 @@ window.COLLECTION_DATA_FULL = $jsonData;
       final callsignDir = Directory('${_devicesDir!.path}/$callsign');
       if (!await callsignDir.exists()) return events;
 
-      // Look for events collections
+      // Look for events apps
       await for (final entity in callsignDir.list()) {
         if (entity is Directory) {
-          final collectionJs = File('${entity.path}/collection.js');
-          if (await collectionJs.exists()) {
-            final content = await collectionJs.readAsString();
+          final appJs = File('${entity.path}/app.js');
+          if (await appJs.exists()) {
+            final content = await appJs.readAsString();
             if (content.contains('"type": "events"')) {
-              // This is an events collection - load events
+              // This is an events app - load events
               final eventService = EventService();
-              await eventService.initializeCollection(entity.path);
+              await eventService.initializeApp(entity.path);
               final loadedEvents = await eventService.loadEvents();
 
               for (final event in loadedEvents) {
@@ -4642,12 +4570,12 @@ window.COLLECTION_DATA_FULL = $jsonData;
       final callsignDir = Directory('${_devicesDir!.path}/$callsign');
       if (!await callsignDir.exists()) return count;
 
-      // Look for places collections
+      // Look for places apps
       await for (final entity in callsignDir.list()) {
         if (entity is Directory) {
-          final collectionJs = File('${entity.path}/collection.js');
-          if (await collectionJs.exists()) {
-            final content = await collectionJs.readAsString();
+          final appJs = File('${entity.path}/app.js');
+          if (await appJs.exists()) {
+            final content = await appJs.readAsString();
             if (content.contains('"type": "places"')) {
               // Count public place folders only
               await for (final placeEntity in entity.list()) {
@@ -4686,14 +4614,14 @@ window.COLLECTION_DATA_FULL = $jsonData;
       final callsignDir = Directory('${_devicesDir!.path}/$callsign');
       if (!await callsignDir.exists()) return rooms;
 
-      // Look for chat collections
+      // Look for chat apps
       await for (final entity in callsignDir.list()) {
         if (entity is Directory) {
-          final collectionJs = File('${entity.path}/collection.js');
-          if (await collectionJs.exists()) {
-            final content = await collectionJs.readAsString();
+          final appJs = File('${entity.path}/app.js');
+          if (await appJs.exists()) {
+            final content = await appJs.readAsString();
             if (content.contains('"type": "chat"')) {
-              // This is a chat collection - load channels
+              // This is a chat app - load channels
               final chatService = ChatService();
               // Set profile storage for encrypted storage support
               if (_profileStorage != null) {
@@ -4705,7 +4633,7 @@ window.COLLECTION_DATA_FULL = $jsonData;
               } else {
                 chatService.setStorage(FilesystemProfileStorage(entity.path));
               }
-              await chatService.initializeCollection(entity.path);
+              await chatService.initializeApp(entity.path);
 
               for (final channel in chatService.channels) {
                 // Check if channel is public (via config or by having '*' in participants)

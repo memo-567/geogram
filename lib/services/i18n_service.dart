@@ -25,7 +25,7 @@ class I18nService {
     'bot',
     'backup',
     'transfer',
-    'collection',
+    'app',
     'places',
     'groups',
     'event',

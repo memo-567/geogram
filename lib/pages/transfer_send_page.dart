@@ -169,7 +169,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
     // Try to find matching device for richer recipient info
     final matchingDevice = _reachableDevices.firstWhere(
       (d) => d.callsign.toUpperCase() == lastCallsign.toUpperCase(),
-      orElse: () => RemoteDevice(callsign: '', name: '', collections: []),
+      orElse: () => RemoteDevice(callsign: '', name: '', apps: []),
     );
 
     if (matchingDevice.callsign.isNotEmpty) {
@@ -229,7 +229,7 @@ class _TransferSendPageState extends State<TransferSendPage> {
         orElse: () => RemoteDevice(
           callsign: '',
           name: '',
-          collections: [],
+          apps: [],
         ),
       );
 

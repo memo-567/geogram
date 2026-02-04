@@ -12,13 +12,13 @@ import '../services/i18n_service.dart';
 
 /// Page to view the raw contract document with markdown rendering.
 class ContractDocumentPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String debtId;
   final I18nService i18n;
 
   const ContractDocumentPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.debtId,
     required this.i18n,
   });
@@ -43,7 +43,7 @@ class _ContractDocumentPageState extends State<ContractDocumentPage> {
   Future<void> _loadDocument() async {
     setState(() => _loading = true);
     try {
-      await _service.initializeCollection(widget.collectionPath);
+      await _service.initializeApp(widget.appPath);
       final ledger = await _service.findDebt(widget.debtId);
 
       if (ledger != null) {

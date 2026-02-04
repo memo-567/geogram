@@ -10,7 +10,7 @@ import '../models/profile.dart';
 import '../services/groups_service.dart';
 import '../services/devices_service.dart';
 import '../services/chat_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../util/group_utils.dart';
@@ -24,38 +24,29 @@ class GroupSyncService {
   GroupSyncService._internal();
 
   Future<String?> findCollectionPathByType(String type) async {
-    try {
-      final collections = await CollectionService().loadCollections();
-      for (final collection in collections) {
-        if (collection.type == type && collection.storagePath != null) {
-          return collection.storagePath;
-        }
-      }
-    } catch (e) {
-      LogService().log('GroupSyncService: Failed to find $type collection: $e');
-    }
-    return null;
+    final app = AppService().getAppByType(type);
+    return app?.storagePath;
   }
 
   Future<void> syncGroupsCollection({
-    required String groupsCollectionPath,
-    String? chatCollectionPath,
+    required String groupsAppPath,
+    String? chatAppPath,
     bool includeDeviceFolders = true,
     bool includeChatChannels = true,
   }) async {
     final groupsService = GroupsService();
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        groupsCollectionPath,
+        groupsAppPath,
       );
       groupsService.setStorage(scopedStorage);
     } else {
-      groupsService.setStorage(FilesystemProfileStorage(groupsCollectionPath));
+      groupsService.setStorage(FilesystemProfileStorage(groupsAppPath));
     }
-    await groupsService.initializeCollection(groupsCollectionPath);
+    await groupsService.initializeApp(groupsAppPath);
 
     if (includeDeviceFolders) {
       await _syncDeviceFolders(groupsService);
@@ -64,7 +55,7 @@ class GroupSyncService {
 
     if (includeChatChannels) {
       final resolvedChatPath =
-          chatCollectionPath ?? await findCollectionPathByType('chat');
+          chatAppPath ?? await findCollectionPathByType('chat');
       if (resolvedChatPath != null) {
         await _syncChatChannels(groupsService, resolvedChatPath);
       }
@@ -155,22 +146,22 @@ class GroupSyncService {
 
   Future<void> _syncChatChannels(
     GroupsService groupsService,
-    String chatCollectionPath,
+    String chatAppPath,
   ) async {
     final chatService = ChatService();
-    if (chatService.collectionPath != chatCollectionPath) {
+    if (chatService.appPath != chatAppPath) {
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          chatCollectionPath,
+          chatAppPath,
         );
         chatService.setStorage(scopedStorage);
       } else {
-        chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+        chatService.setStorage(FilesystemProfileStorage(chatAppPath));
       }
-      await chatService.initializeCollection(chatCollectionPath);
+      await chatService.initializeApp(chatAppPath);
     } else {
       await chatService.refreshChannels();
     }
@@ -457,45 +448,45 @@ class GroupSyncService {
   /// Verify and create missing chat rooms for all device folders with chat enabled.
   /// Call this at app startup and when chat is enabled for a folder.
   Future<void> ensureFolderChatRooms() async {
-    final chatCollectionPath = await findCollectionPathByType('chat');
-    final groupsCollectionPath = await findCollectionPathByType('groups');
+    final chatAppPath = await findCollectionPathByType('chat');
+    final groupsAppPath = await findCollectionPathByType('groups');
 
-    if (chatCollectionPath == null) {
+    if (chatAppPath == null) {
       LogService().log('GroupSyncService: Cannot ensure chat rooms - chat collection not configured');
       return;
     }
 
     final chatService = ChatService();
-    if (chatService.collectionPath != chatCollectionPath) {
+    if (chatService.appPath != chatAppPath) {
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          chatCollectionPath,
+          chatAppPath,
         );
         chatService.setStorage(scopedStorage);
       } else {
-        chatService.setStorage(FilesystemProfileStorage(chatCollectionPath));
+        chatService.setStorage(FilesystemProfileStorage(chatAppPath));
       }
-      await chatService.initializeCollection(chatCollectionPath);
+      await chatService.initializeApp(chatAppPath);
     }
 
     GroupsService? groupsService;
-    if (groupsCollectionPath != null) {
+    if (groupsAppPath != null) {
       groupsService = GroupsService();
       // Set profile storage for encrypted storage support
-      final profileStorage = CollectionService().profileStorage;
+      final profileStorage = AppService().profileStorage;
       if (profileStorage != null) {
         final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
           profileStorage,
-          groupsCollectionPath,
+          groupsAppPath,
         );
         groupsService.setStorage(scopedStorage);
       } else {
-        groupsService.setStorage(FilesystemProfileStorage(groupsCollectionPath));
+        groupsService.setStorage(FilesystemProfileStorage(groupsAppPath));
       }
-      await groupsService.initializeCollection(groupsCollectionPath);
+      await groupsService.initializeApp(groupsAppPath);
     }
 
     final devicesService = DevicesService();

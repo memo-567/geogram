@@ -87,20 +87,20 @@ class NetworkPolicy {
   }
 }
 
-/// Collections configuration for network
-class NetworkCollections {
+/// Apps configuration for network
+class NetworkApps {
   final List<String> community;
   final List<String> public;
   final List<String> userApprovalRequired;
 
-  const NetworkCollections({
+  const NetworkApps({
     this.community = const ['reports', 'places', 'events'],
     this.public = const ['forum', 'chat', 'announcements'],
     this.userApprovalRequired = const ['shops', 'services'],
   });
 
-  factory NetworkCollections.fromJson(Map<String, dynamic> json) {
-    return NetworkCollections(
+  factory NetworkApps.fromJson(Map<String, dynamic> json) {
+    return NetworkApps(
       community: (json['community'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
@@ -124,7 +124,7 @@ class NetworkCollections {
     };
   }
 
-  /// Get all supported collection types
+  /// Get all supported app types
   List<String> get all => [...community, ...public, ...userApprovalRequired];
 }
 
@@ -176,7 +176,7 @@ class StationNetwork {
   final String rootCallsign;
   final String? rootUrl;
   final NetworkPolicy policy;
-  final NetworkCollections collections;
+  final NetworkApps apps;
   final NetworkStats stats;
   final DateTime founded;
   final DateTime updated;
@@ -189,7 +189,7 @@ class StationNetwork {
     required this.rootCallsign,
     this.rootUrl,
     this.policy = const NetworkPolicy(),
-    this.collections = const NetworkCollections(),
+    this.apps = const NetworkApps(),
     this.stats = const NetworkStats(),
     required this.founded,
     required this.updated,
@@ -206,9 +206,9 @@ class StationNetwork {
       policy: json['policy'] != null
           ? NetworkPolicy.fromJson(json['policy'] as Map<String, dynamic>)
           : const NetworkPolicy(),
-      collections: json['collections'] != null
-          ? NetworkCollections.fromJson(json['collections'] as Map<String, dynamic>)
-          : const NetworkCollections(),
+      apps: (json['apps'] ?? json['collections']) != null
+          ? NetworkApps.fromJson(((json['apps'] ?? json['collections']) as Map<String, dynamic>))
+          : const NetworkApps(),
       stats: json['stats'] != null
           ? NetworkStats.fromJson(json['stats'] as Map<String, dynamic>)
           : const NetworkStats(),
@@ -226,7 +226,7 @@ class StationNetwork {
       'rootCallsign': rootCallsign,
       if (rootUrl != null) 'rootUrl': rootUrl,
       'policy': policy.toJson(),
-      'collections': collections.toJson(),
+      'apps': apps.toJson(),
       'stats': stats.toJson(),
       'founded': founded.toIso8601String(),
       'updated': updated.toIso8601String(),
@@ -241,7 +241,7 @@ class StationNetwork {
     String? rootCallsign,
     String? rootUrl,
     NetworkPolicy? policy,
-    NetworkCollections? collections,
+    NetworkApps? apps,
     NetworkStats? stats,
     DateTime? founded,
     DateTime? updated,
@@ -254,7 +254,7 @@ class StationNetwork {
       rootCallsign: rootCallsign ?? this.rootCallsign,
       rootUrl: rootUrl ?? this.rootUrl,
       policy: policy ?? this.policy,
-      collections: collections ?? this.collections,
+      apps: apps ?? this.apps,
       stats: stats ?? this.stats,
       founded: founded ?? this.founded,
       updated: updated ?? this.updated,

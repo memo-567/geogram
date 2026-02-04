@@ -6,7 +6,7 @@
 import 'package:flutter/material.dart';
 import '../models/group.dart';
 import '../models/group_member.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/groups_service.dart';
 import '../services/group_sync_service.dart';
 import '../services/profile_service.dart';
@@ -16,13 +16,13 @@ import 'group_detail_page.dart';
 
 /// Groups browser page
 class GroupsBrowserPage extends StatefulWidget {
-  final String collectionPath;
-  final String collectionTitle;
+  final String appPath;
+  final String appTitle;
 
   const GroupsBrowserPage({
     super.key,
-    required this.collectionPath,
-    required this.collectionTitle,
+    required this.appPath,
+    required this.appTitle,
   });
 
   @override
@@ -56,25 +56,25 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
 
   Future<void> _initialize() async {
     // Set profile storage for encrypted storage support
-    final profileStorage = CollectionService().profileStorage;
+    final profileStorage = AppService().profileStorage;
     if (profileStorage != null) {
       final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
         profileStorage,
-        widget.collectionPath,
+        widget.appPath,
       );
       _groupsService.setStorage(scopedStorage);
     } else {
-      _groupsService.setStorage(FilesystemProfileStorage(widget.collectionPath));
+      _groupsService.setStorage(FilesystemProfileStorage(widget.appPath));
     }
 
     final currentProfile = _profileService.getProfile();
-    await _groupsService.initializeCollection(
-      widget.collectionPath,
+    await _groupsService.initializeApp(
+      widget.appPath,
       creatorNpub: currentProfile.npub,
     );
-    if (_groupsService.isCollectionAdmin(currentProfile.npub)) {
+    if (_groupsService.isAppAdmin(currentProfile.npub)) {
       await GroupSyncService().syncGroupsCollection(
-        groupsCollectionPath: widget.collectionPath,
+        groupsAppPath: widget.appPath,
       );
     }
     await _loadGroups();
@@ -126,10 +126,10 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
   }
 
   String _getDisplayTitle() {
-    if (widget.collectionTitle.toLowerCase() == 'groups') {
-      return _i18n.t('collection_type_groups');
+    if (widget.appTitle.toLowerCase() == 'groups') {
+      return _i18n.t('app_type_groups');
     }
-    return widget.collectionTitle;
+    return widget.appTitle;
   }
 
   String _getGroupTypeDisplay(GroupType type) {
@@ -166,8 +166,8 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
         return _i18n.t('group_type_education_school');
       case GroupType.educationUniversity:
         return _i18n.t('group_type_education_university');
-      case GroupType.collectionModerator:
-        return _i18n.t('group_type_collection_moderator');
+      case GroupType.appModerator:
+        return _i18n.t('group_type_app_moderator');
     }
   }
 
@@ -205,7 +205,7 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
         return Icons.school;
       case GroupType.educationUniversity:
         return Icons.account_balance;
-      case GroupType.collectionModerator:
+      case GroupType.appModerator:
         return Icons.admin_panel_settings;
     }
   }
@@ -235,7 +235,7 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
       case GroupType.educationSchool:
       case GroupType.educationUniversity:
         return Colors.indigo;
-      case GroupType.collectionModerator:
+      case GroupType.appModerator:
         return Colors.amber;
     }
   }
@@ -323,7 +323,7 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
             context,
             MaterialPageRoute(
               builder: (context) => GroupDetailPage(
-                collectionPath: widget.collectionPath,
+                appPath: widget.appPath,
                 groupName: group.name,
               ),
             ),
@@ -357,10 +357,10 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
                             ],
                           ],
                         ),
-                        if (group.collectionType != null) ...[
+                        if (group.appType != null) ...[
                           const SizedBox(height: 4),
                           Text(
-                            '${_i18n.t('moderates')}: ${group.collectionType}',
+                            '${_i18n.t('moderates')}: ${group.appType}',
                             style: theme.textTheme.bodySmall?.copyWith(
                               fontStyle: FontStyle.italic,
                               color: Colors.purple,
@@ -572,13 +572,13 @@ class _GroupsBrowserPageState extends State<GroupsBrowserPage> {
           title: result['title'],
           description: result['description'],
           type: result['type'],
-          collectionType: result['collectionType'],
+          appType: result['appType'],
           creatorNpub: currentProfile.npub,
           creatorCallsign: currentProfile.callsign,
         );
 
         await GroupSyncService().syncGroupsCollection(
-          groupsCollectionPath: widget.collectionPath,
+          groupsAppPath: widget.appPath,
         );
 
         await _loadGroups();
@@ -609,7 +609,7 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   GroupType _selectedType = GroupType.association;
-  String? _collectionType;
+  String? _appType;
 
   @override
   void dispose() {
@@ -652,8 +652,8 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
         return _i18n.t('group_type_education_school');
       case GroupType.educationUniversity:
         return _i18n.t('group_type_education_university');
-      case GroupType.collectionModerator:
-        return _i18n.t('group_type_collection_moderator');
+      case GroupType.appModerator:
+        return _i18n.t('group_type_app_moderator');
     }
   }
 
@@ -692,11 +692,11 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
                 if (value != null) setState(() => _selectedType = value);
               },
             ),
-            if (_selectedType == GroupType.collectionModerator) ...[
+            if (_selectedType == GroupType.appModerator) ...[
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: _collectionType,
-                decoration: InputDecoration(labelText: _i18n.t('collection_type')),
+                value: _appType,
+                decoration: InputDecoration(labelText: _i18n.t('app_type')),
                 items: [
                   'blog', 'forum', 'events', 'news', 'alerts',
                   'postcards', 'contacts', 'places', 'market'
@@ -705,7 +705,7 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
                   child: Text(type),
                 )).toList(),
                 onChanged: (value) {
-                  setState(() => _collectionType = value);
+                  setState(() => _appType = value);
                 },
               ),
             ],
@@ -721,10 +721,10 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
           onPressed: () {
             if (_titleController.text.isNotEmpty &&
                 _descriptionController.text.isNotEmpty) {
-              if (_selectedType == GroupType.collectionModerator &&
-                  _collectionType == null) {
+              if (_selectedType == GroupType.appModerator &&
+                  _appType == null) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(_i18n.t('select_collection_type'))),
+                  SnackBar(content: Text(_i18n.t('select_app_type'))),
                 );
                 return;
               }
@@ -733,7 +733,7 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
                 'title': _titleController.text,
                 'description': _descriptionController.text,
                 'type': _selectedType,
-                'collectionType': _collectionType,
+                'appType': _appType,
               });
             }
           },

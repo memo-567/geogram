@@ -48,7 +48,7 @@ class ChatService {
   late ProfileStorage _storage;
 
   /// Current collection path
-  String? _collectionPath;
+  String? _appPath;
 
   /// Loaded channels
   List<ChatChannel> _channels = [];
@@ -76,7 +76,7 @@ class ChatService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
@@ -97,17 +97,17 @@ class ChatService {
 
   /// Get the relative path from collection path
   String _getRelativePath(String fullPath) {
-    if (_collectionPath == null) return fullPath;
-    if (fullPath.startsWith(_collectionPath!)) {
-      final rel = fullPath.substring(_collectionPath!.length);
+    if (_appPath == null) return fullPath;
+    if (fullPath.startsWith(_appPath!)) {
+      final rel = fullPath.substring(_appPath!.length);
       return rel.startsWith('/') ? rel.substring(1) : rel;
     }
     return fullPath;
   }
 
   /// Initialize chat service for a collection
-  Future<void> initializeCollection(String collectionPath, {String? creatorNpub}) async {
-    _collectionPath = collectionPath;
+  Future<void> initializeApp(String appPath, {String? creatorNpub}) async {
+    _appPath = appPath;
     await _loadChannels();
     await _loadParticipants();
     await _loadSecurity();
@@ -125,7 +125,7 @@ class ChatService {
   }
 
   Future<void> _loadHiddenMessages() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final content = await _storage.readString('extra/hidden_messages.json');
@@ -145,7 +145,7 @@ class ChatService {
   }
 
   Future<void> _saveHiddenMessages() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final data = {
       'version': '1.0',
@@ -180,7 +180,7 @@ class ChatService {
   }
 
   /// Get collection path
-  String? get collectionPath => _collectionPath;
+  String? get appPath => _appPath;
 
   /// Get loaded channels
   List<ChatChannel> get channels => List.unmodifiable(_channels);
@@ -195,7 +195,7 @@ class ChatService {
   void startWatching() {
     stopWatching(); // Clear any existing watchers
 
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       if (!kIsWeb) stderr.writeln('ChatService: Cannot start watching - no collection path');
       return;
     }
@@ -211,11 +211,11 @@ class ChatService {
       return;
     }
 
-    stderr.writeln('ChatService: Starting file watchers for ${_channels.length} channels at $_collectionPath');
+    stderr.writeln('ChatService: Starting file watchers for ${_channels.length} channels at $_appPath');
 
     // Watch main channel folder and subfolders
     for (final channel in _channels) {
-      final channelDir = Directory(p.join(_collectionPath!, channel.folder));
+      final channelDir = Directory(p.join(_appPath!, channel.folder));
       stderr.writeln('ChatService: Checking channel ${channel.id} at ${channelDir.path}');
       if (channelDir.existsSync()) {
         try {
@@ -250,7 +250,7 @@ class ChatService {
 
   /// Load channels from channels.json
   Future<void> _loadChannels() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final content = await _storage.readString('extra/channels.json');
@@ -274,7 +274,7 @@ class ChatService {
 
   /// Save channels to channels.json
   Future<void> _saveChannels() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final json = {
       'version': '1.0',
@@ -288,7 +288,7 @@ class ChatService {
 
   /// Load participants from participants.json
   Future<void> _loadParticipants() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final content = await _storage.readString('extra/participants.json');
@@ -316,7 +316,7 @@ class ChatService {
 
   /// Save participants to participants.json
   Future<void> _saveParticipants() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final Map<String, dynamic> participantsMap = {};
     _participants.forEach((callsign, npub) {
@@ -347,7 +347,7 @@ class ChatService {
 
   /// Load security settings from security.json
   Future<void> _loadSecurity() async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     try {
       final content = await _storage.readString('extra/security.json');
@@ -367,7 +367,7 @@ class ChatService {
 
   /// Save security settings to security.json
   Future<void> saveSecurity(ChatSecurity security) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     _security = security;
 
@@ -383,7 +383,7 @@ class ChatService {
 
   /// Create a new channel
   Future<ChatChannel> createChannel(ChatChannel channel) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -432,7 +432,7 @@ class ChatService {
 
   /// Delete a channel
   Future<void> deleteChannel(String channelId) async {
-    if (_collectionPath == null) return;
+    if (_appPath == null) return;
 
     final channel = _channels.firstWhere(
       (ch) => ch.id == channelId,
@@ -508,7 +508,7 @@ class ChatService {
     DateTime? endDate,
     int limit = 100,
   }) async {
-    if (_collectionPath == null) return [];
+    if (_appPath == null) return [];
 
     final channel = getChannel(channelId);
     if (channel == null) return [];
@@ -614,7 +614,7 @@ class ChatService {
 
   /// Save a message to appropriate file
   Future<void> saveMessage(String channelId, ChatMessage message) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -715,7 +715,7 @@ class ChatService {
     await _saveChannels();
 
     // Update config.json if config changed
-    if (channel.config != null && _collectionPath != null) {
+    if (channel.config != null && _appPath != null) {
       final configContent = const JsonEncoder.withIndent('  ').convert(channel.config!.toJson());
       await _storage.writeString('${channel.folder}/config.json', configContent);
     }
@@ -752,7 +752,7 @@ class ChatService {
     ChatMessage message,
     String? userNpub,
   ) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -851,7 +851,7 @@ class ChatService {
     String timestamp, {
     String? author,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       return null;
     }
 
@@ -922,7 +922,7 @@ class ChatService {
     required String newSignature,
     required int newCreatedAt,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -1016,7 +1016,7 @@ class ChatService {
     required String authorCallsign,
     required String actorNpub,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -1096,7 +1096,7 @@ class ChatService {
     required String actorCallsign,
     required String reaction,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -1215,7 +1215,7 @@ class ChatService {
     required String ownerNpub,
     String? description,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 
@@ -1260,7 +1260,7 @@ class ChatService {
     required String ownerNpub,
     String? description,
   }) async {
-    if (_collectionPath == null) {
+    if (_appPath == null) {
       throw Exception('Collection not initialized');
     }
 

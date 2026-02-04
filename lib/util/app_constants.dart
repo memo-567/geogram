@@ -67,6 +67,7 @@ const Set<String> singleInstanceTypesConst = {
   'usenet',
   'music',
   'stories',
+  'files',
 };
 
 /// Predefined categories for stories

@@ -13,7 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import '../services/log_service.dart';
 import '../services/log_api_service.dart';
 import '../services/profile_service.dart';
-import '../services/collection_service.dart';
+import '../services/app_service.dart';
 import '../services/signing_service.dart';
 import '../services/user_location_service.dart';
 import '../services/security_service.dart';
@@ -31,7 +31,7 @@ import '../util/nostr_crypto.dart';
 import '../util/nostr_key_generator.dart';
 import '../models/update_notification.dart';
 import '../models/blog_post.dart';
-import '../models/collection.dart';
+import '../models/app.dart';
 
 /// WebSocket service for station connections (singleton)
 class WebSocketService {
@@ -239,7 +239,7 @@ class WebSocketService {
             if (rawMessage.startsWith('UPDATE:')) {
               final update = UpdateNotification.parse(rawMessage);
               if (update != null) {
-                LogService().log('UPDATE notification: ${update.callsign}/${update.collectionType}${update.path}');
+                LogService().log('UPDATE notification: ${update.callsign}/${update.appType}${update.path}');
                 _updateController.add(update);
               }
               return;
@@ -310,14 +310,14 @@ class WebSocketService {
                 LogService().log('Reason: ${data['message']}');
                 LogService().log('══════════════════════════════════════');
               }
-            } else if (data['type'] == 'COLLECTIONS_REQUEST') {
+            } else if (data['type'] == 'APPS_REQUEST') {
               LogService().log('✓ Station requested collections');
-              _handleCollectionsRequest(data['requestId'] as String?);
-            } else if (data['type'] == 'COLLECTION_FILE_REQUEST') {
+              _handleAppsRequest(data['requestId'] as String?);
+            } else if (data['type'] == 'APP_FILE_REQUEST') {
               LogService().log('✓ Station requested collection file');
-              _handleCollectionFileRequest(
+              _handleAppFileRequest(
                 data['requestId'] as String?,
-                data['collectionName'] as String?,
+                data['appName'] as String?,
                 data['fileName'] as String?,
               );
             } else if (data['type'] == 'HTTP_REQUEST') {
@@ -625,7 +625,7 @@ class WebSocketService {
   }
 
   /// Handle collections request from station
-  Future<void> _handleCollectionsRequest(String? requestId) async {
+  Future<void> _handleAppsRequest(String? requestId) async {
     if (requestId == null) return;
 
     // Skip collection requests on web - the web client doesn't serve collections
@@ -635,15 +635,15 @@ class WebSocketService {
     }
 
     try {
-      final collections = await CollectionService().loadCollections();
+      final apps = await AppService().loadApps();
 
       // Filter out private collections - only share public and restricted ones
-      final publicCollections = collections
+      final publicApps = apps
           .where((c) => c.visibility != 'private')
           .toList();
 
       // Extract folder names from storage paths (raw names for navigation)
-      final collectionNames = publicCollections.map((c) {
+      final appNames = publicApps.map((c) {
         if (c.storagePath != null) {
           // Get the last segment of the path as folder name
           final path = c.storagePath!;
@@ -654,25 +654,25 @@ class WebSocketService {
       }).toList();
 
       final response = {
-        'type': 'COLLECTIONS_RESPONSE',
+        'type': 'APPS_RESPONSE',
         'requestId': requestId,
-        'collections': collectionNames,
+        'collections': appNames,
       };
 
       send(response);
-      LogService().log('Sent ${collectionNames.length} collection folder names to station (filtered ${collections.length - publicCollections.length} private collections)');
+      LogService().log('Sent ${appNames.length} collection folder names to station (filtered ${apps.length - publicApps.length} private collections)');
     } catch (e) {
       LogService().log('Error handling collections request: $e');
     }
   }
 
   /// Handle collection file request from station
-  Future<void> _handleCollectionFileRequest(
+  Future<void> _handleAppFileRequest(
     String? requestId,
-    String? collectionName,
+    String? appName,
     String? fileName,
   ) async {
-    if (requestId == null || collectionName == null || fileName == null) return;
+    if (requestId == null || appName == null || fileName == null) return;
 
     // Skip file requests on web - the web client doesn't serve files
     if (kIsWeb) {
@@ -681,43 +681,43 @@ class WebSocketService {
     }
 
     try {
-      final collections = await CollectionService().loadCollections();
+      final apps = await AppService().loadApps();
       // Match by folder name (last segment of storagePath) instead of title
-      final collection = collections.firstWhere(
+      final app = apps.firstWhere(
         (c) {
           if (c.storagePath != null) {
             final segments = c.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
             final folderName = segments.isNotEmpty ? segments.last : '';
-            return folderName == collectionName;
+            return folderName == appName;
           }
-          return c.title == collectionName;
+          return c.title == appName;
         },
-        orElse: () => throw Exception('Collection not found: $collectionName'),
+        orElse: () => throw Exception('Collection not found: $appName'),
       );
 
       // Security check: reject access to private collections
-      if (collection.visibility == 'private') {
-        LogService().log('⚠ Rejected file request for private collection: $collectionName');
+      if (app.visibility == 'private') {
+        LogService().log('⚠ Rejected file request for private collection: $appName');
         throw Exception('Access denied: Collection is private');
       }
 
       String fileContent;
       String actualFileName;
 
-      final storagePath = collection.storagePath;
+      final storagePath = app.storagePath;
       if (storagePath == null) {
-        throw Exception('Collection has no storage path: $collectionName');
+        throw Exception('Collection has no storage path: $appName');
       }
 
       if (fileName == 'collection') {
-        final file = File('$storagePath/collection.js');
+        final file = File('$storagePath/app.js');
         fileContent = await file.readAsString();
-        actualFileName = 'collection.js';
+        actualFileName = 'app.js';
       } else if (fileName == 'tree') {
         // Read tree.json from disk (pre-generated)
         final file = File('$storagePath/extra/tree.json');
         if (!await file.exists()) {
-          throw Exception('tree.json not found for collection: $collectionName');
+          throw Exception('tree.json not found for collection: $appName');
         }
         fileContent = await file.readAsString();
         actualFileName = 'extra/tree.json';
@@ -725,7 +725,7 @@ class WebSocketService {
         // Read data.js from disk (pre-generated)
         final file = File('$storagePath/extra/data.js');
         if (!await file.exists()) {
-          throw Exception('data.js not found for collection: $collectionName');
+          throw Exception('data.js not found for collection: $appName');
         }
         fileContent = await file.readAsString();
         actualFileName = 'extra/data.js';
@@ -734,15 +734,15 @@ class WebSocketService {
       }
 
       final response = {
-        'type': 'COLLECTION_FILE_RESPONSE',
+        'type': 'APP_FILE_RESPONSE',
         'requestId': requestId,
-        'collectionName': collectionName,
+        'appName': appName,
         'fileName': actualFileName,
         'fileContent': fileContent,
       };
 
       send(response);
-      LogService().log('Sent $fileName for collection $collectionName (${fileContent.length} bytes)');
+      LogService().log('Sent $fileName for collection $appName (${fileContent.length} bytes)');
     } catch (e) {
       LogService().log('Error handling collection file request: $e');
     }
@@ -793,83 +793,83 @@ class WebSocketService {
         return;
       }
 
-      // Parse path: should be /{collectionName}/{filePath}
+      // Parse path: should be /{appName}/{filePath}
       // e.g., /blog/index.html, /www/index.html
       final parts = path.split('/').where((p) => p.isNotEmpty).toList();
       if (parts.isEmpty) {
         throw Exception('Invalid path format: $path');
       }
 
-      final collectionName = parts[0];
+      final appName = parts[0];
       final filePath = parts.length > 1 ? '/${parts.sublist(1).join('/')}' : '/';
 
       // Load collection - match by folder name (last segment of storagePath)
-      final collectionService = CollectionService();
-      var collections = await collectionService.loadCollections();
-      var collection = collections.cast<Collection?>().firstWhere(
+      final appService = AppService();
+      var apps = await appService.loadApps();
+      var app = apps.cast<App?>().firstWhere(
         (c) {
           if (c?.storagePath != null) {
             final segments = c!.storagePath!.split('/').where((s) => s.isNotEmpty).toList();
             final folderName = segments.isNotEmpty ? segments.last : '';
-            return folderName == collectionName;
+            return folderName == appName;
           }
-          return c?.title == collectionName;
+          return c?.title == appName;
         },
         orElse: () => null,
       );
 
       // If www collection not found, create it on-demand
-      if (collection == null && collectionName == 'www') {
+      if (app == null && appName == 'www') {
         LogService().log('Creating www collection on-demand...');
         try {
-          collection = await collectionService.createCollection(
+          app = await appService.createApp(
             title: 'Www',
             description: '',
             type: 'www',
           );
           // Generate default index.html
-          await collectionService.generateDefaultWwwIndex(collection);
-          LogService().log('Created www collection on-demand: ${collection.storagePath}');
+          await appService.generateDefaultWwwIndex(app);
+          LogService().log('Created www collection on-demand: ${app.storagePath}');
         } catch (e) {
           LogService().log('Error creating www collection on-demand: $e');
-          throw Exception('Collection not found: $collectionName');
+          throw Exception('Collection not found: $appName');
         }
-      } else if (collection == null) {
-        throw Exception('Collection not found: $collectionName');
+      } else if (app == null) {
+        throw Exception('Collection not found: $appName');
       }
 
       // Security check: reject access to private collections
-      if (collection.visibility == 'private') {
-        LogService().log('⚠ Rejected HTTP request for private collection: $collectionName');
+      if (app.visibility == 'private') {
+        LogService().log('⚠ Rejected HTTP request for private collection: $appName');
         _sendHttpResponse(requestId, 403, {'Content-Type': 'text/plain'}, 'Forbidden');
         return;
       }
 
-      final storagePath = collection.storagePath;
+      final storagePath = app.storagePath;
       if (storagePath == null) {
-        throw Exception('Collection has no storage path: $collectionName');
+        throw Exception('Collection has no storage path: $appName');
       }
 
       // For www collection requesting index.html, regenerate it dynamically
       // This ensures the page always reflects the current state of available apps
-      if (collectionName == 'www' && (filePath == '/' || filePath == '/index.html')) {
+      if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
         LogService().log('Regenerating www index.html dynamically...');
-        await collectionService.generateDefaultWwwIndex(collection);
+        await appService.generateDefaultWwwIndex(app);
       }
 
       // For blog collection requesting index.html, regenerate it dynamically
-      if (collectionName == 'blog' && (filePath == '/' || filePath == '/index.html')) {
+      if (appName == 'blog' && (filePath == '/' || filePath == '/index.html')) {
         LogService().log('Regenerating blog index.html dynamically...');
-        await collectionService.generateBlogIndex(storagePath);
+        await appService.generateBlogIndex(storagePath);
       }
 
       // For chat collection requesting index.html, regenerate it dynamically
-      if (collectionName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
+      if (appName == 'chat' && (filePath == '/' || filePath == '/index.html')) {
         LogService().log('Regenerating chat index.html dynamically...');
-        // Chat uses the chat collection path from CollectionService
-        final collectionsDir = collectionService.collectionsDirectory;
-        final chatPath = '${collectionsDir.path}/chat';
-        await collectionService.generateChatIndex(chatPath);
+        // Chat uses the chat collection path from AppService
+        final appsDir = appService.appsDirectory;
+        final chatPath = '${appsDir.path}/chat';
+        await appService.generateChatIndex(chatPath);
         // Update storagePath to point to chat collection
         final chatDir = Directory(chatPath);
         if (await chatDir.exists()) {
@@ -948,17 +948,17 @@ class WebSocketService {
       final year = yearMatch.group(1)!;
 
       // Search for blog post in all public blog collections
-      final collections = await CollectionService().loadCollections();
+      final apps = await AppService().loadApps();
       BlogPost? foundPost;
-      String? collectionName;
+      String? appName;
       List<String> foundPostLikedHexPubkeys = [];
 
-      for (final collection in collections) {
+      for (final app in apps) {
         // Skip private collections and non-blog collections
-        if (collection.visibility == 'private') continue;
-        if (collection.type != 'blog') continue;
+        if (app.visibility == 'private') continue;
+        if (app.type != 'blog') continue;
 
-        final storagePath = collection.storagePath;
+        final storagePath = app.storagePath;
         if (storagePath == null) continue;
 
         // Blog structure: {storagePath}/{year}/{postId}/post.md
@@ -969,7 +969,7 @@ class WebSocketService {
           try {
             final content = await blogFile.readAsString();
             foundPost = BlogPost.fromText(content, filename);
-            collectionName = collection.title;
+            appName = app.title;
 
             // Load feedback counts
             final postFolderPath = '$storagePath/$year/$filename';

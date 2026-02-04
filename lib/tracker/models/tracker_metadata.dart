@@ -60,8 +60,8 @@ class TrackerNostrMetadata {
   }
 }
 
-/// Collection metadata for tracker
-class TrackerCollectionMetadata {
+/// App metadata for tracker
+class TrackerAppMetadata {
   final String id;
   final String type;
   final String version;
@@ -73,7 +73,7 @@ class TrackerCollectionMetadata {
   final TrackerFeatures features;
   final TrackerNostrMetadata? metadata;
 
-  const TrackerCollectionMetadata({
+  const TrackerAppMetadata({
     required this.id,
     this.type = 'tracker',
     this.version = '1.0.0',
@@ -99,8 +99,8 @@ class TrackerCollectionMetadata {
         if (metadata != null) 'metadata': metadata!.toJson(),
       };
 
-  factory TrackerCollectionMetadata.fromJson(Map<String, dynamic> json) {
-    return TrackerCollectionMetadata(
+  factory TrackerAppMetadata.fromJson(Map<String, dynamic> json) {
+    return TrackerAppMetadata(
       id: json['id'] as String,
       type: json['type'] as String? ?? 'tracker',
       version: json['version'] as String? ?? '1.0.0',
@@ -119,7 +119,7 @@ class TrackerCollectionMetadata {
     );
   }
 
-  TrackerCollectionMetadata copyWith({
+  TrackerAppMetadata copyWith({
     String? id,
     String? type,
     String? version,
@@ -131,7 +131,7 @@ class TrackerCollectionMetadata {
     TrackerFeatures? features,
     TrackerNostrMetadata? metadata,
   }) {
-    return TrackerCollectionMetadata(
+    return TrackerAppMetadata(
       id: id ?? this.id,
       type: type ?? this.type,
       version: version ?? this.version,
@@ -146,7 +146,7 @@ class TrackerCollectionMetadata {
   }
 }
 
-/// Features enabled for a tracker collection
+/// Features enabled for a tracker app
 class TrackerFeatures {
   final bool paths;
   final bool measurements;

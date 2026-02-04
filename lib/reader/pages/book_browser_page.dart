@@ -13,13 +13,13 @@ import '../../services/i18n_service.dart';
 
 /// Page for browsing local books
 class BookBrowserPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final I18nService i18n;
   final List<String> initialPath;
 
   const BookBrowserPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.i18n,
     this.initialPath = const [],
   });
@@ -62,7 +62,7 @@ class _BookBrowserPageState extends State<BookBrowserPage> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => BookBrowserPage(
-          collectionPath: widget.collectionPath,
+          appPath: widget.appPath,
           i18n: widget.i18n,
           initialPath: [..._currentPath, folder.id],
         ),

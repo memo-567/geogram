@@ -13,7 +13,7 @@ import '../../services/i18n_service.dart';
 
 /// Page for reading manga chapters
 class MangaReaderPage extends StatefulWidget {
-  final String collectionPath;
+  final String appPath;
   final String sourceId;
   final String mangaSlug;
   final MangaChapter chapter;
@@ -22,7 +22,7 @@ class MangaReaderPage extends StatefulWidget {
 
   const MangaReaderPage({
     super.key,
-    required this.collectionPath,
+    required this.appPath,
     required this.sourceId,
     required this.mangaSlug,
     required this.chapter,

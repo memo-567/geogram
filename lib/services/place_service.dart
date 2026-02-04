@@ -78,13 +78,13 @@ class PlaceService {
   bool get useEncryptedStorage => _storage.isEncrypted;
 
   /// Set the profile storage for file operations
-  /// MUST be called before initializeCollection
+  /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
     _storage = storage;
   }
 
   /// Initialize the service with a collection path
-  Future<void> initializeCollection(String collectionPath) async {
+  Future<void> initializeApp(String appPath) async {
     // Create places directory using storage abstraction
     if (!await _storage.exists('places')) {
       await _storage.createDirectory('places');

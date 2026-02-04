@@ -59,13 +59,13 @@ class PlaceSharingService {
   }
 
   /// Upload a place (place.txt + photos) to all configured stations
-  Future<int> uploadPlaceToStations(Place place, String collectionPath) async {
+  Future<int> uploadPlaceToStations(Place place, String appPath) async {
     if (kIsWeb) return 0;
 
     int uploadedTotal = 0;
     final stationUrls = getRelayUrls();
     for (final stationUrl in stationUrls) {
-      uploadedTotal += await uploadPlaceToStation(place, collectionPath, stationUrl);
+      uploadedTotal += await uploadPlaceToStation(place, appPath, stationUrl);
     }
     return uploadedTotal;
   }
@@ -73,13 +73,13 @@ class PlaceSharingService {
   /// Upload a place (place.txt + photos) to a specific station
   Future<int> uploadPlaceToStation(
     Place place,
-    String collectionPath,
+    String appPath,
     String stationUrl,
   ) async {
     if (kIsWeb) return 0;
 
     try {
-      await _placeService.initializeCollection(collectionPath);
+      await _placeService.initializeApp(appPath);
 
       final profile = _profileService.getProfile();
       final callsign = profile.callsign;
@@ -94,7 +94,7 @@ class PlaceSharingService {
         return 0;
       }
 
-      final placesBasePath = _resolvePlacesBasePath(collectionPath);
+      final placesBasePath = _resolvePlacesBasePath(appPath);
       var relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
       if (relativePlacePath.startsWith('..')) {
         LogService().log('PlaceSharingService: Invalid relative place path: $relativePlacePath');
@@ -236,10 +236,10 @@ class PlaceSharingService {
         .toList();
   }
 
-  String _resolvePlacesBasePath(String collectionPath) {
-    return path.basename(collectionPath) == 'places'
-        ? collectionPath
-        : path.join(collectionPath, 'places');
+  String _resolvePlacesBasePath(String appPath) {
+    return path.basename(appPath) == 'places'
+        ? appPath
+        : path.join(appPath, 'places');
   }
 
   Future<String?> _resolvePlaceFolderPath(Place place) async {
@@ -252,7 +252,7 @@ class PlaceSharingService {
 
   /// Upload all local places to stations, skipping ones already known by the station.
   Future<int> uploadLocalPlacesToStations(
-    String collectionPath, {
+    String appPath, {
     Set<String>? knownStationRelativePaths,
   }) async {
     if (kIsWeb) return 0;
@@ -275,32 +275,32 @@ class PlaceSharingService {
       return 0;
     }
 
-    await _placeService.initializeCollection(collectionPath);
+    await _placeService.initializeApp(appPath);
     final places = await _placeService.loadAllPlaces();
 
     for (final place in places) {
       final relativePlacePath = await _resolveRelativePlacePath(
         place,
-        collectionPath,
+        appPath,
       );
 
       if (relativePlacePath != null && existingPaths.contains(relativePlacePath)) {
         continue;
       }
 
-      uploadedTotal += await uploadPlaceToStations(place, collectionPath);
+      uploadedTotal += await uploadPlaceToStations(place, appPath);
     }
 
     return uploadedTotal;
   }
 
-  Future<String?> _resolveRelativePlacePath(Place place, String collectionPath) async {
+  Future<String?> _resolveRelativePlacePath(Place place, String appPath) async {
     final placeFolderPath = await _resolvePlaceFolderPath(place);
     if (placeFolderPath == null) {
       return null;
     }
 
-    final placesBasePath = _resolvePlacesBasePath(collectionPath);
+    final placesBasePath = _resolvePlacesBasePath(appPath);
     var relativePlacePath = path.relative(placeFolderPath, from: placesBasePath);
     if (relativePlacePath.startsWith('..')) {
       return null;
