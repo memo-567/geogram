@@ -410,7 +410,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
                   ),
                   child: Slider(
                     value: _duration.inMilliseconds > 0
-                        ? _position.inMilliseconds / _duration.inMilliseconds
+                        ? (_position.inMilliseconds / _duration.inMilliseconds)
+                            .clamp(0.0, 1.0)
                         : 0,
                     onChanged: (value) {
                       final newPosition = Duration(

@@ -20,36 +20,54 @@ enum DocumentViewerType {
   auto,      // Detect from file extension
 }
 
-/// Reusable document viewer/editor page.
+/// Reusable document viewer widget (no Scaffold).
 ///
 /// Displays documents based on file extension or explicit viewer type.
-/// Supports continuous vertical scrolling for all content types.
-class DocumentViewerEditorPage extends StatefulWidget {
+/// Can be embedded in any layout — split-pane previews, dialogs, etc.
+/// Set [editable] to true to enable inline text editing for supported formats.
+class DocumentViewerWidget extends StatefulWidget {
   /// Path to the document file.
   final String filePath;
 
   /// Force a specific viewer type (default: auto-detect from extension).
   final DocumentViewerType viewerType;
 
-  /// Custom title for the app bar (default: filename).
-  final String? title;
+  /// Whether to allow editing for text-based files (default: false).
+  final bool editable;
 
-  /// Read-only mode (default: true).
-  final bool readOnly;
+  /// Whether to show the built-in edit toolbar (default: true).
+  /// Set to false when hosting code provides its own edit button
+  /// and calls [DocumentViewerWidgetState.startEditing] via a GlobalKey.
+  final bool showEditToolbar;
 
-  const DocumentViewerEditorPage({
+  /// Called after a successful save when editing.
+  final VoidCallback? onSaved;
+
+  const DocumentViewerWidget({
     super.key,
     required this.filePath,
     this.viewerType = DocumentViewerType.auto,
-    this.title,
-    this.readOnly = true,
+    this.editable = false,
+    this.showEditToolbar = true,
+    this.onSaved,
   });
 
+  /// Check if a file extension supports text editing.
+  static bool isEditableExtension(String ext) {
+    const editable = {
+      'txt', 'log', 'json', 'xml', 'csv', 'yaml', 'yml', 'ini', 'conf',
+      'cfg', 'toml', 'md', 'markdown', 'html', 'htm', 'css',
+      'dart', 'py', 'js', 'ts', 'java', 'c', 'cpp', 'h', 'sh', 'bat',
+      'kt', 'go', 'rs', 'rb', 'php',
+    };
+    return editable.contains(ext.toLowerCase());
+  }
+
   @override
-  State<DocumentViewerEditorPage> createState() => _DocumentViewerEditorPageState();
+  DocumentViewerWidgetState createState() => DocumentViewerWidgetState();
 }
 
-class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
+class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   DocumentViewerType _resolvedType = DocumentViewerType.text;
   String? _textContent;
   List<Uint8List> _pdfPages = [];
@@ -57,17 +75,38 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
   String? _error;
   PdfDocument? _pdfDocument;
 
-  String get _filename => path.basename(widget.filePath);
+  // Editing state
+  bool _isEditing = false;
+  bool _hasUnsavedChanges = false;
+  late TextEditingController _editController;
 
   @override
   void initState() {
     super.initState();
+    _editController = TextEditingController();
     _loadDocument();
+  }
+
+  @override
+  void didUpdateWidget(DocumentViewerWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.filePath != widget.filePath ||
+        oldWidget.viewerType != widget.viewerType) {
+      _pdfDocument?.close();
+      _pdfDocument = null;
+      _pdfPages = [];
+      _textContent = null;
+      _isEditing = false;
+      _hasUnsavedChanges = false;
+      _editController.clear();
+      _loadDocument();
+    }
   }
 
   @override
   void dispose() {
     _pdfDocument?.close();
+    _editController.dispose();
     super.dispose();
   }
 
@@ -152,6 +191,41 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
 
   /// Load PDF and render all pages as images.
   Future<void> _loadPdf(File file) async {
+    if (Platform.isLinux) {
+      await _loadPdfLinux(file);
+    } else {
+      await _loadPdfNative(file);
+    }
+  }
+
+  /// Linux fallback: render PDF pages via pdftoppm (poppler-utils).
+  Future<void> _loadPdfLinux(File file) async {
+    final tempDir = await Directory.systemTemp.createTemp('geogram_pdf_');
+    final prefix = path.join(tempDir.path, 'page');
+    final result = await Process.run(
+      'pdftoppm', ['-png', '-r', '200', file.path, prefix],
+    );
+    if (result.exitCode != 0) {
+      await tempDir.delete(recursive: true);
+      throw Exception('pdftoppm failed: ${result.stderr}');
+    }
+
+    final pngFiles = tempDir.listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.png'))
+        .toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+
+    final pages = <Uint8List>[];
+    for (final png in pngFiles) {
+      pages.add(await png.readAsBytes());
+    }
+    await tempDir.delete(recursive: true);
+    _pdfPages = pages;
+  }
+
+  /// Native PDF rendering via pdfx (non-Linux platforms).
+  Future<void> _loadPdfNative(File file) async {
     _pdfDocument = await PdfDocument.openFile(file.path);
     final pageCount = _pdfDocument!.pagesCount;
     final pages = <Uint8List>[];
@@ -175,23 +249,146 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title ?? _filename),
-        actions: [
-          if (_resolvedType == DocumentViewerType.pdf && _pdfPages.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(
-                child: Text(
-                  '${_pdfPages.length} pages',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
+    return _buildBody();
+  }
+
+  /// Whether the current resolved type supports editing.
+  bool get isEditableType =>
+      _resolvedType == DocumentViewerType.text ||
+      _resolvedType == DocumentViewerType.markdown;
+
+  /// Whether the widget is currently in edit mode.
+  bool get isEditing => _isEditing;
+
+  /// Whether there are unsaved changes.
+  bool get hasUnsavedChanges => _hasUnsavedChanges;
+
+  /// Enter edit mode (loads current text content into the editor).
+  void startEditing() {
+    _editController.text = _textContent ?? '';
+    setState(() => _isEditing = true);
+  }
+
+  /// Save edited content to disk.
+  Future<void> saveFile() async {
+    try {
+      await File(widget.filePath).writeAsString(_editController.text);
+      setState(() {
+        _textContent = _editController.text;
+        _hasUnsavedChanges = false;
+        _isEditing = false;
+      });
+      widget.onSaved?.call();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save: $e')),
+        );
+      }
+    }
+  }
+
+  /// Cancel editing (prompts if there are unsaved changes).
+  Future<void> cancelEditing() async {
+    if (_hasUnsavedChanges) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard changes?'),
+          content: const Text('You have unsaved changes. Discard them?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep editing'),
             ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Discard'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true) return;
+    }
+    setState(() {
+      _isEditing = false;
+      _hasUnsavedChanges = false;
+    });
+  }
+
+  Widget _buildEditToolbar() {
+    final theme = Theme.of(context);
+
+    if (_isEditing) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerLow,
+          border: Border(
+            bottom: BorderSide(color: theme.dividerColor),
+          ),
+        ),
+        child: Row(
+          children: [
+            Text('Editing', style: theme.textTheme.labelLarge),
+            const Spacer(),
+            TextButton(
+              onPressed: cancelEditing,
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: _hasUnsavedChanges ? saveFile : null,
+              icon: const Icon(Icons.save, size: 18),
+              label: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        border: Border(
+          bottom: BorderSide(color: theme.dividerColor),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.edit, size: 20),
+            tooltip: 'Edit',
+            onPressed: startEditing,
+          ),
         ],
       ),
-      body: _buildBody(),
+    );
+  }
+
+  Widget _buildEditor() {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: TextField(
+          controller: _editController,
+          maxLines: null,
+          expands: true,
+          textAlignVertical: TextAlignVertical.top,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontFamily: 'monospace',
+            height: 1.5,
+          ),
+          decoration: const InputDecoration.collapsed(hintText: ''),
+          onChanged: (_) {
+            if (!_hasUnsavedChanges) {
+              setState(() => _hasUnsavedChanges = true);
+            }
+          },
+        ),
+      ),
     );
   }
 
@@ -228,6 +425,30 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
           ),
         ),
       );
+    }
+
+    // Show edit toolbar + editor/viewer for editable types
+    if (widget.editable && isEditableType) {
+      if (_isEditing) {
+        // Always show the save/cancel toolbar when editing
+        return Column(
+          children: [
+            _buildEditToolbar(),
+            _buildEditor(),
+          ],
+        );
+      }
+      if (widget.showEditToolbar) {
+        // Show the built-in edit button toolbar
+        return Column(
+          children: [
+            _buildEditToolbar(),
+            Expanded(child: _buildViewer()),
+          ],
+        );
+      }
+      // Editable but toolbar managed externally — just show viewer
+      return _buildViewer();
     }
 
     return _buildViewer();
@@ -344,6 +565,53 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
         style: theme.textTheme.bodyMedium?.copyWith(
           fontFamily: 'monospace',
           height: 1.5,
+        ),
+      ),
+    );
+  }
+}
+
+/// Reusable document viewer/editor page.
+///
+/// Wraps [DocumentViewerWidget] in a Scaffold with an AppBar.
+/// For embedding without a Scaffold, use [DocumentViewerWidget] directly.
+class DocumentViewerEditorPage extends StatefulWidget {
+  /// Path to the document file.
+  final String filePath;
+
+  /// Force a specific viewer type (default: auto-detect from extension).
+  final DocumentViewerType viewerType;
+
+  /// Custom title for the app bar (default: filename).
+  final String? title;
+
+  /// Read-only mode (default: false).
+  final bool readOnly;
+
+  const DocumentViewerEditorPage({
+    super.key,
+    required this.filePath,
+    this.viewerType = DocumentViewerType.auto,
+    this.title,
+    this.readOnly = false,
+  });
+
+  @override
+  State<DocumentViewerEditorPage> createState() => _DocumentViewerEditorPageState();
+}
+
+class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title ?? path.basename(widget.filePath)),
+      ),
+      body: DocumentViewerWidget(
+        filePath: widget.filePath,
+        viewerType: widget.viewerType,
+        editable: !widget.readOnly && DocumentViewerWidget.isEditableExtension(
+          path.extension(widget.filePath).replaceFirst('.', ''),
         ),
       ),
     );
